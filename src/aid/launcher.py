@@ -18,7 +18,7 @@ import anyio
 import anyio.to_thread
 
 from aid import worker
-from aid.paths import ENV_SESSION
+from aid.paths import ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR
 from aid.spec import AgentSpecAdapter
 
 if TYPE_CHECKING:
@@ -36,6 +36,9 @@ class WorkerArgs:
     name: str
     spec_json: str
     state_dir: str
+    daemon_runtime_dir: str
+    daemon_state_dir: str
+    """The daemon's own paths, so code in the worker that calls `aid.connect()` finds this daemon."""
 
 
 class WorkerHandle(Protocol):
@@ -58,6 +61,8 @@ def _process_main(args: WorkerArgs) -> None:
     os.chdir(spec.cwd)
     os.environ.update(spec.env)
     os.environ[ENV_SESSION] = args.name
+    os.environ[ENV_RUNTIME_DIR] = args.daemon_runtime_dir
+    os.environ[ENV_STATE_DIR] = args.daemon_state_dir
     worker.main(args.endpoint, args.name, args.spec_json, args.state_dir)
 
 

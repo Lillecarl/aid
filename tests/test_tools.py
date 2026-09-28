@@ -88,7 +88,8 @@ async def test_pydantic_ai_session_calls_the_tools(
             catalog = await client.agents()
             session = await client.create("caller", spec)
             events = [e async for e in session.stream("go")]
-            quiet = await client.create("quiet", spec.model_copy(update={"aid_tools": False}))
+            without_tools = {"aid_tools": False, "target": "agents:every_tool_caller"}
+            quiet = await client.create("quiet", spec.model_copy(update=without_tools))
             without = [e async for e in quiet.stream("go")]
     titles = {e.title for e in events if isinstance(e, ToolCall) and e.title}
     assert titles == {"add", "whoami"}

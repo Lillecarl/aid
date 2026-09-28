@@ -87,8 +87,36 @@ class GetHistory(_Request):
     limit: Annotated[int, Field(ge=1, le=1000)] = 100
 
 
+class SendMessage(_Request):
+    """A message to another session. The daemon wakes it: a turn of its own for ACP and pydantic-ai, a channel
+    event for interactive Claude. `sender` is a session name, or None for a person."""
+
+    op: Literal["send"] = "send"
+    to: str
+    text: str
+    sender: str | None = None
+
+
+class ReceiveMessages(_Request):
+    """The messages waiting for an interactive Claude session, taken out of its mailbox. Waits up to `wait`
+    seconds for one to arrive; an empty list means none did. Only the session's channel server asks."""
+
+    op: Literal["receive"] = "receive"
+    session: str
+    wait: Annotated[float, Field(ge=0, le=60)] = 25
+
+
 type Request = Annotated[
-    CreateSession | ListSessions | Prompt | Cancel | StopSession | DeleteSession | ListAgents | GetHistory,
+    CreateSession
+    | ListSessions
+    | Prompt
+    | Cancel
+    | StopSession
+    | DeleteSession
+    | ListAgents
+    | GetHistory
+    | SendMessage
+    | ReceiveMessages,
     Field(discriminator="op"),
 ]
 
@@ -153,8 +181,16 @@ class TurnError(_Message):
     message: str
 
 
+class MessageEntry(_Message):
+    """A message another session, or a person, sent to this one."""
+
+    type: Literal["message"] = "message"
+    sender: str | None
+    text: str
+
+
 type HistoryItem = Annotated[
-    PromptEntry | TextDelta | ThoughtDelta | ToolCall | Output | TurnError, Field(discriminator="type")
+    PromptEntry | MessageEntry | TextDelta | ThoughtDelta | ToolCall | Output | TurnError, Field(discriminator="type")
 ]
 
 

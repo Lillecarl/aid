@@ -29,7 +29,10 @@ from aid.protocol import (
     Hello,
     ListAgents,
     ListSessions,
+    MessageEntry,
     Prompt,
+    ReceiveMessages,
+    SendMessage,
     SessionInfo,
     StartFailed,
     StopSession,
@@ -37,7 +40,7 @@ from aid.protocol import (
     decode_request,
     encode,
 )
-from aid.spec import AgentSpecAdapter
+from aid.spec import AgentKind, AgentSpecAdapter
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup, TaskStatus
@@ -70,15 +73,40 @@ class _Session:
     start_error: str | None = None
     start_failed: anyio.Event = field(default_factory=anyio.Event)
     lock: anyio.Lock = field(default_factory=anyio.Lock)
+    turn: str | None = None
+    """The prompt running now, a client's or a wake. The worker takes one at a time."""
+    inbox: list[MessageEntry] = field(default_factory=list[MessageEntry])
+    """Messages not yet handed over: to a wake turn, or to the channel server of interactive Claude."""
+    mail: anyio.Event = field(default_factory=anyio.Event)
+    """Set when `inbox` gains a message, for a channel server waiting on it."""
 
     @property
     def running(self) -> bool:
         return self.handle is not None and self.ready.is_set() and not self.exited.is_set()
 
+    @property
+    def uses_channel(self) -> bool:
+        return self.spec.kind is AgentKind.CLAUDE_TTY
+
+
+def wake_prompt(messages: list[MessageEntry]) -> str:
+    """The turn that hands messages to an ACP or pydantic-ai session."""
+    parts = [
+        f"Message from {f'aid session {m.sender!r}' if m.sender else 'a person using aid'}:\n\n{m.text}"
+        for m in messages
+    ]
+    if any(m.sender for m in messages):
+        parts.append(
+            "Answer a session with the send_message tool, addressed to its name, when its message asks for "
+            "something. Do not answer a message that only acknowledges or thanks."
+        )
+    return "\n\n---\n\n".join(parts)
+
 
 @dataclass(frozen=True)
 class _Route:
-    client: bytes
+    client: bytes | None
+    """None for a turn the daemon started itself, which only history sees."""
     session: str
     recorder: Recorder | None = None
     """Set for prompts: writes the turn to the session's history as it passes."""
@@ -187,12 +215,33 @@ class Daemon:
                 return Done(id=request.id, data=(await list_agents()).model_dump(mode="json"))
             case Prompt():
                 session = self._session(request.session)
-                await self._ensure_running(session)
-                recorder = Recorder(session.history, request.id)
-                await recorder.prompt(request.text)
-                self._routes[request.id] = _Route(client, session.name, recorder)
-                await self._send_worker(session.name, request)
+                if session.turn is not None:
+                    raise AidError("busy", f"{session.name!r} is in a turn")
+                session.turn = request.id
+                try:
+                    await self._ensure_running(session)
+                    recorder = Recorder(session.history, request.id)
+                    await recorder.prompt(request.text)
+                    self._routes[request.id] = _Route(client, session.name, recorder)
+                    await self._send_worker(session.name, request)
+                except BaseException:
+                    self._routes.pop(request.id, None)
+                    session.turn = None
+                    raise
                 return None
+            case SendMessage():
+                await self._send_message(request)
+                return Done(id=request.id)
+            case ReceiveMessages():
+                session = self._session(request.session)
+                if not session.uses_channel:
+                    raise AidError("not_channel", f"{session.name!r} takes its messages as turns, not by channel")
+                if not session.inbox:
+                    with anyio.move_on_after(request.wait):
+                        await session.mail.wait()
+                taken, session.inbox = session.inbox, []
+                session.mail = anyio.Event()
+                return Done(id=request.id, data=[m.model_dump(mode="json") for m in taken])
             case Cancel():
                 session = self._session(request.session)
                 if not session.running:
@@ -238,6 +287,59 @@ class Daemon:
             await anyio.to_thread.run_sync(shutil.rmtree, session_dir, True)
             raise
 
+    async def _send_message(self, request: SendMessage) -> None:
+        session = self._session(request.to)
+        if request.sender == session.name:
+            raise AidError("to_self", f"{session.name!r} cannot message itself")
+        if session.uses_channel and not session.spec.aid_tools:
+            raise AidError("cannot_receive", f"{session.name!r} has aid_tools off, so nothing reads its messages")
+        if self._tg is None:
+            raise RuntimeError("daemon is not serving")
+        message = MessageEntry(sender=request.sender, text=request.text)
+        await Recorder(session.history, request.id).message(message)
+        session.inbox.append(message)
+        session.mail.set()
+        # The sender is often an agent mid-turn, waiting on its tool call: it gets its answer before the wake.
+        self._tg.start_soon(self._wake, session)
+
+    async def _wake(self, session: _Session) -> None:
+        if not session.uses_channel:
+            await self._deliver(session)
+            return
+        # Interactive Claude reads its inbox through the channel server it starts.
+        try:
+            await self._ensure_running(session)
+        except AidError:
+            log.exception("could not start %s for its messages", session.name)
+
+    async def _deliver(self, session: _Session) -> None:
+        """Hand the inbox to a turn of its own, unless a turn is running: its end calls this again."""
+        if session.turn is not None or not session.inbox:
+            return
+        messages, session.inbox = session.inbox, []
+        request = Prompt(session=session.name, text=wake_prompt(messages))
+        session.turn = request.id
+        recorder = Recorder(session.history, request.id)
+        try:
+            await self._ensure_running(session)
+            self._routes[request.id] = _Route(None, session.name, recorder)
+            await self._send_worker(session.name, request)
+        except (AidError, zmq.ZMQError) as error:
+            log.exception("could not deliver %d messages to %s", len(messages), session.name)
+            self._routes.pop(request.id, None)
+            session.turn = None
+            await self._record(
+                _Route(None, session.name, recorder), Failure(id=request.id, code="undelivered", message=str(error))
+            )
+
+    def _end_turn(self, name: str, turn: str) -> None:
+        session = self._sessions.get(name)
+        if session is None or session.turn != turn:
+            return
+        session.turn = None
+        if session.inbox and not session.uses_channel and self._tg is not None:
+            self._tg.start_soon(self._deliver, session)
+
     async def _ensure_running(self, session: _Session) -> None:
         async with session.lock:
             if session.running:
@@ -253,6 +355,8 @@ class Daemon:
                 name=session.name,
                 spec_json=AgentSpecAdapter.dump_json(session.spec).decode(),
                 state_dir=str(self._paths.session_dir(session.name)),
+                daemon_runtime_dir=str(self._paths.runtime_dir),
+                daemon_state_dir=str(self._paths.state_dir),
             )
             handle = await self._launcher.launch(args)
             session.handle = handle
@@ -284,8 +388,12 @@ class Daemon:
                 if route.session == session.name:
                     del self._routes[request_id]
                     failure = Failure(id=request_id, code="worker_exited", message=f"worker exited with {code}")
-                    await self._send_client(route.client, encode(failure))
+                    if route.client is not None:
+                        await self._send_client(route.client, encode(failure))
                     await self._record(route, failure)
+            # Messages still in the inbox wait for the next turn to end or the next message: a wake now could
+            # start a crashing worker again and again.
+            session.turn = None
             session.exited.set()
             session.ready.set()
 
@@ -326,12 +434,15 @@ class Daemon:
                         session.ready.set()
                 case Event():
                     if (route := self._routes.get(reply.id)) is not None:
-                        await self._send_client(route.client, payload)
+                        if route.client is not None:
+                            await self._send_client(route.client, payload)
                         await self._record(route, reply)
                 case Done() | Failure():
                     if (route := self._routes.pop(reply.id, None)) is not None:
-                        await self._send_client(route.client, payload)
+                        if route.client is not None:
+                            await self._send_client(route.client, payload)
                         await self._record(route, reply)
+                        self._end_turn(route.session, reply.id)
 
     async def _record(self, route: _Route, reply: Event | Done | Failure) -> None:
         """Write a reply to the turn's history, after the client has it. A disk error loses history, not the turn."""

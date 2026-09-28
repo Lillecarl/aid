@@ -17,6 +17,7 @@ export type SessionEvent =
 export type HistoryItem =
   | SessionEvent
   | { type: "prompt"; text: string }
+  | { type: "message"; sender: string | null; text: string }
   | { type: "error"; code: string; message: string };
 
 export interface HistoryEntry {

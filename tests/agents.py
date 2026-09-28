@@ -50,7 +50,9 @@ class Review(BaseModel):
     score: int
 
 
-reviewer = Agent(TestModel(custom_output_args={"verdict": "approve", "score": 7}), output_type=Review)
+reviewer = Agent(TestModel(call_tools=[], custom_output_args={"verdict": "approve", "score": 7}), output_type=Review)
 
-# TestModel calls every tool it is given once, then answers with their results.
-tool_caller = Agent(TestModel())
+# TestModel calls each tool in call_tools once, then answers with their results. Not "all": aid's own tools
+# reach every session too.
+tool_caller = Agent(TestModel(call_tools=["add", "whoami"]))
+every_tool_caller = Agent(TestModel())

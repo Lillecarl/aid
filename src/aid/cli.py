@@ -16,7 +16,16 @@ from aid.client import connect
 from aid.launcher import ForkserverLauncher
 from aid.mcp import from_claude_config
 from aid.paths import default_paths
-from aid.protocol import AidError, Output, PromptEntry, TextDelta, ThoughtDelta, ToolCall, TurnError
+from aid.protocol import (
+    AidError,
+    MessageEntry,
+    Output,
+    PromptEntry,
+    TextDelta,
+    ThoughtDelta,
+    ToolCall,
+    TurnError,
+)
 from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
 from aid.web import OidcConfig, create_app
 from aid.web import serve as serve_web
@@ -180,6 +189,8 @@ def _history_line(entry: HistoryEntry) -> str:
                 if isinstance(item.output, str)
                 else f"{json.dumps(item.output)} [{item.stop_reason}]"
             )
+        case MessageEntry():
+            body = f"[message from {item.sender or 'a person'}] {item.text}"
         case TurnError():
             body = f"[error {item.code}] {item.message}"
     return f"{entry.seq:>6}  {body}"

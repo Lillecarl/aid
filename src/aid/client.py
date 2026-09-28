@@ -31,9 +31,12 @@ from aid.protocol import (
     HistoryPage,
     ListAgents,
     ListSessions,
+    MessageEntry,
     Output,
     Prompt,
+    ReceiveMessages,
     Reply,
+    SendMessage,
     SessionInfo,
     StopSession,
     TextDelta,
@@ -51,6 +54,7 @@ if TYPE_CHECKING:
     from aid.spec import AgentSpec
 
 _SESSION_INFOS = TypeAdapter(list[SessionInfo])
+_MESSAGES = TypeAdapter(list[MessageEntry])
 
 
 @dataclass(frozen=True)
@@ -142,6 +146,15 @@ class Client:
 
     def session(self, name: str) -> Session:
         return Session(self, name)
+
+    async def send_message(self, to: str, text: str, *, sender: str | None = None) -> None:
+        """Leave a message for session `to`; the daemon wakes it. `sender` names the session it is from, or None
+        for a person. Returns once the message is recorded, not answered."""
+        await self.call(SendMessage(to=to, text=text, sender=sender))
+
+    async def receive_messages(self, session: str, *, wait: float = 25) -> list[MessageEntry]:
+        """Take the messages waiting for interactive Claude session `session`, waiting up to `wait` seconds."""
+        return _MESSAGES.validate_python(await self.call(ReceiveMessages(session=session, wait=wait)))
 
 
 class Session:

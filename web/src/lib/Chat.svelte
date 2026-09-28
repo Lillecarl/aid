@@ -9,7 +9,7 @@
     ondeleted: () => void | Promise<void>;
   }
 
-  type Kind = "user" | "assistant" | "thought" | "tool" | "meta" | "error";
+  type Kind = "user" | "message" | "assistant" | "thought" | "tool" | "meta" | "error";
   /** One line of the log. `seq` is set for rows read from history; rows of a turn still streaming lack it. */
   type Row = { key: string; seq?: number; kind: Kind; text: string };
 
@@ -37,6 +37,8 @@
     switch (item.type) {
       case "prompt":
         return [row("user", item.text)];
+      case "message":
+        return [row("message", `From ${item.sender ?? "a person"}: ${item.text}`)];
       case "text":
         return [row("assistant", item.text)];
       case "thought":
@@ -251,6 +253,11 @@
   }
   .user {
     font-weight: 600;
+  }
+  .message {
+    font-weight: 600;
+    border-left: 3px solid var(--line);
+    padding-left: 0.5rem;
   }
   .thought,
   .meta,

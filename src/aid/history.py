@@ -20,7 +20,7 @@ from pydantic import ValidationError
 from aid.protocol import HistoryEntry, HistoryPage, PromptEntry, TextDelta, ThoughtDelta, TurnError
 
 if TYPE_CHECKING:
-    from aid.protocol import HistoryItem, SessionEvent
+    from aid.protocol import HistoryItem, MessageEntry, SessionEvent
 
 log = logging.getLogger(__name__)
 
@@ -117,6 +117,9 @@ class Recorder:
 
     async def prompt(self, text: str) -> None:
         await self._history.append(PromptEntry(text=text), self._turn)
+
+    async def message(self, message: MessageEntry) -> None:
+        await self._history.append(message, self._turn)
 
     async def error(self, code: str, message: str) -> None:
         await self.flush()
