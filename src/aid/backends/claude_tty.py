@@ -184,11 +184,11 @@ class ClaudeTtyBackend:
             )
 
         def capture() -> PaneView:
-            # A Pane's fields are a snapshot from when it was read: without refresh() the revision stays where the
-            # pane was created, and every wait since it answers at once. Read before drawing, so the frame is at
-            # least this new and the next wait misses nothing.
+            # Asked of the server: Pane.revision is the snapshot from when the Pane was read, and a wait since that
+            # answers at once, every time. Read before drawing, so the frame is at least this new and the next wait
+            # misses nothing. The refresh is for in_mode and mode below, snapshot fields too.
+            revision = self._pane.current_revision()
             self._pane.refresh()
-            revision = self._pane.revision
             html = self._pane.capture_html()
             css = self._server.html_stylesheet(self._pane) if stylesheet else None
             # pymux draws a mode (copy mode, a popup) above the pane, and the pane's page does not hold it.
