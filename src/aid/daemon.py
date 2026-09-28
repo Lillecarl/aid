@@ -26,6 +26,7 @@ from aid.protocol import (
     ListSessions,
     Prompt,
     SessionInfo,
+    StartFailed,
     StopSession,
     decode_reply,
     decode_request,
@@ -44,6 +45,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 START_TIMEOUT: Final = 60.0
+START_ERROR_GRACE: Final = 0.5
 STOP_TIMEOUT: Final = 10.0
 SPEC_FILE: Final = "spec.json"
 
@@ -56,6 +58,8 @@ class _Session:
     ready: anyio.Event = field(default_factory=anyio.Event)
     exited: anyio.Event = field(default_factory=anyio.Event)
     exit_code: int | None = None
+    start_error: str | None = None
+    start_failed: anyio.Event = field(default_factory=anyio.Event)
     lock: anyio.Lock = field(default_factory=anyio.Lock)
 
     @property
@@ -218,6 +222,8 @@ class Daemon:
                 raise RuntimeError("daemon is not serving")
             session.ready = anyio.Event()
             session.exited = anyio.Event()
+            session.start_failed = anyio.Event()
+            session.start_error = None
             args = WorkerArgs(
                 endpoint=self._paths.workers,
                 name=session.name,
@@ -232,6 +238,12 @@ class Daemon:
             if scope.cancelled_caught:
                 handle.kill()
                 raise AidError("start_timeout", f"worker for {session.name!r} sent no hello in {START_TIMEOUT}s")
+            if session.exited.is_set() and not session.start_failed.is_set():
+                # The worker's StartFailed and its exit take different paths here, so the exit can win.
+                with anyio.move_on_after(START_ERROR_GRACE):
+                    await session.start_failed.wait()
+            if session.start_error is not None:
+                raise AidError("start_failed", f"{session.name!r} did not start: {session.start_error}")
             if session.exited.is_set():
                 raise AidError("worker_exited", f"worker for {session.name!r} exited with {session.exit_code}")
 
@@ -280,6 +292,12 @@ class Daemon:
                 case Hello():
                     if (session := self._sessions.get(name)) is not None:
                         log.info("worker %s ready (pid %d)", name, reply.pid)
+                        session.ready.set()
+                case StartFailed():
+                    if (session := self._sessions.get(name)) is not None:
+                        log.warning("worker %s did not start: %s", name, reply.message)
+                        session.start_error = reply.message
+                        session.start_failed.set()
                         session.ready.set()
                 case Event():
                     if (route := self._routes.get(reply.id)) is not None:

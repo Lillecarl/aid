@@ -10,7 +10,8 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING
+from contextlib import AsyncExitStack
+from typing import TYPE_CHECKING, cast
 
 import anyio
 import zmq
@@ -24,6 +25,7 @@ from aid.protocol import (
     Failure,
     Hello,
     Prompt,
+    StartFailed,
     StopSession,
     decode_request,
     encode,
@@ -55,13 +57,28 @@ async def serve(endpoint: str, name: str, spec: AgentSpec, state_dir: anyio.Path
     sock.setsockopt(zmq.LINGER, 1000)
     sock.connect(endpoint)
     try:
-        async with open_backend(spec, state_dir) as backend, anyio.create_task_group() as tg:
+        async with AsyncExitStack() as stack:
+            try:
+                backend = await stack.enter_async_context(open_backend(spec, state_dir))
+            except Exception as error:
+                log.exception("the backend did not start")
+                await sock.send(encode(StartFailed(message=describe(error))))
+                raise
+            tg = await stack.enter_async_context(anyio.create_task_group())
             worker = _Worker(sock, backend, tg)
             await worker.send(Hello(pid=os.getpid()))
             await worker.serve()
     finally:
         sock.close()
         ctx.term()
+
+
+def describe(error: BaseException) -> str:
+    """One line per underlying error. A task group's own message says only how many there were."""
+    if isinstance(error, BaseExceptionGroup):
+        inner: tuple[BaseException, ...] = cast("BaseExceptionGroup[BaseException]", error).exceptions
+        return "; ".join(describe(e) for e in inner)
+    return f"{type(error).__name__}: {error}"
 
 
 class _Worker:

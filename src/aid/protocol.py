@@ -137,7 +137,14 @@ class Hello(_Message):
     pid: int
 
 
-type Reply = Annotated[Event | Done | Failure | Hello, Field(discriminator="reply")]
+class StartFailed(_Message):
+    """Instead of Hello, from a worker whose backend did not start. It exits right after."""
+
+    reply: Literal["start_failed"] = "start_failed"
+    message: str
+
+
+type Reply = Annotated[Event | Done | Failure | Hello | StartFailed, Field(discriminator="reply")]
 
 RequestAdapter: TypeAdapter[Request] = TypeAdapter(Request)
 ReplyAdapter: TypeAdapter[Reply] = TypeAdapter(Reply)

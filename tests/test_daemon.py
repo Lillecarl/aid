@@ -83,7 +83,8 @@ async def test_failed_start_leaves_no_session(daemon: Paths, tmp_path: Path) -> 
         async with aid.connect(daemon) as client:
             with pytest.raises(AidError) as error:
                 await client.create("broken", spec)
-            assert error.value.code == "worker_exited"
+            assert error.value.code == "start_failed"
+            assert "/nonexistent/agent" in error.value.message
             assert await client.sessions() == []
 
 
