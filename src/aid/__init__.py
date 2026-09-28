@@ -20,3 +20,4 @@ from aid.spec import AcpSpec as AcpSpec
 from aid.spec import AgentSpec as AgentSpec
 from aid.spec import PermissionMode as PermissionMode
 from aid.spec import PydanticAISpec as PydanticAISpec
+from aid.tools import mcptool as mcptool

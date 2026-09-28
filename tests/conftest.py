@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import multiprocessing.forkserver
+import os
 import shutil
 import sys
 import tempfile
@@ -9,6 +11,7 @@ from typing import TYPE_CHECKING
 import anyio
 import pytest
 
+from aid.agents import ENV_AGENTS_PATH
 from aid.daemon import Daemon
 from aid.launcher import ForkserverLauncher
 from aid.paths import Paths
@@ -25,9 +28,25 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture(scope="session", autouse=True)
+def empty_agents_path(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Keep the agents and tools of whoever runs the tests out of the sessions. Set before the forkserver starts,
+    so every worker inherits it."""
+    previous = os.environ.get(ENV_AGENTS_PATH)
+    os.environ[ENV_AGENTS_PATH] = str(tmp_path_factory.mktemp("no-agents"))
+    yield
+    if previous is None:
+        del os.environ[ENV_AGENTS_PATH]
+    else:
+        os.environ[ENV_AGENTS_PATH] = previous
+
+
 @pytest.fixture(scope="session")
-def launcher() -> ForkserverLauncher:
-    return ForkserverLauncher()
+def launcher(empty_agents_path: None) -> ForkserverLauncher:
+    launcher = ForkserverLauncher()
+    # Workers inherit the forkserver's environment, frozen when it starts: start it before a test monkeypatches.
+    multiprocessing.forkserver.ensure_running()
+    return launcher
 
 
 @pytest.fixture

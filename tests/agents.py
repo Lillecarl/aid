@@ -51,3 +51,6 @@ class Review(BaseModel):
 
 
 reviewer = Agent(TestModel(custom_output_args={"verdict": "approve", "score": 7}), output_type=Review)
+
+# TestModel calls every tool it is given once, then answers with their results.
+tool_caller = Agent(TestModel())

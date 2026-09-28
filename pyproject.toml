@@ -15,6 +15,7 @@ dependencies = [
   "hypercorn>=0.17",
   "itsdangerous>=2.2",
   "libpymux",
+  "mcp>=1.20",
   # The SDK behind pydantic-ai's OpenAI-compatible providers: OpenAI itself, DeepSeek, OpenRouter and the like.
   "openai>=2.0",
   "pydantic>=2.11",

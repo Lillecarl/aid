@@ -95,7 +95,9 @@ def _parser() -> argparse.ArgumentParser:
     py.add_argument("agent", help="an agent `aid agents` lists, or module:attribute of a pydantic_ai agent")
     py.add_argument("--python-path", action="append", default=[], help="prepend to the worker's sys.path")
 
-    sub.add_parser("agents", help="list the aid.PydanticAgent classes on the daemon's agents path")
+    sub.add_parser(
+        "agents", help="list the aid.PydanticAgent classes and @aid.mcptool functions on the daemon's agents path"
+    )
 
     hist = sub.add_parser("history", help="print a session's history, newest last")
     hist.add_argument("name")
@@ -202,6 +204,8 @@ async def _client_command(args: argparse.Namespace) -> None:
                 catalog = await client.agents()
                 for agent in catalog.agents:
                     print(f"{agent.name}\t{agent.module}\t{agent.description}")
+                for tool in catalog.tools:
+                    print(f"tool {tool.name}\t{tool.module}\t{tool.description}")
                 for problem in catalog.problems:
                     print(f"problem: {problem}", file=sys.stderr)
             case "prompt":

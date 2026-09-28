@@ -26,7 +26,7 @@ from acp.schema import (
 from pydantic import ValidationError
 
 from aid.env import agent_environment
-from aid.mcp import to_acp
+from aid.mcp import session_servers, to_acp
 from aid.protocol import Output, SessionEvent, TextDelta, ThoughtDelta, ToolCall
 from aid.spec import PermissionMode
 
@@ -188,7 +188,7 @@ async def open_acp(spec: AcpSpec, state_dir: anyio.Path) -> AsyncGenerator[AcpBa
             if missing := unsupported_transports(spec, caps.mcp_capabilities if caps else None):
                 raise RuntimeError(f"the agent does not take {' or '.join(missing)} MCP servers")
             servers: list[HttpMcpServer | SseMcpServer | AcpMcpServer | McpServerStdio] = [
-                to_acp(server) for server in spec.mcp_servers
+                to_acp(server) for server in session_servers(spec, state_dir.name)
             ]
             session_id = await _resume(conn, spec, id_file, servers, can_load=bool(caps and caps.load_session))
         await id_file.write_text(session_id)

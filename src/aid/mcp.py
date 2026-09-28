@@ -2,17 +2,43 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from typing import TYPE_CHECKING, Any
 
 from acp.schema import EnvVariable, HttpHeader, HttpMcpServer, McpServerStdio, SseMcpServer
 from pydantic import TypeAdapter
 
-from aid.spec import McpHttp, McpServer, McpSse, McpStdio
+from aid.agents import ENV_AGENTS_PATH, agents_path
+from aid.paths import ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, default_paths
+from aid.spec import BUILTIN_MCP_SERVER, McpHttp, McpServer, McpSse, McpStdio
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
+    from aid.spec import AcpSpec, ClaudeTtySpec
+
 _servers: TypeAdapter[list[McpServer]] = TypeAdapter(list[McpServer])
+
+
+def builtin_server(session: str) -> McpStdio:
+    """`aid.mcp_server` for one session. The agent starts it with its own environment, which may lack ours."""
+    paths = default_paths()
+    env = {
+        ENV_AGENTS_PATH: ":".join(str(p) for p in agents_path()),
+        ENV_SESSION: session,
+        ENV_RUNTIME_DIR: str(paths.runtime_dir),
+        ENV_STATE_DIR: str(paths.state_dir),
+    }
+    # The dev shell runs aid from src/ through PYTHONPATH; without it the server imports the venv's copy.
+    if python_path := os.environ.get("PYTHONPATH"):
+        env["PYTHONPATH"] = python_path
+    return McpStdio(name=BUILTIN_MCP_SERVER, command=[sys.executable, "-m", "aid.mcp_server"], env=env)
+
+
+def session_servers(spec: AcpSpec | ClaudeTtySpec, session: str) -> list[McpServer]:
+    """What a session's agent gets. One function for new and resumed sessions, so both see the same list."""
+    return [*spec.mcp_servers, builtin_server(session)] if spec.aid_tools else list(spec.mcp_servers)
 
 
 def to_acp(server: McpServer) -> McpServerStdio | HttpMcpServer | SseMcpServer:

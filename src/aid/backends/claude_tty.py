@@ -27,7 +27,7 @@ import anyio.to_thread
 from libpymux import Server
 
 from aid.env import agent_environment
-from aid.mcp import claude_config
+from aid.mcp import claude_config, session_servers
 from aid.paths import default_paths
 from aid.protocol import Output, TextDelta
 from aid.transcript import TranscriptFollower, TurnEnded, config_dir, find_transcript, items_from_entry
@@ -192,9 +192,9 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
     await id_file.write_text(session_id)
     resume = await anyio.to_thread.run_sync(find_transcript, transcripts, session_id) is not None
     mcp_config: str | None = None
-    if spec.mcp_servers:
+    if servers := session_servers(spec, state_dir.name):
         mcp_file = state_dir / MCP_CONFIG_FILE
-        await _write_private(mcp_file, json.dumps(claude_config(spec.mcp_servers)), 0o600)
+        await _write_private(mcp_file, json.dumps(claude_config(servers)), 0o600)
         mcp_config = str(mcp_file)
     argv = claude_argv(spec, session_id, resume=resume, mcp_config=mcp_config)
 

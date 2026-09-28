@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
+from aid.tools import McpTool, tool_of
+
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
@@ -58,6 +60,7 @@ class PydanticAgent(ABC):
 @dataclass(frozen=True)
 class Catalog:
     agents: dict[str, type[PydanticAgent]] = field(default_factory=dict[str, "type[PydanticAgent]"])
+    tools: dict[str, McpTool] = field(default_factory=dict[str, McpTool])
     problems: list[str] = field(default_factory=list[str])
     """Modules that failed to import and names defined twice. A problem hides one agent, not the catalog."""
 
@@ -66,6 +69,10 @@ class Catalog:
             "agents": [
                 {"name": name, "description": cls.description(), "module": cls.__module__}
                 for name, cls in sorted(self.agents.items())
+            ],
+            "tools": [
+                {"name": name, "description": tool.summary(), "module": tool.fn.__module__}
+                for name, tool in sorted(self.tools.items())
             ],
             "problems": self.problems,
         }
@@ -91,6 +98,16 @@ def _module_names(directory: Path) -> list[str]:
     return names
 
 
+def _add_tool(catalog: Catalog, module: str, tool: McpTool) -> None:
+    # A tool imported from another module on the path is that module's to offer.
+    if tool.fn.__module__ != module:
+        return
+    if (other := catalog.tools.get(tool.name)) is not None and other is not tool:
+        catalog.problems.append(f"tool {tool.name}: defined by {other.fn.__module__} and {module}")
+        return
+    catalog.tools[tool.name] = tool
+
+
 def discover(paths: Sequence[Path]) -> Catalog:
     """Import every module on `paths` and collect its agents. Imports run the modules' code: call it in a
     process that may run user code, a worker or `python -m aid.catalog`, never the daemon."""
@@ -107,6 +124,9 @@ def discover(paths: Sequence[Path]) -> Catalog:
                 catalog.problems.append(f"{directory / module_name}: {type(error).__name__}: {error}")
                 continue
             for obj in vars(module).values():
+                if (tool := tool_of(obj)) is not None:
+                    _add_tool(catalog, module.__name__, tool)
+                    continue
                 if not (isinstance(obj, type) and issubclass(obj, PydanticAgent)):
                     continue
                 if obj.__module__ != module.__name__ or inspect.isabstract(obj):

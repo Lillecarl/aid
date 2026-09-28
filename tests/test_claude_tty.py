@@ -156,5 +156,9 @@ async def test_mcp_servers_reach_claude(daemon: Paths, tmp_path: Path, pymux_soc
             session = await client.create("tty", spec)
             result = await session.run("mcp")
     config = next(daemon.state_dir.rglob("mcp.json"))
-    assert json.loads(result.text) == claude_config(servers)
+    got = json.loads(result.text)["mcpServers"]
+    builtin = got.pop("aid")
+    assert got == claude_config(servers)["mcpServers"]
+    assert (builtin["command"], builtin["args"]) == (sys.executable, ["-m", "aid.mcp_server"])
+    assert builtin["env"]["AID_SESSION"] == "tty"
     assert config.stat().st_mode & 0o777 == 0o600

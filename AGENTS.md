@@ -12,8 +12,13 @@ API and a CLI.
 - `src/aid/launcher.py` — `Launcher` protocol; `ForkserverLauncher`.
 - `src/aid/worker.py` — worker entry `main(endpoint, name, spec_json, state_dir)`; DEALER to the daemon.
 - `src/aid/backends/` — `acp.py`, `pydantic_ai.py`, `claude_tty.py`; each implements `base.Backend`.
-- `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON.
-  claude-agent-acp restarts its query when `session/load` gets servers other than `session/new` did.
+- `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON,
+  plus the built-in `aid` server (`session_servers`). claude-agent-acp restarts its query when `session/load` gets
+  servers other than `session/new` did.
+- `src/aid/tools.py` — `@aid.mcptool`, a marker attribute; `agents.discover` collects the marked functions.
+  Keep it free of `mcp` imports: every worker and the daemon import it.
+- `src/aid/mcp_server.py` — `python -m aid.mcp_server`, the tools as a stdio MCP server. The agent starts it; it
+  imports user code, so never the daemon. pydantic-ai sessions get the same functions in-process as a toolset.
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.
 - `src/aid/agents.py` — `aid.PydanticAgent`, the interface agent modules implement, and discovery on
   AID_AGENTS_PATH. `catalog.py` runs discovery in a subprocess for the daemon; never import agent modules

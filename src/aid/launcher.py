@@ -18,6 +18,7 @@ import anyio
 import anyio.to_thread
 
 from aid import worker
+from aid.paths import ENV_SESSION
 from aid.spec import AgentSpecAdapter
 
 if TYPE_CHECKING:
@@ -56,6 +57,7 @@ def _process_main(args: WorkerArgs) -> None:
     spec = AgentSpecAdapter.validate_json(args.spec_json)
     os.chdir(spec.cwd)
     os.environ.update(spec.env)
+    os.environ[ENV_SESSION] = args.name
     worker.main(args.endpoint, args.name, args.spec_json, args.state_dir)
 
 

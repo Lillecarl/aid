@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal, Self
+from typing import Annotated, Final, Literal, Self
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
@@ -26,6 +26,12 @@ class _Spec(BaseModel):
 
     cwd: str
     env: dict[str, str] = Field(default_factory=dict[str, str])
+    aid_tools: bool = True
+    """Offer the `@aid.mcptool` functions on the agents path: as the MCP server `aid`, or in-process to a
+    pydantic-ai agent."""
+
+
+BUILTIN_MCP_SERVER: Final = "aid"
 
 
 class _McpServer(BaseModel):
@@ -60,6 +66,8 @@ def _unique_names(servers: list[McpServer]) -> list[McpServer]:
     names = [server.name for server in servers]
     if len(set(names)) != len(names):
         raise ValueError(f"MCP server names repeat: {names}")
+    if BUILTIN_MCP_SERVER in names:
+        raise ValueError(f"the MCP server name {BUILTIN_MCP_SERVER!r} belongs to aid's own tools")
     return servers
 
 

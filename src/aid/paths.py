@@ -6,6 +6,8 @@ from pathlib import Path
 
 ENV_RUNTIME_DIR = "AID_RUNTIME_DIR"
 ENV_STATE_DIR = "AID_STATE_DIR"
+# Set in each worker and in the MCP server a session's agent starts: the session the code runs for.
+ENV_SESSION = "AID_SESSION"
 
 
 @dataclass(frozen=True)
