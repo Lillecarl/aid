@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -13,9 +14,11 @@ import pytest
 import aid
 from aid.backends.claude_tty import Screen, classify, claude_argv, launcher_script
 from aid.mcp import claude_config
-from aid.protocol import AidError, Output, TextDelta, ToolCall
+from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR
+from aid.protocol import AidError, MessageEntry, Output, TextDelta, ToolCall
 from aid.spec import ClaudeTtySpec, McpHttp
 from tests.fake_claude import COUNT
+from tests.test_tools import Rpc
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -35,6 +38,11 @@ needs_pymux = pytest.mark.skipif(shutil.which("pymux") is None, reason="pymux is
         (" Do you trust this folder?\n ❯ No, exit\n   Yes, I trust this folder\n", Screen.TRUST),
         ('header\n────\n❯ Try "refactor <filepath>"\n────\n', Screen.READY),
         ("header\n────\n❯\n────\n", Screen.READY),
+        (
+            "  WARNING: Loading development channels\n\n  --dangerously-load-development-channels is for local\n"
+            "  Channels: server:aid\n\n  ❯ 1. I am using this for local development\n    2. Exit\n",
+            Screen.CHANNELS,
+        ),
         ("loading ❯ not at the start\n", Screen.STARTING),
     ],
 )
@@ -59,6 +67,8 @@ def test_variadic_options_go_before_other_arguments() -> None:
         "/s/mcp.json",
         "--allowedTools",
         "mcp__aid",
+        "--dangerously-load-development-channels",
+        "server:aid",
         "--session-id",
         "id",
         "first prompt",
@@ -80,7 +90,7 @@ def fake_spec(cwd: Path, socket: str, env: dict[str, str] | None = None, *, trus
     return ClaudeTtySpec(
         cwd=str(cwd),
         command=[sys.executable, str(TESTS / "fake_claude.py")],
-        env={"CLAUDE_CONFIG_DIR": str(cwd / "claude-config"), **(env or {})},
+        env={"CLAUDE_CONFIG_DIR": str(cwd / "claude-config"), "FAKE_CLAUDE_CHANNELS": "1", **(env or {})},
         pymux_socket=socket,
         trust_cwd=trust_cwd,
     )
@@ -164,4 +174,42 @@ async def test_mcp_servers_reach_claude(daemon: Paths, tmp_path: Path, pymux_soc
     assert got == claude_config(servers)["mcpServers"]
     assert (builtin["command"], builtin["args"]) == (sys.executable, ["-m", "aid.mcp_server"])
     assert builtin["env"]["AID_SESSION"] == "tty"
+    assert builtin["env"]["AID_CHANNEL"] == "1"
     assert config.stat().st_mode & 0o777 == 0o600
+
+
+@needs_pymux
+async def test_messages_reach_claude_through_its_channel(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    env = {
+        ENV_SESSION: "tty",
+        ENV_CHANNEL: "1",
+        ENV_RUNTIME_DIR: str(daemon.runtime_dir),
+        ENV_STATE_DIR: str(daemon.state_dir),
+    }
+    command = [sys.executable, "-m", "aid.mcp_server"]
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            async with await anyio.open_process(command, env={**os.environ, **env}) as server:
+                assert server.stdin is not None
+                assert server.stdout is not None
+                rpc = Rpc(server.stdin, server.stdout)
+                hello = {"name": "test", "version": "0"}
+                init = await rpc.call(
+                    "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": hello}
+                )
+                await rpc.notify("notifications/initialized")
+                await client.send_message("tty", "ping", sender="bob")
+                await client.send_message("tty", "from a person")
+                first = await rpc.notification("notifications/claude/channel")
+                second = await rpc.notification("notifications/claude/channel")
+                await server.stdin.aclose()
+            history = await client.session("tty").history()
+    assert init["capabilities"]["experimental"] == {"claude/channel": {}}
+    assert "send_message" in init["instructions"]
+    assert first == {"content": "ping", "meta": {"from": "bob"}}
+    assert second == {"content": "from a person", "meta": {}}
+    assert [e.item for e in history.entries] == [
+        MessageEntry(sender="bob", text="ping"),
+        MessageEntry(sender=None, text="from a person"),
+    ]

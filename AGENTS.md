@@ -19,6 +19,11 @@ API and a CLI.
   Keep it free of `mcp` imports: every worker and the daemon import it.
 - `src/aid/mcp_server.py` — `python -m aid.mcp_server`, the tools as a stdio MCP server. The agent starts it; it
   imports user code, so never the daemon. pydantic-ai sessions get the same functions in-process as a toolset.
+  For interactive Claude it is also the session's channel (research preview): it long-polls the daemon for the
+  session's messages and pushes `notifications/claude/channel`.
+- `src/aid/builtin_tools.py` — aid's own tools, in every session: `send_message`, `list_sessions`.
+- Messages: `SendMessage` → recipient's history + inbox. ACP and pydantic-ai get a daemon-started wake turn after
+  the running turn; interactive Claude gets a channel event. A wake turn has no client (`_Route.client` None).
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.
 - `src/aid/agents.py` — `aid.PydanticAgent`, the interface agent modules implement, and discovery on
   AID_AGENTS_PATH. `catalog.py` runs discovery in a subprocess for the daemon; never import agent modules

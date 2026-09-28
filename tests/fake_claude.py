@@ -2,6 +2,7 @@
 
 Prompts: "slow" waits for Escape; "count" writes one text block per number; "tool" makes a tool call;
 "mcp" says the --mcp-config file; anything else is echoed. FAKE_CLAUDE_TRUST=1 shows the trust dialog until a `.fake-trusted` file exists.
+FAKE_CLAUDE_CHANNELS=1 shows the development channels warning, when the flag is given, until Enter.
 """
 
 from __future__ import annotations
@@ -94,6 +95,15 @@ class Fake:
                 marker.touch()
                 return
 
+    def channels(self) -> None:
+        if "--dangerously-load-development-channels" not in sys.argv or os.environ.get("FAKE_CLAUDE_CHANNELS") != "1":
+            return
+        self.screen(
+            "  WARNING: Loading development channels\n\n  ❯ 1. I am using this for local development\n    2. Exit\n"
+        )
+        while self.next_event()[0] != "enter":
+            pass
+
     def turn(self, text: str) -> None:
         self.write({"type": "user", "message": {"role": "user", "content": text}})
         if text == "slow":
@@ -122,6 +132,7 @@ class Fake:
 
     def run(self) -> None:
         self.trust()
+        self.channels()
         pending = ""
         while True:
             self.screen(f" fake claude {self.session_id}\n{'─' * 20}\n❯ {pending}\n{'─' * 20}\n")

@@ -9,6 +9,13 @@ transcript (`aid.transcript`), because the terminal has no structured stream. Me
 - A typed newline is Enter and submits. A bracketed paste keeps newlines and semicolons.
 - `--resume <id>` appends to the same transcript.
 - Escape interrupts a turn; the transcript then holds "[Request interrupted by user]" and no turn_duration.
+
+And on 2.1.284, with `--dangerously-load-development-channels server:aid`:
+
+- After the trust dialog comes "WARNING: Loading development channels", whose default is to go on.
+- A channel event wakes an idle Claude. Its turn is in the transcript as a `user` entry with `isMeta` and
+  `origin.kind == "channel"`, ended by turn_duration as usual. aid follows the transcript only during its own
+  prompts, so such a turn is not in the session's history.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ from aid.env import agent_environment
 from aid.mcp import AID_TOOLS_RULE, claude_config, session_servers
 from aid.paths import default_paths
 from aid.protocol import Output, TextDelta
+from aid.spec import BUILTIN_MCP_SERVER
 from aid.transcript import TranscriptFollower, TurnEnded, config_dir, find_transcript, items_from_entry
 
 if TYPE_CHECKING:
@@ -56,17 +64,21 @@ PANE_CHECK: Final = 2.0
 
 _PROMPT_LINE = re.compile(r"^❯(\s|$)", re.MULTILINE)
 _TRUST_DIALOG = "trust this folder"
+_CHANNELS_DIALOG = "Loading development channels"
 
 
 class Screen(Enum):
     STARTING = "starting"
     TRUST = "trust"
+    CHANNELS = "channels"
     READY = "ready"
 
 
 def classify(capture: str) -> Screen:
     if _TRUST_DIALOG in capture:
         return Screen.TRUST
+    if _CHANNELS_DIALOG in capture:
+        return Screen.CHANNELS
     if _PROMPT_LINE.search(capture):
         return Screen.READY
     return Screen.STARTING
@@ -86,8 +98,12 @@ def claude_argv(spec: ClaudeTtySpec, session_id: str, *, resume: bool, mcp_confi
     # --mcp-config and --allowedTools are variadic: each goes before another option, or it would take the first
     # of spec.args too. A repeated --allowedTools in spec.args adds to this one.
     mcp = ["--mcp-config", mcp_config] if mcp_config else []
-    allowed = ["--allowedTools", AID_TOOLS_RULE] if spec.aid_tools else []
-    return [*spec.command, *mcp, *allowed, "--resume" if resume else "--session-id", session_id, *spec.args]
+    aid = (
+        ["--allowedTools", AID_TOOLS_RULE, "--dangerously-load-development-channels", f"server:{BUILTIN_MCP_SERVER}"]
+        if spec.aid_tools
+        else []
+    )
+    return [*spec.command, *mcp, *aid, "--resume" if resume else "--session-id", session_id, *spec.args]
 
 
 class ClaudeTtyBackend:
@@ -174,6 +190,9 @@ async def _wait_ready(pane: Pane, trust: bool) -> None:
                 if not trust:
                     raise RuntimeError("Claude Code asks whether to trust the cwd; set trust_cwd to answer yes")
                 await anyio.to_thread.run_sync(pane.send_key, "Down")
+                await anyio.to_thread.run_sync(pane.send_key, "Enter")
+            if screen is Screen.CHANNELS:
+                # Its first option, and the default, is "I am using this for local development".
                 await anyio.to_thread.run_sync(pane.send_key, "Enter")
             await anyio.sleep(POLL)
 

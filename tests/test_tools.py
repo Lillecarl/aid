@@ -32,6 +32,18 @@ async def test_discover_finds_tools(monkeypatch: pytest.MonkeyPatch) -> None:
     described = discover([AGENT_DIR]).describe()["tools"]
     assert described == [
         {"name": "add", "description": "Add two numbers.", "module": "tooling"},
+        {
+            "name": "list_sessions",
+            "description": "The aid sessions you can message: name, kind, whether its worker is running, and which "
+            "one is you.",
+            "module": "aid.builtin_tools",
+        },
+        {
+            "name": "send_message",
+            "description": "Send a message to another aid session, by its name from list_sessions. It wakes that "
+            "session.",
+            "module": "aid.builtin_tools",
+        },
         {"name": "whoami", "description": "The aid session that calls this tool.", "module": "tooling"},
     ]
 
@@ -43,17 +55,24 @@ class Rpc:
     async def notify(self, method: str) -> None:
         await self._send.send(json.dumps({"jsonrpc": "2.0", "method": method}).encode() + b"\n")
 
+    async def _next(self) -> dict[str, Any]:
+        while b"\n" not in self._buffer:
+            self._buffer += await self._receive.receive()
+        line, self._buffer = self._buffer.split(b"\n", 1)
+        return json.loads(line)
+
     async def call(self, method: str, params: dict[str, Any]) -> Any:
         self._id += 1
         request = {"jsonrpc": "2.0", "id": self._id, "method": method, "params": params}
         await self._send.send(json.dumps(request).encode() + b"\n")
-        while True:
-            while b"\n" not in self._buffer:
-                self._buffer += await self._receive.receive()
-            line, self._buffer = self._buffer.split(b"\n", 1)
-            message = json.loads(line)
-            if message.get("id") == self._id:
-                return message["result"]
+        while (message := await self._next()).get("id") != self._id:
+            pass
+        return message["result"]
+
+    async def notification(self, method: str) -> Any:
+        while (message := await self._next()).get("method") != method:
+            pass
+        return message["params"]
 
 
 async def test_mcp_server_serves_the_tools() -> None:
@@ -72,7 +91,7 @@ async def test_mcp_server_serves_the_tools() -> None:
             who = await rpc.call("tools/call", {"name": "whoami", "arguments": {}})
             await process.stdin.aclose()
     tools = {t["name"]: t for t in listed["tools"]}
-    assert sorted(tools) == ["add", "whoami"]
+    assert sorted(tools) == ["add", "list_sessions", "send_message", "whoami"]
     assert sorted(tools["add"]["inputSchema"]["required"]) == ["a", "b"]
     assert added["content"] == [{"type": "text", "text": "5"}]
     assert who["content"] == [{"type": "text", "text": "s1"}]

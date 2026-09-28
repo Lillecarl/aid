@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
+from aid import builtin_tools
 from aid.tools import McpTool, tool_of
 
 if TYPE_CHECKING:
@@ -112,6 +113,9 @@ def discover(paths: Sequence[Path]) -> Catalog:
     """Import every module on `paths` and collect its agents. Imports run the modules' code: call it in a
     process that may run user code, a worker or `python -m aid.catalog`, never the daemon."""
     catalog = Catalog()
+    for obj in vars(builtin_tools).values():
+        if (tool := tool_of(obj)) is not None:
+            _add_tool(catalog, builtin_tools.__name__, tool)
     for directory in paths:
         if not directory.is_dir():
             continue

@@ -90,3 +90,13 @@ async def test_refused_messages(daemon: Paths, tmp_path: Path) -> None:
                 await client.send_message("nobody", "x")
             with pytest.raises(aid.AidError, match="as turns"):
                 await client.receive_messages("acp", wait=0)
+
+
+async def test_a_pydantic_ai_agent_messages_another_session(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            recipient = await client.create("a", acp_spec(tmp_path))
+            sender = await client.create("sender", py_spec(tmp_path, "agents:messenger"))
+            await sender.run("go")
+            items = await outputs_after_message(recipient)
+    assert items[0] == MessageEntry(sender="sender", text="a")

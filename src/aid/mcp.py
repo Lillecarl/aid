@@ -10,8 +10,8 @@ from acp.schema import EnvVariable, HttpHeader, HttpMcpServer, McpServerStdio, S
 from pydantic import TypeAdapter
 
 from aid.agents import ENV_AGENTS_PATH, agents_path
-from aid.paths import ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, default_paths
-from aid.spec import BUILTIN_MCP_SERVER, McpHttp, McpServer, McpSse, McpStdio
+from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, default_paths
+from aid.spec import BUILTIN_MCP_SERVER, AgentKind, McpHttp, McpServer, McpSse, McpStdio
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -26,8 +26,11 @@ AID_TOOLS_RULE: Final = f"mcp__{BUILTIN_MCP_SERVER}"
 AID_TOOL_PREFIX: Final = f"{AID_TOOLS_RULE}__"
 
 
-def builtin_server(session: str) -> McpStdio:
-    """`aid.mcp_server` for one session. The agent starts it with its own environment, which may lack ours."""
+def builtin_server(session: str, *, channel: bool) -> McpStdio:
+    """`aid.mcp_server` for one session. The agent starts it with its own environment, which may lack ours.
+
+    `channel` makes it the session's channel too; only interactive Claude listens to one.
+    """
     paths = default_paths()
     env = {
         ENV_AGENTS_PATH: ":".join(str(p) for p in agents_path()),
@@ -35,6 +38,8 @@ def builtin_server(session: str) -> McpStdio:
         ENV_RUNTIME_DIR: str(paths.runtime_dir),
         ENV_STATE_DIR: str(paths.state_dir),
     }
+    if channel:
+        env[ENV_CHANNEL] = "1"
     # The dev shell runs aid from src/ through PYTHONPATH; without it the server imports the venv's copy.
     if python_path := os.environ.get("PYTHONPATH"):
         env["PYTHONPATH"] = python_path
@@ -43,7 +48,9 @@ def builtin_server(session: str) -> McpStdio:
 
 def session_servers(spec: AcpSpec | ClaudeTtySpec, session: str) -> list[McpServer]:
     """What a session's agent gets. One function for new and resumed sessions, so both see the same list."""
-    return [*spec.mcp_servers, builtin_server(session)] if spec.aid_tools else list(spec.mcp_servers)
+    if not spec.aid_tools:
+        return list(spec.mcp_servers)
+    return [*spec.mcp_servers, builtin_server(session, channel=spec.kind is AgentKind.CLAUDE_TTY)]
 
 
 def to_acp(server: McpServer) -> McpServerStdio | HttpMcpServer | SseMcpServer:

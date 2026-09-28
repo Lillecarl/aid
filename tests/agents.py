@@ -56,3 +56,5 @@ reviewer = Agent(TestModel(call_tools=[], custom_output_args={"verdict": "approv
 # reach every session too.
 tool_caller = Agent(TestModel(call_tools=["add", "whoami"]))
 every_tool_caller = Agent(TestModel())
+# Calls send_message once; TestModel makes up the arguments, so it writes "a" to session "a".
+messenger = Agent(TestModel(call_tools=["send_message"]))

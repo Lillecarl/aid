@@ -8,6 +8,8 @@ ENV_RUNTIME_DIR = "AID_RUNTIME_DIR"
 ENV_STATE_DIR = "AID_STATE_DIR"
 # Set in each worker and in the MCP server a session's agent starts: the session the code runs for.
 ENV_SESSION = "AID_SESSION"
+# "1" makes `aid.mcp_server` the session's channel: interactive Claude's way to hear its messages.
+ENV_CHANNEL = "AID_CHANNEL"
 
 
 @dataclass(frozen=True)
