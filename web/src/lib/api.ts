@@ -8,6 +8,22 @@ export interface SessionInfo {
   running: boolean;
 }
 
+export interface SessionStatus {
+  name: string;
+  kind: AgentKind;
+  running: boolean;
+  busy: boolean;
+  pending: number;
+  pid: number | null;
+  cwd: string;
+  runs: string;
+  mcp_servers: string[];
+  aid_tools: boolean;
+}
+
+/** The URL of a session's status stream: Server-Sent Events, one per change. */
+export const statusEventsUrl = (name: string): string => `/api/sessions/${encodeURIComponent(name)}/status/events`;
+
 export type SessionEvent =
   | { type: "text"; text: string }
   | { type: "thought"; text: string }

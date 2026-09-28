@@ -193,7 +193,6 @@
 </script>
 
 <div class="head">
-  <h2>{name}</h2>
   <label title="How many entries this page keeps; older ones load again when you scroll up.">
     Keep <input type="number" min="50" max="5000" step="50" bind:value={windowSize} /> entries
   </label>
@@ -221,8 +220,9 @@
   .head {
     display: flex;
     align-items: baseline;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 1rem;
+    margin-bottom: 0.5rem;
   }
   .head label {
     color: var(--muted);

@@ -54,6 +54,8 @@ SECURITY_HEADERS: Final = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "same-origin",
 }
+STATUS_POLL: Final = 1.0
+STATUS_KEEPALIVE: Final = 15.0
 _STATUS: Final = {"not_found": 404, "exists": 409, "invalid_request": 422, "busy": 409}
 
 
@@ -147,6 +149,41 @@ async def prompt(request: Request) -> Response:
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
 
 
+@api()
+async def status(request: Request) -> Response:
+    found = await _client(request).session(request.path_params["name"]).status()
+    return JSONResponse(found.model_dump(mode="json"))
+
+
+@api()
+async def status_events(request: Request) -> Response:
+    """The session's status each time it changes, for as long as the page holds the stream open. A page opens it
+    only while the status is on screen, so nobody polls the daemon for a status nobody sees."""
+    session = _client(request).session(request.path_params["name"])
+    await session.status()  # A missing session is a 404 here, not an error inside the stream.
+
+    async def events() -> AsyncIterator[str]:
+        last: str | None = None
+        quiet = 0.0
+        while True:
+            try:
+                current = (await session.status()).model_dump_json()
+            except AidError as error:
+                yield f"event: error\ndata: {json.dumps({'error': error.message, 'code': error.code})}\n\n"
+                return
+            if current != last:
+                last, quiet = current, 0.0
+                yield f"data: {current}\n\n"
+            elif quiet >= STATUS_KEEPALIVE:
+                # A comment: it tells a dead connection apart from a quiet one.
+                quiet = 0.0
+                yield ": still here\n\n"
+            await anyio.sleep(STATUS_POLL)
+            quiet += STATUS_POLL
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
+
+
 @api(mutating=True)
 async def cancel(request: Request) -> Response:
     await _client(request).session(request.path_params["name"]).cancel()
@@ -223,6 +260,8 @@ def create_app(
             Route("/api/sessions", create_session, methods=["POST"]),
             Route("/api/sessions/{name}", delete, methods=["DELETE"]),
             Route("/api/sessions/{name}/history", history, methods=["GET"]),
+            Route("/api/sessions/{name}/status", status, methods=["GET"]),
+            Route("/api/sessions/{name}/status/events", status_events, methods=["GET"]),
             Route("/api/sessions/{name}/prompt", prompt, methods=["POST"]),
             Route("/api/sessions/{name}/cancel", cancel, methods=["POST"]),
             Route("/api/sessions/{name}/stop", stop, methods=["POST"]),

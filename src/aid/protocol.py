@@ -106,8 +106,14 @@ class ReceiveMessages(_Request):
     wait: Annotated[float, Field(ge=0, le=60)] = 25
 
 
+class GetStatus(_Request):
+    op: Literal["status"] = "status"
+    session: str
+
+
 type Request = Annotated[
-    CreateSession
+    GetStatus
+    | CreateSession
     | ListSessions
     | Prompt
     | Cancel
@@ -215,6 +221,24 @@ class SessionInfo(_Message):
     name: str
     kind: AgentKind
     running: bool
+
+
+class SessionStatus(_Message):
+    """What a session is doing now, and what it runs. Never env values or MCP headers: those hold credentials."""
+
+    name: str
+    kind: AgentKind
+    running: bool
+    busy: bool
+    """A turn is running, a client's or a wake."""
+    pending: int
+    """Messages waiting: for the running turn to end, or for interactive Claude's channel to take them."""
+    pid: int | None
+    cwd: str
+    runs: str
+    """The agent command, or the pydantic-ai agent's name or target."""
+    mcp_servers: list[str]
+    aid_tools: bool
 
 
 class Event(_Message):

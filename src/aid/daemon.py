@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import shlex
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -26,6 +27,7 @@ from aid.protocol import (
     Event,
     Failure,
     GetHistory,
+    GetStatus,
     Hello,
     ListAgents,
     ListSessions,
@@ -34,13 +36,14 @@ from aid.protocol import (
     ReceiveMessages,
     SendMessage,
     SessionInfo,
+    SessionStatus,
     StartFailed,
     StopSession,
     decode_reply,
     decode_request,
     encode,
 )
-from aid.spec import AgentKind, AgentSpecAdapter
+from aid.spec import BUILTIN_MCP_SERVER, AcpSpec, AgentKind, AgentSpecAdapter, ClaudeTtySpec, PydanticAISpec
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup, TaskStatus
@@ -87,6 +90,30 @@ class _Session:
     @property
     def uses_channel(self) -> bool:
         return self.spec.kind is AgentKind.CLAUDE_TTY
+
+    def status(self) -> SessionStatus:
+        match self.spec:
+            case AcpSpec():
+                runs, servers = shlex.join(self.spec.command), [s.name for s in self.spec.mcp_servers]
+            case ClaudeTtySpec():
+                runs = shlex.join([*self.spec.command, *self.spec.args])
+                servers = [s.name for s in self.spec.mcp_servers]
+            case PydanticAISpec():
+                runs, servers = self.spec.agent or self.spec.target or "", []
+        if self.spec.aid_tools and not isinstance(self.spec, PydanticAISpec):
+            servers.append(BUILTIN_MCP_SERVER)
+        return SessionStatus(
+            name=self.name,
+            kind=self.spec.kind,
+            running=self.running,
+            busy=self.turn is not None,
+            pending=len(self.inbox),
+            pid=self.handle.pid if self.handle is not None and self.running else None,
+            cwd=self.spec.cwd,
+            runs=runs,
+            mcp_servers=servers,
+            aid_tools=self.spec.aid_tools,
+        )
 
 
 def wake_prompt(messages: list[MessageEntry]) -> str:
@@ -229,6 +256,8 @@ class Daemon:
                     session.turn = None
                     raise
                 return None
+            case GetStatus():
+                return Done(id=request.id, data=self._session(request.session).status().model_dump(mode="json"))
             case SendMessage():
                 await self._send_message(request)
                 return Done(id=request.id)

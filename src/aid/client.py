@@ -28,6 +28,7 @@ from aid.protocol import (
     Event,
     Failure,
     GetHistory,
+    GetStatus,
     HistoryPage,
     ListAgents,
     ListSessions,
@@ -38,6 +39,7 @@ from aid.protocol import (
     Reply,
     SendMessage,
     SessionInfo,
+    SessionStatus,
     StopSession,
     TextDelta,
     decode_reply,
@@ -195,6 +197,9 @@ class Session:
         the newest of all. Entry `seq` numbers are what `before` and `after` take."""
         request = GetHistory(session=self.name, before=before, after=after, limit=limit)
         return HistoryPage.model_validate(await self._client.call(request))
+
+    async def status(self) -> SessionStatus:
+        return SessionStatus.model_validate(await self._client.call(GetStatus(session=self.name)))
 
     async def cancel(self) -> None:
         await self._client.call(Cancel(session=self.name))

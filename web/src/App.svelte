@@ -2,8 +2,8 @@
   import { onMount } from "svelte";
   import * as api from "./lib/api";
   import type { SessionInfo } from "./lib/api";
-  import Chat from "./lib/Chat.svelte";
   import CreateSession from "./lib/CreateSession.svelte";
+  import Session from "./lib/Session.svelte";
   import SessionList from "./lib/SessionList.svelte";
 
   let email = $state("");
@@ -53,7 +53,7 @@
       <p class="empty">Select or create a session.</p>
     {:else}
       {#key current}
-        <Chat
+        <Session
           name={current}
           onchange={refresh}
           ondeleted={async () => {

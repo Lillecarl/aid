@@ -7,7 +7,8 @@ import pytest
 
 import aid
 from aid.daemon import wake_prompt
-from aid.protocol import HistoryItem, MessageEntry, Output, PromptEntry, TextDelta
+from aid.protocol import HistoryItem, MessageEntry, Output, PromptEntry, SessionStatus, TextDelta
+from aid.spec import McpHttp
 from tests.conftest import acp_spec, py_spec
 
 if TYPE_CHECKING:
@@ -100,3 +101,27 @@ async def test_a_pydantic_ai_agent_messages_another_session(daemon: Paths, tmp_p
             await sender.run("go")
             items = await outputs_after_message(recipient)
     assert items[0] == MessageEntry(sender="sender", text="a")
+
+
+async def test_status_shows_the_turn_and_waiting_messages(daemon: Paths, tmp_path: Path) -> None:
+    spec = acp_spec(tmp_path, SECRET="hidden").model_copy(
+        update={"mcp_servers": [McpHttp(name="web", url="http://x", headers={"Authorization": "hidden"})]}
+    )
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("acp", spec)
+            idle = await session.status()
+            during: list[SessionStatus] = []
+            async for event in session.stream("slow"):
+                if event == TextDelta(text="waiting"):
+                    await client.send_message("acp", "queued")
+                    during.append(await session.status())
+                    await session.cancel()
+            await session.stop()
+            stopped = await session.status()
+    assert (idle.running, idle.busy, idle.pending) == (True, False, 0)
+    assert [(s.busy, s.pending) for s in during] == [(True, 1)]
+    assert (stopped.running, stopped.pid) == (False, None)
+    assert idle.runs.endswith("fake_acp_agent.py")
+    assert idle.mcp_servers == ["web", "aid"]
+    assert "hidden" not in idle.model_dump_json()

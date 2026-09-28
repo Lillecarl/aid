@@ -225,3 +225,29 @@ async def test_logout(web: Web) -> None:
             assert (await client.post(f"{web.url}/logout", headers={"X-CSRF-Token": csrf})).status_code == 200
             me = await client.get(f"{web.url}/api/me")
     assert me.status_code == 401
+
+
+async def test_status_streams_changes(web: Web, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with httpx.AsyncClient() as client:
+            await login(client, web, ALLOWED)
+            csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
+            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
+            await client.post(
+                f"{web.url}/api/sessions", json={"name": "echo", "spec": spec}, headers={"X-CSRF-Token": csrf}
+            )
+            snapshot = (await client.get(f"{web.url}/api/sessions/echo/status")).json()
+            missing = await client.get(f"{web.url}/api/sessions/nope/status/events")
+            seen: list[dict[str, Any]] = []
+            async with client.stream("GET", f"{web.url}/api/sessions/echo/status/events") as response:
+                lines = response.aiter_lines()
+                async for line in lines:
+                    if line.startswith("data: "):
+                        seen.append(json.loads(line.removeprefix("data: ")))
+                        if len(seen) == 1:
+                            await client.post(f"{web.url}/api/sessions/echo/stop", headers={"X-CSRF-Token": csrf})
+                        else:
+                            break
+    assert snapshot["running"] is True
+    assert missing.status_code == 404
+    assert [s["running"] for s in seen] == [True, False]
