@@ -24,6 +24,7 @@ from aid.protocol import (
     Done,
     Event,
     Failure,
+    GetPane,
     GetScreen,
     Hello,
     Prompt,
@@ -110,6 +111,13 @@ class _Worker:
                     await self.send(Done(id=request.id))
                 case GetScreen():
                     self._tg.start_soon(self._screen, request)
+                case GetPane():
+                    if isinstance(self._backend, ScreenBackend):
+                        await self.send(Done(id=request.id, data=self._backend.pane_address().model_dump(mode="json")))
+                    else:
+                        await self.send(
+                            Failure(id=request.id, code="no_screen", message="this session has no terminal")
+                        )
                 case StopSession():
                     await self._backend.cancel()
                     await self.send(Done(id=request.id))

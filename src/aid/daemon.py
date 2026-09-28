@@ -27,6 +27,7 @@ from aid.protocol import (
     Event,
     Failure,
     GetHistory,
+    GetPane,
     GetScreen,
     GetStatus,
     Hello,
@@ -257,7 +258,7 @@ class Daemon:
                     session.turn = None
                     raise
                 return None
-            case GetScreen():
+            case GetScreen() | GetPane():
                 session = self._session(request.session)
                 if not session.uses_channel:
                     raise AidError("no_screen", f"{session.name!r} has no terminal")

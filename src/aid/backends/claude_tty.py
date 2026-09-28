@@ -36,7 +36,7 @@ from libpymux import Server
 from aid.env import agent_environment
 from aid.mcp import AID_TOOLS_RULE, claude_config, session_servers
 from aid.paths import default_paths
-from aid.protocol import Output, PaneView, TextDelta
+from aid.protocol import Output, PaneAddress, PaneView, TextDelta
 from aid.spec import BUILTIN_MCP_SERVER
 from aid.transcript import TranscriptFollower, TurnEnded, config_dir, find_transcript, items_from_entry
 
@@ -175,6 +175,9 @@ class ClaudeTtyBackend:
 
     async def cancel(self) -> None:
         await anyio.to_thread.run_sync(self._pane.send_key, "Escape")
+
+    def pane_address(self) -> PaneAddress:
+        return PaneAddress(socket=self._server.socket_path, pane=self._pane.id)
 
     async def screen(self, *, stylesheet: bool, since: int | None, wait: float) -> PaneView:
         if since is not None and since >= 0:

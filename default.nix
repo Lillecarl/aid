@@ -6,8 +6,8 @@
     type = "github";
     owner = "Lillecarl";
     repo = "pyterm";
-    rev = "e6d6781db9ed0e3aa9fe6ea46e810c005009f0d3";
-    narHash = "sha256-PwQMyimClQjf9nox6Ql7/9CeH/WQCEmicGTWBtEKNr4=";
+    rev = "fd54512e4217a69e449cbd1440c3e71b1e8d98ce";
+    narHash = "sha256-se2rRsL4PXp05I3oNrY4ytUbRkXeEL6xLMPoaeGDs7o=";
   },
 }:
 let

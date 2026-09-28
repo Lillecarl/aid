@@ -338,3 +338,45 @@ async def test_speech_to_text(web: Web) -> None:
     assert replies[-1] == {"done": True}
     assert " ".join(r["text"] for r in replies if r.get("final")) == SAID
     assert any(r.get("final") is False for r in replies)
+
+
+@needs_pymux
+async def test_pane_relay(web: Web, tmp_path: Path, pymux_socket: str) -> None:
+    url = web.url.replace("http://", "ws://")
+    with anyio.fail_after(TIMEOUT):
+        async with httpx.AsyncClient() as client:
+            await login(client, web, ALLOWED)
+            csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
+            spec = fake_spec(tmp_path, pymux_socket).model_dump(mode="json")
+            await client.post(
+                f"{web.url}/api/sessions", json={"name": "tty", "spec": spec}, headers={"X-CSRF-Token": csrf}
+            )
+            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
+            await client.post(
+                f"{web.url}/api/sessions", json={"name": "py", "spec": spec}, headers={"X-CSRF-Token": csrf}
+            )
+            headers = {"Cookie": f"aid_session={client.cookies['aid_session']}"}
+        origin = cast("Origin", web.url)
+        async with ws_connect(f"{url}/api/sessions/tty/pane", origin=origin, additional_headers=headers) as ws:
+            welcome = json.loads(await ws.recv())
+            first = json.loads(await ws.recv())
+            await ws.send(json.dumps({"type": "text", "text": "typed-in-the-browser"}))
+            seen = ""
+            while "typed-in-the-browser" not in seen:
+                frame = json.loads(await ws.recv())
+                seen = json.dumps(frame.get("rows", {}))
+        with pytest.raises(InvalidStatus):
+            async with ws_connect(
+                f"{url}/api/sessions/tty/pane",
+                origin=cast("Origin", "http://elsewhere.example"),
+                additional_headers=headers,
+            ):
+                pass
+        with pytest.raises(InvalidStatus):
+            async with ws_connect(f"{url}/api/sessions/py/pane", origin=origin, additional_headers=headers):
+                pass
+    assert welcome["type"] == "welcome"
+    assert welcome["writable"] is True
+    assert "background-color" in welcome["css"]
+    assert first["type"] == "frame"
+    assert first.get("whole") is True

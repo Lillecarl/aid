@@ -71,7 +71,10 @@ class Fake:
                 self.buffer += more
                 continue
             elif self.buffer and not self.buffer.startswith(b"\x1b"):
-                self.buffer = self.buffer[1:]
+                # Typed, not pasted: printable ASCII joins the prompt as the real one does; the rest is dropped.
+                char, self.buffer = self.buffer[:1], self.buffer[1:]
+                if b" " <= char < b"\x7f":
+                    return "paste", char.decode()
                 continue
             self.buffer += self.read_byte_chunk()
 

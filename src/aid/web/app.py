@@ -6,11 +6,12 @@ everything on plain HTTP, where the session cookie and the CSRF header already a
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Annotated, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
 import anyio
 import anyio.to_thread
@@ -19,6 +20,7 @@ from hypercorn.asyncio import (
     serve as hypercorn_serve,  # pyright: ignore[reportUnknownVariableType] -- its WSGI branch types a bare dict
 )
 from hypercorn.config import Config as HypercornConfig
+from libpymux.streams import PaneStream, StreamRefused
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
@@ -33,6 +35,7 @@ from starlette.responses import (
 )
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
+from starlette.websockets import WebSocketDisconnect
 
 from aid.client import connect
 from aid.protocol import AidError, CreateSession
@@ -75,6 +78,8 @@ SCREEN_POLL: Final = 0.5
 KEEPALIVE: Final = 15.0
 WS_POLICY_VIOLATION: Final = 1008
 WS_NO_SPEECH: Final = 4404
+# RFC 6455 allows 123 bytes of close reason.
+WS_REASON_MAX: Final = 120
 # One second of float32 at the highest rate SpeechStart takes; a page sends about 0.1 s per frame.
 MAX_AUDIO_FRAME: Final = 192000 * 4
 _STATUS: Final = {
@@ -334,6 +339,56 @@ async def transcribe(websocket: WebSocket) -> None:
             return
 
 
+async def pane(websocket: WebSocket) -> None:
+    """Interactive Claude's pane for `<pymux-pane>`: pymux's frames out, the viewer's keys in (Lillecarl/pymux#461).
+
+    A relay: it reads neither side. pymux spells the keys for the program's keyboard mode, and a stream opened
+    writable is the only way input reaches the pane. The boundary is here, in front of it: login and Origin, as for
+    any WebSocket, because whoever reaches the pymux socket can type into every pane on it.
+    """
+    if auth.current_user(websocket) is None or not auth.same_origin(websocket, websocket.app.state.oidc_config):
+        await websocket.close(code=WS_POLICY_VIOLATION)
+        return
+    client: Client = websocket.app.state.client
+    try:
+        address = await client.session(websocket.path_params["name"]).pane()
+    except AidError as error:
+        await websocket.close(code=WS_POLICY_VIOLATION, reason=error.message[:WS_REASON_MAX])
+        return
+    await websocket.accept()
+    try:
+        async with (
+            PaneStream(address.socket, address.pane, writable=True) as stream,
+            anyio.create_task_group() as tg,
+        ):
+
+            async def to_viewer() -> None:
+                async for frame in stream:
+                    await websocket.send_text(json.dumps(frame))
+                # The pane is gone: its stream's end is the whole signal (no frame says so).
+                tg.cancel_scope.cancel()
+
+            tg.start_soon(to_viewer)
+            while True:
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    break
+                if (text := message.get("text")) is None:
+                    continue
+                said = json.loads(text)
+                if not isinstance(said, dict):
+                    break
+                await stream.send(cast("dict[str, Any]", said))
+            tg.cancel_scope.cancel()
+    except StreamRefused as error:
+        await websocket.close(code=WS_POLICY_VIOLATION, reason=str(error)[:WS_REASON_MAX])
+        return
+    except json.JSONDecodeError, WebSocketDisconnect:
+        pass
+    with contextlib.suppress(RuntimeError):  # Already closed by the viewer.
+        await websocket.close()
+
+
 async def index(request: Request) -> Response:
     if auth.current_user(request) is None:
         return RedirectResponse("/login", status_code=303)
@@ -406,6 +461,7 @@ def create_app(
             Route("/api/sessions/{name}/stop", stop, methods=["POST"]),
             Route("/api/speech", speech, methods=["GET"]),
             WebSocketRoute("/api/transcribe", transcribe),
+            WebSocketRoute("/api/sessions/{name}/pane", pane),
         ],
         middleware=[
             Middleware(security_headers),

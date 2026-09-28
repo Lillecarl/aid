@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from aid.protocol import Output, PaneView, SessionEvent
+    from aid.protocol import Output, PaneAddress, PaneView, SessionEvent
 
 type Emit = Callable[[SessionEvent], Awaitable[None]]
 
@@ -22,3 +22,5 @@ class ScreenBackend(Backend, Protocol):
     """A backend with a terminal a person can look at."""
 
     async def screen(self, *, stylesheet: bool, since: int | None, wait: float) -> PaneView: ...
+
+    def pane_address(self) -> PaneAddress: ...

@@ -28,6 +28,7 @@ from aid.protocol import (
     Event,
     Failure,
     GetHistory,
+    GetPane,
     GetScreen,
     GetStatus,
     HistoryPage,
@@ -35,6 +36,7 @@ from aid.protocol import (
     ListSessions,
     MessageEntry,
     Output,
+    PaneAddress,
     PaneView,
     Prompt,
     ReceiveMessages,
@@ -208,6 +210,10 @@ class Session:
         """
         request = GetScreen(session=self.name, stylesheet=stylesheet, since=since, wait=wait)
         return PaneView.model_validate(await self._client.call(request))
+
+    async def pane(self) -> PaneAddress:
+        """Where interactive Claude's pane lives, for a relay that streams it with `libpymux.PaneStream`."""
+        return PaneAddress.model_validate(await self._client.call(GetPane(session=self.name)))
 
     async def status(self) -> SessionStatus:
         return SessionStatus.model_validate(await self._client.call(GetStatus(session=self.name)))

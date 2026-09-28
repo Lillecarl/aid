@@ -264,3 +264,16 @@ async def test_screen_waits_for_the_pane_to_change(daemon: Paths, tmp_path: Path
     # A revision already left answers at once: nothing between a frame and the next wait is missed.
     assert behind.revision != first.revision
     assert answered < 2
+
+
+@needs_pymux
+async def test_pane_address(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            address = await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            where = await address.pane()
+            await client.create("acp", acp_spec(tmp_path))
+            with pytest.raises(AidError, match="no terminal"):
+                await client.session("acp").pane()
+    assert where.socket == pymux_socket
+    assert where.pane.startswith("%")

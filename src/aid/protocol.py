@@ -123,9 +123,17 @@ class GetScreen(_Request):
     wait: Annotated[float, Field(gt=0, le=60)] = 25
 
 
+class GetPane(_Request):
+    """Where interactive Claude's pane lives: the pymux socket and pane id, for a relay that streams it."""
+
+    op: Literal["pane"] = "pane"
+    session: str
+
+
 type Request = Annotated[
     GetStatus
     | GetScreen
+    | GetPane
     | CreateSession
     | ListSessions
     | Prompt
@@ -252,6 +260,13 @@ class SessionStatus(_Message):
     """The agent command, or the pydantic-ai agent's name or target."""
     mcp_servers: list[str]
     aid_tools: bool
+
+
+class PaneAddress(_Message):
+    socket: str
+    """The pymux server's unix socket. Whoever can open it can type into every pane on it."""
+    pane: str
+    """The pane id, such as `%1002`."""
 
 
 class PaneView(_Message):
