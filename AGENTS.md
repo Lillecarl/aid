@@ -1,26 +1,33 @@
 # aid
 
-AI daemon. Hosts persistent agent sessions — external ACP agents (`claude-agent-acp`, `opencode acp`, …) and
-`pydantic_ai` agents imported by `module:attr` — behind an async Python API and a CLI.
+AI daemon. Hosts persistent agent sessions — external ACP agents (`claude-agent-acp`, `opencode acp`, …),
+`pydantic_ai` agents imported by `module:attr`, and interactive Claude Code in pymux — behind an async Python
+API and a CLI.
 
 ## Layout
 
-- `src/aid/spec.py` — `AcpSpec` / `PydanticAISpec`: what a session runs.
+- `src/aid/spec.py` — `AcpSpec` / `PydanticAISpec` / `ClaudeTtySpec`: what a session runs.
 - `src/aid/protocol.py` — pydantic messages on the zmq sockets; `AidError`.
 - `src/aid/daemon.py` — ROUTER for clients (`control.sock`), ROUTER for workers (`workers.sock`), session state.
 - `src/aid/launcher.py` — `Launcher` protocol; `ForkserverLauncher`.
 - `src/aid/worker.py` — worker entry `main(endpoint, name, spec_json, state_dir)`; DEALER to the daemon.
-- `src/aid/backends/` — `acp.py`, `pydantic_ai.py`; both implement `base.Backend`.
+- `src/aid/backends/` — `acp.py`, `pydantic_ai.py`, `claude_tty.py`; each implements `base.Backend`.
+- `src/aid/transcript.py` — Claude Code transcript entries → aid events.
+- `src/aid/env.py` — agent environments, minus the markers of the Claude session that started us.
 - `src/aid/client.py` — public API: `aid.connect()`, `Client`, `Session.run/stream`.
-- `aid/default.nix` — package; `nix/` — NixOS and home-manager modules.
+- `default.nix` — a pyproject.nix set from pyterm's builders (`mkPythonSet`, `mkProject`, its `overlay`);
+  `aid/default.nix` — the aid project in it; `nix/` — NixOS and home-manager modules.
 
 ## Commands
 
 ```sh
 nix develop --file . shell --command sh -c 'ruff format src tests && ruff check src tests && pyright'
 nix develop --file . shell --command python -m pytest -p no:cacheprovider
-nix build --file . aid        # runs the same tests in the sandbox
+nix build --file . tests      # the same suite in the sandbox, against a real pymux
 ```
+
+The dev shell puts `src/` ahead of the aid its venv carries. Dependencies go in `pyproject.toml`; the set
+reads them. Test-only ones go in the `test` extra.
 
 ## Rules
 
@@ -40,3 +47,6 @@ nix build --file . aid        # runs the same tests in the sandbox
   `if __name__ == "__main__":` guard.
 - Daemon shutdown: `_stop_all` runs inside the task group; worker watchers are shielded and must see every exit.
 - ACP permission requests are answered by `AcpSpec.permission`; nobody is attached to ask.
+- claude-tty depends on Claude Code's screen and transcript, neither an API. `claude_tty.py` and
+  `transcript.py` say what was measured, on which version; re-measure before changing them.
+- libpymux and the `pymux` binary come from one pyterm pin (`default.nix`): the wire protocol still moves.

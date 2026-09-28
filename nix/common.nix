@@ -1,13 +1,26 @@
 { lib, pkgs }:
+let
+  aid = import ../. { inherit pkgs; };
+in
 {
   options = {
-    enable = lib.mkEnableOption "aid, the AI daemon that keeps ACP and pydantic-ai agents running";
+    enable = lib.mkEnableOption "aid, the AI daemon that keeps ACP, pydantic-ai and interactive Claude agents running";
 
     package = lib.mkOption {
       type = lib.types.package;
-      default = pkgs.python3Packages.callPackage ../aid { };
-      defaultText = lib.literalExpression "pkgs.python3Packages.callPackage <aid/aid> { }";
+      default = aid.aid;
+      defaultText = lib.literalExpression "(import <aid> { inherit pkgs; }).aid";
       description = "The aid package.";
+    };
+
+    pymuxPackage = lib.mkOption {
+      type = lib.types.package;
+      default = aid.pymux;
+      defaultText = lib.literalExpression "(import <aid> { inherit pkgs; }).pymux";
+      description = ''
+        The pymux that starts aid's own server for claude-tty sessions. The default comes from the same pyterm
+        revision as aid's libpymux, because the wire protocol between them still moves.
+      '';
     };
 
     extraPackages = lib.mkOption {
@@ -40,7 +53,7 @@
     : The module's evaluated `services.aid` config
   */
   service = cfg: {
-    path = cfg.extraPackages;
+    path = [ cfg.pymuxPackage ] ++ cfg.extraPackages;
     serviceConfig = {
       Type = "exec";
       ExecStart = "${lib.getExe cfg.package} daemon";

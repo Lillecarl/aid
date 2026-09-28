@@ -1,50 +1,55 @@
+# aid as a pyproject.nix builders package, in a set that pyterm's builders assemble. What aid needs is declared
+# once, in pyproject.toml; the renderer reads it. See ../default.nix for the set.
 {
   lib,
-  buildPythonPackage,
-  hatchling,
-  agent-client-protocol,
-  anyio,
-  pydantic,
-  pydantic-ai-slim,
-  pyzmq,
-  watchfiles,
-  pytestCheckHook,
+  stdenv,
+  python,
+  pyprojectHook,
+  resolveBuildSystem,
+  mkVirtualEnv,
+  mkProject,
+  runCommand,
+  # The pymux application, whose `bin/pymux` the claude-tty tests start servers with.
+  pymuxApp,
 }:
 let
   root = ../.;
-in
-buildPythonPackage {
-  pname = "aid";
-  inherit ((lib.importTOML (root + "/pyproject.toml")).project) version;
-  pyproject = true;
 
-  src = lib.fileset.toSource {
+  package =
+    (mkProject {
+      inherit root python;
+      extra = rendered: {
+        passthru = rendered.passthru // {
+          inherit tests;
+        };
+        meta = rendered.meta // {
+          description = "AI daemon: persistent ACP, pydantic-ai and interactive Claude sessions behind an async API";
+          homepage = "https://github.com/Lillecarl/aid";
+          mainProgram = "aid";
+          platforms = lib.platforms.linux;
+        };
+      };
+    })
+      {
+        inherit stdenv pyprojectHook resolveBuildSystem;
+      };
+
+  testSources = lib.fileset.toSource {
     inherit root;
     fileset = lib.fileset.unions [
-      (root + "/pyproject.toml")
-      (root + "/src")
       (root + "/tests")
+      (root + "/pyproject.toml")
     ];
   };
 
-  build-system = [ hatchling ];
+  testEnv = mkVirtualEnv "aid-test-env" { aid = [ "test" ]; };
 
-  dependencies = [
-    agent-client-protocol
-    anyio
-    pydantic
-    pydantic-ai-slim
-    pyzmq
-    watchfiles
-  ];
-
-  nativeCheckInputs = [ pytestCheckHook ];
-
-  pythonImportsCheck = [ "aid" ];
-
-  meta = {
-    description = "AI daemon: persistent ACP and pydantic-ai agents behind a Pythonic async API";
-    mainProgram = "aid";
-    platforms = lib.platforms.linux;
-  };
-}
+  tests = runCommand "aid-tests" { nativeBuildInputs = [ testEnv pymuxApp ]; } ''
+    cp -r ${testSources}/. .
+    chmod -R +w .
+    export HOME="$TMPDIR" PYTHONDONTWRITEBYTECODE=1
+    python -m pytest -q -p no:cacheprovider
+    touch $out
+  '';
+in
+package

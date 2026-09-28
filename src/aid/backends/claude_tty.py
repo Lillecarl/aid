@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Final
 
 import anyio
 import anyio.to_thread
-from libpymux import Server  # pyright: ignore[reportMissingTypeStubs] -- libpymux ships no py.typed yet
+from libpymux import Server
 
 from aid.env import agent_environment
 from aid.paths import default_paths
@@ -34,7 +34,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from pathlib import Path
 
-    from libpymux import Pane  # pyright: ignore[reportMissingTypeStubs] -- libpymux ships no py.typed yet
+    from libpymux import Pane
 
     from aid.backends.base import Emit
     from aid.spec import ClaudeTtySpec

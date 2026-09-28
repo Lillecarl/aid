@@ -22,7 +22,7 @@ in
         Environment = lib.mapAttrsToList (name: value: "${name}=${value}") (
           {
             PATH = lib.concatStringsSep ":" [
-              (lib.makeBinPath cfg.extraPackages)
+              (lib.makeBinPath unit.path)
               "${config.home.profileDirectory}/bin"
               "/run/current-system/sw/bin"
             ];
