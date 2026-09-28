@@ -123,7 +123,7 @@ class _Worker:
             await self.send(Failure(id=request.id, code="no_screen", message="this session has no terminal"))
             return
         try:
-            view = await self._backend.screen(stylesheet=request.stylesheet)
+            view = await self._backend.screen(stylesheet=request.stylesheet, since=request.since, wait=request.wait)
         except Exception as error:
             log.exception("screen %s failed", request.id)
             await self.send(Failure(id=request.id, code="screen_failed", message=f"{type(error).__name__}: {error}"))

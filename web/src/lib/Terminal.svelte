@@ -1,11 +1,11 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import { screenEventsUrl, screenStylesheetUrl, watch } from "./api";
-  import type { PaneView } from "./api";
+  import type { ScreenFrame } from "./api";
 
   let { name }: { name: string } = $props();
 
-  let view: PaneView | null = $state(null);
+  let view: ScreenFrame | null = $state(null);
   let problem = $state("");
   let box: HTMLDivElement | undefined = $state();
 
@@ -20,7 +20,7 @@
 
   // Mounted only while its tab is shown.
   onMount(() =>
-    watch<PaneView>(
+    watch<ScreenFrame>(
       screenEventsUrl(name),
       (data) => {
         view = data;
@@ -32,7 +32,8 @@
 </script>
 
 <svelte:head>
-  <link rel="stylesheet" href={screenStylesheetUrl(name)} />
+  <!-- The query changes with the pane's palette, so the browser fetches the stylesheet again then and only then. -->
+  {#if view}<link rel="stylesheet" href={`${screenStylesheetUrl(name)}?v=${view.style}`} />{/if}
 </svelte:head>
 
 {#if problem}<p class="problem">{problem}</p>{/if}

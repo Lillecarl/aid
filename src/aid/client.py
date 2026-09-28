@@ -200,9 +200,14 @@ class Session:
         request = GetHistory(session=self.name, before=before, after=after, limit=limit)
         return HistoryPage.model_validate(await self._client.call(request))
 
-    async def screen(self, *, stylesheet: bool = False) -> PaneView:
-        """What interactive Claude's pane shows now, as HTML; with `stylesheet`, the CSS it is written against."""
-        return PaneView.model_validate(await self._client.call(GetScreen(session=self.name, stylesheet=stylesheet)))
+    async def screen(self, *, stylesheet: bool = False, since: int | None = None, wait: float = 25) -> PaneView:
+        """What interactive Claude's pane shows, as HTML; with `stylesheet`, the CSS it is written against.
+
+        With `since`, a revision already drawn, it answers once the pane has changed from it, or after `wait`
+        seconds with the same revision back.
+        """
+        request = GetScreen(session=self.name, stylesheet=stylesheet, since=since, wait=wait)
+        return PaneView.model_validate(await self._client.call(request))
 
     async def status(self) -> SessionStatus:
         return SessionStatus.model_validate(await self._client.call(GetStatus(session=self.name)))

@@ -22,9 +22,11 @@ export interface SessionStatus {
 }
 
 /** What interactive Claude's pane shows, drawn by pymux. */
-export interface PaneView {
+export interface ScreenFrame {
   html: string;
   overlay: string | null;
+  /** A digest of the pane's stylesheet; a new one means fetch the stylesheet again. */
+  style: string;
 }
 
 const sessionPath = (name: string): string => `/api/sessions/${encodeURIComponent(name)}`;

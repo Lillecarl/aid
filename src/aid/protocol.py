@@ -118,6 +118,9 @@ class GetScreen(_Request):
     session: str
     stylesheet: bool = False
     """Also return the stylesheet the HTML is written against, with the pane's own colours."""
+    since: int | None = None
+    """A revision already drawn: answer once the pane has left it, or after `wait` seconds with it unchanged."""
+    wait: Annotated[float, Field(gt=0, le=60)] = 25
 
 
 type Request = Annotated[
@@ -252,6 +255,9 @@ class SessionStatus(_Message):
 
 
 class PaneView(_Message):
+    revision: int
+    """pymux's revision of the pane, read before `html` was drawn: `html` is at least this new. Compare it, never
+    order it; -1 from a pymux too old to count."""
     html: str
     """A `<pre class="pyte-screen">` of the visible rows, drawn by pymux. No cursor yet."""
     stylesheet: str | None = None

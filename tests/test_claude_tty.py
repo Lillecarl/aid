@@ -12,7 +12,7 @@ import aid
 from aid.backends.claude_tty import Screen, classify, claude_argv, launcher_script
 from aid.mcp import claude_config
 from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR
-from aid.protocol import AidError, MessageEntry, Output, TextDelta, ToolCall
+from aid.protocol import AidError, MessageEntry, Output, PaneView, TextDelta, ToolCall
 from aid.spec import ClaudeTtySpec, McpHttp
 from tests.conftest import acp_spec, fake_spec, needs_pymux
 from tests.fake_claude import COUNT
@@ -234,3 +234,33 @@ async def test_panes_start_at_aids_size(daemon: Paths, tmp_path: Path, pymux_soc
                 ["pymux", "-S", pymux_socket, "list-panes", "-a", "-F", "#{window_name} #{pane_width}x#{pane_height}"]
             )
     assert "aid:tty 200x50" in listed.stdout.decode().splitlines()
+
+
+@needs_pymux
+async def test_screen_waits_for_the_pane_to_change(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            first = await session.screen()
+            started = anyio.current_time()
+            quiet = await session.screen(since=first.revision, wait=0.5)
+            waited = anyio.current_time() - started
+            changed: list[PaneView] = []
+
+            async with anyio.create_task_group() as tg:
+
+                async def wait_for_it() -> None:
+                    changed.append(await session.screen(since=first.revision, wait=20))
+
+                tg.start_soon(wait_for_it)
+                await session.run("hello")
+            started = anyio.current_time()
+            behind = await session.screen(since=first.revision, wait=20)
+            answered = anyio.current_time() - started
+    assert first.revision >= 0
+    assert quiet.revision == first.revision
+    assert 0.4 < waited < 5
+    assert changed[0].revision != first.revision
+    # A revision already left answers at once: nothing between a frame and the next wait is missed.
+    assert behind.revision != first.revision
+    assert answered < 2

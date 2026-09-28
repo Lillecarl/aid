@@ -176,13 +176,24 @@ class ClaudeTtyBackend:
     async def cancel(self) -> None:
         await anyio.to_thread.run_sync(self._pane.send_key, "Escape")
 
-    async def screen(self, *, stylesheet: bool) -> PaneView:
+    async def screen(self, *, stylesheet: bool, since: int | None, wait: float) -> PaneView:
+        if since is not None and since >= 0:
+            # Abandoned on cancel: a viewer that leaves must not hold up the worker's stop for the whole wait.
+            await anyio.to_thread.run_sync(
+                lambda: self._pane.wait_for_change(since=since, timeout=wait), abandon_on_cancel=True
+            )
+
         def capture() -> PaneView:
+            # A Pane's fields are a snapshot from when it was read: without refresh() the revision stays where the
+            # pane was created, and every wait since it answers at once. Read before drawing, so the frame is at
+            # least this new and the next wait misses nothing.
+            self._pane.refresh()
+            revision = self._pane.revision
             html = self._pane.capture_html()
             css = self._server.html_stylesheet(self._pane) if stylesheet else None
             # pymux draws a mode (copy mode, a popup) above the pane, and the pane's page does not hold it.
             overlay = (self._pane.mode or "a pymux mode") if self._pane.in_mode else None
-            return PaneView(html=html, stylesheet=css, overlay=overlay)
+            return PaneView(revision=revision, html=html, stylesheet=css, overlay=overlay)
 
         return await anyio.to_thread.run_sync(capture)
 
