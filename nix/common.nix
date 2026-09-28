@@ -37,10 +37,15 @@ in
     };
 
     environmentFile = lib.mkOption {
-      type = lib.types.nullOr lib.types.path;
+      # A string, not a path: systemd specifiers such as %t (the runtime directory) are what a user unit
+      # needs to reach home-manager agenix's secrets, and a path type rejects them.
+      type = lib.types.nullOr lib.types.str;
       default = null;
-      example = "/run/secrets/aid.env";
-      description = "systemd EnvironmentFile for secrets such as ANTHROPIC_API_KEY. Kept out of the store.";
+      example = "%t/agenix/aid-env";
+      description = ''
+        systemd EnvironmentFile for secrets such as DEEPSEEK_API_KEY or ANTHROPIC_API_KEY; every agent inherits
+        them. Kept out of the store. systemd specifiers work.
+      '';
     };
 
     web = {
@@ -77,9 +82,11 @@ in
       };
 
       environmentFile = lib.mkOption {
-        type = lib.types.path;
+        type = lib.types.str;
         example = "/run/secrets/aid-web.env";
-        description = "systemd EnvironmentFile with AID_OIDC_CLIENT_SECRET and AID_WEB_SESSION_SECRET.";
+        description = ''
+          systemd EnvironmentFile with AID_OIDC_CLIENT_SECRET and AID_WEB_SESSION_SECRET. systemd specifiers work.
+        '';
       };
     };
   };
