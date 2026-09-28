@@ -16,7 +16,13 @@ let
   venv = set.mkVirtualEnv "aid-env" { aid = [ ]; };
   ui = pkgs.callPackage ./web { pymuxElement = p.pymux-element; };
   speechModel = pkgs.callPackage ./nix/speech-model.nix { };
-  python = pkgs.python3;
+  # Drafts turn on libzmq's ws:// transport (Lillecarl/aid#1): remote workers reach the daemon through an HTTP
+  # reverse proxy, which also terminates TLS, so no GnuTLS and no wss://.
+  zeromq = pkgs.zeromq.override { enableDrafts = true; };
+  python = pkgs.python3.override {
+    self = python;
+    packageOverrides = _final: prev: { pyzmq = prev.pyzmq.override { inherit zeromq; }; };
+  };
 
   set = p.mkPythonSet {
     inherit python;
