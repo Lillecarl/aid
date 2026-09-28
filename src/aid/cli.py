@@ -14,6 +14,7 @@ import anyio
 from aid import daemon
 from aid.client import connect
 from aid.launcher import ForkserverLauncher
+from aid.mcp import from_claude_config
 from aid.paths import default_paths
 from aid.protocol import AidError, Output, PromptEntry, TextDelta, ThoughtDelta, ToolCall, TurnError
 from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
@@ -25,7 +26,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from aid.protocol import HistoryEntry
-    from aid.spec import AgentSpec
+    from aid.spec import AgentSpec, McpServer
 
 ENV_CLIENT_SECRET = "AID_OIDC_CLIENT_SECRET"
 ENV_SESSION_SECRET = "AID_WEB_SESSION_SECRET"
@@ -69,11 +70,23 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
         return p
 
-    acp = new("new-acp", "create a session running an ACP agent command, given after --")
+    def with_mcp(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        p.add_argument(
+            "--mcp-config",
+            action="append",
+            default=[],
+            metavar="FILE",
+            help='MCP servers for the agent, in Claude Code\'s {"mcpServers": {...}} format; repeat for more',
+        )
+        return p
+
+    acp = with_mcp(new("new-acp", "create a session running an ACP agent command, given after --"))
     acp.add_argument("--allow", action="store_true", help="grant every permission request (default: deny)")
     acp.add_argument("--no-inherit-env", action="store_true", help="start the agent with only --env")
 
-    claude = new("new-claude", "create a session running interactive Claude Code in pymux; claude args after --")
+    claude = with_mcp(
+        new("new-claude", "create a session running interactive Claude Code in pymux; claude args after --")
+    )
     claude.add_argument("--trust", action="store_true", help="answer Claude Code's trust-this-folder dialog with yes")
     claude.add_argument("--pymux-socket", help="the pymux server to run in (default: aid's own)")
     claude.add_argument("--claude", default="claude", help="the claude executable")
@@ -108,6 +121,16 @@ def _split_agent_command(argv: Sequence[str]) -> tuple[list[str], list[str]]:
     return argv[:split], argv[split + 1 :]
 
 
+def _mcp_servers(files: Sequence[str]) -> list[McpServer]:
+    servers: list[McpServer] = []
+    for file in files:
+        try:
+            servers += from_claude_config(json.loads(Path(file).read_text()))
+        except (OSError, ValueError) as error:
+            raise SystemExit(f"--mcp-config {file}: {error}") from None
+    return servers
+
+
 def _spec(args: argparse.Namespace) -> AgentSpec:
     cwd = str(Path(args.cwd).resolve())
     env = _env(args.env)
@@ -121,6 +144,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             command=command,
             inherit_env=not args.no_inherit_env,
             permission=PermissionMode.ALLOW if args.allow else PermissionMode.DENY,
+            mcp_servers=_mcp_servers(args.mcp_config),
         )
     if args.command == "new-claude":
         return ClaudeTtySpec(
@@ -130,6 +154,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             args=args.agent_command,
             trust_cwd=args.trust,
             pymux_socket=args.pymux_socket,
+            mcp_servers=_mcp_servers(args.mcp_config),
         )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
     source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
