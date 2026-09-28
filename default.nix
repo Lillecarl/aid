@@ -13,6 +13,7 @@
 let
   inherit (pkgs) lib;
   p = import pyterm { inherit pkgs; };
+  venv = set.mkVirtualEnv "aid-env" { aid = [ ]; };
   python = pkgs.python3;
 
   set = p.mkPythonSet {
@@ -35,9 +36,18 @@ in
 {
   inherit set;
 
-  aid = set.mkVirtualEnv "aid" { aid = [ ]; } // {
-    inherit (set.aid) meta;
-  };
+  # Only `bin/aid`: a profile that installs this next to another virtualenv, such as pymux's, would otherwise
+  # get two `bin/python` and `bin/activate` and refuse to build. The script's shebang names the venv's python.
+  aid =
+    pkgs.runCommand "aid-${set.aid.version}"
+      {
+        inherit (set.aid) meta;
+        passthru = { inherit venv; };
+      }
+      ''
+        mkdir -p $out/bin
+        ln -s ${venv}/bin/aid $out/bin/aid
+      '';
 
   inherit (set.aid) tests;
 
