@@ -9,14 +9,16 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Annotated, Final
 
 import anyio
+import anyio.to_thread
+import numpy as np
 from hypercorn.asyncio import (
     serve as hypercorn_serve,  # pyright: ignore[reportUnknownVariableType] -- its WSGI branch types a bare dict
 )
 from hypercorn.config import Config as HypercornConfig
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -28,11 +30,13 @@ from starlette.responses import (
     Response,
     StreamingResponse,
 )
-from starlette.routing import Mount, Route
+from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 
 from aid.client import connect
 from aid.protocol import AidError, CreateSession
+from aid.speech import Transcription
+from aid.speech import load as load_speech
 from aid.web import auth
 
 if TYPE_CHECKING:
@@ -41,9 +45,11 @@ if TYPE_CHECKING:
 
     from starlette.requests import Request
     from starlette.types import ASGIApp, Message, Receive, Scope, Send
+    from starlette.websockets import WebSocket
 
     from aid.client import Client
     from aid.paths import Paths
+    from aid.speech import Recognizer
 
 log = logging.getLogger(__name__)
 
@@ -63,6 +69,10 @@ STATUS_POLL: Final = 1.0
 # pymux has no "pane changed" wait yet (Lillecarl/pymux long poll, planned): a frame is fetched this often.
 SCREEN_POLL: Final = 0.5
 KEEPALIVE: Final = 15.0
+WS_POLICY_VIOLATION: Final = 1008
+WS_NO_SPEECH: Final = 4404
+# One second of float32 at the highest rate SpeechStart takes; a page sends about 0.1 s per frame.
+MAX_AUDIO_FRAME: Final = 192000 * 4
 _STATUS: Final = {
     "not_found": 404,
     "exists": 409,
@@ -235,6 +245,56 @@ async def delete(request: Request) -> Response:
     return JSONResponse({})
 
 
+@api()
+async def speech(request: Request) -> Response:
+    return JSONResponse({"enabled": request.app.state.recognizer is not None})
+
+
+class SpeechStart(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    rate: Annotated[int, Field(ge=8000, le=192000)]
+
+
+async def transcribe(websocket: WebSocket) -> None:
+    """Speech to text, streamed: `{"rate": N}`, then binary frames of little-endian float32 mono samples at that
+    rate, then `{"end": true}`. Each change comes back as `{"text": ..., "final": ...}`; `{"done": true}` last.
+
+    A WebSocket carries no CSRF header, so the Origin must be aid's own, as well as the session cookie.
+    """
+    recognizer: Recognizer | None = websocket.app.state.recognizer
+    if auth.current_user(websocket) is None or not auth.same_origin(websocket, websocket.app.state.oidc_config):
+        await websocket.close(code=WS_POLICY_VIOLATION)
+        return
+    if recognizer is None:
+        await websocket.close(code=WS_NO_SPEECH)
+        return
+    await websocket.accept()
+    try:
+        rate = SpeechStart.model_validate_json(await websocket.receive_text()).rate
+    except ValidationError, KeyError:
+        await websocket.close(code=WS_POLICY_VIOLATION)
+        return
+    transcription = Transcription(recognizer)
+    while True:
+        message = await websocket.receive()
+        if message["type"] == "websocket.disconnect":
+            return
+        if (data := message.get("bytes")) is not None:
+            if len(data) > MAX_AUDIO_FRAME or len(data) % 4:
+                await websocket.close(code=WS_POLICY_VIOLATION)
+                return
+            samples = np.frombuffer(data, dtype="<f4").astype(np.float32)
+            heard = await anyio.to_thread.run_sync(transcription.feed, rate, samples)
+        else:
+            heard = await anyio.to_thread.run_sync(transcription.finish, rate)
+        for h in heard:
+            await websocket.send_json({"text": h.text, "final": h.final})
+        if data is None:
+            await websocket.send_json({"done": True})
+            await websocket.close()
+            return
+
+
 async def index(request: Request) -> Response:
     if auth.current_user(request) is None:
         return RedirectResponse("/login", status_code=303)
@@ -268,12 +328,18 @@ def security_headers(app: ASGIApp) -> ASGIApp:
 
 
 def create_app(
-    oidc: auth.OidcConfig, session_secret: str, paths: Paths | None = None, assets: Path | None = None
+    oidc: auth.OidcConfig,
+    session_secret: str,
+    paths: Paths | None = None,
+    assets: Path | None = None,
+    speech_model: Path | None = None,
 ) -> Starlette:
-    """The app. `assets` is the built UI (web/dist); without it the API still works and `/` says what is missing."""
+    """The app. `assets` is the built UI (web/dist); without it the API still works and `/` says what is missing.
+    `speech_model` is a sherpa-onnx streaming transducer (`aid.speech`); without one there is no speech to text."""
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncGenerator[None]:
+        app.state.recognizer = await anyio.to_thread.run_sync(load_speech, speech_model) if speech_model else None
         async with connect(paths) as client:
             app.state.client = client
             yield
@@ -300,6 +366,8 @@ def create_app(
             Route("/api/sessions/{name}/prompt", prompt, methods=["POST"]),
             Route("/api/sessions/{name}/cancel", cancel, methods=["POST"]),
             Route("/api/sessions/{name}/stop", stop, methods=["POST"]),
+            Route("/api/speech", speech, methods=["GET"]),
+            WebSocketRoute("/api/transcribe", transcribe),
         ],
         middleware=[
             Middleware(security_headers),

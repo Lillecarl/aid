@@ -10,12 +10,13 @@ import logging
 import secrets
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
+from urllib.parse import urlsplit
 
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
 
 if TYPE_CHECKING:
-    from starlette.requests import Request
+    from starlette.requests import HTTPConnection, Request
     from starlette.responses import Response
 
 log = logging.getLogger(__name__)
@@ -66,9 +67,17 @@ def allowed(claims: dict[str, Any], config: OidcConfig) -> str | None:
     return email if email.lower() in config.allowed_emails else None
 
 
-def current_user(request: Request) -> User | None:
-    data = request.session.get(USER_KEY)
+def current_user(connection: HTTPConnection) -> User | None:
+    data = connection.session.get(USER_KEY)
     return User(**cast("dict[str, str]", data)) if isinstance(data, dict) else None
+
+
+def same_origin(connection: HTTPConnection, config: OidcConfig) -> bool:
+    """For a WebSocket, which carries no CSRF header: the browser's Origin must be aid's own. Another site's page
+    could otherwise open one with the user's cookie."""
+    expected = urlsplit(config.base_url)
+    given = urlsplit(connection.headers.get("origin", ""))
+    return (given.scheme, given.netloc) == (expected.scheme, expected.netloc)
 
 
 def csrf_ok(request: Request) -> bool:

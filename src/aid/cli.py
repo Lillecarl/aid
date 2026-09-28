@@ -71,6 +71,10 @@ def _parser() -> argparse.ArgumentParser:
     web.add_argument(
         "--allow-email", action="append", required=True, help="a verified email that may log in; repeat for more"
     )
+    web.add_argument(
+        "--speech-model",
+        help="a sherpa-onnx streaming transducer directory, for speech to text (default: none, no microphone)",
+    )
 
     def new(name: str, help_text: str) -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=help_text)
@@ -271,7 +275,8 @@ async def _web(args: argparse.Namespace) -> None:
         allowed_emails=frozenset(email.lower() for email in args.allow_email),
     )
     assets = Path(args.assets) if args.assets else None
-    app = create_app(oidc, _secret(ENV_SESSION_SECRET), assets=assets)
+    speech_model = Path(args.speech_model) if args.speech_model else None
+    app = create_app(oidc, _secret(ENV_SESSION_SECRET), assets=assets, speech_model=speech_model)
     shutdown = anyio.Event()
     async with anyio.create_task_group() as tg:
         tg.start_soon(lambda: serve_web(app, args.bind, shutdown=shutdown))

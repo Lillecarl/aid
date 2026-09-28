@@ -10,18 +10,24 @@ import shutil
 import socket
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, BinaryIO
+from typing import TYPE_CHECKING, Any, BinaryIO, cast
 
 import anyio
 import httpx
 import pytest
+from websockets.asyncio.client import connect as ws_connect
+from websockets.exceptions import InvalidStatus
 
 from aid.web import OidcConfig, create_app, serve
 from aid.web.app import ENV_ASSETS
 from tests.conftest import fake_spec, needs_pymux, py_spec
+from tests.test_speech import MODEL as SPEECH_MODEL
+from tests.test_speech import SAID, speech
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+
+    from websockets.typing import Origin
 
     from aid.paths import Paths
 
@@ -102,7 +108,7 @@ async def web(daemon: Paths, tmp_path: Path) -> AsyncIterator[Web]:
             with anyio.fail_after(TIMEOUT):
                 await wait_for(f"{issuer}/.well-known/openid-configuration")
             async with anyio.create_task_group() as tg:
-                app = create_app(oidc, secrets.token_hex(32), daemon, assets=ASSETS)
+                app = create_app(oidc, secrets.token_hex(32), daemon, assets=ASSETS, speech_model=SPEECH_MODEL)
                 tg.start_soon(lambda: serve(app, f"127.0.0.1:{web_port}", shutdown=shutdown))
                 with anyio.fail_after(TIMEOUT):
                     await wait_for(f"{web_url}/healthz")
@@ -281,3 +287,38 @@ async def test_screen_endpoints(web: Web, tmp_path: Path, pymux_socket: str) -> 
     assert "style-src-attr 'unsafe-inline'" in css.headers["content-security-policy"]
     assert "fake claude" in frame["html"]
     assert no_screen.status_code == 404
+
+
+async def speak(web: Web, cookie: str, *, origin: str | None = None) -> list[dict[str, Any]]:
+    """Send the speech model's sample over /api/transcribe, as a page would; return every reply."""
+    rate, samples = speech()
+    url = web.url.replace("http://", "ws://") + "/api/transcribe"
+    headers = {"Cookie": f"aid_session={cookie}"}
+    replies: list[dict[str, Any]] = []
+    async with ws_connect(url, origin=cast("Origin", origin or web.url), additional_headers=headers) as ws:
+        await ws.send(json.dumps({"rate": rate}))
+        step = rate // 10
+        for start in range(0, len(samples), step):
+            await ws.send(samples[start : start + step].astype("<f4").tobytes())
+        await ws.send(json.dumps({"end": True}))
+        async for message in ws:
+            replies.append(json.loads(message))
+    return replies
+
+
+@pytest.mark.skipif(SPEECH_MODEL is None, reason="AID_TEST_SPEECH_MODEL is not set")
+async def test_speech_to_text(web: Web) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with httpx.AsyncClient() as client:
+            await login(client, web, ALLOWED)
+            enabled = (await client.get(f"{web.url}/api/speech")).json()
+            cookie = client.cookies["aid_session"]
+        replies = await speak(web, cookie)
+        with pytest.raises(InvalidStatus):
+            await speak(web, cookie, origin="http://elsewhere.example")
+        with pytest.raises(InvalidStatus):
+            await speak(web, "not-a-session")
+    assert enabled == {"enabled": True}
+    assert replies[-1] == {"done": True}
+    assert " ".join(r["text"] for r in replies if r.get("final")) == SAID
+    assert any(r.get("final") is False for r in replies)
