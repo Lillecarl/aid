@@ -15,7 +15,7 @@ from aid.client import connect
 from aid.launcher import ForkserverLauncher
 from aid.paths import default_paths
 from aid.protocol import AidError, Output, TextDelta
-from aid.spec import AcpSpec, PermissionMode, PydanticAISpec
+from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -51,6 +51,11 @@ def _parser() -> argparse.ArgumentParser:
     acp.add_argument("--allow", action="store_true", help="grant every permission request (default: deny)")
     acp.add_argument("--no-inherit-env", action="store_true", help="start the agent with only --env")
 
+    claude = new("new-claude", "create a session running interactive Claude Code in pymux; claude args after --")
+    claude.add_argument("--trust", action="store_true", help="answer Claude Code's trust-this-folder dialog with yes")
+    claude.add_argument("--pymux-socket", help="the pymux server to run in (default: aid's own)")
+    claude.add_argument("--claude", default="claude", help="the claude executable")
+
     py = new("new-py", "create a session running a pydantic-ai agent")
     py.add_argument("target", help="module:attribute of a pydantic_ai agent")
     py.add_argument("--python-path", action="append", default=[], help="prepend to the worker's sys.path")
@@ -67,7 +72,7 @@ def _parser() -> argparse.ArgumentParser:
 def _split_agent_command(argv: Sequence[str]) -> tuple[list[str], list[str]]:
     """Split `new-acp ... -- cmd args` by hand: argparse.REMAINDER after a positional swallows options too."""
     argv = list(argv)
-    if argv[:1] != ["new-acp"] or "--" not in argv:
+    if argv[:1] not in (["new-acp"], ["new-claude"]) or "--" not in argv:
         return argv, []
     split = argv.index("--")
     return argv[:split], argv[split + 1 :]
@@ -87,6 +92,15 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             inherit_env=not args.no_inherit_env,
             permission=PermissionMode.ALLOW if args.allow else PermissionMode.DENY,
         )
+    if args.command == "new-claude":
+        return ClaudeTtySpec(
+            cwd=cwd,
+            env=env,
+            command=[args.claude],
+            args=args.agent_command,
+            trust_cwd=args.trust,
+            pymux_socket=args.pymux_socket,
+        )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
     return PydanticAISpec(cwd=cwd, env=env, target=args.target, python_path=python_path)
 
@@ -94,7 +108,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
 async def _client_command(args: argparse.Namespace) -> None:
     async with connect() as client:
         match args.command:
-            case "new-acp" | "new-py":
+            case "new-acp" | "new-py" | "new-claude":
                 await client.create(args.name, _spec(args))
                 print(args.name)
             case "list":

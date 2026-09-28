@@ -38,6 +38,8 @@ line-length = 120
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "C4", "TC", "TID", "ASYNC", "PTH", "RET", "FA", "PGH", "PLC0415"]
 ignore = ["E501"]
+# Claude Code draws its prompt with it; matching the screen needs the real character.
+allowed-confusables = ["❯"]
 
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "asyncio".msg = "Use anyio. The acp library is asyncio-native; keep that seam inside the acp package."
