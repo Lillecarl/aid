@@ -3,6 +3,8 @@
   lib,
   buildNpmPackage,
   nodejs_24,
+  # `<pymux-pane>`, npm-shaped, from the pyterm pin: linked in as node_modules/pymux-pane.
+  pymuxElement,
 }:
 buildNpmPackage {
   pname = "aid-web";
@@ -24,6 +26,11 @@ buildNpmPackage {
 
   # Changes with package-lock.json: set lib.fakeHash, build, and take the hash the error prints.
   npmDepsHash = "sha256-yJn1JVqNiZuR5IXDHTZNtjqdF1sYoiHKzQRgWxNzmho=";
+
+  # After npm's own install, which would drop a package the lock does not name.
+  preBuild = ''
+    ln -s ${pymuxElement} node_modules/pymux-pane
+  '';
 
   doCheck = true;
   checkPhase = ''

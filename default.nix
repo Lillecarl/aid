@@ -6,15 +6,15 @@
     type = "github";
     owner = "Lillecarl";
     repo = "pyterm";
-    rev = "fd54512e4217a69e449cbd1440c3e71b1e8d98ce";
-    narHash = "sha256-se2rRsL4PXp05I3oNrY4ytUbRkXeEL6xLMPoaeGDs7o=";
+    rev = "23a3fff1c14004f01e237825d6a6d80e09ddf3a1";
+    narHash = "sha256-nMED4Ap5sY2L1Q+YgNv3sSO+a5nTvUP0ORipO56/46g=";
   },
 }:
 let
   inherit (pkgs) lib;
   p = import pyterm { inherit pkgs; };
   venv = set.mkVirtualEnv "aid-env" { aid = [ ]; };
-  ui = pkgs.callPackage ./web { };
+  ui = pkgs.callPackage ./web { pymuxElement = p.pymux-element; };
   speechModel = pkgs.callPackage ./nix/speech-model.nix { };
   python = pkgs.python3;
 
@@ -77,6 +77,9 @@ in
       export PYTHONPATH=${lib.escapeShellArg (toString ./src)}''${PYTHONPATH:+:$PYTHONPATH}
       export AID_WEB_ASSETS=${ui}
       export AID_TEST_SPEECH_MODEL=${speechModel}
+      # The element the web build links in; `npm ci` in web/ removes it, and the next shell puts it back.
+      mkdir -p ${lib.escapeShellArg (toString ./web)}/node_modules
+      ln -sfn ${p.pymux-element} ${lib.escapeShellArg (toString ./web)}/node_modules/pymux-pane
     '';
   };
 }

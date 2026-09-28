@@ -1,69 +1,51 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
-  import { screenEventsUrl, screenStylesheetUrl, watch } from "./api";
-  import type { ScreenFrame } from "./api";
+  import "pymux-pane";
+  import { onMount } from "svelte";
 
   let { name }: { name: string } = $props();
 
-  let view: ScreenFrame | null = $state(null);
-  let problem = $state("");
-  let box: HTMLDivElement | undefined = $state();
+  const scheme = location.protocol === "https:" ? "wss" : "ws";
+  const src = $derived(`${scheme}://${location.host}/api/sessions/${encodeURIComponent(name)}/pane`);
 
-  /** Links in the pane come from the program in it (OSC 8). pymux keeps only safe schemes; open them apart. */
-  async function isolateLinks(): Promise<void> {
-    await tick();
-    for (const link of box?.querySelectorAll("a") ?? []) {
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-    }
-  }
+  let note = $state("Connecting…");
+  // Mounted only while its tab is shown, and the element only while the browser tab is visible: removing it
+  // closes its WebSocket, so nothing streams that nobody sees.
+  let visible = $state(document.visibilityState === "visible");
 
-  // Mounted only while its tab is shown.
-  onMount(() =>
-    watch<ScreenFrame>(
-      screenEventsUrl(name),
-      (data) => {
-        view = data;
-        void isolateLinks();
-      },
-      (text) => (problem = text),
-    ),
-  );
+  onMount(() => {
+    const onvisibility = (): void => {
+      visible = document.visibilityState === "visible";
+    };
+    document.addEventListener("visibilitychange", onvisibility);
+    return () => document.removeEventListener("visibilitychange", onvisibility);
+  });
 </script>
 
-<svelte:head>
-  <!-- The query changes with the pane's palette, so the browser fetches the stylesheet again then and only then. -->
-  {#if view}<link rel="stylesheet" href={`${screenStylesheetUrl(name)}?v=${view.style}`} />{/if}
-</svelte:head>
-
-{#if problem}<p class="problem">{problem}</p>{/if}
-{#if view?.overlay}<p class="muted">pymux shows {view.overlay} over this pane, which this view does not draw.</p>{/if}
-<div class="screen" bind:this={box}>
-  {#if view === null}
-    <p class="muted">Loading…</p>
-  {:else}
-    <!-- HTML that pymux drew: pyte escapes the pane's text and keeps links to safe schemes. -->
-    {@html view.html}
-  {/if}
-</div>
+<p class="muted">{note}</p>
+{#if visible}
+  <pymux-pane
+    {src}
+    onconnected={(event: Event) => {
+      const pane = event.currentTarget as HTMLElementTagNameMap["pymux-pane"];
+      note = pane.writable ? "Click the pane and type: keys go to the session." : "Showing only.";
+    }}
+    onclosed={() => (note = "The stream ended: the session stopped, or its pane went away.")}
+    onerror={() => (note = "The stream failed.")}
+  ></pymux-pane>
+{/if}
 
 <style>
-  .screen {
+  pymux-pane {
     flex: 1;
     min-height: 0;
     overflow: auto;
     border: 1px solid var(--line);
     border-radius: 0.3rem;
-  }
-  .screen :global(pre) {
-    margin: 0;
     padding: 0.5rem;
-    width: max-content;
   }
   .muted {
     color: var(--muted);
-  }
-  .problem {
-    color: #d33;
+    margin: 0 0 0.5rem;
+    font-size: 0.85em;
   }
 </style>
