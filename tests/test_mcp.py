@@ -12,7 +12,7 @@ import aid
 from aid.agents import ENV_AGENTS_PATH
 from aid.mcp import claude_config, from_claude_config
 from aid.paths import ENV_SESSION
-from aid.spec import AcpSpec, McpHttp, McpSse, McpStdio
+from aid.spec import AcpSpec, McpHttp, McpSse, McpStdio, PermissionMode
 from tests.conftest import acp_spec
 
 if TYPE_CHECKING:
@@ -104,3 +104,17 @@ async def test_acp_agent_without_the_transport_fails_to_start(daemon: Paths, tmp
         async with aid.connect(daemon) as client:
             with pytest.raises(aid.AidError, match="does not take sse MCP servers"):
                 await client.create("sse", spec)
+
+
+@pytest.mark.anyio
+async def test_acp_approves_aid_tools_by_their_name(daemon: Paths, tmp_path: Path) -> None:
+    denying = acp_spec(tmp_path, PermissionMode.DENY)
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("perm", denying)
+            aid_tool = await session.run("aid-tool")
+            spoofed = await session.run("spoofed-title")
+            other = await session.run("permission")
+            off = await client.create("off", denying.model_copy(update={"aid_tools": False}))
+            aid_tool_off = await off.run("aid-tool")
+    assert (aid_tool.text, spoofed.text, other.text, aid_tool_off.text) == ("yes", "no", "no", "no")

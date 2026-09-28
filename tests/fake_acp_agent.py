@@ -55,6 +55,20 @@ class FakeAgent:
     async def say(self, session_id: str, text: str) -> None:
         await self.conn.session_update(session_id=session_id, update=acp.update_agent_message_text(text))
 
+    async def ask_raw(self, session_id: str, *, name: str, title: str) -> str:
+        """A permission request as claude-agent-acp sends it: `toolCall.name` is outside the schema, so the typed
+        `request_permission` cannot send it."""
+        params = {
+            "sessionId": session_id,
+            "toolCall": {"toolCallId": uuid.uuid4().hex, "name": name, "title": title},
+            "options": [
+                {"optionId": "yes", "name": "Yes", "kind": "allow_once"},
+                {"optionId": "no", "name": "No", "kind": "reject_once"},
+            ],
+        }
+        response = await self.conn._conn.send_request("session/request_permission", params)
+        return response["outcome"].get("optionId", "cancelled")
+
     async def prompt(self, session_id: str, prompt: list[Any], **kwargs: Any) -> PromptResponse:
         text = "".join(block.text for block in prompt if isinstance(block, TextContentBlock))
         self.turns += 1
@@ -82,6 +96,10 @@ class FakeAgent:
                 await self.say(session_id, f"{os.environ.get('AID_TEST_VAR')} {Path.cwd()}")
             case "pid":
                 await self.say(session_id, str(os.getpid()))
+            case "aid-tool":
+                await self.say(session_id, await self.ask_raw(session_id, name="mcp__aid__add", title="add"))
+            case "spoofed-title":
+                await self.say(session_id, await self.ask_raw(session_id, name="Bash", title="mcp__aid__add"))
             case "mcp":
                 servers = [s.model_dump(mode="json", exclude_none=True) for s in self.mcp_servers]
                 await self.say(session_id, json.dumps({"via": self.session_via, "servers": servers}))

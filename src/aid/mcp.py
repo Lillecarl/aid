@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 from acp.schema import EnvVariable, HttpHeader, HttpMcpServer, McpServerStdio, SseMcpServer
 from pydantic import TypeAdapter
@@ -19,6 +19,11 @@ if TYPE_CHECKING:
     from aid.spec import AcpSpec, ClaudeTtySpec
 
 _servers: TypeAdapter[list[McpServer]] = TypeAdapter(list[McpServer])
+
+
+# How Claude Code names the built-in server's tools; also a permission rule that allows all of them.
+AID_TOOLS_RULE: Final = f"mcp__{BUILTIN_MCP_SERVER}"
+AID_TOOL_PREFIX: Final = f"{AID_TOOLS_RULE}__"
 
 
 def builtin_server(session: str) -> McpStdio:

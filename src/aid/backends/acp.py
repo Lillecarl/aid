@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import acp
 import anyio
+from acp.connection import StreamDirection
 from acp.schema import (
     AgentMessageChunk,
     AgentThoughtChunk,
@@ -23,10 +24,10 @@ from acp.schema import (
     ToolCallProgress,
     ToolCallStart,
 )
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from aid.env import agent_environment
-from aid.mcp import session_servers, to_acp
+from aid.mcp import AID_TOOL_PREFIX, session_servers, to_acp
 from aid.protocol import Output, SessionEvent, TextDelta, ThoughtDelta, ToolCall
 from aid.spec import PermissionMode
 
@@ -85,17 +86,56 @@ def to_event(update: object) -> SessionEvent | None:
             return None
 
 
+def permission_for(spec: AcpSpec, tool_name: str | None) -> PermissionMode:
+    """aid's own tools are approved: whoever put them on the agents path chose them."""
+    if spec.aid_tools and tool_name is not None and tool_name.startswith(AID_TOOL_PREFIX):
+        return PermissionMode.ALLOW
+    return spec.permission
+
+
+def requested_tool(message: dict[str, Any]) -> tuple[str, str] | None:
+    """(tool call id, tool name) of a raw `session/request_permission`.
+
+    The name is claude-agent-acp's `toolCall.name`, outside the ACP schema, so the parsed request lacks it. The
+    title is no substitute: for Bash it is the description the model wrote.
+    """
+    if message.get("method") != "session/request_permission":
+        return None
+    try:
+        tool_call = _PermissionParams.model_validate(message.get("params")).tool_call
+    except ValidationError:
+        return None
+    return tool_call.tool_call_id, tool_call.name
+
+
+class _NamedToolCall(BaseModel):
+    tool_call_id: str = Field(alias="toolCallId")
+    name: str
+
+
+class _PermissionParams(BaseModel):
+    tool_call: _NamedToolCall = Field(alias="toolCall")
+
+
 class _Client:
     """The `acp.Client` side. Session updates arrive through `AcpBackend.observe`, not here."""
 
-    def __init__(self, permission: PermissionMode) -> None:
-        self._permission = permission
+    def __init__(self, spec: AcpSpec) -> None:
+        self._spec = spec
+        self._tool_names: dict[str, str] = {}
+
+    def observe(self, event: StreamEvent) -> None:
+        """Runs in the receive loop, before the library dispatches the request to `request_permission`."""
+        if event.direction is StreamDirection.INCOMING and (found := requested_tool(event.message)):
+            self._tool_names[found[0]] = found[1]
 
     async def request_permission(
         self, session_id: str, tool_call: ToolCallUpdate, options: list[PermissionOption], **kwargs: Any
     ) -> RequestPermissionResponse:
-        response = choose_permission(self._permission, options)
-        log.info("permission %s for %r: %s", self._permission, tool_call.title, response.outcome)
+        tool_name = self._tool_names.pop(tool_call.tool_call_id, None)
+        mode = permission_for(self._spec, tool_name)
+        response = choose_permission(mode, options)
+        log.info("permission %s for %s %r: %s", mode, tool_name, tool_call.title, response.outcome)
         return response
 
     async def session_update(self, session_id: str, update: object, **kwargs: Any) -> None:
@@ -164,14 +204,16 @@ class AcpBackend:
 async def open_acp(spec: AcpSpec, state_dir: anyio.Path) -> AsyncGenerator[AcpBackend]:
     id_file = state_dir / SESSION_ID_FILE
     backend: AcpBackend | None = None
+    client = _Client(spec)
 
     def observe(event: StreamEvent) -> None:
+        client.observe(event)
         if backend is not None:
             backend.observe(event)
 
     async with acp.spawn_agent_process(
         # Partial on purpose: the router answers method_not_found for what `ClientCapabilities()` does not advertise.
-        cast("acp.Client", _Client(spec.permission)),
+        cast("acp.Client", client),
         spec.command[0],
         *spec.command[1:],
         env=agent_environment(spec.env, inherit=spec.inherit_env),

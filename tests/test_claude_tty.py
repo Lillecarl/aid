@@ -51,17 +51,20 @@ def test_launcher_script_quotes_everything() -> None:
     ]
 
 
-def test_mcp_config_goes_before_other_arguments() -> None:
+def test_variadic_options_go_before_other_arguments() -> None:
     spec = ClaudeTtySpec(cwd="/", args=["first prompt"])
     assert claude_argv(spec, "id", resume=False, mcp_config="/s/mcp.json") == [
         "claude",
         "--mcp-config",
         "/s/mcp.json",
+        "--allowedTools",
+        "mcp__aid",
         "--session-id",
         "id",
         "first prompt",
     ]
-    assert claude_argv(spec, "id", resume=True, mcp_config=None) == ["claude", "--resume", "id", "first prompt"]
+    without = spec.model_copy(update={"aid_tools": False})
+    assert claude_argv(without, "id", resume=True, mcp_config=None) == ["claude", "--resume", "id", "first prompt"]
 
 
 @pytest.fixture

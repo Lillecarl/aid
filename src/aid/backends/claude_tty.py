@@ -27,7 +27,7 @@ import anyio.to_thread
 from libpymux import Server
 
 from aid.env import agent_environment
-from aid.mcp import claude_config, session_servers
+from aid.mcp import AID_TOOLS_RULE, claude_config, session_servers
 from aid.paths import default_paths
 from aid.protocol import Output, TextDelta
 from aid.transcript import TranscriptFollower, TurnEnded, config_dir, find_transcript, items_from_entry
@@ -83,9 +83,11 @@ def launcher_script(env: dict[str, str], cwd: str, argv: list[str]) -> str:
 
 
 def claude_argv(spec: ClaudeTtySpec, session_id: str, *, resume: bool, mcp_config: str | None) -> list[str]:
-    # --mcp-config is variadic: it goes before another option, or it would take the first of spec.args too.
+    # --mcp-config and --allowedTools are variadic: each goes before another option, or it would take the first
+    # of spec.args too. A repeated --allowedTools in spec.args adds to this one.
     mcp = ["--mcp-config", mcp_config] if mcp_config else []
-    return [*spec.command, *mcp, "--resume" if resume else "--session-id", session_id, *spec.args]
+    allowed = ["--allowedTools", AID_TOOLS_RULE] if spec.aid_tools else []
+    return [*spec.command, *mcp, *allowed, "--resume" if resume else "--session-id", session_id, *spec.args]
 
 
 class ClaudeTtyBackend:
