@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aid"
+version = "0.1.0"
+description = "AI daemon: persistent ACP and pydantic-ai agents behind a Pythonic async API."
+requires-python = ">=3.14"
+dependencies = [
+  "agent-client-protocol>=0.12",
+  "anyio>=4.10",
+  "pydantic>=2.11",
+  "pydantic-ai-slim>=2.30",
+  "pyzmq>=27",
+]
+
+[project.scripts]
+aid = "aid.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aid"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error"]
+
+[tool.pyright]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+include = ["src", "tests"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "C4", "TC", "TID", "ASYNC", "PTH", "RET", "FA", "PGH", "PLC0415"]
+ignore = ["E501"]
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"asyncio".msg = "Use anyio. The acp library is asyncio-native; keep that seam inside the acp package."
+"subprocess".msg = "Use anyio.open_process or acp.spawn_agent_process."
+
+[tool.ruff.lint.flake8-type-checking]
+runtime-evaluated-base-classes = ["pydantic.BaseModel", "aid.protocol._Message", "aid.spec._Spec"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["aid"]
