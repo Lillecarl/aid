@@ -259,52 +259,6 @@ async def test_status_streams_changes(web: Web, tmp_path: Path) -> None:
     assert [s["running"] for s in seen] == [True, False]
 
 
-@needs_pymux
-async def test_screen_endpoints(web: Web, tmp_path: Path, pymux_socket: str) -> None:
-    with anyio.fail_after(TIMEOUT):
-        async with httpx.AsyncClient() as client:
-            await login(client, web, ALLOWED)
-            csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
-            spec = fake_spec(tmp_path, pymux_socket).model_dump(mode="json")
-            created = await client.post(
-                f"{web.url}/api/sessions", json={"name": "tty", "spec": spec}, headers={"X-CSRF-Token": csrf}
-            )
-            assert created.status_code == 201, created.text
-            css = await client.get(f"{web.url}/api/sessions/tty/screen.css")
-            frames: list[dict[str, Any]] = []
-            # No read timeout: an idle pane's stream is quiet until pymux's wait runs out.
-            url = f"{web.url}/api/sessions/tty/screen/events"
-            async with anyio.create_task_group() as tg, client.stream("GET", url, timeout=None) as response:
-                async for line in response.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    frames.append(json.loads(line.removeprefix("data: ")))
-                    if len(frames) == 1:
-                        # A prompt is pasted into the pane, and shows for a moment before Enter sends it.
-                        tg.start_soon(
-                            lambda: client.post(
-                                f"{web.url}/api/sessions/tty/prompt",
-                                json={"text": "hi"},
-                                headers={"X-CSRF-Token": csrf},
-                            )
-                        )
-                    elif "❯ hi" in frames[-1]["html"]:
-                        break
-            frame = frames[0]
-            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
-            await client.post(
-                f"{web.url}/api/sessions", json={"name": "py", "spec": spec}, headers={"X-CSRF-Token": csrf}
-            )
-            no_screen = await client.get(f"{web.url}/api/sessions/py/screen/events")
-    assert css.headers["content-type"].startswith("text/css")
-    assert "--pyte-" in css.text
-    assert "style-src-attr 'unsafe-inline'" in css.headers["content-security-policy"]
-    assert "fake claude" in frame["html"]
-    assert len(frame["style"]) == 16
-    assert "❯ hi" in frames[-1]["html"]
-    assert no_screen.status_code == 404
-
-
 async def speak(web: Web, cookie: str, *, origin: str | None = None) -> list[dict[str, Any]]:
     """Send the speech model's sample over /api/transcribe, as a page would; return every reply."""
     rate, samples = speech()

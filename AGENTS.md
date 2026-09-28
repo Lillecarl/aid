@@ -71,8 +71,9 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 - claude-tty depends on Claude Code's screen and transcript, neither an API. `claude_tty.py` and
   `transcript.py` say what was measured, on which version; re-measure before changing them.
 - libpymux and the `pymux` binary come from one pyterm pin (`default.nix`): the wire protocol still moves.
-- Web live views (Status, Terminal) stream SSE only while their tab is mounted and the browser tab is visible
-  (`api.watch`). Terminal HTML is drawn by pymux (`Pane.capture_html`); the CSP allows `style-src-attr` inline
-  for its cell styles and nothing wider.
+- Web live views stream only while their tab is mounted and the browser tab is visible: Status by SSE
+  (`api.watch`), Terminal by `<pymux-pane>` (pyterm's `pymux-element`, linked in as `node_modules/pymux-pane`)
+  over `/api/sessions/{name}/pane`, which relays `libpymux.PaneStream` without reading it. The element styles
+  through the CSSOM, so the CSP stays `default-src 'self'`: do not add inline allowances.
 - Web: a session runs commands on the host, so login needs a verified email on the allowlist, and every
   mutating request needs the CSRF header. The CSP forbids inline script; agent output is text, never HTML.

@@ -7,7 +7,6 @@ everything on plain HTTP, where the session cookie and the CSRF header already a
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import logging
 from contextlib import asynccontextmanager
@@ -59,22 +58,11 @@ log = logging.getLogger(__name__)
 ENV_ASSETS: Final = "AID_WEB_ASSETS"
 SESSION_MAX_AGE: Final = 12 * 3600
 SECURITY_HEADERS: Final = {
-    # style-src-attr: pymux's HTML of a pane colours its cells with style attributes. pyte writes the declarations;
-    # a program in the pane picks at most a colour.
-    "Content-Security-Policy": (
-        "default-src 'self'; style-src-attr 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; "
-        "form-action 'self'"
-    ),
+    "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "same-origin",
 }
 STATUS_POLL: Final = 1.0
-# Frames come when pymux says the pane changed. At most this often, so fast output costs a bounded frame rate.
-SCREEN_MIN_INTERVAL: Final = 0.1
-# Under pymux's own limit on a wait, which is under a minute.
-SCREEN_WAIT: Final = 25.0
-# Only for a pymux that cannot count revisions.
-SCREEN_POLL: Final = 0.5
 KEEPALIVE: Final = 15.0
 WS_POLICY_VIOLATION: Final = 1008
 WS_NO_SPEECH: Final = 4404
@@ -219,56 +207,6 @@ async def status_events(request: Request) -> Response:
     session = _client(request).session(request.path_params["name"])
     await session.status()  # A missing session is a 404 here, not an error inside the stream.
     return _changes(session.status, STATUS_POLL)
-
-
-class ScreenFrame(BaseModel):
-    html: str
-    overlay: str | None
-    style: str
-    """A digest of the pane's stylesheet: the page fetches it again when this changes (a program's OSC 4)."""
-
-
-@api()
-async def screen_events(request: Request) -> Response:
-    """Interactive Claude's pane as HTML, each time it changes, for as long as the page holds the stream open.
-
-    The worker waits in pymux for the pane to leave the revision last drawn, so an idle pane sends nothing and
-    costs nothing; a busy one is held to SCREEN_MIN_INTERVAL between frames.
-    """
-    session = _client(request).session(request.path_params["name"])
-    await session.screen()  # A missing or stopped session is an HTTP error here, not an error inside the stream.
-
-    async def events() -> AsyncIterator[str]:
-        revision: int | None = None
-        last: ScreenFrame | None = None
-        while True:
-            try:
-                view = await session.screen(stylesheet=True, since=revision, wait=SCREEN_WAIT)
-            except AidError as error:
-                yield f"event: error\ndata: {json.dumps({'error': error.message, 'code': error.code})}\n\n"
-                return
-            style = hashlib.sha256((view.stylesheet or "").encode()).hexdigest()[:16]
-            frame = ScreenFrame(html=view.html, overlay=view.overlay, style=style)
-            if frame != last:
-                last = frame
-                yield f"data: {frame.model_dump_json()}\n\n"
-            elif view.revision == revision:
-                # The wait ran out with nothing new: a comment tells a dead connection apart from a quiet one.
-                yield ": still here\n\n"
-            if view.revision < 0:
-                # A pymux too old to count revisions answers at once: poll it instead.
-                await anyio.sleep(SCREEN_POLL)
-            revision = view.revision if view.revision >= 0 else None
-            await anyio.sleep(SCREEN_MIN_INTERVAL)
-
-    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
-
-
-@api()
-async def screen_stylesheet(request: Request) -> Response:
-    """The CSS a pane's HTML is written against, with the pane's own colours."""
-    view = await _client(request).session(request.path_params["name"]).screen(stylesheet=True)
-    return Response(view.stylesheet or "", media_type="text/css", headers={"Cache-Control": "no-store"})
 
 
 @api(mutating=True)
@@ -454,8 +392,6 @@ def create_app(
             Route("/api/sessions/{name}/history", history, methods=["GET"]),
             Route("/api/sessions/{name}/status", status, methods=["GET"]),
             Route("/api/sessions/{name}/status/events", status_events, methods=["GET"]),
-            Route("/api/sessions/{name}/screen/events", screen_events, methods=["GET"]),
-            Route("/api/sessions/{name}/screen.css", screen_stylesheet, methods=["GET"]),
             Route("/api/sessions/{name}/prompt", prompt, methods=["POST"]),
             Route("/api/sessions/{name}/cancel", cancel, methods=["POST"]),
             Route("/api/sessions/{name}/stop", stop, methods=["POST"]),

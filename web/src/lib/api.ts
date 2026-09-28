@@ -21,18 +21,7 @@ export interface SessionStatus {
   aid_tools: boolean;
 }
 
-/** What interactive Claude's pane shows, drawn by pymux. */
-export interface ScreenFrame {
-  html: string;
-  overlay: string | null;
-  /** A digest of the pane's stylesheet; a new one means fetch the stylesheet again. */
-  style: string;
-}
-
-const sessionPath = (name: string): string => `/api/sessions/${encodeURIComponent(name)}`;
-export const statusEventsUrl = (name: string): string => `${sessionPath(name)}/status/events`;
-export const screenEventsUrl = (name: string): string => `${sessionPath(name)}/screen/events`;
-export const screenStylesheetUrl = (name: string): string => `${sessionPath(name)}/screen.css`;
+export const statusEventsUrl = (name: string): string => `/api/sessions/${encodeURIComponent(name)}/status/events`;
 
 /**
  * Follow a stream of Server-Sent Events, one per change, while the browser tab is visible; a hidden tab closes
