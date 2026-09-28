@@ -157,6 +157,12 @@ export async function agents(): Promise<AgentCatalog> {
   return (await request("GET", "/api/agents")).json();
 }
 
+/** Whether aid web has a speech model, so the page can offer the microphone. */
+export async function speechEnabled(): Promise<boolean> {
+  const data: { enabled: boolean } = await (await request("GET", "/api/speech")).json();
+  return data.enabled;
+}
+
 export async function sessions(): Promise<SessionInfo[]> {
   return (await request("GET", "/api/sessions")).json();
 }

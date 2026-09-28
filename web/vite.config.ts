@@ -7,6 +7,7 @@ const proxied = ["/api", "/login", "/logout", "/auth"];
 
 export default defineConfig({
   plugins: [svelte()],
-  build: { outDir: "dist", assetsDir: "assets" },
+  // No inlining: a small asset becomes a data: URL, and the CSP refuses script from one (the mic worklet).
+  build: { outDir: "dist", assetsDir: "assets", assetsInlineLimit: 0 },
   server: { proxy: Object.fromEntries(proxied.map((path) => [path, backend])) },
 });

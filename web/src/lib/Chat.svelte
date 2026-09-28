@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
   import * as api from "./api";
   import type { HistoryEntry, HistoryItem, SessionEvent } from "./api";
+  import { Dictation } from "./dictation";
 
   interface Props {
     name: string;
@@ -189,7 +190,53 @@
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void send();
   }
 
-  onMount(loadLatest);
+  // Speech to text: what is heard goes into the prompt box, to edit before sending.
+  let canDictate = $state(false);
+  let dictation: Dictation | null = $state(null);
+  let stopping = $state(false);
+
+  async function toggleDictation(): Promise<void> {
+    if (dictation !== null) {
+      stopping = true;
+      try {
+        await dictation.stop();
+      } finally {
+        dictation = null;
+        stopping = false;
+      }
+      return;
+    }
+    // Finished utterances join what was typed; the latest guess follows them until it is final.
+    const before = text.trimEnd();
+    let heard = "";
+    const show = (guess: string): void => {
+      text = [before, heard, guess].filter((part) => part !== "").join(" ");
+    };
+    const started = new Dictation((h) => {
+      if (h.final) {
+        heard = [heard, h.text].filter((part) => part !== "").join(" ");
+        show("");
+      } else {
+        show(h.text);
+      }
+    });
+    try {
+      await started.start();
+      dictation = started;
+    } catch (e) {
+      rows.push({ key: `l${liveCount++}`, kind: "error", text: e instanceof Error ? e.message : String(e) });
+      await started.stop().catch(() => undefined);
+    }
+  }
+
+  onMount(() => {
+    void loadLatest();
+    api.speechEnabled().then(
+      (enabled) => (canDictate = enabled),
+      () => (canDictate = false),
+    );
+    return () => void dictation?.stop();
+  });
 </script>
 
 <div class="head">
@@ -210,6 +257,16 @@
   <textarea bind:value={text} onkeydown={keydown} rows="4" placeholder="Prompt (Ctrl+Enter sends)"></textarea>
   <div class="buttons">
     <button type="submit" disabled={busy}>{busy ? "Working…" : "Send"}</button>
+    {#if canDictate}
+      <button
+        type="button"
+        class:listening={dictation !== null}
+        onclick={toggleDictation}
+        disabled={stopping}
+        title="Speech to text: what you say goes into the prompt, to edit before sending"
+        >{stopping ? "Finishing…" : dictation !== null ? "Stop listening" : "Dictate"}</button
+      >
+    {/if}
     <button type="button" onclick={() => control("cancel")} disabled={!busy}>Cancel</button>
     <button type="button" onclick={() => control("stop")}>Stop</button>
     <button type="button" onclick={() => control("delete")}>Delete</button>
@@ -270,6 +327,10 @@
   }
   .error {
     color: #d33;
+  }
+  .listening {
+    color: #d33;
+    border-color: #d33;
   }
   .buttons {
     display: flex;
