@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as api from "./api";
-  import type { AgentKind, AgentSpec } from "./api";
+  import type { AgentCatalog, AgentKind, AgentSpec } from "./api";
 
   interface Props {
     oncreated: (name: string) => void | Promise<void>;
@@ -12,7 +12,8 @@
   let kind: AgentKind = $state("claude-tty");
   let cwd = $state("");
   let command = $state("claude-agent-acp");
-  let target = $state("");
+  let agent = $state("");
+  let catalog = $state<AgentCatalog | null>(null);
   let args = $state("");
   let trust = $state(false);
   let error = $state("");
@@ -25,11 +26,27 @@
       case "acp":
         return { kind, cwd, command: words(command) };
       case "pydantic-ai":
-        return { kind, cwd, target };
+        return { kind, cwd, agent };
       case "claude-tty":
         return { kind, cwd, args: words(args), trust_cwd: trust };
     }
   }
+
+  async function loadAgents(): Promise<void> {
+    try {
+      catalog = await api.agents();
+      if (!catalog.agents.some((a) => a.name === agent)) agent = catalog.agents[0]?.name ?? "";
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // Asked each time the kind turns to pydantic-ai: the catalog reflects the agents path as it is now.
+  $effect(() => {
+    if (kind === "pydantic-ai") void loadAgents();
+  });
+
+  const chosen = $derived(catalog?.agents.find((a) => a.name === agent));
 
   async function submit(event: SubmitEvent): Promise<void> {
     event.preventDefault();
@@ -62,7 +79,21 @@
   {#if kind === "acp"}
     <label>Command <input bind:value={command} required /></label>
   {:else if kind === "pydantic-ai"}
-    <label>Target <input bind:value={target} required placeholder="package.module:agent" /></label>
+    <label>
+      Agent
+      <select bind:value={agent} required disabled={catalog === null}>
+        {#each catalog?.agents ?? [] as info (info.name)}
+          <option value={info.name}>{info.name}</option>
+        {/each}
+      </select>
+    </label>
+    {#if chosen?.description}<p class="hint">{chosen.description}</p>{/if}
+    {#if catalog !== null && catalog.agents.length === 0}
+      <p class="hint">No agents on the daemon's agents path.</p>
+    {/if}
+    {#each catalog?.problems ?? [] as problem (problem)}
+      <p class="error">{problem}</p>
+    {/each}
   {:else}
     <label>Claude arguments <input bind:value={args} placeholder="--model opus" /></label>
     <label class="check"><input type="checkbox" bind:checked={trust} /> Trust the directory</label>
@@ -75,6 +106,15 @@
   label {
     display: block;
     margin: 0.4rem 0;
+  }
+  .hint {
+    color: var(--muted);
+    font-size: 0.9em;
+    margin: 0 0 0.4rem;
+  }
+  .error {
+    white-space: pre-wrap;
+    font-size: 0.9em;
   }
   label.check {
     display: flex;

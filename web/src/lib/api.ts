@@ -16,8 +16,19 @@ export type SessionEvent =
 
 export type AgentSpec =
   | { kind: "acp"; cwd: string; command: string[] }
-  | { kind: "pydantic-ai"; cwd: string; target: string }
+  | { kind: "pydantic-ai"; cwd: string; agent: string }
   | { kind: "claude-tty"; cwd: string; args: string[]; trust_cwd: boolean };
+
+export interface AgentInfo {
+  name: string;
+  description: string;
+  module: string;
+}
+
+export interface AgentCatalog {
+  agents: AgentInfo[];
+  problems: string[];
+}
 
 export class ApiError extends Error {}
 
@@ -48,6 +59,11 @@ export async function me(): Promise<{ email: string }> {
 
 export async function logout(): Promise<void> {
   await request("POST", "/logout");
+}
+
+/** The agents on the daemon's agents path. Each call imports them afresh, so edits show up. */
+export async function agents(): Promise<AgentCatalog> {
+  return (await request("GET", "/api/agents")).json();
 }
 
 export async function sessions(): Promise<SessionInfo[]> {

@@ -105,6 +105,11 @@ async def list_sessions(request: Request) -> Response:
     return JSONResponse([info.model_dump(mode="json") for info in await _client(request).sessions()])
 
 
+@api()
+async def list_agents(request: Request) -> Response:
+    return JSONResponse((await _client(request).agents()).model_dump(mode="json"))
+
+
 @api(mutating=True)
 async def create_session(request: Request) -> Response:
     create = CreateSession.model_validate(await request.json())
@@ -198,6 +203,7 @@ def create_app(
             Route(auth.CALLBACK_PATH, auth.callback),
             Route("/logout", auth.logout, methods=["POST"]),
             Route("/api/me", me),
+            Route("/api/agents", list_agents, methods=["GET"]),
             Route("/api/sessions", list_sessions, methods=["GET"]),
             Route("/api/sessions", create_session, methods=["POST"]),
             Route("/api/sessions/{name}", delete, methods=["DELETE"]),

@@ -27,7 +27,7 @@ in
               "/run/current-system/sw/bin"
             ];
           }
-          // cfg.environment
+          // unit.environment
         );
       };
     };

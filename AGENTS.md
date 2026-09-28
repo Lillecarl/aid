@@ -13,6 +13,9 @@ API and a CLI.
 - `src/aid/worker.py` — worker entry `main(endpoint, name, spec_json, state_dir)`; DEALER to the daemon.
 - `src/aid/backends/` — `acp.py`, `pydantic_ai.py`, `claude_tty.py`; each implements `base.Backend`.
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.
+- `src/aid/agents.py` — `aid.PydanticAgent`, the interface agent modules implement, and discovery on
+  AID_AGENTS_PATH. `catalog.py` runs discovery in a subprocess for the daemon; never import agent modules
+  in the daemon itself.
 - `src/aid/env.py` — agent environments, minus the markers of the Claude session that started us.
 - `src/aid/client.py` — public API: `aid.connect()`, `Client`, `Session.run/stream`.
 - `src/aid/web/` — `aid web`: Starlette on hypercorn, OIDC login (`auth.py`), JSON API + SSE (`app.py`).

@@ -36,6 +36,16 @@ in
       description = "Environment for the daemon. Workers and ACP agents inherit it unless a session opts out.";
     };
 
+    agentsPath = lib.mkOption {
+      type = lib.types.listOf lib.types.str;
+      default = [ ];
+      example = [ "/home/me/aid-agents" ];
+      description = ''
+        Directories whose modules define `aid.PydanticAgent` subclasses; they become AID_AGENTS_PATH. Empty
+        leaves aid's default, `$XDG_CONFIG_HOME/aid/agents`. Changes to the modules need no restart.
+      '';
+    };
+
     environmentFile = lib.mkOption {
       # A string, not a path: systemd specifiers such as %t (the runtime directory) are what a user unit
       # needs to reach home-manager agenix's secrets, and a path type rejects them.
@@ -101,6 +111,9 @@ in
   */
   service = cfg: {
     path = [ cfg.pymuxPackage ] ++ cfg.extraPackages;
+    environment =
+      lib.optionalAttrs (cfg.agentsPath != [ ]) { AID_AGENTS_PATH = lib.concatStringsSep ":" cfg.agentsPath; }
+      // cfg.environment;
     serviceConfig = {
       Type = "exec";
       ExecStart = "${lib.getExe cfg.package} daemon";

@@ -7,6 +7,8 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
+import anyio
+import anyio.to_thread
 from pydantic_ai import RunCancelled
 from pydantic_ai.agent import AbstractAgent
 from pydantic_ai.messages import (
@@ -24,12 +26,12 @@ from pydantic_ai.messages import (
 from pydantic_ai.run import AgentRunResultEvent
 from pydantic_core import to_jsonable_python
 
+from aid.agents import ENV_AGENTS_PATH, agents_path, discover
 from aid.protocol import Output, SessionEvent, TextDelta, ThoughtDelta, ToolCall
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
-    import anyio
     from pydantic_ai.agent import AgentRunEvents
 
     from aid.backends.base import Emit
@@ -48,6 +50,15 @@ def load_target(target: str) -> AbstractAgent[Any, Any]:
     if not isinstance(obj, AbstractAgent):
         raise TypeError(f"{target} is {type(obj).__name__}, not a pydantic_ai agent")
     return obj  # pyright: ignore[reportUnknownVariableType] -- isinstance cannot narrow the generic parameters
+
+
+def load_named(name: str) -> AbstractAgent[Any, Any]:
+    catalog = discover(agents_path())
+    if (cls := catalog.agents.get(name)) is None:
+        known = ", ".join(sorted(catalog.agents)) or "none"
+        problems = "".join(f"\n  {problem}" for problem in catalog.problems)
+        raise LookupError(f"no agent {name!r} on {ENV_AGENTS_PATH} (found: {known}){problems}")
+    return cls().build()
 
 
 def to_event(event: object) -> SessionEvent | None:
@@ -106,10 +117,16 @@ async def _write_atomic(path: anyio.Path, data: bytes) -> None:
 
 @asynccontextmanager
 async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> AsyncGenerator[PydanticAIBackend]:
-    agent = load_target(spec.target)
+    # Imports and filesystem walks, run off the event loop.
+    if spec.agent is not None:
+        agent = await anyio.to_thread.run_sync(load_named, spec.agent)
+    elif spec.target is not None:
+        agent = await anyio.to_thread.run_sync(load_target, spec.target)
+    else:
+        raise ValueError("the spec names no agent")
     history_file = state_dir / HISTORY_FILE
     history = (
         ModelMessagesTypeAdapter.validate_json(await history_file.read_bytes()) if await history_file.exists() else []
     )
-    log.info("loaded %s with %d history messages", spec.target, len(history))
+    log.info("loaded %s with %d history messages", spec.agent or spec.target, len(history))
     yield PydanticAIBackend(agent, history_file, history)

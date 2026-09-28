@@ -70,10 +70,27 @@ class DeleteSession(_Request):
     session: str
 
 
+class ListAgents(_Request):
+    """The `aid.PydanticAgent`s on the daemon's agents path."""
+
+    op: Literal["agents"] = "agents"
+
+
 type Request = Annotated[
-    CreateSession | ListSessions | Prompt | Cancel | StopSession | DeleteSession,
+    CreateSession | ListSessions | Prompt | Cancel | StopSession | DeleteSession | ListAgents,
     Field(discriminator="op"),
 ]
+
+
+class AgentInfo(_Message):
+    name: str
+    description: str
+    module: str
+
+
+class AgentCatalog(_Message):
+    agents: list[AgentInfo]
+    problems: list[str]
 
 
 class TextDelta(_Message):

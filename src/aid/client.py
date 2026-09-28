@@ -19,6 +19,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from aid.paths import default_paths
 from aid.protocol import (
+    AgentCatalog,
     AidError,
     Cancel,
     CreateSession,
@@ -26,6 +27,7 @@ from aid.protocol import (
     Done,
     Event,
     Failure,
+    ListAgents,
     ListSessions,
     Output,
     Prompt,
@@ -131,6 +133,10 @@ class Client:
 
     async def sessions(self) -> list[SessionInfo]:
         return _SESSION_INFOS.validate_python(await self.call(ListSessions()))
+
+    async def agents(self) -> AgentCatalog:
+        """The `aid.PydanticAgent`s on the daemon's agents path, and what failed to load."""
+        return AgentCatalog.model_validate(await self.call(ListAgents()))
 
     def session(self, name: str) -> Session:
         return Session(self, name)

@@ -78,8 +78,10 @@ def _parser() -> argparse.ArgumentParser:
     claude.add_argument("--claude", default="claude", help="the claude executable")
 
     py = new("new-py", "create a session running a pydantic-ai agent")
-    py.add_argument("target", help="module:attribute of a pydantic_ai agent")
+    py.add_argument("agent", help="an agent `aid agents` lists, or module:attribute of a pydantic_ai agent")
     py.add_argument("--python-path", action="append", default=[], help="prepend to the worker's sys.path")
+
+    sub.add_parser("agents", help="list the aid.PydanticAgent classes on the daemon's agents path")
 
     prompt = sub.add_parser("prompt", help="send a prompt and stream the answer")
     prompt.add_argument("name")
@@ -123,7 +125,8 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             pymux_socket=args.pymux_socket,
         )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
-    return PydanticAISpec(cwd=cwd, env=env, target=args.target, python_path=python_path)
+    source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
+    return PydanticAISpec(cwd=cwd, env=env, python_path=python_path, **source)
 
 
 async def _client_command(args: argparse.Namespace) -> None:
@@ -135,6 +138,12 @@ async def _client_command(args: argparse.Namespace) -> None:
             case "list":
                 for info in await client.sessions():
                     print(f"{info.name}\t{info.kind}\t{'running' if info.running else 'stopped'}")
+            case "agents":
+                catalog = await client.agents()
+                for agent in catalog.agents:
+                    print(f"{agent.name}\t{agent.module}\t{agent.description}")
+                for problem in catalog.problems:
+                    print(f"problem: {problem}", file=sys.stderr)
             case "prompt":
                 text = sys.stdin.read() if args.text == "-" else args.text
                 async for event in client.session(args.name).stream(text):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+import sys
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
@@ -15,6 +16,7 @@ from pydantic import ValidationError
 
 from aid.launcher import WorkerArgs
 from aid.protocol import (
+    AgentCatalog,
     AidError,
     Cancel,
     CreateSession,
@@ -23,6 +25,7 @@ from aid.protocol import (
     Event,
     Failure,
     Hello,
+    ListAgents,
     ListSessions,
     Prompt,
     SessionInfo,
@@ -46,6 +49,7 @@ log = logging.getLogger(__name__)
 
 START_TIMEOUT: Final = 60.0
 START_ERROR_GRACE: Final = 0.5
+CATALOG_TIMEOUT: Final = 60.0
 STOP_TIMEOUT: Final = 10.0
 SPEC_FILE: Final = "spec.json"
 
@@ -171,6 +175,8 @@ class Daemon:
             case ListSessions():
                 infos = [SessionInfo(name=s.name, kind=s.spec.kind, running=s.running) for s in self._sessions.values()]
                 return Done(id=request.id, data=[info.model_dump(mode="json") for info in infos])
+            case ListAgents():
+                return Done(id=request.id, data=(await list_agents()).model_dump(mode="json"))
             case Prompt():
                 session = self._session(request.session)
                 await self._ensure_running(session)
@@ -305,6 +311,15 @@ class Daemon:
                 case Done() | Failure():
                     if (route := self._routes.pop(reply.id, None)) is not None:
                         await self._send_client(route.client, payload)
+
+
+async def list_agents() -> AgentCatalog:
+    """Discover agents in a fresh process: agent modules are user code, and edits since the last call count."""
+    with anyio.fail_after(CATALOG_TIMEOUT):
+        result = await anyio.run_process([sys.executable, "-m", "aid.catalog"], check=False)
+    if result.returncode != 0:
+        raise AidError("catalog_failed", result.stderr.decode(errors="replace").strip()[-2000:])
+    return AgentCatalog.model_validate_json(result.stdout)
 
 
 async def run(paths: Paths, launcher: Launcher) -> None:

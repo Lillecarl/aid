@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 
 class AgentKind(StrEnum):
@@ -38,11 +38,19 @@ class AcpSpec(_Spec):
 
 
 class PydanticAISpec(_Spec):
-    """A `pydantic_ai` agent that the worker imports from `target` (`package.module:attribute`)."""
+    """A pydantic-ai agent: `agent`, the name of an `aid.PydanticAgent` on the agents path, or `target`, a
+    `package.module:attribute` that is an agent itself. Exactly one of them."""
 
     kind: Literal[AgentKind.PYDANTIC_AI] = AgentKind.PYDANTIC_AI
-    target: Annotated[str, Field(pattern=r"^[\w.]+:[\w.]+$")]
+    agent: Annotated[str, Field(pattern=r"^[\w.-]+$")] | None = None
+    target: Annotated[str, Field(pattern=r"^[\w.]+:[\w.]+$")] | None = None
     python_path: list[str] = Field(default_factory=list[str])
+
+    @model_validator(mode="after")
+    def _one_source(self) -> Self:
+        if (self.agent is None) == (self.target is None):
+            raise ValueError("set exactly one of agent and target")
+        return self
 
 
 class ClaudeTtySpec(_Spec):

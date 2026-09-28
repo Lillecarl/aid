@@ -49,7 +49,7 @@ in
         AID_STATE_DIR = "/var/lib/aid";
         HOME = "/var/lib/aid";
       }
-      // cfg.environment;
+      // unit.environment;
       serviceConfig = unit.serviceConfig // {
         User = cfg.user;
         Group = cfg.group;
