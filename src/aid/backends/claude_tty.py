@@ -55,6 +55,11 @@ SESSION_ID_FILE: Final = "claude-session-id"
 LAUNCHER_FILE: Final = "launch.sh"
 MCP_CONFIG_FILE: Final = "mcp.json"
 PANE_TERMINAL: Final = ("TERM", "COLORTERM", "TERMINFO", "TERMINFO_DIRS")
+# With no client attached a pymux session is 80x24 unless it is started with a size. Claude Code lays out its
+# screen at the width it is given and keeps no record of more, so the size must be right from the start. A client
+# that attaches resizes the window while it watches.
+PANE_COLUMNS: Final = 200
+PANE_ROWS: Final = 50
 PYMUX_SESSION: Final = "aid"
 START_TIMEOUT: Final = 60.0
 TRANSCRIPT_TIMEOUT: Final = 60.0
@@ -187,8 +192,9 @@ async def _ensure_server(spec: ClaudeTtySpec, socket: str) -> Server:
     if await anyio.to_thread.run_sync(server.is_alive):
         return server
     await anyio.Path(socket).parent.mkdir(parents=True, exist_ok=True)
+    size = ["-x", str(PANE_COLUMNS), "-y", str(PANE_ROWS)]
     result = await anyio.run_process(
-        [*spec.pymux_command, "-S", socket, "new-session", "-d", "-s", PYMUX_SESSION], check=False
+        [*spec.pymux_command, "-S", socket, "new-session", "-d", "-s", PYMUX_SESSION, *size], check=False
     )
     # Two workers can race to start it; the loser's error is fine once a server answers.
     if not await anyio.to_thread.run_sync(server.is_alive):

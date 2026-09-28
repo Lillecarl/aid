@@ -223,3 +223,14 @@ async def test_claude_gets_the_panes_terminal(daemon: Paths, tmp_path: Path, pym
         async with aid.connect(daemon) as client:
             result = await (await client.create("tty", spec)).run("term")
     assert result.output == "pyte"
+
+
+@needs_pymux
+async def test_panes_start_at_aids_size(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            listed = await anyio.run_process(
+                ["pymux", "-S", pymux_socket, "list-panes", "-a", "-F", "#{window_name} #{pane_width}x#{pane_height}"]
+            )
+    assert "aid:tty 200x50" in listed.stdout.decode().splitlines()
