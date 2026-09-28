@@ -13,6 +13,7 @@ dependencies = [
   "pydantic>=2.11",
   "pydantic-ai-slim>=2.30",
   "pyzmq>=27",
+  "watchfiles>=1.0",
 ]
 
 [project.scripts]

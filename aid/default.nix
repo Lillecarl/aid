@@ -7,6 +7,7 @@
   pydantic,
   pydantic-ai-slim,
   pyzmq,
+  watchfiles,
   pytestCheckHook,
 }:
 let
@@ -34,6 +35,7 @@ buildPythonPackage {
     pydantic
     pydantic-ai-slim
     pyzmq
+    watchfiles
   ];
 
   nativeCheckInputs = [ pytestCheckHook ];
