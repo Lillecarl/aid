@@ -118,6 +118,11 @@ def _parser() -> argparse.ArgumentParser:
     prompt.add_argument("name")
     prompt.add_argument("text", help="prompt text, or - to read stdin")
 
+    message = sub.add_parser("message", help="leave a message for a session, which wakes it")
+    message.add_argument("name")
+    message.add_argument("text", help="message text, or - to read stdin")
+    message.add_argument("--from", dest="sender", help="the session it is from (default: a person)")
+
     for command in ("cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
     return parser
@@ -228,6 +233,9 @@ async def _client_command(args: argparse.Namespace) -> None:
                         if not isinstance(event.output, str) and event.output is not None:
                             print(json.dumps(event.output, indent=2))
                         print(f"\n[{event.stop_reason}]", file=sys.stderr)
+            case "message":
+                text = sys.stdin.read() if args.text == "-" else args.text
+                await client.send_message(args.name, text, sender=args.sender)
             case "cancel":
                 await client.session(args.name).cancel()
             case "stop":
