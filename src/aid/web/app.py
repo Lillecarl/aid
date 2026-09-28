@@ -20,23 +20,34 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse, Response, StreamingResponse
-from starlette.routing import Route
+from starlette.responses import (
+    FileResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
+from starlette.routing import Mount, Route
+from starlette.staticfiles import StaticFiles
 
 from aid.client import connect
 from aid.protocol import AidError, CreateSession
-from aid.web import auth, page
+from aid.web import auth
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+    from pathlib import Path
 
     from starlette.requests import Request
+    from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
     from aid.client import Client
     from aid.paths import Paths
 
 log = logging.getLogger(__name__)
 
+ENV_ASSETS: Final = "AID_WEB_ASSETS"
 SESSION_MAX_AGE: Final = 12 * 3600
 SECURITY_HEADERS: Final = {
     "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
@@ -137,33 +148,51 @@ async def delete(request: Request) -> Response:
 async def index(request: Request) -> Response:
     if auth.current_user(request) is None:
         return RedirectResponse("/login", status_code=303)
-    return Response(page.HTML, media_type="text/html; charset=utf-8", headers=SECURITY_HEADERS)
-
-
-async def script(_request: Request) -> Response:
-    return Response(page.SCRIPT, media_type="text/javascript; charset=utf-8", headers=SECURITY_HEADERS)
-
-
-async def style(_request: Request) -> Response:
-    return Response(page.STYLE, media_type="text/css; charset=utf-8", headers=SECURITY_HEADERS)
+    assets: Path | None = request.app.state.assets
+    if assets is None:
+        return PlainTextResponse(f"the UI is not built; point {ENV_ASSETS} at web/dist", status_code=503)
+    return FileResponse(assets / "index.html", headers={"Cache-Control": "no-store"})
 
 
 async def health(_request: Request) -> Response:
     return PlainTextResponse("ok")
 
 
-def create_app(oidc: auth.OidcConfig, session_secret: str, paths: Paths | None = None) -> Starlette:
+def security_headers(app: ASGIApp) -> ASGIApp:
+    """Add SECURITY_HEADERS to every HTTP response. Pure ASGI, because BaseHTTPMiddleware breaks streaming."""
+    extra = [(k.lower().encode(), v.encode()) for k, v in SECURITY_HEADERS.items()]
+
+    async def wrapped(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                message = {**message, "headers": [*message.get("headers", []), *extra]}
+            await send(message)
+
+        await app(scope, receive, send_with_headers)
+
+    return wrapped
+
+
+def create_app(
+    oidc: auth.OidcConfig, session_secret: str, paths: Paths | None = None, assets: Path | None = None
+) -> Starlette:
+    """The app. `assets` is the built UI (web/dist); without it the API still works and `/` says what is missing."""
+
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncGenerator[None]:
         async with connect(paths) as client:
             app.state.client = client
             yield
 
+    static = [Mount("/assets", StaticFiles(directory=assets / "assets"))] if assets is not None else []
     app = Starlette(
         routes=[
             Route("/", index),
-            Route("/app.js", script),
-            Route("/app.css", style),
+            *static,
             Route("/healthz", health),
             Route("/login", auth.login),
             Route(auth.CALLBACK_PATH, auth.callback),
@@ -177,6 +206,7 @@ def create_app(oidc: auth.OidcConfig, session_secret: str, paths: Paths | None =
             Route("/api/sessions/{name}/stop", stop, methods=["POST"]),
         ],
         middleware=[
+            Middleware(security_headers),
             Middleware(
                 SessionMiddleware,
                 secret_key=session_secret,
@@ -184,12 +214,13 @@ def create_app(oidc: auth.OidcConfig, session_secret: str, paths: Paths | None =
                 max_age=SESSION_MAX_AGE,
                 same_site="lax",
                 https_only=oidc.base_url.startswith("https://"),
-            )
+            ),
         ],
         lifespan=lifespan,
     )
     app.state.oidc_config = oidc
     app.state.oidc = auth.make_oauth(oidc)
+    app.state.assets = assets
     return app
 
 

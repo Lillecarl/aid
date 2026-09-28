@@ -14,6 +14,7 @@ let
   inherit (pkgs) lib;
   p = import pyterm { inherit pkgs; };
   venv = set.mkVirtualEnv "aid-env" { aid = [ ]; };
+  ui = pkgs.callPackage ./web { };
   python = pkgs.python3;
 
   set = p.mkPythonSet {
@@ -29,25 +30,26 @@ let
           inherit (p) mkProject;
           pymuxApp = p.pymux;
           dex = pkgs.dex-oidc;
+          webUi = ui;
         };
       }
     );
   };
 in
 {
-  inherit set;
+  inherit set ui;
 
   # Only `bin/aid`: a profile that installs this next to another virtualenv, such as pymux's, would otherwise
-  # get two `bin/python` and `bin/activate` and refuse to build. The script's shebang names the venv's python.
+  # get two `bin/python` and `bin/activate` and refuse to build. The wrapper points `aid web` at the built UI.
   aid =
     pkgs.runCommand "aid-${set.aid.version}"
       {
         inherit (set.aid) meta;
-        passthru = { inherit venv; };
+        passthru = { inherit venv ui; };
+        nativeBuildInputs = [ pkgs.makeWrapper ];
       }
       ''
-        mkdir -p $out/bin
-        ln -s ${venv}/bin/aid $out/bin/aid
+        makeWrapper ${venv}/bin/aid $out/bin/aid --set-default AID_WEB_ASSETS ${ui}
       '';
 
   inherit (set.aid) tests;
@@ -63,12 +65,15 @@ in
       (set.mkVirtualEnv "aid-dev" { aid = [ "test" ]; })
       p.pymux
       pkgs.dex-oidc
+      pkgs.nodejs_24
       pkgs.pyright
       pkgs.ruff
     ];
-    # The working copy, ahead of the aid the venv carries.
+    # The working copy, ahead of the aid the venv carries. The UI is the built one; `npm run dev` in web/
+    # serves the working copy instead.
     shellHook = ''
       export PYTHONPATH=${lib.escapeShellArg (toString ./src)}''${PYTHONPATH:+:$PYTHONPATH}
+      export AID_WEB_ASSETS=${ui}
     '';
   };
 }

@@ -19,6 +19,7 @@ from aid.protocol import AidError, Output, TextDelta
 from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
 from aid.web import OidcConfig, create_app
 from aid.web import serve as serve_web
+from aid.web.app import ENV_ASSETS
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -55,6 +56,7 @@ def _parser() -> argparse.ArgumentParser:
     web.add_argument("--base-url", help="where browsers reach aid (default: http://BIND)")
     web.add_argument("--issuer", required=True, help="the OIDC issuer URL")
     web.add_argument("--client-id", required=True)
+    web.add_argument("--assets", default=os.environ.get(ENV_ASSETS), help=f"the built UI (default: ${ENV_ASSETS})")
     web.add_argument(
         "--allow-email", action="append", required=True, help="a verified email that may log in; repeat for more"
     )
@@ -176,7 +178,8 @@ async def _web(args: argparse.Namespace) -> None:
         base_url=args.base_url or f"http://{args.bind}",
         allowed_emails=frozenset(email.lower() for email in args.allow_email),
     )
-    app = create_app(oidc, _secret(ENV_SESSION_SECRET))
+    assets = Path(args.assets) if args.assets else None
+    app = create_app(oidc, _secret(ENV_SESSION_SECRET), assets=assets)
     shutdown = anyio.Event()
     async with anyio.create_task_group() as tg:
         tg.start_soon(lambda: serve_web(app, args.bind, shutdown=shutdown))

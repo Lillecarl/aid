@@ -13,6 +13,8 @@
   pymuxApp,
   # The OIDC provider the web tests log in through.
   dex,
+  # The built Svelte UI, which the web tests serve.
+  webUi,
 }:
 let
   root = ../.;
@@ -49,7 +51,7 @@ let
   tests = runCommand "aid-tests" { nativeBuildInputs = [ testEnv pymuxApp dex ]; } ''
     cp -r ${testSources}/. .
     chmod -R +w .
-    export HOME="$TMPDIR" PYTHONDONTWRITEBYTECODE=1
+    export HOME="$TMPDIR" PYTHONDONTWRITEBYTECODE=1 AID_WEB_ASSETS=${webUi}
     # The sandbox sets it to /no-cert-file.crt, and httpx loads it for every client, http:// ones too.
     unset SSL_CERT_FILE
     python -m pytest -q -p no:cacheprovider

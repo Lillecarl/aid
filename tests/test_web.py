@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 import shutil
 import socket
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO
 
 import anyio
@@ -15,13 +17,16 @@ import httpx
 import pytest
 
 from aid.web import OidcConfig, create_app, serve
+from aid.web.app import ENV_ASSETS
 from tests.conftest import py_spec
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-    from pathlib import Path
 
     from aid.paths import Paths
+
+# The built Svelte UI. The Nix test run and the dev shell set it; without it the API tests still run.
+ASSETS = Path(os.environ[ENV_ASSETS]) if os.environ.get(ENV_ASSETS) else None
 
 pytestmark = [pytest.mark.anyio, pytest.mark.skipif(shutil.which("dex") is None, reason="dex is not on PATH")]
 
@@ -97,7 +102,7 @@ async def web(daemon: Paths, tmp_path: Path) -> AsyncIterator[Web]:
             with anyio.fail_after(TIMEOUT):
                 await wait_for(f"{issuer}/.well-known/openid-configuration")
             async with anyio.create_task_group() as tg:
-                app = create_app(oidc, secrets.token_hex(32), daemon)
+                app = create_app(oidc, secrets.token_hex(32), daemon, assets=ASSETS)
                 tg.start_soon(lambda: serve(app, f"127.0.0.1:{web_port}", shutdown=shutdown))
                 with anyio.fail_after(TIMEOUT):
                     await wait_for(f"{web_url}/healthz")
@@ -136,10 +141,25 @@ async def test_login_is_required(web: Web) -> None:
     async with httpx.AsyncClient() as client:
         assert (await client.get(f"{web.url}/api/sessions")).status_code == 401
         index = await client.get(f"{web.url}/")
-        script = await client.get(f"{web.url}/app.js")
+        health = await client.get(f"{web.url}/healthz")
     assert index.status_code == 303
     assert index.headers["location"] == "/login"
-    assert "default-src 'self'" in script.headers["content-security-policy"]
+    assert "default-src 'self'" in health.headers["content-security-policy"]
+
+
+@pytest.mark.skipif(ASSETS is None, reason=f"{ENV_ASSETS} is not set")
+async def test_ui_is_served(web: Web) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with httpx.AsyncClient() as client:
+            await login(client, web, ALLOWED)
+            index = await client.get(f"{web.url}/")
+            scripts = re.findall(r'src="(/assets/[^"]+\.js)"', index.text)
+            assert scripts, index.text
+            script = await client.get(f"{web.url}{scripts[0]}")
+    assert index.status_code == 200
+    assert '<div id="app">' in index.text
+    assert script.status_code == 200
+    assert "javascript" in script.headers["content-type"]
 
 
 async def test_session_round_trip(web: Web, tmp_path: Path) -> None:

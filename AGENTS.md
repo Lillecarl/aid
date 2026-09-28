@@ -15,6 +15,9 @@ API and a CLI.
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.
 - `src/aid/env.py` — agent environments, minus the markers of the Claude session that started us.
 - `src/aid/client.py` — public API: `aid.connect()`, `Client`, `Session.run/stream`.
+- `src/aid/web/` — `aid web`: Starlette on hypercorn, OIDC login (`auth.py`), JSON API + SSE (`app.py`).
+- `web/` — the Svelte 5 UI (runes, TypeScript, Vite). `web/default.nix` builds it; `aid web` serves the result
+  from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.
 - `default.nix` — a pyproject.nix set from pyterm's builders (`mkPythonSet`, `mkProject`, its `overlay`);
   `aid/default.nix` — the aid project in it; `nix/` — NixOS and home-manager modules.
 
@@ -28,6 +31,9 @@ nix build --file . tests      # the same suite in the sandbox, against a real py
 
 The dev shell puts `src/` ahead of the aid its venv carries. Dependencies go in `pyproject.toml`; the set
 reads them. Test-only ones go in the `test` extra.
+
+UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `AID_WEB_BACKEND`, default
+127.0.0.1:8080). After changing `package-lock.json`, update `npmDepsHash` in `web/default.nix`.
 
 ## Rules
 
@@ -50,3 +56,5 @@ reads them. Test-only ones go in the `test` extra.
 - claude-tty depends on Claude Code's screen and transcript, neither an API. `claude_tty.py` and
   `transcript.py` say what was measured, on which version; re-measure before changing them.
 - libpymux and the `pymux` binary come from one pyterm pin (`default.nix`): the wire protocol still moves.
+- Web: a session runs commands on the host, so login needs a verified email on the allowlist, and every
+  mutating request needs the CSRF header. The CSP forbids inline script; agent output is text, never HTML.
