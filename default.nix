@@ -28,6 +28,7 @@ let
         aid = final.callPackage ./aid {
           inherit (p) mkProject;
           pymuxApp = p.pymux;
+          dex = pkgs.dex-oidc;
         };
       }
     );
@@ -61,6 +62,7 @@ in
     packages = [
       (set.mkVirtualEnv "aid-dev" { aid = [ "test" ]; })
       p.pymux
+      pkgs.dex-oidc
       pkgs.pyright
       pkgs.ruff
     ];

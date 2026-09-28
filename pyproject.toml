@@ -10,10 +10,15 @@ requires-python = ">=3.14"
 dependencies = [
   "agent-client-protocol>=0.12",
   "anyio>=4.10",
+  "authlib>=1.6",
+  "httpx>=0.28",
+  "hypercorn>=0.17",
+  "itsdangerous>=2.2",
   "libpymux",
   "pydantic>=2.11",
   "pydantic-ai-slim>=2.30",
   "pyzmq>=27",
+  "starlette>=1.0",
   "watchfiles>=1.0",
 ]
 

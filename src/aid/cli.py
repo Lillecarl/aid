@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import signal
 import sys
 from pathlib import Path
@@ -16,11 +17,16 @@ from aid.launcher import ForkserverLauncher
 from aid.paths import default_paths
 from aid.protocol import AidError, Output, TextDelta
 from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
+from aid.web import OidcConfig, create_app
+from aid.web import serve as serve_web
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from aid.spec import AgentSpec
+
+ENV_CLIENT_SECRET = "AID_OIDC_CLIENT_SECRET"
+ENV_SESSION_SECRET = "AID_WEB_SESSION_SECRET"
 
 
 def _env(values: Sequence[str]) -> dict[str, str]:
@@ -39,6 +45,19 @@ def _parser() -> argparse.ArgumentParser:
 
     sub.add_parser("daemon", help="run the daemon in the foreground")
     sub.add_parser("list", help="list sessions")
+
+    web = sub.add_parser(
+        "web",
+        help="serve the web UI, with OIDC login",
+        description=f"Secrets come from the environment: {ENV_CLIENT_SECRET} and {ENV_SESSION_SECRET}.",
+    )
+    web.add_argument("--bind", default="127.0.0.1:8080", help="host:port to listen on")
+    web.add_argument("--base-url", help="where browsers reach aid (default: http://BIND)")
+    web.add_argument("--issuer", required=True, help="the OIDC issuer URL")
+    web.add_argument("--client-id", required=True)
+    web.add_argument(
+        "--allow-email", action="append", required=True, help="a verified email that may log in; repeat for more"
+    )
 
     def new(name: str, help_text: str) -> argparse.ArgumentParser:
         p = sub.add_parser(name, help=help_text)
@@ -143,13 +162,37 @@ async def _serve() -> None:
                 return
 
 
+def _secret(name: str) -> str:
+    if not (value := os.environ.get(name)):
+        raise SystemExit(f"aid web: set {name}")
+    return value
+
+
+async def _web(args: argparse.Namespace) -> None:
+    oidc = OidcConfig(
+        issuer=args.issuer,
+        client_id=args.client_id,
+        client_secret=_secret(ENV_CLIENT_SECRET),
+        base_url=args.base_url or f"http://{args.bind}",
+        allowed_emails=frozenset(email.lower() for email in args.allow_email),
+    )
+    app = create_app(oidc, _secret(ENV_SESSION_SECRET))
+    shutdown = anyio.Event()
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(lambda: serve_web(app, args.bind, shutdown=shutdown))
+        with anyio.open_signal_receiver(signal.SIGTERM, signal.SIGINT) as signals:
+            async for _signum in signals:
+                shutdown.set()
+                return
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     head, agent_command = _split_agent_command(sys.argv[1:] if argv is None else argv)
     args = _parser().parse_args(head)
     args.agent_command = agent_command
-    if args.command == "daemon":
+    if args.command in ("daemon", "web"):
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(processName)s %(name)s %(levelname)s %(message)s")
-        anyio.run(_serve)
+        anyio.run(_serve if args.command == "daemon" else lambda: _web(args))
         return
     try:
         anyio.run(_client_command, args)
