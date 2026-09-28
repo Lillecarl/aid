@@ -54,6 +54,8 @@ START_ERROR_GRACE: Final = 0.5
 CATALOG_TIMEOUT: Final = 60.0
 STOP_TIMEOUT: Final = 10.0
 SPEC_FILE: Final = "spec.json"
+# A spec holds env values and MCP headers, which are often credentials.
+SESSION_DIR_MODE: Final = 0o700
 
 
 @dataclass
@@ -128,6 +130,7 @@ class Daemon:
             spec_file = session_dir / SPEC_FILE
             if not await spec_file.exists():
                 continue
+            await session_dir.chmod(SESSION_DIR_MODE)
             try:
                 spec = AgentSpecAdapter.validate_json(await spec_file.read_bytes())
             except ValidationError:
@@ -226,7 +229,7 @@ class Daemon:
         session = self._new_session(request.name, request.spec)
         self._sessions[session.name] = session
         session_dir = anyio.Path(self._paths.session_dir(session.name))
-        await session_dir.mkdir(parents=True, exist_ok=True)
+        await session_dir.mkdir(mode=SESSION_DIR_MODE, parents=True, exist_ok=True)
         await (session_dir / SPEC_FILE).write_bytes(AgentSpecAdapter.dump_json(request.spec))
         try:
             await self._ensure_running(session)

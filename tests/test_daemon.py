@@ -153,3 +153,10 @@ async def test_delete_removes_state(daemon: Paths, tmp_path: Path) -> None:
             await session.delete()
             assert await client.sessions() == []
     assert not daemon.session_dir("gone").exists()
+
+
+async def test_session_state_is_private(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            await client.create("private", py_spec(tmp_path, "agents:echo", TOKEN="secret"))
+    assert daemon.session_dir("private").stat().st_mode & 0o777 == 0o700
