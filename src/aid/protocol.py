@@ -76,8 +76,19 @@ class ListAgents(_Request):
     op: Literal["agents"] = "agents"
 
 
+class GetHistory(_Request):
+    """A page of a session's history: the newest entries before `before`, the oldest after `after`, or the
+    newest of all when neither is given."""
+
+    op: Literal["history"] = "history"
+    session: str
+    before: Annotated[int, Field(ge=0)] | None = None
+    after: Annotated[int, Field(ge=-1)] | None = None
+    limit: Annotated[int, Field(ge=1, le=1000)] = 100
+
+
 type Request = Annotated[
-    CreateSession | ListSessions | Prompt | Cancel | StopSession | DeleteSession | ListAgents,
+    CreateSession | ListSessions | Prompt | Cancel | StopSession | DeleteSession | ListAgents | GetHistory,
     Field(discriminator="op"),
 ]
 
@@ -120,6 +131,41 @@ class Output(_Message):
 
 
 type SessionEvent = Annotated[TextDelta | ThoughtDelta | ToolCall | Output, Field(discriminator="type")]
+
+
+class PromptEntry(_Message):
+    type: Literal["prompt"] = "prompt"
+    text: str
+
+
+class TurnError(_Message):
+    """A prompt that ended in a Failure rather than an Output."""
+
+    type: Literal["error"] = "error"
+    code: str
+    message: str
+
+
+type HistoryItem = Annotated[
+    PromptEntry | TextDelta | ThoughtDelta | ToolCall | Output | TurnError, Field(discriminator="type")
+]
+
+
+class HistoryEntry(_Message):
+    seq: int
+    """Position in the session's history, from 0. Pages are asked for by it."""
+    at: float
+    """Unix time the entry was written."""
+    turn: str
+    """The id of the prompt request this entry belongs to."""
+    item: HistoryItem
+
+
+class HistoryPage(_Message):
+    entries: list[HistoryEntry]
+    has_older: bool
+    has_newer: bool
+    total: int
 
 
 class SessionInfo(_Message):

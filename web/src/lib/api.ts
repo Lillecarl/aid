@@ -14,6 +14,25 @@ export type SessionEvent =
   | { type: "tool_call"; tool_call_id: string; title: string | null; kind: string | null; status: string | null }
   | { type: "output"; output: unknown; stop_reason: string };
 
+export type HistoryItem =
+  | SessionEvent
+  | { type: "prompt"; text: string }
+  | { type: "error"; code: string; message: string };
+
+export interface HistoryEntry {
+  seq: number;
+  at: number;
+  turn: string;
+  item: HistoryItem;
+}
+
+export interface HistoryPage {
+  entries: HistoryEntry[];
+  has_older: boolean;
+  has_newer: boolean;
+  total: number;
+}
+
 export type AgentSpec =
   | { kind: "acp"; cwd: string; command: string[] }
   | { kind: "pydantic-ai"; cwd: string; agent: string }
@@ -72,6 +91,17 @@ export async function sessions(): Promise<SessionInfo[]> {
 
 export async function create(name: string, spec: AgentSpec): Promise<void> {
   await request("POST", "/api/sessions", { name, spec });
+}
+
+/** A page of a session's history: the newest before `before`, the oldest after `after`, or the newest. */
+export async function history(
+  name: string,
+  page: { before?: number; after?: number; limit: number },
+): Promise<HistoryPage> {
+  const query = new URLSearchParams({ limit: String(page.limit) });
+  if (page.before !== undefined) query.set("before", String(page.before));
+  if (page.after !== undefined) query.set("after", String(page.after));
+  return (await request("GET", `/api/sessions/${encodeURIComponent(name)}/history?${query}`)).json();
 }
 
 export async function control(name: string, verb: "cancel" | "stop" | "delete"): Promise<void> {

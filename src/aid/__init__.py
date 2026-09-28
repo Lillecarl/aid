@@ -8,6 +8,8 @@ from aid.client import connect as connect
 from aid.protocol import AgentCatalog as AgentCatalog
 from aid.protocol import AgentInfo as AgentInfo
 from aid.protocol import AidError as AidError
+from aid.protocol import HistoryEntry as HistoryEntry
+from aid.protocol import HistoryPage as HistoryPage
 from aid.protocol import Output as Output
 from aid.protocol import SessionEvent as SessionEvent
 from aid.protocol import SessionInfo as SessionInfo

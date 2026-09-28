@@ -15,7 +15,7 @@ from aid import daemon
 from aid.client import connect
 from aid.launcher import ForkserverLauncher
 from aid.paths import default_paths
-from aid.protocol import AidError, Output, TextDelta
+from aid.protocol import AidError, Output, PromptEntry, TextDelta, ThoughtDelta, ToolCall, TurnError
 from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
 from aid.web import OidcConfig, create_app
 from aid.web import serve as serve_web
@@ -24,6 +24,7 @@ from aid.web.app import ENV_ASSETS
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from aid.protocol import HistoryEntry
     from aid.spec import AgentSpec
 
 ENV_CLIENT_SECRET = "AID_OIDC_CLIENT_SECRET"
@@ -83,6 +84,12 @@ def _parser() -> argparse.ArgumentParser:
 
     sub.add_parser("agents", help="list the aid.PydanticAgent classes on the daemon's agents path")
 
+    hist = sub.add_parser("history", help="print a session's history, newest last")
+    hist.add_argument("name")
+    hist.add_argument("--limit", type=int, default=50)
+    hist.add_argument("--before", type=int, help="only entries older than this seq")
+    hist.add_argument("--json", action="store_true", help="one JSON entry per line")
+
     prompt = sub.add_parser("prompt", help="send a prompt and stream the answer")
     prompt.add_argument("name")
     prompt.add_argument("text", help="prompt text, or - to read stdin")
@@ -129,6 +136,28 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
     return PydanticAISpec(cwd=cwd, env=env, python_path=python_path, **source)
 
 
+def _history_line(entry: HistoryEntry) -> str:
+    item = entry.item
+    match item:
+        case PromptEntry():
+            body = f"> {item.text}"
+        case TextDelta():
+            body = item.text
+        case ThoughtDelta():
+            body = f"(thinking) {item.text}"
+        case ToolCall():
+            body = f"[tool] {item.title or item.tool_call_id} {item.status or ''}".rstrip()
+        case Output():
+            body = (
+                f"[{item.stop_reason}]"
+                if isinstance(item.output, str)
+                else f"{json.dumps(item.output)} [{item.stop_reason}]"
+            )
+        case TurnError():
+            body = f"[error {item.code}] {item.message}"
+    return f"{entry.seq:>6}  {body}"
+
+
 async def _client_command(args: argparse.Namespace) -> None:
     async with connect() as client:
         match args.command:
@@ -138,6 +167,12 @@ async def _client_command(args: argparse.Namespace) -> None:
             case "list":
                 for info in await client.sessions():
                     print(f"{info.name}\t{info.kind}\t{'running' if info.running else 'stopped'}")
+            case "history":
+                page = await client.session(args.name).history(before=args.before, limit=args.limit)
+                if page.has_older and not args.json:
+                    print(f"… {page.entries[0].seq if page.entries else page.total} older entries", file=sys.stderr)
+                for entry in page.entries:
+                    print(entry.model_dump_json() if args.json else _history_line(entry))
             case "agents":
                 catalog = await client.agents()
                 for agent in catalog.agents:

@@ -117,6 +117,21 @@ async def create_session(request: Request) -> Response:
     return JSONResponse({"name": create.name}, status_code=201)
 
 
+class HistoryQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    before: int | None = None
+    after: int | None = None
+    limit: int = 100
+
+
+@api()
+async def history(request: Request) -> Response:
+    query = HistoryQuery.model_validate(dict(request.query_params))
+    session = _client(request).session(request.path_params["name"])
+    page = await session.history(before=query.before, after=query.after, limit=query.limit)
+    return JSONResponse(page.model_dump(mode="json"))
+
+
 @api(mutating=True)
 async def prompt(request: Request) -> Response:
     body = PromptBody.model_validate(await request.json())
@@ -207,6 +222,7 @@ def create_app(
             Route("/api/sessions", list_sessions, methods=["GET"]),
             Route("/api/sessions", create_session, methods=["POST"]),
             Route("/api/sessions/{name}", delete, methods=["DELETE"]),
+            Route("/api/sessions/{name}/history", history, methods=["GET"]),
             Route("/api/sessions/{name}/prompt", prompt, methods=["POST"]),
             Route("/api/sessions/{name}/cancel", cancel, methods=["POST"]),
             Route("/api/sessions/{name}/stop", stop, methods=["POST"]),

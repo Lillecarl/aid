@@ -14,6 +14,7 @@ import zmq
 import zmq.asyncio
 from pydantic import ValidationError
 
+from aid.history import HISTORY_FILE, HistoryLog, Recorder
 from aid.launcher import WorkerArgs
 from aid.protocol import (
     AgentCatalog,
@@ -24,6 +25,7 @@ from aid.protocol import (
     Done,
     Event,
     Failure,
+    GetHistory,
     Hello,
     ListAgents,
     ListSessions,
@@ -58,6 +60,7 @@ SPEC_FILE: Final = "spec.json"
 class _Session:
     name: str
     spec: AgentSpec
+    history: HistoryLog
     handle: WorkerHandle | None = None
     ready: anyio.Event = field(default_factory=anyio.Event)
     exited: anyio.Event = field(default_factory=anyio.Event)
@@ -75,6 +78,8 @@ class _Session:
 class _Route:
     client: bytes
     session: str
+    recorder: Recorder | None = None
+    """Set for prompts: writes the turn to the session's history as it passes."""
 
 
 class Daemon:
@@ -128,7 +133,7 @@ class Daemon:
             except ValidationError:
                 log.exception("skipping session %s with an invalid spec", session_dir.name)
                 continue
-            self._sessions[session_dir.name] = _Session(session_dir.name, spec)
+            self._sessions[session_dir.name] = self._new_session(session_dir.name, spec)
         log.info("restored %d sessions", len(self._sessions))
 
     async def _stop_all(self) -> None:
@@ -180,7 +185,9 @@ class Daemon:
             case Prompt():
                 session = self._session(request.session)
                 await self._ensure_running(session)
-                self._routes[request.id] = _Route(client, session.name)
+                recorder = Recorder(session.history, request.id)
+                await recorder.prompt(request.text)
+                self._routes[request.id] = _Route(client, session.name, recorder)
                 await self._send_worker(session.name, request)
                 return None
             case Cancel():
@@ -199,6 +206,14 @@ class Daemon:
                 del self._sessions[session.name]
                 await anyio.to_thread.run_sync(shutil.rmtree, self._paths.session_dir(session.name), True)
                 return Done(id=request.id)
+            case GetHistory():
+                session = self._session(request.session)
+                page = await session.history.page(before=request.before, after=request.after, limit=request.limit)
+                return Done(id=request.id, data=page.model_dump(mode="json"))
+
+    def _new_session(self, name: str, spec: AgentSpec) -> _Session:
+        history = HistoryLog(anyio.Path(self._paths.session_dir(name)) / HISTORY_FILE)
+        return _Session(name, spec, history)
 
     def _session(self, name: str) -> _Session:
         if (session := self._sessions.get(name)) is None:
@@ -208,7 +223,7 @@ class Daemon:
     async def _create(self, request: CreateSession) -> None:
         if request.name in self._sessions:
             raise AidError("exists", f"session {request.name!r} already exists")
-        session = _Session(request.name, request.spec)
+        session = self._new_session(request.name, request.spec)
         self._sessions[session.name] = session
         session_dir = anyio.Path(self._paths.session_dir(session.name))
         await session_dir.mkdir(parents=True, exist_ok=True)
@@ -267,6 +282,7 @@ class Daemon:
                     del self._routes[request_id]
                     failure = Failure(id=request_id, code="worker_exited", message=f"worker exited with {code}")
                     await self._send_client(route.client, encode(failure))
+                    await self._record(route, failure)
             session.exited.set()
             session.ready.set()
 
@@ -308,9 +324,26 @@ class Daemon:
                 case Event():
                     if (route := self._routes.get(reply.id)) is not None:
                         await self._send_client(route.client, payload)
+                        await self._record(route, reply)
                 case Done() | Failure():
                     if (route := self._routes.pop(reply.id, None)) is not None:
                         await self._send_client(route.client, payload)
+                        await self._record(route, reply)
+
+    async def _record(self, route: _Route, reply: Event | Done | Failure) -> None:
+        """Write a reply to the turn's history, after the client has it. A disk error loses history, not the turn."""
+        if route.recorder is None:
+            return
+        try:
+            match reply:
+                case Event():
+                    await route.recorder.event(reply.event)
+                case Done():
+                    await route.recorder.flush()
+                case Failure():
+                    await route.recorder.error(reply.code, reply.message)
+        except OSError:
+            log.exception("could not write history for %s", route.session)
 
 
 async def list_agents() -> AgentCatalog:

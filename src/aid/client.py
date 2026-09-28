@@ -27,6 +27,8 @@ from aid.protocol import (
     Done,
     Event,
     Failure,
+    GetHistory,
+    HistoryPage,
     ListAgents,
     ListSessions,
     Output,
@@ -174,6 +176,12 @@ class Session:
             return RunResult(output.output, "".join(chunks), output.stop_reason)
         typed = TypeAdapter(output_type).validate_python(output.output)
         return RunResult(typed, "".join(chunks), output.stop_reason)
+
+    async def history(self, *, before: int | None = None, after: int | None = None, limit: int = 100) -> HistoryPage:
+        """A page of this session's history: the newest entries before `before`, the oldest after `after`, or
+        the newest of all. Entry `seq` numbers are what `before` and `after` take."""
+        request = GetHistory(session=self.name, before=before, after=after, limit=limit)
+        return HistoryPage.model_validate(await self._client.call(request))
 
     async def cancel(self) -> None:
         await self._client.call(Cancel(session=self.name))
