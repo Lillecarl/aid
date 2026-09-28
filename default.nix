@@ -15,6 +15,7 @@ let
   p = import pyterm { inherit pkgs; };
   venv = set.mkVirtualEnv "aid-env" { aid = [ ]; };
   ui = pkgs.callPackage ./web { };
+  speechModel = pkgs.callPackage ./nix/speech-model.nix { };
   python = pkgs.python3;
 
   set = p.mkPythonSet {
@@ -31,13 +32,14 @@ let
           pymuxApp = p.pymux;
           dex = pkgs.dex-oidc;
           webUi = ui;
+          inherit speechModel;
         };
       }
     );
   };
 in
 {
-  inherit set ui;
+  inherit set ui speechModel;
 
   # Only `bin/aid`: a profile that installs this next to another virtualenv, such as pymux's, would otherwise
   # get two `bin/python` and `bin/activate` and refuse to build. The wrapper points `aid web` at the built UI.
@@ -74,6 +76,7 @@ in
     shellHook = ''
       export PYTHONPATH=${lib.escapeShellArg (toString ./src)}''${PYTHONPATH:+:$PYTHONPATH}
       export AID_WEB_ASSETS=${ui}
+      export AID_TEST_SPEECH_MODEL=${speechModel}
     '';
   };
 }
