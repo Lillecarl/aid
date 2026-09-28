@@ -46,11 +46,14 @@ def test_classify(capture: str, screen: Screen) -> None:
 
 
 def test_launcher_script_quotes_everything() -> None:
-    script = launcher_script({"A": "x y", "B": "it's"}, "/w d", ["claude", "--session-id", "id;rm"])
+    script = launcher_script(
+        {"A": "x y", "B": "it's", "TERM": "not-the-pane"}, "/w d", ["claude", "--session-id", "id;rm"]
+    )
+    terminal = " ".join(f'${{{name}+"{name}=${name}"}}' for name in ("TERM", "COLORTERM", "TERMINFO", "TERMINFO_DIRS"))
     assert script.splitlines() == [
         "#!/bin/sh",
         "cd '/w d' || exit 1",
-        "exec env -i 'A=x y' 'B=it'\"'\"'s' claude --session-id 'id;rm'",
+        f"exec env -i {terminal} 'A=x y' 'B=it'\"'\"'s' claude --session-id 'id;rm'",
     ]
 
 
@@ -210,3 +213,13 @@ async def test_screen_is_the_pane_as_html(daemon: Paths, tmp_path: Path, pymux_s
     assert (plain.stylesheet, plain.overlay) == (None, None)
     assert styled.stylesheet is not None
     assert "--pyte-" in styled.stylesheet
+
+
+@needs_pymux
+async def test_claude_gets_the_panes_terminal(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    # A TERM in aid's own environment is not the pane's terminal.
+    spec = fake_spec(tmp_path, pymux_socket, env={"TERM": "not-the-pane"})
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            result = await (await client.create("tty", spec)).run("term")
+    assert result.output == "pyte"

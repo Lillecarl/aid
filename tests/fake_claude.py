@@ -1,7 +1,7 @@
 """A stand-in for interactive Claude Code: reads a terminal like it, writes a transcript like it.
 
 Prompts: "slow" waits for Escape; "count" writes one text block per number; "tool" makes a tool call;
-"mcp" says the --mcp-config file; anything else is echoed. FAKE_CLAUDE_TRUST=1 shows the trust dialog until a `.fake-trusted` file exists.
+"mcp" says the --mcp-config file; "term" says TERM; anything else is echoed. FAKE_CLAUDE_TRUST=1 shows the trust dialog until a `.fake-trusted` file exists.
 FAKE_CLAUDE_CHANNELS=1 shows the development channels warning, when the flag is given, until Enter.
 """
 
@@ -117,6 +117,8 @@ class Fake:
         if text == "count":
             for i in range(COUNT):
                 self.say(f"{i} ")
+        elif text == "term":
+            self.say(os.environ.get("TERM", "unset"))
         elif text == "mcp":
             self.say(Path(self.mcp_config).read_text() if self.mcp_config else "none")
         elif text == "tool":

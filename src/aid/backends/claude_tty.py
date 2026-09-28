@@ -54,6 +54,7 @@ log = logging.getLogger(__name__)
 SESSION_ID_FILE: Final = "claude-session-id"
 LAUNCHER_FILE: Final = "launch.sh"
 MCP_CONFIG_FILE: Final = "mcp.json"
+PANE_TERMINAL: Final = ("TERM", "COLORTERM", "TERMINFO", "TERMINFO_DIRS")
 PYMUX_SESSION: Final = "aid"
 START_TIMEOUT: Final = 60.0
 TRANSCRIPT_TIMEOUT: Final = 60.0
@@ -85,13 +86,18 @@ def classify(capture: str) -> Screen:
 
 
 def launcher_script(env: dict[str, str], cwd: str, argv: list[str]) -> str:
-    """A script that starts Claude with exactly `env`.
+    """A script that starts Claude with exactly `env`, plus the pane's terminal variables.
 
     The pymux server's own environment belongs to whoever started it, so `env -i` drops it. The variables live
     in this file, mode 0700, and not in the window's command, which pymux keeps and shows.
+
+    The terminal variables are the pane's, not aid's: the pane is the terminal. Measured: pymux gives a pane
+    TERM=pyte, COLORTERM=truecolor and a TERMINFO_DIRS holding pyte's terminfo; without them Claude draws no colour.
     """
-    assignments = " ".join(shlex.quote(f"{k}={v}") for k, v in sorted(env.items()))
-    return f"#!/bin/sh\ncd {shlex.quote(cwd)} || exit 1\nexec env -i {assignments} {shlex.join(argv)}\n"
+    assignments = " ".join(shlex.quote(f"{k}={v}") for k, v in sorted(env.items()) if k not in PANE_TERMINAL)
+    # `${VAR+...}` unquoted: a variable the pane does not set adds no word at all.
+    terminal = " ".join(f'${{{name}+"{name}=${name}"}}' for name in PANE_TERMINAL)
+    return f"#!/bin/sh\ncd {shlex.quote(cwd)} || exit 1\nexec env -i {terminal} {assignments} {shlex.join(argv)}\n"
 
 
 def claude_argv(spec: ClaudeTtySpec, session_id: str, *, resume: bool, mcp_config: str | None) -> list[str]:
