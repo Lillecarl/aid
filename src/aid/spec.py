@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Literal, Self
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 
 class AgentKind(StrEnum):
@@ -28,6 +28,44 @@ class _Spec(BaseModel):
     env: dict[str, str] = Field(default_factory=dict[str, str])
 
 
+class _McpServer(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # Claude Code builds tool names as mcp__<name>__<tool>.
+    name: Annotated[str, Field(pattern=r"^[\w-]+$")]
+
+
+class McpStdio(_McpServer):
+    type: Literal["stdio"] = "stdio"
+    command: Annotated[list[str], Field(min_length=1)]
+    env: dict[str, str] = Field(default_factory=dict[str, str])
+
+
+class McpHttp(_McpServer):
+    type: Literal["http"] = "http"
+    url: str
+    headers: dict[str, str] = Field(default_factory=dict[str, str])
+
+
+class McpSse(_McpServer):
+    type: Literal["sse"] = "sse"
+    url: str
+    headers: dict[str, str] = Field(default_factory=dict[str, str])
+
+
+type McpServer = Annotated[McpStdio | McpHttp | McpSse, Field(discriminator="type")]
+
+
+def _unique_names(servers: list[McpServer]) -> list[McpServer]:
+    names = [server.name for server in servers]
+    if len(set(names)) != len(names):
+        raise ValueError(f"MCP server names repeat: {names}")
+    return servers
+
+
+type McpServers = Annotated[list[McpServer], AfterValidator(_unique_names)]
+
+
 class AcpSpec(_Spec):
     """An external ACP agent, such as `claude-agent-acp` or `opencode acp`."""
 
@@ -35,6 +73,7 @@ class AcpSpec(_Spec):
     command: Annotated[list[str], Field(min_length=1)]
     inherit_env: bool = True
     permission: PermissionMode = PermissionMode.DENY
+    mcp_servers: McpServers = Field(default_factory=list[McpServer])
 
 
 class PydanticAISpec(_Spec):
@@ -68,6 +107,8 @@ class ClaudeTtySpec(_Spec):
     pymux_socket: str | None = None
     """The pymux server to run in. None uses one owned by aid, under its runtime directory."""
     pymux_command: Annotated[list[str], Field(min_length=1)] = Field(default_factory=lambda: ["pymux"])
+    mcp_servers: McpServers = Field(default_factory=list[McpServer])
+    """Added to the MCP servers Claude Code finds in its own configuration."""
 
 
 type AgentSpec = Annotated[AcpSpec | PydanticAISpec | ClaudeTtySpec, Field(discriminator="kind")]

@@ -13,6 +13,7 @@ transcript (`aid.transcript`), because the terminal has no structured stream. Me
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import shlex
@@ -26,6 +27,7 @@ import anyio.to_thread
 from libpymux import Server
 
 from aid.env import agent_environment
+from aid.mcp import claude_config
 from aid.paths import default_paths
 from aid.protocol import Output, TextDelta
 from aid.transcript import TranscriptFollower, TurnEnded, config_dir, find_transcript, items_from_entry
@@ -43,6 +45,7 @@ log = logging.getLogger(__name__)
 
 SESSION_ID_FILE: Final = "claude-session-id"
 LAUNCHER_FILE: Final = "launch.sh"
+MCP_CONFIG_FILE: Final = "mcp.json"
 PYMUX_SESSION: Final = "aid"
 START_TIMEOUT: Final = 60.0
 TRANSCRIPT_TIMEOUT: Final = 60.0
@@ -77,6 +80,12 @@ def launcher_script(env: dict[str, str], cwd: str, argv: list[str]) -> str:
     """
     assignments = " ".join(shlex.quote(f"{k}={v}") for k, v in sorted(env.items()))
     return f"#!/bin/sh\ncd {shlex.quote(cwd)} || exit 1\nexec env -i {assignments} {shlex.join(argv)}\n"
+
+
+def claude_argv(spec: ClaudeTtySpec, session_id: str, *, resume: bool, mcp_config: str | None) -> list[str]:
+    # --mcp-config is variadic: it goes before another option, or it would take the first of spec.args too.
+    mcp = ["--mcp-config", mcp_config] if mcp_config else []
+    return [*spec.command, *mcp, "--resume" if resume else "--session-id", session_id, *spec.args]
 
 
 class ClaudeTtyBackend:
@@ -167,6 +176,13 @@ async def _wait_ready(pane: Pane, trust: bool) -> None:
             await anyio.sleep(POLL)
 
 
+async def _write_private(path: anyio.Path, text: str, mode: int) -> None:
+    """Environments and MCP headers hold credentials; the file gets its mode before it gets them."""
+    await path.touch(mode=mode)
+    await path.chmod(mode)
+    await path.write_text(text)
+
+
 @asynccontextmanager
 async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGenerator[ClaudeTtyBackend]:
     env = agent_environment(spec.env, inherit=spec.inherit_env)
@@ -175,12 +191,15 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
     session_id = (await id_file.read_text()).strip() if await id_file.exists() else str(uuid.uuid4())
     await id_file.write_text(session_id)
     resume = await anyio.to_thread.run_sync(find_transcript, transcripts, session_id) is not None
-    argv = [*spec.command, "--resume" if resume else "--session-id", session_id, *spec.args]
+    mcp_config: str | None = None
+    if spec.mcp_servers:
+        mcp_file = state_dir / MCP_CONFIG_FILE
+        await _write_private(mcp_file, json.dumps(claude_config(spec.mcp_servers)), 0o600)
+        mcp_config = str(mcp_file)
+    argv = claude_argv(spec, session_id, resume=resume, mcp_config=mcp_config)
 
     launcher = state_dir / LAUNCHER_FILE
-    await launcher.touch(mode=0o700)
-    await launcher.chmod(0o700)
-    await launcher.write_text(launcher_script(env, spec.cwd, argv))
+    await _write_private(launcher, launcher_script(env, spec.cwd, argv), 0o700)
 
     socket = spec.pymux_socket or str(default_paths().runtime_dir / "pymux.sock")
     server = await _ensure_server(spec, socket)

@@ -12,6 +12,8 @@ API and a CLI.
 - `src/aid/launcher.py` — `Launcher` protocol; `ForkserverLauncher`.
 - `src/aid/worker.py` — worker entry `main(endpoint, name, spec_json, state_dir)`; DEALER to the daemon.
 - `src/aid/backends/` — `acp.py`, `pydantic_ai.py`, `claude_tty.py`; each implements `base.Backend`.
+- `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON.
+  claude-agent-acp restarts its query when `session/load` gets servers other than `session/new` did.
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.
 - `src/aid/agents.py` — `aid.PydanticAgent`, the interface agent modules implement, and discovery on
   AID_AGENTS_PATH. `catalog.py` runs discovery in a subprocess for the daemon; never import agent modules

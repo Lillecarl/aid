@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from pathlib import Path
@@ -14,6 +15,7 @@ from acp.schema import (
     AllowedOutcome,
     InitializeResponse,
     LoadSessionResponse,
+    McpCapabilities,
     NewSessionResponse,
     PermissionOption,
     PromptResponse,
@@ -29,19 +31,24 @@ class FakeAgent:
         self.conn: Any = None
         self.cancelled = anyio.Event()
         self.turns = 0
+        self.mcp_servers: list[Any] = []
+        self.session_via = ""
 
     def on_connect(self, conn: Any) -> None:
         self.conn = conn
 
     async def initialize(self, protocol_version: int, **kwargs: Any) -> InitializeResponse:
-        return InitializeResponse(
-            protocol_version=protocol_version, agent_capabilities=AgentCapabilities(load_session=True)
-        )
+        caps = AgentCapabilities(load_session=True, mcp_capabilities=McpCapabilities(http=True))
+        return InitializeResponse(protocol_version=protocol_version, agent_capabilities=caps)
 
-    async def new_session(self, cwd: str, **kwargs: Any) -> NewSessionResponse:
+    async def new_session(self, cwd: str, mcp_servers: list[Any] | None = None, **kwargs: Any) -> NewSessionResponse:
+        self.mcp_servers, self.session_via = mcp_servers or [], "new"
         return NewSessionResponse(session_id=uuid.uuid4().hex)
 
-    async def load_session(self, cwd: str, session_id: str, **kwargs: Any) -> LoadSessionResponse:
+    async def load_session(
+        self, cwd: str, session_id: str, mcp_servers: list[Any] | None = None, **kwargs: Any
+    ) -> LoadSessionResponse:
+        self.mcp_servers, self.session_via = mcp_servers or [], "load"
         await self.say(session_id, "replayed history")
         return LoadSessionResponse()
 
@@ -75,6 +82,9 @@ class FakeAgent:
                 await self.say(session_id, f"{os.environ.get('AID_TEST_VAR')} {Path.cwd()}")
             case "pid":
                 await self.say(session_id, str(os.getpid()))
+            case "mcp":
+                servers = [s.model_dump(mode="json", exclude_none=True) for s in self.mcp_servers]
+                await self.say(session_id, json.dumps({"via": self.session_via, "servers": servers}))
             case _:
                 await self.say(session_id, f"echo: {text}")
         return PromptResponse(stop_reason="end_turn")

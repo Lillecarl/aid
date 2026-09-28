@@ -1,7 +1,7 @@
 """A stand-in for interactive Claude Code: reads a terminal like it, writes a transcript like it.
 
 Prompts: "slow" waits for Escape; "count" writes one text block per number; "tool" makes a tool call;
-anything else is echoed. FAKE_CLAUDE_TRUST=1 shows the trust dialog until a `.fake-trusted` file exists.
+"mcp" says the --mcp-config file; anything else is echoed. FAKE_CLAUDE_TRUST=1 shows the trust dialog until a `.fake-trusted` file exists.
 """
 
 from __future__ import annotations
@@ -30,8 +30,9 @@ def transcript_path(session_id: str) -> Path:
 
 
 class Fake:
-    def __init__(self, session_id: str) -> None:
+    def __init__(self, session_id: str, mcp_config: str | None) -> None:
         self.session_id = session_id
+        self.mcp_config = mcp_config
         self.buffer = b""
 
     def write(self, entry: dict[str, Any]) -> None:
@@ -106,6 +107,8 @@ class Fake:
         if text == "count":
             for i in range(COUNT):
                 self.say(f"{i} ")
+        elif text == "mcp":
+            self.say(Path(self.mcp_config).read_text() if self.mcp_config else "none")
         elif text == "tool":
             use = {"type": "tool_use", "id": "toolu_fake", "name": "Bash", "input": {"command": "true"}}
             self.write({"type": "assistant", "message": {"id": "msg", "content": [use]}})
@@ -133,10 +136,11 @@ class Fake:
 def main() -> None:
     args = sys.argv[1:]
     session_id = next(args[i + 1] for i, a in enumerate(args) if a in ("--session-id", "--resume"))
+    mcp_config = next((args[i + 1] for i, a in enumerate(args) if a == "--mcp-config"), None)
     old = termios.tcgetattr(0)
     tty.setraw(0)
     try:
-        Fake(session_id).run()
+        Fake(session_id, mcp_config).run()
     finally:
         termios.tcsetattr(0, termios.TCSADRAIN, old)
 

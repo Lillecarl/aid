@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import sys
 import tempfile
@@ -10,9 +11,10 @@ import anyio
 import pytest
 
 import aid
-from aid.backends.claude_tty import Screen, classify, launcher_script
+from aid.backends.claude_tty import Screen, classify, claude_argv, launcher_script
+from aid.mcp import claude_config
 from aid.protocol import AidError, Output, TextDelta, ToolCall
-from aid.spec import ClaudeTtySpec
+from aid.spec import ClaudeTtySpec, McpHttp
 from tests.fake_claude import COUNT
 
 if TYPE_CHECKING:
@@ -47,6 +49,19 @@ def test_launcher_script_quotes_everything() -> None:
         "cd '/w d' || exit 1",
         "exec env -i 'A=x y' 'B=it'\"'\"'s' claude --session-id 'id;rm'",
     ]
+
+
+def test_mcp_config_goes_before_other_arguments() -> None:
+    spec = ClaudeTtySpec(cwd="/", args=["first prompt"])
+    assert claude_argv(spec, "id", resume=False, mcp_config="/s/mcp.json") == [
+        "claude",
+        "--mcp-config",
+        "/s/mcp.json",
+        "--session-id",
+        "id",
+        "first prompt",
+    ]
+    assert claude_argv(spec, "id", resume=True, mcp_config=None) == ["claude", "--resume", "id", "first prompt"]
 
 
 @pytest.fixture
@@ -130,3 +145,16 @@ async def test_trust_dialog(daemon: Paths, tmp_path: Path, pymux_socket: str) ->
             session = await client.create("trusted", fake_spec(tmp_path, pymux_socket, env=env, trust_cwd=True))
             result = await session.run("hi")
     assert result.output == "echo: hi"
+
+
+@needs_pymux
+async def test_mcp_servers_reach_claude(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    servers = [McpHttp(name="web", url="http://127.0.0.1:1/mcp", headers={"Authorization": "Bearer t"})]
+    spec = fake_spec(tmp_path, pymux_socket).model_copy(update={"mcp_servers": servers})
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("tty", spec)
+            result = await session.run("mcp")
+    config = next(daemon.state_dir.rglob("mcp.json"))
+    assert json.loads(result.text) == claude_config(servers)
+    assert config.stat().st_mode & 0o777 == 0o600

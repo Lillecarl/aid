@@ -26,6 +26,7 @@ from acp.schema import (
 from pydantic import ValidationError
 
 from aid.env import agent_environment
+from aid.mcp import to_acp
 from aid.protocol import Output, SessionEvent, TextDelta, ThoughtDelta, ToolCall
 from aid.spec import PermissionMode
 
@@ -34,7 +35,16 @@ if TYPE_CHECKING:
 
     from acp.client.connection import ClientSideConnection
     from acp.connection import StreamEvent
-    from acp.schema import PermissionOption, PromptResponse, ToolCallUpdate
+    from acp.schema import (
+        AcpMcpServer,
+        HttpMcpServer,
+        McpCapabilities,
+        McpServerStdio,
+        PermissionOption,
+        PromptResponse,
+        SseMcpServer,
+        ToolCallUpdate,
+    )
     from anyio.streams.memory import MemoryObjectSendStream
 
     from aid.backends.base import Emit
@@ -175,20 +185,40 @@ async def open_acp(spec: AcpSpec, state_dir: anyio.Path) -> AsyncGenerator[AcpBa
                 client_info=Implementation(name="aid", version=version("aid")),
             )
             caps = init.agent_capabilities
-            session_id = await _resume(conn, spec, id_file, can_load=bool(caps and caps.load_session))
+            if missing := unsupported_transports(spec, caps.mcp_capabilities if caps else None):
+                raise RuntimeError(f"the agent does not take {' or '.join(missing)} MCP servers")
+            servers: list[HttpMcpServer | SseMcpServer | AcpMcpServer | McpServerStdio] = [
+                to_acp(server) for server in spec.mcp_servers
+            ]
+            session_id = await _resume(conn, spec, id_file, servers, can_load=bool(caps and caps.load_session))
         await id_file.write_text(session_id)
         backend = AcpBackend(conn, session_id)
         yield backend
 
 
-async def _resume(conn: ClientSideConnection, spec: AcpSpec, id_file: anyio.Path, *, can_load: bool) -> str:
+def unsupported_transports(spec: AcpSpec, caps: McpCapabilities | None) -> list[str]:
+    """Stdio is mandatory in ACP; http and sse are capabilities the agent advertises."""
+    wanted = {server.type for server in spec.mcp_servers} - {"stdio"}
+    offered = {kind for kind in ("http", "sse") if caps and getattr(caps, kind)}
+    return sorted(wanted - offered)
+
+
+async def _resume(
+    conn: ClientSideConnection,
+    spec: AcpSpec,
+    id_file: anyio.Path,
+    servers: list[HttpMcpServer | SseMcpServer | AcpMcpServer | McpServerStdio],
+    *,
+    can_load: bool,
+) -> str:
+    # The same list on load as on new: claude-agent-acp restarts its query process when they differ.
     if can_load and await id_file.exists():
         previous = (await id_file.read_text()).strip()
         try:
-            await conn.load_session(cwd=spec.cwd, session_id=previous, mcp_servers=[])
+            await conn.load_session(cwd=spec.cwd, session_id=previous, mcp_servers=servers)
         except acp.RequestError:
             log.warning("agent could not load session %s; starting a new one", previous, exc_info=True)
         else:
             return previous
-    session = await conn.new_session(cwd=spec.cwd, mcp_servers=[])
+    session = await conn.new_session(cwd=spec.cwd, mcp_servers=servers)
     return session.session_id
