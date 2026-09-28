@@ -1,5 +1,7 @@
 // Speech to text through aid web: the microphone streams to /api/transcribe, and what the server hears comes back.
 
+import micWorkletUrl from "./mic-worklet.ts?worker&url";
+
 export interface Heard {
   text: string;
   final: boolean;
@@ -23,7 +25,7 @@ export class Dictation {
       audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
     });
     this.context = new AudioContext();
-    await this.context.audioWorklet.addModule(new URL("./mic-worklet.js", import.meta.url));
+    await this.context.audioWorklet.addModule(micWorkletUrl);
     const rate = this.context.sampleRate;
     const frame = Math.round(rate * FRAME_SECONDS);
 
