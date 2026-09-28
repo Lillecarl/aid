@@ -16,7 +16,7 @@ from aid.spec import ClaudeTtySpec
 from tests.fake_claude import COUNT
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import AsyncIterator
 
     from aid.paths import Paths
 
@@ -50,11 +50,11 @@ def test_launcher_script_quotes_everything() -> None:
 
 
 @pytest.fixture
-def pymux_socket() -> Iterator[str]:
+async def pymux_socket() -> AsyncIterator[str]:
     directory = Path(tempfile.mkdtemp(prefix="aid-pymux-"))
     socket = str(directory / "pymux.sock")
     yield socket
-    anyio.run(lambda: anyio.run_process(["pymux", "-S", socket, "kill-server"], check=False))
+    await anyio.run_process(["pymux", "-S", socket, "kill-server"], check=False)
     shutil.rmtree(directory, ignore_errors=True)
 
 
