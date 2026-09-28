@@ -47,7 +47,7 @@ in
     pkgs.runCommand "aid-${set.aid.version}"
       {
         inherit (set.aid) meta;
-        passthru = { inherit venv ui; };
+        passthru = { inherit venv ui speechModel; };
         nativeBuildInputs = [ pkgs.makeWrapper ];
       }
       ''

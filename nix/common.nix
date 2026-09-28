@@ -98,6 +98,16 @@ in
           systemd EnvironmentFile with AID_OIDC_CLIENT_SECRET and AID_WEB_SESSION_SECRET. systemd specifiers work.
         '';
       };
+
+      speechModel = lib.mkOption {
+        type = lib.types.nullOr lib.types.path;
+        default = null;
+        example = lib.literalExpression "config.services.aid.package.speechModel";
+        description = ''
+          A sherpa-onnx streaming transducer for speech to text in the web UI. The package's `speechModel` is an
+          English one. Null turns speech to text off, and the page shows no microphone button.
+        '';
+      };
     };
   };
 
@@ -156,6 +166,10 @@ in
           "--allow-email"
           email
         ]) cfg.web.allowEmails
+        ++ lib.optionals (cfg.web.speechModel != null) [
+          "--speech-model"
+          "${cfg.web.speechModel}"
+        ]
       );
       EnvironmentFile = cfg.web.environmentFile;
       Restart = "on-failure";
