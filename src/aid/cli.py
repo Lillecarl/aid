@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import anyio
+import anyio.to_thread
 
-from aid import daemon
+from aid import daemon, speech
 from aid.client import connect
 from aid.launcher import ForkserverLauncher
 from aid.mcp import from_claude_config
@@ -275,8 +276,9 @@ async def _web(args: argparse.Namespace) -> None:
         allowed_emails=frozenset(email.lower() for email in args.allow_email),
     )
     assets = Path(args.assets) if args.assets else None
-    speech_model = Path(args.speech_model) if args.speech_model else None
-    app = create_app(oidc, _secret(ENV_SESSION_SECRET), assets=assets, speech_model=speech_model)
+    # About a second, once, before aid web listens.
+    recognizer = await anyio.to_thread.run_sync(speech.load, Path(args.speech_model)) if args.speech_model else None
+    app = create_app(oidc, _secret(ENV_SESSION_SECRET), assets=assets, recognizer=recognizer)
     shutdown = anyio.Event()
     async with anyio.create_task_group() as tg:
         tg.start_soon(lambda: serve_web(app, args.bind, shutdown=shutdown))

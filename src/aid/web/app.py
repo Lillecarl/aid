@@ -36,7 +36,6 @@ from starlette.staticfiles import StaticFiles
 from aid.client import connect
 from aid.protocol import AidError, CreateSession
 from aid.speech import Transcription
-from aid.speech import load as load_speech
 from aid.web import auth
 
 if TYPE_CHECKING:
@@ -332,14 +331,13 @@ def create_app(
     session_secret: str,
     paths: Paths | None = None,
     assets: Path | None = None,
-    speech_model: Path | None = None,
+    recognizer: Recognizer | None = None,
 ) -> Starlette:
     """The app. `assets` is the built UI (web/dist); without it the API still works and `/` says what is missing.
-    `speech_model` is a sherpa-onnx streaming transducer (`aid.speech`); without one there is no speech to text."""
+    `recognizer` is a loaded speech model (`aid.speech.load`); without one there is no speech to text."""
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncGenerator[None]:
-        app.state.recognizer = await anyio.to_thread.run_sync(load_speech, speech_model) if speech_model else None
         async with connect(paths) as client:
             app.state.client = client
             yield
@@ -385,6 +383,7 @@ def create_app(
     app.state.oidc_config = oidc
     app.state.oidc = auth.make_oauth(oidc)
     app.state.assets = assets
+    app.state.recognizer = recognizer
     return app
 
 

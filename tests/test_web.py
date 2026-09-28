@@ -20,8 +20,7 @@ from websockets.exceptions import InvalidStatus
 
 from aid.web import OidcConfig, create_app, serve
 from aid.web.app import ENV_ASSETS
-from tests.conftest import fake_spec, needs_pymux, py_spec
-from tests.test_speech import MODEL as SPEECH_MODEL
+from tests.conftest import SPEECH_MODEL, fake_spec, needs_pymux, py_spec
 from tests.test_speech import SAID, speech
 
 if TYPE_CHECKING:
@@ -30,6 +29,7 @@ if TYPE_CHECKING:
     from websockets.typing import Origin
 
     from aid.paths import Paths
+    from aid.speech import Recognizer
 
 # The built Svelte UI. The Nix test run and the dev shell set it; without it the API tests still run.
 ASSETS = Path(os.environ[ENV_ASSETS]) if os.environ.get(ENV_ASSETS) else None
@@ -88,7 +88,7 @@ async def wait_for(url: str) -> None:
 
 
 @pytest.fixture
-async def web(daemon: Paths, tmp_path: Path) -> AsyncIterator[Web]:
+async def web(daemon: Paths, tmp_path: Path, speech_recognizer: Recognizer | None) -> AsyncIterator[Web]:
     dex_port, web_port = free_port(), free_port()
     web_url = f"http://127.0.0.1:{web_port}"
     config = tmp_path / "dex.json"
@@ -108,7 +108,7 @@ async def web(daemon: Paths, tmp_path: Path) -> AsyncIterator[Web]:
             with anyio.fail_after(TIMEOUT):
                 await wait_for(f"{issuer}/.well-known/openid-configuration")
             async with anyio.create_task_group() as tg:
-                app = create_app(oidc, secrets.token_hex(32), daemon, assets=ASSETS, speech_model=SPEECH_MODEL)
+                app = create_app(oidc, secrets.token_hex(32), daemon, assets=ASSETS, recognizer=speech_recognizer)
                 tg.start_soon(lambda: serve(app, f"127.0.0.1:{web_port}", shutdown=shutdown))
                 with anyio.fail_after(TIMEOUT):
                     await wait_for(f"{web_url}/healthz")

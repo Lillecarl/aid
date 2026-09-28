@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import os
 import wave
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import anyio
@@ -13,13 +11,15 @@ import numpy as np
 import pytest
 
 from aid.speech import Heard, Transcription, load
+from tests.conftest import SPEECH_MODEL as MODEL
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from numpy.typing import NDArray
 
     from aid.speech import Recognizer
 
-MODEL = Path(os.environ["AID_TEST_SPEECH_MODEL"]) if os.environ.get("AID_TEST_SPEECH_MODEL") else None
 pytestmark = pytest.mark.skipif(MODEL is None, reason="AID_TEST_SPEECH_MODEL is not set")
 
 # What the default model's test_wavs/0.wav says.
@@ -33,10 +33,10 @@ def speech() -> tuple[int, NDArray[np.float32]]:
     return rate, np.frombuffer(frames, dtype=np.int16).astype(np.float32) / np.float32(32768)
 
 
-@pytest.fixture(scope="module")
-def recognizer() -> Recognizer:
-    assert MODEL is not None
-    return load(MODEL)
+@pytest.fixture
+def recognizer(speech_recognizer: Recognizer | None) -> Recognizer:
+    assert speech_recognizer is not None
+    return speech_recognizer
 
 
 def transcribe(recognizer: Recognizer) -> list[Heard]:

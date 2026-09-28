@@ -16,9 +16,12 @@ from aid.daemon import Daemon
 from aid.launcher import ForkserverLauncher
 from aid.paths import Paths
 from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
+from aid.speech import load as load_speech
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
+
+    from aid.speech import Recognizer
 
 TESTS = Path(__file__).parent
 
@@ -99,3 +102,12 @@ def fake_spec(cwd: Path, socket: str, env: dict[str, str] | None = None, *, trus
         pymux_socket=socket,
         trust_cwd=trust_cwd,
     )
+
+
+SPEECH_MODEL = Path(os.environ["AID_TEST_SPEECH_MODEL"]) if os.environ.get("AID_TEST_SPEECH_MODEL") else None
+
+
+@pytest.fixture(scope="session")
+def speech_recognizer() -> Recognizer | None:
+    """AID_TEST_SPEECH_MODEL, loaded once: loading takes a second or two. The dev shell and the Nix tests set it."""
+    return load_speech(SPEECH_MODEL) if SPEECH_MODEL is not None else None
