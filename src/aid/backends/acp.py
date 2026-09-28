@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import math
-import os
 from contextlib import asynccontextmanager
 from importlib.metadata import version
 from typing import TYPE_CHECKING, Any, cast
@@ -26,6 +25,7 @@ from acp.schema import (
 )
 from pydantic import ValidationError
 
+from aid.env import agent_environment
 from aid.protocol import Output, SessionEvent, TextDelta, ThoughtDelta, ToolCall
 from aid.spec import PermissionMode
 
@@ -150,10 +150,6 @@ class AcpBackend:
         await self._conn.cancel(session_id=self._session_id)
 
 
-def agent_environment(spec: AcpSpec) -> dict[str, str]:
-    return {**os.environ, **spec.env} if spec.inherit_env else dict(spec.env)
-
-
 @asynccontextmanager
 async def open_acp(spec: AcpSpec, state_dir: anyio.Path) -> AsyncGenerator[AcpBackend]:
     id_file = state_dir / SESSION_ID_FILE
@@ -168,7 +164,7 @@ async def open_acp(spec: AcpSpec, state_dir: anyio.Path) -> AsyncGenerator[AcpBa
         cast("acp.Client", _Client(spec.permission)),
         spec.command[0],
         *spec.command[1:],
-        env=agent_environment(spec),
+        env=agent_environment(spec.env, inherit=spec.inherit_env),
         cwd=spec.cwd,
         observers=[observe],
     ) as (conn, _process):
