@@ -31,5 +31,15 @@ in
         );
       };
     };
+
+    systemd.user.services.aid-web = lib.mkIf cfg.web.enable {
+      Unit = {
+        Description = "aid web UI";
+        After = [ "aid.service" ];
+        Wants = [ "aid.service" ];
+      };
+      Install.WantedBy = [ "default.target" ];
+      Service = (common.webService cfg).serviceConfig;
+    };
   };
 }

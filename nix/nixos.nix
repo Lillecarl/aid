@@ -62,5 +62,24 @@ in
         NoNewPrivileges = true;
       };
     };
+
+    systemd.services.aid-web = lib.mkIf cfg.web.enable {
+      description = "aid web UI";
+      wantedBy = [ "multi-user.target" ];
+      after = [
+        "aid.service"
+        "network-online.target"
+      ];
+      wants = [
+        "aid.service"
+        "network-online.target"
+      ];
+      environment.AID_RUNTIME_DIR = runtimeDir;
+      serviceConfig = (common.webService cfg).serviceConfig // {
+        User = cfg.user;
+        Group = cfg.group;
+        NoNewPrivileges = true;
+      };
+    };
   };
 }
