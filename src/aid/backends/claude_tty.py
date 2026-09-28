@@ -36,7 +36,7 @@ from libpymux import Server
 from aid.env import agent_environment
 from aid.mcp import AID_TOOLS_RULE, claude_config, session_servers
 from aid.paths import default_paths
-from aid.protocol import Output, TextDelta
+from aid.protocol import Output, PaneView, TextDelta
 from aid.spec import BUILTIN_MCP_SERVER
 from aid.transcript import TranscriptFollower, TurnEnded, config_dir, find_transcript, items_from_entry
 
@@ -164,6 +164,16 @@ class ClaudeTtyBackend:
 
     async def cancel(self) -> None:
         await anyio.to_thread.run_sync(self._pane.send_key, "Escape")
+
+    async def screen(self, *, stylesheet: bool) -> PaneView:
+        def capture() -> PaneView:
+            html = self._pane.capture_html()
+            css = self._server.html_stylesheet(self._pane) if stylesheet else None
+            # pymux draws a mode (copy mode, a popup) above the pane, and the pane's page does not hold it.
+            overlay = (self._pane.mode or "a pymux mode") if self._pane.in_mode else None
+            return PaneView(html=html, stylesheet=css, overlay=overlay)
+
+        return await anyio.to_thread.run_sync(capture)
 
 
 async def _ensure_server(spec: ClaudeTtySpec, socket: str) -> Server:

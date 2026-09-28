@@ -21,8 +21,63 @@ export interface SessionStatus {
   aid_tools: boolean;
 }
 
-/** The URL of a session's status stream: Server-Sent Events, one per change. */
-export const statusEventsUrl = (name: string): string => `/api/sessions/${encodeURIComponent(name)}/status/events`;
+/** What interactive Claude's pane shows, drawn by pymux. */
+export interface PaneView {
+  html: string;
+  overlay: string | null;
+}
+
+const sessionPath = (name: string): string => `/api/sessions/${encodeURIComponent(name)}`;
+export const statusEventsUrl = (name: string): string => `${sessionPath(name)}/status/events`;
+export const screenEventsUrl = (name: string): string => `${sessionPath(name)}/screen/events`;
+export const screenStylesheetUrl = (name: string): string => `${sessionPath(name)}/screen.css`;
+
+/**
+ * Follow a stream of Server-Sent Events, one per change, while the browser tab is visible; a hidden tab closes
+ * it, so nothing streams that nobody sees. Returns the function that stops following.
+ */
+export function watch<T>(url: string, ondata: (data: T) => void, onproblem: (problem: string) => void): () => void {
+  let source: EventSource | null = null;
+  let ended = false;
+
+  function open(): void {
+    if (source !== null || ended) return;
+    source = new EventSource(url);
+    source.onmessage = (event: MessageEvent<string>) => {
+      ondata(JSON.parse(event.data) as T);
+      onproblem("");
+    };
+    source.addEventListener("error", (event) => {
+      // A server-sent `error` event carries data and ends the stream for good; a dropped connection has none,
+      // and EventSource retries it.
+      const data = (event as MessageEvent<string>).data;
+      if (data) {
+        onproblem((JSON.parse(data) as { error: string }).error);
+        ended = true;
+        close();
+      } else {
+        onproblem("reconnecting…");
+      }
+    });
+  }
+
+  function close(): void {
+    source?.close();
+    source = null;
+  }
+
+  function onvisibility(): void {
+    if (document.visibilityState === "visible") open();
+    else close();
+  }
+
+  onvisibility();
+  document.addEventListener("visibilitychange", onvisibility);
+  return () => {
+    document.removeEventListener("visibilitychange", onvisibility);
+    close();
+  };
+}
 
 export type SessionEvent =
   | { type: "text"; text: string }

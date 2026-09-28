@@ -27,6 +27,7 @@ from aid.protocol import (
     Event,
     Failure,
     GetHistory,
+    GetScreen,
     GetStatus,
     Hello,
     ListAgents,
@@ -255,6 +256,15 @@ class Daemon:
                     self._routes.pop(request.id, None)
                     session.turn = None
                     raise
+                return None
+            case GetScreen():
+                session = self._session(request.session)
+                if not session.uses_channel:
+                    raise AidError("no_screen", f"{session.name!r} has no terminal")
+                if not session.running:
+                    raise AidError("not_running", f"{session.name!r} is stopped, so it has no screen")
+                self._routes[request.id] = _Route(client, session.name)
+                await self._send_worker(session.name, request)
                 return None
             case GetStatus():
                 return Done(id=request.id, data=self._session(request.session).status().model_dump(mode="json"))

@@ -2,10 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
-import tempfile
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import anyio
@@ -17,18 +14,16 @@ from aid.mcp import claude_config
 from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR
 from aid.protocol import AidError, MessageEntry, Output, TextDelta, ToolCall
 from aid.spec import ClaudeTtySpec, McpHttp
+from tests.conftest import acp_spec, fake_spec, needs_pymux
 from tests.fake_claude import COUNT
 from tests.test_tools import Rpc
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from pathlib import Path
 
     from aid.paths import Paths
 
-TESTS = Path(__file__).parent
 TIMEOUT = 30
-
-needs_pymux = pytest.mark.skipif(shutil.which("pymux") is None, reason="pymux is not on PATH")
 
 
 @pytest.mark.parametrize(
@@ -75,25 +70,6 @@ def test_variadic_options_go_before_other_arguments() -> None:
     ]
     without = spec.model_copy(update={"aid_tools": False})
     assert claude_argv(without, "id", resume=True, mcp_config=None) == ["claude", "--resume", "id", "first prompt"]
-
-
-@pytest.fixture
-async def pymux_socket() -> AsyncIterator[str]:
-    directory = Path(tempfile.mkdtemp(prefix="aid-pymux-"))
-    socket = str(directory / "pymux.sock")
-    yield socket
-    await anyio.run_process(["pymux", "-S", socket, "kill-server"], check=False)
-    shutil.rmtree(directory, ignore_errors=True)
-
-
-def fake_spec(cwd: Path, socket: str, env: dict[str, str] | None = None, *, trust_cwd: bool = False) -> ClaudeTtySpec:
-    return ClaudeTtySpec(
-        cwd=str(cwd),
-        command=[sys.executable, str(TESTS / "fake_claude.py")],
-        env={"CLAUDE_CONFIG_DIR": str(cwd / "claude-config"), "FAKE_CLAUDE_CHANNELS": "1", **(env or {})},
-        pymux_socket=socket,
-        trust_cwd=trust_cwd,
-    )
 
 
 pytestmark = pytest.mark.anyio
@@ -213,3 +189,24 @@ async def test_messages_reach_claude_through_its_channel(daemon: Paths, tmp_path
         MessageEntry(sender="bob", text="ping"),
         MessageEntry(sender=None, text="from a person"),
     ]
+
+
+@needs_pymux
+async def test_screen_is_the_pane_as_html(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            await session.run("hello")
+            plain = await session.screen()
+            styled = await session.screen(stylesheet=True)
+            await client.create("acp", acp_spec(tmp_path))
+            with pytest.raises(AidError, match="no terminal"):
+                await client.session("acp").screen()
+            await session.stop()
+            with pytest.raises(AidError, match="stopped"):
+                await session.screen()
+    assert plain.html.startswith('<pre class="pyte-screen">')
+    assert "fake claude" in plain.html
+    assert (plain.stylesheet, plain.overlay) == (None, None)
+    assert styled.stylesheet is not None
+    assert "--pyte-" in styled.stylesheet

@@ -50,13 +50,27 @@ log = logging.getLogger(__name__)
 ENV_ASSETS: Final = "AID_WEB_ASSETS"
 SESSION_MAX_AGE: Final = 12 * 3600
 SECURITY_HEADERS: Final = {
-    "Content-Security-Policy": "default-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    # style-src-attr: pymux's HTML of a pane colours its cells with style attributes. pyte writes the declarations;
+    # a program in the pane picks at most a colour.
+    "Content-Security-Policy": (
+        "default-src 'self'; style-src-attr 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; "
+        "form-action 'self'"
+    ),
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "same-origin",
 }
 STATUS_POLL: Final = 1.0
-STATUS_KEEPALIVE: Final = 15.0
-_STATUS: Final = {"not_found": 404, "exists": 409, "invalid_request": 422, "busy": 409}
+# pymux has no "pane changed" wait yet (Lillecarl/pymux long poll, planned): a frame is fetched this often.
+SCREEN_POLL: Final = 0.5
+KEEPALIVE: Final = 15.0
+_STATUS: Final = {
+    "not_found": 404,
+    "exists": 409,
+    "invalid_request": 422,
+    "busy": 409,
+    "no_screen": 404,
+    "not_running": 409,
+}
 
 
 class PromptBody(BaseModel):
@@ -155,33 +169,52 @@ async def status(request: Request) -> Response:
     return JSONResponse(found.model_dump(mode="json"))
 
 
-@api()
-async def status_events(request: Request) -> Response:
-    """The session's status each time it changes, for as long as the page holds the stream open. A page opens it
-    only while the status is on screen, so nobody polls the daemon for a status nobody sees."""
-    session = _client(request).session(request.path_params["name"])
-    await session.status()  # A missing session is a 404 here, not an error inside the stream.
+def _changes(fetch: Callable[[], Awaitable[BaseModel]], poll: float) -> StreamingResponse:
+    """Server-Sent Events of `fetch()` each time its value changes, for as long as the page holds the stream open.
+    A page opens one only while its tab is on screen, so nobody polls the daemon for what nobody sees."""
 
     async def events() -> AsyncIterator[str]:
         last: str | None = None
         quiet = 0.0
         while True:
             try:
-                current = (await session.status()).model_dump_json()
+                current = (await fetch()).model_dump_json()
             except AidError as error:
                 yield f"event: error\ndata: {json.dumps({'error': error.message, 'code': error.code})}\n\n"
                 return
             if current != last:
                 last, quiet = current, 0.0
                 yield f"data: {current}\n\n"
-            elif quiet >= STATUS_KEEPALIVE:
+            elif quiet >= KEEPALIVE:
                 # A comment: it tells a dead connection apart from a quiet one.
                 quiet = 0.0
                 yield ": still here\n\n"
-            await anyio.sleep(STATUS_POLL)
-            quiet += STATUS_POLL
+            await anyio.sleep(poll)
+            quiet += poll
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
+
+
+@api()
+async def status_events(request: Request) -> Response:
+    session = _client(request).session(request.path_params["name"])
+    await session.status()  # A missing session is a 404 here, not an error inside the stream.
+    return _changes(session.status, STATUS_POLL)
+
+
+@api()
+async def screen_events(request: Request) -> Response:
+    """Interactive Claude's pane as HTML, each time it changes."""
+    session = _client(request).session(request.path_params["name"])
+    await session.screen()
+    return _changes(session.screen, SCREEN_POLL)
+
+
+@api()
+async def screen_stylesheet(request: Request) -> Response:
+    """The CSS a pane's HTML is written against, with the pane's own colours."""
+    view = await _client(request).session(request.path_params["name"]).screen(stylesheet=True)
+    return Response(view.stylesheet or "", media_type="text/css", headers={"Cache-Control": "no-store"})
 
 
 @api(mutating=True)
@@ -262,6 +295,8 @@ def create_app(
             Route("/api/sessions/{name}/history", history, methods=["GET"]),
             Route("/api/sessions/{name}/status", status, methods=["GET"]),
             Route("/api/sessions/{name}/status/events", status_events, methods=["GET"]),
+            Route("/api/sessions/{name}/screen/events", screen_events, methods=["GET"]),
+            Route("/api/sessions/{name}/screen.css", screen_stylesheet, methods=["GET"]),
             Route("/api/sessions/{name}/prompt", prompt, methods=["POST"]),
             Route("/api/sessions/{name}/cancel", cancel, methods=["POST"]),
             Route("/api/sessions/{name}/stop", stop, methods=["POST"]),

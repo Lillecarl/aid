@@ -111,8 +111,18 @@ class GetStatus(_Request):
     session: str
 
 
+class GetScreen(_Request):
+    """What interactive Claude's pane shows now, as HTML. The daemon forwards it to the session's worker."""
+
+    op: Literal["screen"] = "screen"
+    session: str
+    stylesheet: bool = False
+    """Also return the stylesheet the HTML is written against, with the pane's own colours."""
+
+
 type Request = Annotated[
     GetStatus
+    | GetScreen
     | CreateSession
     | ListSessions
     | Prompt
@@ -239,6 +249,14 @@ class SessionStatus(_Message):
     """The agent command, or the pydantic-ai agent's name or target."""
     mcp_servers: list[str]
     aid_tools: bool
+
+
+class PaneView(_Message):
+    html: str
+    """A `<pre class="pyte-screen">` of the visible rows, drawn by pymux. No cursor yet."""
+    stylesheet: str | None = None
+    overlay: str | None = None
+    """A pymux mode drawn over the pane, such as copy mode, which `html` does not show."""
 
 
 class Event(_Message):

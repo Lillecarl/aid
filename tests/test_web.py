@@ -18,7 +18,7 @@ import pytest
 
 from aid.web import OidcConfig, create_app, serve
 from aid.web.app import ENV_ASSETS
-from tests.conftest import py_spec
+from tests.conftest import fake_spec, needs_pymux, py_spec
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -251,3 +251,33 @@ async def test_status_streams_changes(web: Web, tmp_path: Path) -> None:
     assert snapshot["running"] is True
     assert missing.status_code == 404
     assert [s["running"] for s in seen] == [True, False]
+
+
+@needs_pymux
+async def test_screen_endpoints(web: Web, tmp_path: Path, pymux_socket: str) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with httpx.AsyncClient() as client:
+            await login(client, web, ALLOWED)
+            csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
+            spec = fake_spec(tmp_path, pymux_socket).model_dump(mode="json")
+            created = await client.post(
+                f"{web.url}/api/sessions", json={"name": "tty", "spec": spec}, headers={"X-CSRF-Token": csrf}
+            )
+            assert created.status_code == 201, created.text
+            css = await client.get(f"{web.url}/api/sessions/tty/screen.css")
+            frame: dict[str, Any] = {}
+            async with client.stream("GET", f"{web.url}/api/sessions/tty/screen/events") as response:
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        frame = json.loads(line.removeprefix("data: "))
+                        break
+            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
+            await client.post(
+                f"{web.url}/api/sessions", json={"name": "py", "spec": spec}, headers={"X-CSRF-Token": csrf}
+            )
+            no_screen = await client.get(f"{web.url}/api/sessions/py/screen/events")
+    assert css.headers["content-type"].startswith("text/css")
+    assert "--pyte-" in css.text
+    assert "style-src-attr 'unsafe-inline'" in css.headers["content-security-policy"]
+    assert "fake claude" in frame["html"]
+    assert no_screen.status_code == 404

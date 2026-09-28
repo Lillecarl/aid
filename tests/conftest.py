@@ -15,7 +15,7 @@ from aid.agents import ENV_AGENTS_PATH
 from aid.daemon import Daemon
 from aid.launcher import ForkserverLauncher
 from aid.paths import Paths
-from aid.spec import AcpSpec, PermissionMode, PydanticAISpec
+from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -76,3 +76,26 @@ def acp_spec(cwd: Path, permission: PermissionMode = PermissionMode.DENY, **env:
 
 def py_spec(cwd: Path, target: str, **env: str) -> PydanticAISpec:
     return PydanticAISpec(cwd=str(cwd), target=target, python_path=[str(TESTS)], env=env)
+
+
+needs_pymux = pytest.mark.skipif(shutil.which("pymux") is None, reason="pymux is not on PATH")
+
+
+@pytest.fixture
+async def pymux_socket() -> AsyncIterator[str]:
+    directory = Path(tempfile.mkdtemp(prefix="aid-pymux-"))
+    socket = str(directory / "pymux.sock")
+    yield socket
+    await anyio.run_process(["pymux", "-S", socket, "kill-server"], check=False)
+    shutil.rmtree(directory, ignore_errors=True)
+
+
+def fake_spec(cwd: Path, socket: str, env: dict[str, str] | None = None, *, trust_cwd: bool = False) -> ClaudeTtySpec:
+    """Interactive Claude as `fake_claude.py` plays it, in the pymux server on `socket`."""
+    return ClaudeTtySpec(
+        cwd=str(cwd),
+        command=[sys.executable, str(TESTS / "fake_claude.py")],
+        env={"CLAUDE_CONFIG_DIR": str(cwd / "claude-config"), "FAKE_CLAUDE_CHANNELS": "1", **(env or {})},
+        pymux_socket=socket,
+        trust_cwd=trust_cwd,
+    )

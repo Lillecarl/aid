@@ -28,12 +28,14 @@ from aid.protocol import (
     Event,
     Failure,
     GetHistory,
+    GetScreen,
     GetStatus,
     HistoryPage,
     ListAgents,
     ListSessions,
     MessageEntry,
     Output,
+    PaneView,
     Prompt,
     ReceiveMessages,
     Reply,
@@ -197,6 +199,10 @@ class Session:
         the newest of all. Entry `seq` numbers are what `before` and `after` take."""
         request = GetHistory(session=self.name, before=before, after=after, limit=limit)
         return HistoryPage.model_validate(await self._client.call(request))
+
+    async def screen(self, *, stylesheet: bool = False) -> PaneView:
+        """What interactive Claude's pane shows now, as HTML; with `stylesheet`, the CSS it is written against."""
+        return PaneView.model_validate(await self._client.call(GetScreen(session=self.name, stylesheet=stylesheet)))
 
     async def status(self) -> SessionStatus:
         return SessionStatus.model_validate(await self._client.call(GetStatus(session=self.name)))

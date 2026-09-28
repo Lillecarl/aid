@@ -55,6 +55,7 @@
       {#key current}
         <Session
           name={current}
+          kind={list.find((s) => s.name === current)?.kind}
           onchange={refresh}
           ondeleted={async () => {
             current = null;

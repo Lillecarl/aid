@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { statusEventsUrl } from "./api";
+  import { statusEventsUrl, watch } from "./api";
   import type { SessionStatus } from "./api";
 
   let { name }: { name: string } = $props();
@@ -8,46 +8,14 @@
   let status: SessionStatus | null = $state(null);
   let problem = $state("");
 
-  // Streams only while this tab is mounted and the browser tab is visible: nobody watches a hidden status.
-  onMount(() => {
-    let source: EventSource | null = null;
-
-    function open(): void {
-      if (source !== null) return;
-      source = new EventSource(statusEventsUrl(name));
-      source.onmessage = (event: MessageEvent<string>) => {
-        status = JSON.parse(event.data) as SessionStatus;
-        problem = "";
-      };
-      source.addEventListener("error", (event) => {
-        // A server-sent `error` event carries data; a dropped connection does not, and EventSource retries.
-        const data = (event as MessageEvent<string>).data;
-        if (data) {
-          problem = (JSON.parse(data) as { error: string }).error;
-          close();
-        } else {
-          problem = "reconnecting…";
-        }
-      });
-    }
-
-    function close(): void {
-      source?.close();
-      source = null;
-    }
-
-    function onvisibility(): void {
-      if (document.visibilityState === "visible") open();
-      else close();
-    }
-
-    onvisibility();
-    document.addEventListener("visibilitychange", onvisibility);
-    return () => {
-      document.removeEventListener("visibilitychange", onvisibility);
-      close();
-    };
-  });
+  // Mounted only while its tab is shown.
+  onMount(() =>
+    watch<SessionStatus>(
+      statusEventsUrl(name),
+      (data) => (status = data),
+      (text) => (problem = text),
+    ),
+  );
 </script>
 
 {#if problem}<p class="problem">{problem}</p>{/if}

@@ -18,11 +18,13 @@ import zmq
 import zmq.asyncio
 
 from aid.backends import open_backend
+from aid.backends.base import ScreenBackend
 from aid.protocol import (
     Cancel,
     Done,
     Event,
     Failure,
+    GetScreen,
     Hello,
     Prompt,
     StartFailed,
@@ -106,6 +108,8 @@ class _Worker:
                 case Cancel():
                     await self._backend.cancel()
                     await self.send(Done(id=request.id))
+                case GetScreen():
+                    self._tg.start_soon(self._screen, request)
                 case StopSession():
                     await self._backend.cancel()
                     await self.send(Done(id=request.id))
@@ -113,6 +117,18 @@ class _Worker:
                     return
                 case _:
                     await self.send(Failure(id=request.id, code="unsupported", message=f"worker cannot {request.op}"))
+
+    async def _screen(self, request: GetScreen) -> None:
+        if not isinstance(self._backend, ScreenBackend):
+            await self.send(Failure(id=request.id, code="no_screen", message="this session has no terminal"))
+            return
+        try:
+            view = await self._backend.screen(stylesheet=request.stylesheet)
+        except Exception as error:
+            log.exception("screen %s failed", request.id)
+            await self.send(Failure(id=request.id, code="screen_failed", message=f"{type(error).__name__}: {error}"))
+        else:
+            await self.send(Done(id=request.id, data=view.model_dump(mode="json")))
 
     async def _prompt(self, request: Prompt) -> None:
         async def emit(event: SessionEvent) -> None:
