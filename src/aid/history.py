@@ -21,6 +21,8 @@ from pydantic import ValidationError
 from aid.protocol import HistoryEntry, HistoryPage, PromptEntry, TextDelta, ThoughtDelta, TurnError
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
     from aid.protocol import HistoryItem, MessageEntry, SessionEvent
 
 log = logging.getLogger(__name__)
@@ -30,8 +32,10 @@ MAX_PAGE: Final = 1000
 
 
 class HistoryLog:
-    def __init__(self, path: anyio.Path) -> None:
+    def __init__(self, path: anyio.Path, on_append: Callable[[HistoryEntry], Awaitable[None]] | None = None) -> None:
+        """`on_append` sees each entry once it is on disk, in seq order: the daemon publishes it from there."""
         self._path = path
+        self._on_append = on_append
         self._offsets: list[int] | None = None
         """Byte offset of each entry's line, then of the end of the last complete line."""
         self._lock = anyio.Lock()
@@ -67,6 +71,8 @@ class HistoryLog:
                 async with await anyio.open_file(self._path, "ab") as f:
                     await f.write(line)
                 offsets.append(offsets[-1] + len(line))
+                if self._on_append is not None:
+                    await self._on_append(entry)
             self._appended.set()
             self._appended = anyio.Event()
             return entry

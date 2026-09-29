@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shlex
 import shutil
@@ -16,7 +17,7 @@ import zmq
 import zmq.asyncio
 from pydantic import ValidationError
 
-from aid import zap
+from aid import events, zap
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
 from aid.launcher import WorkerArgs
 from aid.protocol import (
@@ -47,11 +48,14 @@ from aid.protocol import (
     ReceiveMessages,
     SendMessage,
     SessionInfo,
+    SessionInfosAdapter,
     SessionStatus,
     Started,
     StartFailed,
     StartSession,
     StopSession,
+    TextDelta,
+    ThoughtDelta,
     Usage,
     decode_reply,
     decode_request,
@@ -67,7 +71,7 @@ if TYPE_CHECKING:
 
     from aid.launcher import Launcher, WorkerHandle
     from aid.paths import Paths
-    from aid.protocol import HistoryItem, Request
+    from aid.protocol import HistoryEntry, HistoryItem, Request
     from aid.spec import AgentSpec
 
 log = logging.getLogger(__name__)
@@ -214,13 +218,18 @@ class Daemon:
         self._keys = zap.Keys()
         zap.serve_curve(self._workers, self._keys)
         self._zap = self._ctx.socket(zmq.REP)
+        self._events = self._ctx.socket(zmq.PUB)
         self._client_lock = anyio.Lock()
         self._worker_lock = anyio.Lock()
+        self._events_lock = anyio.Lock()
+        self._published: dict[bytes, bytes] = {}
+        """The last status or list published per topic: publish only what changed."""
         self._tg: TaskGroup | None = None
 
     async def serve(self, *, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
         await anyio.Path(self._paths.runtime_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
         await self._load_sessions()
+        self._events.bind(self._paths.events)
         self._clients.bind(self._paths.control)
         # Before the workers socket: libzmq accepts every CURVE client while no handler is bound.
         self._zap.bind(zap.ZAP_ENDPOINT)
@@ -246,6 +255,7 @@ class Daemon:
             self._clients.close(linger=0)
             self._workers.close(linger=0)
             self._zap.close(linger=0)
+            self._events.close(linger=0)
             self._ctx.term()
 
     async def _load_sessions(self) -> None:
@@ -273,6 +283,24 @@ class Daemon:
     async def _send_client(self, client: bytes, payload: bytes) -> None:
         async with self._client_lock:
             await self._clients.send_multipart([client, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
+
+    async def _publish(self, topic: bytes, payload: bytes) -> None:
+        async with self._events_lock:
+            await self._events.send_multipart([topic, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
+
+    async def _publish_changes(self) -> None:
+        """Publish each status and the list if it differs from what was published last."""
+        current = {events.status_topic(s.name): s.status().model_dump_json().encode() for s in self._sessions.values()}
+        current[events.SESSIONS] = SessionInfosAdapter.dump_json([s.info() for s in self._sessions.values()])
+        for topic, payload in current.items():
+            if self._published.get(topic) != payload:
+                self._published[topic] = payload
+                await self._publish(topic, payload)
+        for gone in self._published.keys() - current.keys():
+            del self._published[gone]
+
+    async def _publish_entry(self, name: str, entry: HistoryEntry) -> None:
+        await self._publish(events.history_topic(name), entry.model_dump_json().encode())
 
     async def _send_worker(self, session: _Session, request: Request) -> None:
         peer = session.peer
@@ -303,6 +331,7 @@ class Daemon:
             reply = Failure(id=request.id, code="internal", message=f"{type(error).__name__}: {error}")
         if reply is not None:
             await self._send_client(client, encode(reply))
+        await self._publish_changes()
 
     async def _dispatch(self, client: bytes, request: Request) -> Done | None:
         match request:
@@ -404,7 +433,10 @@ class Daemon:
                 return Done(id=request.id, data=page.model_dump(mode="json"))
 
     def _new_session(self, name: str, spec: AgentSpec) -> _Session:
-        history = HistoryLog(anyio.Path(self._paths.session_dir(name)) / HISTORY_FILE)
+        history = HistoryLog(
+            anyio.Path(self._paths.session_dir(name)) / HISTORY_FILE,
+            on_append=lambda entry: self._publish_entry(name, entry),
+        )
         return _Session(name, spec, history)
 
     def _session(self, name: str) -> _Session:
@@ -451,6 +483,7 @@ class Daemon:
             await self._ensure_running(session)
         except AidError:
             log.exception("could not start %s for its messages", session.name)
+        await self._publish_changes()
 
     async def _deliver(self, session: _Session) -> None:
         """Hand the inbox to a turn of its own, unless a turn is running: its end calls this again."""
@@ -471,6 +504,7 @@ class Daemon:
             await self._record(
                 _Route(None, session.name, recorder), Failure(id=request.id, code="undelivered", message=str(error))
             )
+        await self._publish_changes()
 
     def _end_turn(self, name: str, turn: str) -> None:
         session = self._sessions.get(name)
@@ -553,6 +587,8 @@ class Daemon:
             session.turn = None
             session.permissions.clear()
             session.working, session.attention = False, None
+            with contextlib.suppress(zmq.ZMQError):  # Shutting down: nobody is subscribed any more.
+                await self._publish_changes()
             session.exited.set()
             session.ready.set()
 
@@ -635,6 +671,9 @@ class Daemon:
                             await self._send_client(route.client, payload)
                         await self._record(route, reply)
                         self._end_turn(route.session, reply.id)
+            # A turn streams many deltas a second, and they change no status.
+            if not (isinstance(reply, Event) and isinstance(reply.event, TextDelta | ThoughtDelta)):
+                await self._publish_changes()
 
     async def _record(self, route: _Route, reply: Event | Done | Failure) -> None:
         """Write a reply to the turn's history, after the client has it. A disk error loses history, not the turn."""

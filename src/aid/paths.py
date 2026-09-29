@@ -22,6 +22,11 @@ class Paths:
         return f"ipc://{self.runtime_dir / 'control.sock'}"
 
     @property
+    def events(self) -> str:
+        """The daemon's PUB socket: `events.topic(...)` names what it publishes."""
+        return f"ipc://{self.runtime_dir / 'events.sock'}"
+
+    @property
     def workers(self) -> str:
         return f"ipc://{self.runtime_dir / 'workers.sock'}"
 

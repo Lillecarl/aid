@@ -581,6 +581,7 @@ type Reply = Annotated[Event | Done | Failure | Hello | StartFailed | Observed |
 
 RequestAdapter: TypeAdapter[Request] = TypeAdapter(Request)
 ReplyAdapter: TypeAdapter[Reply] = TypeAdapter(Reply)
+SessionInfosAdapter: TypeAdapter[list[SessionInfo]] = TypeAdapter(list[SessionInfo])
 
 
 def encode(message: _Message) -> bytes:

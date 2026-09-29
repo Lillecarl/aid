@@ -45,6 +45,7 @@ from aid.protocol import (
     Reply,
     SendMessage,
     SessionInfo,
+    SessionInfosAdapter,
     SessionStatus,
     SessionSummary,
     StartSession,
@@ -63,7 +64,6 @@ if TYPE_CHECKING:
     from aid.protocol import Request, SessionEvent
     from aid.spec import AgentSpec
 
-_SESSION_INFOS = TypeAdapter(list[SessionInfo])
 _MESSAGES = TypeAdapter(list[MessageEntry])
 
 
@@ -148,7 +148,7 @@ class Client:
         return Session(self, name)
 
     async def sessions(self) -> list[SessionInfo]:
-        return _SESSION_INFOS.validate_python(await self.call(ListSessions()))
+        return SessionInfosAdapter.validate_python(await self.call(ListSessions()))
 
     async def agents(self) -> AgentCatalog:
         """The `aid.PydanticAgent`s on the daemon's agents path, and what failed to load."""
