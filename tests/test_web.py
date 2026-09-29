@@ -281,6 +281,7 @@ async def test_status_streams_changes(web: Web, tmp_path: Path) -> None:
             snapshot = (await client.get(f"{web.url}/api/sessions/echo/status")).json()
             missing = await client.get(f"{web.url}/api/sessions/nope/status/events")
             seen: list[dict[str, Any]] = []
+            no_csrf: httpx.Response | None = None
             async with client.stream("GET", f"{web.url}/api/sessions/echo/status/events") as response:
                 lines = response.aiter_lines()
                 async for line in lines:
@@ -288,11 +289,16 @@ async def test_status_streams_changes(web: Web, tmp_path: Path) -> None:
                         seen.append(json.loads(line.removeprefix("data: ")))
                         if len(seen) == 1:
                             await client.post(f"{web.url}/api/sessions/echo/stop", headers={"X-CSRF-Token": csrf})
+                        elif len(seen) == 2:
+                            no_csrf = await client.post(f"{web.url}/api/sessions/echo/start")
+                            await client.post(f"{web.url}/api/sessions/echo/start", headers={"X-CSRF-Token": csrf})
                         else:
                             break
     assert snapshot["running"] is True
     assert missing.status_code == 404
-    assert [s["running"] for s in seen] == [True, False]
+    assert no_csrf is not None
+    assert no_csrf.status_code == 403
+    assert [s["running"] for s in seen] == [True, False, True]
 
 
 async def speak(web: Web, cookie: str, *, origin: str | None = None) -> list[dict[str, Any]]:

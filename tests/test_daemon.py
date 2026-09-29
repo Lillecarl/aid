@@ -77,6 +77,22 @@ async def test_acp_session_survives_stop(daemon: Paths, tmp_path: Path) -> None:
     assert again.text == "echo: hello"
 
 
+async def test_start_runs_a_stopped_session_without_a_turn(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("wake", acp_spec(tmp_path))
+            await session.stop()
+            await session.start()
+            started = await session.status()
+            await session.start()
+            again = await session.status()
+            history = await session.history()
+    assert started.running
+    assert not started.busy
+    assert again.pid == started.pid
+    assert history.entries == []
+
+
 async def test_failed_start_leaves_no_session(daemon: Paths, tmp_path: Path) -> None:
     spec = acp_spec(tmp_path).model_copy(update={"command": ["/nonexistent/agent"]})
     with anyio.fail_after(TIMEOUT):

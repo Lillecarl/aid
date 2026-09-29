@@ -44,6 +44,7 @@ from aid.protocol import (
     SendMessage,
     SessionInfo,
     SessionStatus,
+    StartSession,
     StopSession,
     TextDelta,
     decode_reply,
@@ -220,6 +221,10 @@ class Session:
 
     async def cancel(self) -> None:
         await self._client.call(Cancel(session=self.name))
+
+    async def start(self) -> None:
+        """Start the worker if it is stopped, with no turn. A prompt or a message starts it too."""
+        await self._client.call(StartSession(session=self.name))
 
     async def stop(self) -> None:
         await self._client.call(StopSession(session=self.name))

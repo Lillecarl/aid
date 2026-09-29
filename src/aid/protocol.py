@@ -60,6 +60,13 @@ class Cancel(_Request):
     session: str
 
 
+class StartSession(_Request):
+    """Start a stopped session's worker without a turn; for interactive Claude, its pane. A running one is left be."""
+
+    op: Literal["start"] = "start"
+    session: str
+
+
 class StopSession(_Request):
     """Stop the worker and keep the session's state, so the next prompt starts it again."""
 
@@ -140,6 +147,7 @@ type Request = Annotated[
     | ListSessions
     | Prompt
     | Cancel
+    | StartSession
     | StopSession
     | DeleteSession
     | ListAgents

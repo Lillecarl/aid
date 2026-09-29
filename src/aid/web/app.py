@@ -247,6 +247,12 @@ async def cancel(request: Request) -> Response:
 
 
 @api(mutating=True)
+async def start(request: Request) -> Response:
+    await _client(request).session(request.path_params["name"]).start()
+    return JSONResponse({})
+
+
+@api(mutating=True)
 async def stop(request: Request) -> Response:
     await _client(request).session(request.path_params["name"]).stop()
     return JSONResponse({})
@@ -436,6 +442,7 @@ def create_app(
             Route("/api/sessions/{name}/status/events", status_events, methods=["GET"]),
             Route("/api/sessions/{name}/prompt", prompt, methods=["POST"]),
             Route("/api/sessions/{name}/cancel", cancel, methods=["POST"]),
+            Route("/api/sessions/{name}/start", start, methods=["POST"]),
             Route("/api/sessions/{name}/stop", stop, methods=["POST"]),
             Route("/api/speech", speech, methods=["GET"]),
             WebSocketRoute("/api/transcribe", transcribe),

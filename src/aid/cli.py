@@ -167,7 +167,7 @@ def _parser() -> argparse.ArgumentParser:
     message.add_argument("text", help="message text, or - to read stdin")
     message.add_argument("--from", dest="sender", help="the session it is from (default: a person)")
 
-    for command in ("cancel", "stop", "delete"):
+    for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
     return parser
 
@@ -280,6 +280,8 @@ async def _client_command(args: argparse.Namespace) -> None:
             case "message":
                 text = sys.stdin.read() if args.text == "-" else args.text
                 await client.send_message(args.name, text, sender=args.sender)
+            case "start":
+                await client.session(args.name).start()
             case "cancel":
                 await client.session(args.name).cancel()
             case "stop":

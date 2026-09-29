@@ -41,6 +41,7 @@ from aid.protocol import (
     SessionInfo,
     SessionStatus,
     StartFailed,
+    StartSession,
     StopSession,
     decode_reply,
     decode_request,
@@ -310,6 +311,9 @@ class Daemon:
                 self._routes[request.id] = _Route(client, session.name)
                 await self._send_worker(session, request)
                 return None
+            case StartSession():
+                await self._ensure_running(self._session(request.session))
+                return Done(id=request.id)
             case StopSession():
                 await self._stop(self._session(request.session))
                 return Done(id=request.id)
