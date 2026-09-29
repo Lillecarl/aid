@@ -201,6 +201,11 @@ def _parser() -> argparse.ArgumentParser:
     py = with_permission(new("new-py", "create a session running a pydantic-ai agent"))
     py.add_argument("agent", help="an agent `aid agents` lists, or module:attribute of a pydantic_ai agent")
     py.add_argument("--python-path", action="append", default=[], help="prepend to the worker's sys.path")
+    py.add_argument(
+        "--max-context",
+        type=int,
+        help="tokens the context gauge calls full, as a rule of thumb half the model's window",
+    )
 
     sub.add_parser(
         "agents", help="list the aid.PydanticAgent classes and @aid.mcptool functions on the daemon's agents path"
@@ -328,6 +333,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         worker_command=worker_command,
         worker_endpoint=worker_endpoint,
         worker_ca=worker_ca,
+        max_context=args.max_context,
         **source,
     )
 

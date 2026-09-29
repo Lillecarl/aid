@@ -118,6 +118,9 @@ class PydanticAISpec(_Spec):
     permission: PermissionMode = PermissionMode.DENY
     """How aid answers what `aid.coding` tools ask: each command a `python` script starts, each edit applied."""
     permission_timeout: Annotated[float, Field(gt=0)] = 1800
+    max_context: Annotated[int, Field(gt=0)] | None = None
+    """Tokens the context gauge calls 100%: rule of thumb half the model's window. None takes a conservative
+    backend default."""
 
     @model_validator(mode="after")
     def _one_source(self) -> Self:

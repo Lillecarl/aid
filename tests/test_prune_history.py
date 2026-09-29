@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+import json
+import time
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from pydantic_ai import Agent
@@ -20,6 +22,7 @@ from aid.backends.pydantic_ai import (
     THOUGHT_LIMIT,
     _send_policy,  # pyright: ignore[reportPrivateUsage]
     prune_history,
+    without_metadata,
 )
 
 if TYPE_CHECKING:
@@ -93,14 +96,16 @@ async def test_policy_filters_wire_but_not_store() -> None:
         seen.append(messages)
         return ModelResponse(parts=[TextPart(content="done")])
 
-    agent: Agent[Any, Any] = Agent(FunctionModel(record), capabilities=[ProcessHistory(_send_policy(2))])
+    agent: Agent[Any, Any] = Agent(FunctionModel(record), capabilities=[ProcessHistory(_send_policy(2, 100_000))])
     result = await agent.run("go", message_history=history)
     assert result.output == "done"
     assert len(seen) == 1
-    wire_thought = seen[0][1].parts[0]
+    wire = seen[0]
+    assert set(_metadata_of(wire)) == {"context_pct", "unixtime"}
+    wire_thought = wire[1].parts[0]
     assert isinstance(wire_thought, ThinkingPart)
     assert wire_thought.signature is None
-    stored = result.all_messages()
+    stored = without_metadata(result.all_messages())
     assert len(stored) == len(history) + 2
     stored_thought = stored[1].parts[0]
     assert isinstance(stored_thought, ThinkingPart)
@@ -108,3 +113,47 @@ async def test_policy_filters_wire_but_not_store() -> None:
     new_response = stored[-1]
     assert isinstance(new_response, ModelResponse)
     assert new_response.parts == [TextPart(content="done")]
+
+
+def _metadata_of(messages: list[ModelMessage]) -> dict[str, Any]:
+    """The trailing metadata payload: the framework may merge it into the previous user message on the wire,
+    so find it by its header rather than by position."""
+    for message in reversed(messages):
+        for part in reversed(message.parts):
+            if (
+                isinstance(part, UserPromptPart)
+                and isinstance(part.content, str)
+                and part.content.startswith("[Session metadata, not stored]")
+            ):
+                _, _, payload = part.content.partition("\n")
+                loaded = json.loads(payload)
+                assert isinstance(loaded, dict)
+                return cast("dict[str, Any]", loaded)
+    raise AssertionError("no metadata suffix on the wire")
+
+
+def test_send_policy_appends_ephemeral_suffix() -> None:
+    history: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart(content="hi")])]
+    before = time.time()
+    (*unchanged, suffix) = _send_policy(1, 100_000)(history)
+    after = time.time()
+    assert unchanged == history
+    meta = _metadata_of([suffix])
+    assert set(meta) == {"context_pct", "unixtime"}
+    assert isinstance(meta["context_pct"], int) and meta["context_pct"] >= 0
+    assert isinstance(meta["unixtime"], int) and int(before) <= meta["unixtime"] <= after
+
+
+def test_send_policy_pct_scales_with_desired_max() -> None:
+    history: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart(content="x" * 4000)])]
+    small = _metadata_of(_send_policy(1, 100_000)(history))
+    big = _metadata_of(_send_policy(1, 100)(history))
+    assert isinstance(small["context_pct"], int) and isinstance(big["context_pct"], int)
+    assert big["context_pct"] > small["context_pct"]
+
+
+def test_without_metadata_strips_only_markers() -> None:
+    history: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart(content="hi")])]
+    sent = _send_policy(1, 100_000)(history)
+    assert len(sent) == len(history) + 1
+    assert without_metadata(sent) == history

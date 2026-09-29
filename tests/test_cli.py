@@ -64,6 +64,8 @@ def test_new_py_worker_command(tmp_path: Path) -> None:
         "ipc://x",
         "--worker-ca",
         "/ca.pem",
+        "--max-context",
+        "500000",
     ]
     args = _parser().parse_args(argv)
     args.agent_command = []
@@ -72,6 +74,7 @@ def test_new_py_worker_command(tmp_path: Path) -> None:
     assert spec.worker_command == ["aid", "worker"]
     assert spec.worker_endpoint == "ipc://x"
     assert spec.worker_ca == "/ca.pem"
+    assert spec.max_context == 500000
 
 
 def test_new_py_worker_endpoint_needs_command() -> None:

@@ -5,12 +5,12 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import anyio
 from pydantic import BaseModel
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelResponse, RetryPromptPart, TextPart, ToolCallPart, ToolReturnPart
+from pydantic_ai.messages import ModelResponse, RetryPromptPart, TextPart, ToolCallPart, ToolReturnPart, UserPromptPart
 from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 from pydantic_ai.models.test import TestModel
 
@@ -22,16 +22,28 @@ if TYPE_CHECKING:
     from pydantic_ai.messages import ModelMessage
 
 
+def _is_note(content: object) -> bool:
+    # The send policy trails every request with session metadata; it is wire-only, and the plan and the turn
+    # count live in the real prompts.
+    return isinstance(content, str) and content.startswith("[Session metadata, not stored]")
+
+
 def _last_prompt(messages: list[ModelMessage]) -> str:
-    for part in reversed(messages[-1].parts):
-        content = getattr(part, "content", None)
-        if isinstance(content, str):
-            return content
+    for message in reversed(messages):
+        for part in reversed(message.parts):
+            content = getattr(part, "content", None)
+            if isinstance(content, str) and not _is_note(content):
+                return content
     return ""
 
 
 def _user_prompts(messages: list[ModelMessage]) -> int:
-    return sum(1 for m in messages for p in m.parts if p.part_kind == "user-prompt")
+    return sum(
+        1
+        for m in messages
+        for p in m.parts
+        if p.part_kind == "user-prompt" and not _is_note(getattr(p, "content", None))
+    )
 
 
 async def _echo(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
@@ -64,10 +76,24 @@ every_tool_caller = Agent(TestModel())
 messenger = Agent(TestModel(call_tools=["send_message"]))
 
 
+def _plan_at(messages: list[ModelMessage]) -> tuple[int, list[tuple[str, dict[str, object]]]]:
+    """The latest user prompt that parses as a plan, and its index: trailing metadata parses as JSON too, but
+    never as a list."""
+    for i in range(len(messages) - 1, -1, -1):
+        for part in reversed(messages[i].parts):
+            if isinstance(part, UserPromptPart) and isinstance(part.content, str):
+                try:
+                    plan = json.loads(part.content)
+                except ValueError:
+                    continue
+                if isinstance(plan, list):
+                    return i, cast("list[tuple[str, dict[str, object]]]", plan)
+    raise ValueError("no plan in messages")
+
+
 def _planned(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     """The prompt is a JSON plan, [[tool, args], ...]: call each in turn, then answer with every result joined."""
-    start = max(i for i, m in enumerate(messages) for p in m.parts if p.part_kind == "user-prompt")
-    plan: list[tuple[str, dict[str, object]]] = json.loads(_last_prompt(messages[: start + 1]))
+    start, plan = _plan_at(messages)
     results = [
         p.model_response() if isinstance(p, RetryPromptPart) else str(p.content)
         for m in messages[start:]

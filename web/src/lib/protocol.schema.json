@@ -1399,6 +1399,18 @@
           "default": "pydantic-ai",
           "type": "string"
         },
+        "max_context": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "permission": {
           "$ref": "#/$defs/PermissionMode",
           "default": "deny"

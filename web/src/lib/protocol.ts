@@ -200,6 +200,7 @@ export interface PydanticAISpec {
     [k: string]: string;
   };
   kind: "pydantic-ai";
+  max_context?: number | null;
   permission?: PermissionMode1;
   permission_timeout?: number;
   python_path?: string[];

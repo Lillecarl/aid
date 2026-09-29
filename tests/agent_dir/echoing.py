@@ -17,7 +17,15 @@ if TYPE_CHECKING:
 
 
 async def _shout(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
-    prompts = [p.content for p in messages[-1].parts if isinstance(p, UserPromptPart) and isinstance(p.content, str)]
+    # The send policy trails every request with session metadata; the prompt lives before it.
+    prompts = [
+        p.content
+        for m in messages
+        for p in m.parts
+        if isinstance(p, UserPromptPart)
+        and isinstance(p.content, str)
+        and not p.content.startswith("[Session metadata, not stored]")
+    ]
     yield (prompts[-1] if prompts else "").upper()
 
 

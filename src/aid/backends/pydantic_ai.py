@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import os
+import time
 from contextlib import asynccontextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
 
@@ -70,6 +72,14 @@ RUNS_DIR = "runs"
 """pyrun's store for what the session's `python` tool runs."""
 THOUGHT_LIMIT: Final = 500
 """Characters of a thinking part kept for replay: thought serves the turn, not the replay."""
+DEFAULT_DESIRED_MAX: Final = 100_000
+"""Tokens the context gauge assumes when the session names no `max_context`. Rule of thumb: half the model's
+window; unknown models err toward compacting early, which fails safe."""
+
+
+@dataclass
+class _MetadataRequest(ModelRequest):
+    """Ephemeral per-request metadata: sent trailing every request, stripped before anything is stored."""
 
 
 def prune_history(history: list[ModelMessage], boundary: int) -> list[ModelMessage]:
@@ -95,14 +105,27 @@ def prune_history(history: list[ModelMessage], boundary: int) -> list[ModelMessa
     return pruned
 
 
-def _send_policy(boundary: int) -> Callable[[list[ModelMessage]], list[ModelMessage]]:
+def _send_policy(boundary: int, desired_max: int) -> Callable[[list[ModelMessage]], list[ModelMessage]]:
     """A `ProcessHistory` processor for one turn: `boundary` is where the stored history ended when the turn
-    started, so the turn's own thinking flows whole and everything before it rides pruned."""
+    started, so the turn's own thinking flows whole and everything before it rides pruned. A metadata message
+    trails every send; the backend strips those before storing."""
 
     def policy(messages: list[ModelMessage]) -> list[ModelMessage]:
-        return prune_history(messages, boundary)
+        clean = [message for message in messages if not isinstance(message, _MetadataRequest)]
+        pruned = prune_history(clean, boundary)
+        used = len(ModelMessagesTypeAdapter.dump_json(pruned)) // 4
+        meta = {"context_pct": round(used / desired_max * 100), "unixtime": int(time.time())}
+        return [
+            *pruned,
+            _MetadataRequest(parts=[UserPromptPart(content=f"[Session metadata, not stored]\n{json.dumps(meta)}")]),
+        ]
 
     return policy
+
+
+def without_metadata(history: list[ModelMessage]) -> list[ModelMessage]:
+    """The stored form: everything the run tracked, minus the ephemeral per-request metadata."""
+    return [message for message in history if not isinstance(message, _MetadataRequest)]
 
 
 def load_target(target: str) -> AbstractAgent[Any, Any]:
@@ -181,6 +204,7 @@ class PydanticAIBackend:
         toolsets: list[AbstractToolset[Any]],
         started: Started,
         coding: Coding,
+        desired_max: int = DEFAULT_DESIRED_MAX,
     ) -> None:
         self._agent = agent
         self._history_file = history_file
@@ -189,6 +213,7 @@ class PydanticAIBackend:
         self._started = started
         self._run: AgentRunEvents[Any] | None = None
         self._coding = coding
+        self._desired_max = desired_max
         coding.compact = self._compact
 
     def started(self) -> Started:
@@ -213,7 +238,7 @@ class PydanticAIBackend:
             text,
             message_history=self._history,
             toolsets=self._toolsets,
-            capabilities=[ProcessHistory(_send_policy(len(self._history)))],
+            capabilities=[ProcessHistory(_send_policy(len(self._history), self._desired_max))],
         ) as run:
             self._run = run
             try:
@@ -229,7 +254,7 @@ class PydanticAIBackend:
                 return Output(output=None, stop_reason="cancelled")
             finally:
                 self._run = None
-        self._history = result.all_messages()
+        self._history = without_metadata(result.all_messages())
         await _write_atomic(self._history_file, ModelMessagesTypeAdapter.dump_json(self._history))
         await emit(usage_of(result))
         return Output(output=to_jsonable_python(result.output), stop_reason="end_turn")
@@ -308,4 +333,12 @@ async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> Async
         timeout=spec.permission_timeout,
         waits=PermissionWaits(),
     )
-    yield PydanticAIBackend(agent, history_file, history, toolsets, started, coding)
+    yield PydanticAIBackend(
+        agent,
+        history_file,
+        history,
+        toolsets,
+        started,
+        coding,
+        desired_max=spec.max_context if spec.max_context is not None else DEFAULT_DESIRED_MAX,
+    )
