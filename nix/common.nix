@@ -108,6 +108,16 @@ in
           English one. Null turns speech to text off, and the page shows no microphone button.
         '';
       };
+
+      theme = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        example = "pygments:catppuccin-mocha";
+        description = ''
+          The web UI's colours, as pymux's `theme` client option names them: `pygments:<name>` or `base16:<name>`.
+          Null keeps the browser's light or dark.
+        '';
+      };
     };
   };
 
@@ -169,6 +179,10 @@ in
         ++ lib.optionals (cfg.web.speechModel != null) [
           "--speech-model"
           "${cfg.web.speechModel}"
+        ]
+        ++ lib.optionals (cfg.web.theme != null) [
+          "--theme"
+          cfg.web.theme
         ]
       );
       EnvironmentFile = cfg.web.environmentFile;

@@ -162,8 +162,12 @@ async def test_ui_is_served(web: Web) -> None:
             scripts = re.findall(r'src="(/assets/[^"]+\.js)"', index.text)
             assert scripts, index.text
             script = await client.get(f"{web.url}{scripts[0]}")
+            colors = await client.get(f"{web.url}/theme.css")
     assert index.status_code == 200
     assert '<div id="app">' in index.text
+    assert 'href="/theme.css"' in index.text
+    assert colors.headers["content-type"].startswith("text/css")
+    assert ".hl .k {" in colors.text
     assert script.status_code == 200
     assert "javascript" in script.headers["content-type"]
 

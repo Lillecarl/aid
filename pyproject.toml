@@ -21,6 +21,8 @@ dependencies = [
   "openai>=2.0",
   "pydantic>=2.11",
   "pydantic-ai-slim>=2.30",
+  # aid web's colours: pymux's theme roles, and the catppuccin styles a pymux theme can name.
+  "pymux[catppuccin]",
   "pyzmq>=27",
   # aid web's speech to text. onnxruntime comes with it; nothing imports it outside aid.speech.
   "sherpa-onnx>=1.12",

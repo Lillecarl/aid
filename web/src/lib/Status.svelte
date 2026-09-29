@@ -61,6 +61,6 @@
     color: var(--muted);
   }
   .problem {
-    color: #d33;
+    color: var(--bad);
   }
 </style>

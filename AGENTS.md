@@ -84,5 +84,8 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   Markdown goes through marked's lexer into Svelte elements (`Markdown.svelte`), never `{@html}`.
 - CodeMirror (`CodeView.svelte`) must live in a shadow root: on a document style-mod adds a style element,
   which the CSP refuses; in a shadow root it adopts a constructed stylesheet.
+- Colours: `aid web --theme pygments:<name>|base16:<name>`, pymux's spelling, served as `/theme.css`
+  (`web/theme.py`): page variables from pymux's roles, code as Pygments short token classes under `.hl`.
+  Components use the variables (`--bad`, `--muted`, …), never literal colours.
 - `/api/sessions/{name}/files` and `/file` (`web/files.py`) read the session cwd in aid web itself; every path
   must resolve inside it.

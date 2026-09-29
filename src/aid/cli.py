@@ -33,6 +33,7 @@ from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
 from aid.web import OidcConfig, create_app
 from aid.web import serve as serve_web
 from aid.web.app import ENV_ASSETS
+from aid.web.theme import Theme
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -102,6 +103,11 @@ def _parser() -> argparse.ArgumentParser:
     web.add_argument(
         "--speech-model",
         help="a sherpa-onnx streaming transducer directory, for speech to text (default: none, no microphone)",
+    )
+    web.add_argument(
+        "--theme",
+        type=_theme,
+        help="colours, as pymux names a theme: pygments:<name> or base16:<name> (default: the browser's)",
     )
 
     def new(name: str, help_text: str) -> argparse.ArgumentParser:
@@ -300,6 +306,13 @@ async def _serve(args: argparse.Namespace) -> None:
                 return
 
 
+def _theme(spec: str) -> Theme:
+    try:
+        return Theme.parse(spec)
+    except ValueError as e:
+        raise argparse.ArgumentTypeError(str(e)) from None
+
+
 def _secret(name: str) -> str:
     if not (value := os.environ.get(name)):
         raise SystemExit(f"aid web: set {name}")
@@ -317,7 +330,7 @@ async def _web(args: argparse.Namespace) -> None:
     assets = Path(args.assets) if args.assets else None
     # About a second, once, before aid web listens.
     recognizer = await anyio.to_thread.run_sync(speech.load, Path(args.speech_model)) if args.speech_model else None
-    app = create_app(oidc, _secret(ENV_SESSION_SECRET), assets=assets, recognizer=recognizer)
+    app = create_app(oidc, _secret(ENV_SESSION_SECRET), assets=assets, recognizer=recognizer, colors=args.theme)
     shutdown = anyio.Event()
     async with anyio.create_task_group() as tg:
         tg.start_soon(lambda: serve_web(app, args.bind, shutdown=shutdown))

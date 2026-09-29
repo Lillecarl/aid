@@ -39,7 +39,7 @@ from starlette.websockets import WebSocketDisconnect
 from aid.client import connect
 from aid.protocol import AidError, CreateSession
 from aid.speech import Transcription
-from aid.web import auth, files
+from aid.web import auth, files, theme
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
@@ -367,6 +367,10 @@ async def health(_request: Request) -> Response:
     return PlainTextResponse("ok")
 
 
+async def theme_css(request: Request) -> Response:
+    return Response(request.app.state.theme_css, media_type="text/css", headers={"Cache-Control": "no-cache"})
+
+
 def security_headers(app: ASGIApp) -> ASGIApp:
     """Add SECURITY_HEADERS to every HTTP response. Pure ASGI, because BaseHTTPMiddleware breaks streaming."""
     extra = [(k.lower().encode(), v.encode()) for k, v in SECURITY_HEADERS.items()]
@@ -392,9 +396,11 @@ def create_app(
     paths: Paths | None = None,
     assets: Path | None = None,
     recognizer: Recognizer | None = None,
+    colors: theme.Theme | None = None,
 ) -> Starlette:
     """The app. `assets` is the built UI (web/dist); without it the API still works and `/` says what is missing.
-    `recognizer` is a loaded speech model (`aid.speech.load`); without one there is no speech to text."""
+    `recognizer` is a loaded speech model (`aid.speech.load`); without one there is no speech to text.
+    `colors` is a pymux theme for `/theme.css`; without one the page keeps the browser's light or dark."""
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncGenerator[None]:
@@ -408,6 +414,7 @@ def create_app(
             Route("/", index),
             *static,
             Route("/healthz", health),
+            Route("/theme.css", theme_css),
             Route("/login", auth.login),
             Route(auth.CALLBACK_PATH, auth.callback),
             Route("/logout", auth.logout, methods=["POST"]),
@@ -445,6 +452,7 @@ def create_app(
     app.state.oidc = auth.make_oauth(oidc)
     app.state.assets = assets
     app.state.recognizer = recognizer
+    app.state.theme_css = theme.css(colors)
     return app
 
 

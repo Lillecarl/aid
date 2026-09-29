@@ -384,8 +384,8 @@
     color: var(--bad);
   }
   .listening {
-    color: #d33;
-    border-color: #d33;
+    color: var(--bad);
+    border-color: var(--bad);
   }
   .buttons {
     display: flex;
