@@ -1,9 +1,16 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
   import * as api from "./api";
-  import type { HistoryEntry, HistoryItem, SessionEvent } from "./api";
+  import type {
+    HistoryEntry,
+    HistoryItem,
+    PermissionDecisionEvent,
+    PermissionRequestEvent,
+    SessionEvent,
+  } from "./api";
   import { Dictation } from "./dictation";
   import Markdown from "./Markdown.svelte";
+  import PermissionCard from "./PermissionCard.svelte";
   import ToolCard from "./ToolCard.svelte";
   import { merge, type Tool, toolOf } from "./tools";
   import { startedLine, usageLine } from "./usage";
@@ -14,10 +21,12 @@
     ondeleted: () => void | Promise<void>;
   }
 
-  type Kind = "user" | "message" | "assistant" | "thought" | "tool" | "meta" | "error";
+  type Kind = "user" | "message" | "assistant" | "thought" | "tool" | "permission" | "meta" | "error";
+  type Permission = { request: PermissionRequestEvent; decision: PermissionDecisionEvent | null };
   /** One entry of the log. `seq` is set for rows read from history; rows of a turn still streaming lack it. A
-   * tool call is one row, which later updates of the same call change. */
-  type Row = { key: string; seq?: number; kind: Kind; text: string; tool?: Tool };
+   * tool call is one row, which later updates of the same call change; so is a permission request and its
+   * decision. */
+  type Row = { key: string; seq?: number; kind: Kind; text: string; tool?: Tool; permission?: Permission };
 
   const PAGE = 100;
   const EDGE_PX = 200;
@@ -62,6 +71,11 @@
         return [row("meta", usageLine(item))];
       case "started":
         return [row("meta", startedLine(item))];
+      case "permission_request":
+        return [{ ...row("permission", ""), permission: { request: item, decision: null } }];
+      case "permission_decision":
+        // Its request is outside the rows loaded.
+        return [row("meta", `permission ${item.option_id ?? "cancelled"} (${item.by})`)];
     }
   }
 
@@ -80,6 +94,13 @@
       const call = into.findLast((r) => r.tool?.id === item.tool_call_id)?.tool;
       if (call) {
         merge(call, item);
+        return;
+      }
+    }
+    if (item.type === "permission_decision") {
+      const asked = into.findLast((r) => r.permission?.request.request_id === item.request_id)?.permission;
+      if (asked) {
+        asked.decision = item;
         return;
       }
     }
@@ -340,6 +361,8 @@
       </details>
     {:else if row.tool}
       <ToolCard tool={row.tool} />
+    {:else if row.permission}
+      <PermissionCard session={name} request={row.permission.request} decision={row.permission.decision} />
     {:else}
       <div class={row.kind}>{row.text}</div>
     {/if}

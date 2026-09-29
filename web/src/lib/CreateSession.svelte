@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as api from "./api";
-  import type { AgentCatalog, AgentKind, AgentSpec } from "./api";
+  import type { AgentCatalog, AgentKind, AgentSpec, PermissionMode } from "./api";
 
   interface Props {
     oncreated: (name: string) => void | Promise<void>;
@@ -12,6 +12,7 @@
   let kind: AgentKind = $state("claude-tty");
   let cwd = $state("");
   let command = $state("claude-agent-acp");
+  let permission: PermissionMode = $state("ask");
   let agent = $state("");
   let catalog = $state<AgentCatalog | null>(null);
   let args = $state("");
@@ -24,7 +25,7 @@
   function spec(): AgentSpec {
     switch (kind) {
       case "acp":
-        return { kind, cwd, command: words(command) };
+        return { kind, cwd, command: words(command), permission };
       case "pydantic-ai":
         return { kind, cwd, agent };
       case "claude-tty":
@@ -78,6 +79,14 @@
   <label>Working directory <input bind:value={cwd} required placeholder="/home/me/project" /></label>
   {#if kind === "acp"}
     <label>Command <input bind:value={command} required /></label>
+    <label>
+      Tool permissions
+      <select bind:value={permission}>
+        <option value="ask">Ask me</option>
+        <option value="allow">Allow all</option>
+        <option value="deny">Deny all</option>
+      </select>
+    </label>
   {:else if kind === "pydantic-ai"}
     <label>
       Agent

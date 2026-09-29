@@ -6,6 +6,8 @@ export interface SessionInfo {
   name: string;
   kind: AgentKind;
   running: boolean;
+  /** Permission requests the agent waits on an answer to. */
+  permissions: number;
 }
 
 export interface SessionStatus {
@@ -23,6 +25,8 @@ export interface SessionStatus {
   agent_session: string | null;
   agent: string | null;
   model: string | null;
+  /** Requests the agent waits on an answer to. */
+  permissions: PermissionRequestEvent[];
 }
 
 export const statusEventsUrl = (name: string): string => `/api/sessions/${encodeURIComponent(name)}/status/events`;
@@ -132,10 +136,39 @@ export interface StartedEntry {
   model: string | null;
 }
 
+export interface PermissionChoice {
+  option_id: string;
+  name: string;
+  /** allow_once, allow_always, reject_once or reject_always. */
+  kind: string;
+}
+
+/** The agent waits on an answer before a tool call; see `aid.protocol.PermissionRequest`. */
+export interface PermissionRequestEvent {
+  type: "permission_request";
+  request_id: string;
+  tool_call_id: string;
+  tool_name: string | null;
+  title: string | null;
+  kind: string | null;
+  input: unknown;
+  options: PermissionChoice[];
+}
+
+export interface PermissionDecisionEvent {
+  type: "permission_decision";
+  request_id: string;
+  /** null: cancelled. */
+  option_id: string | null;
+  by: "person" | "policy" | "timeout" | "cancel";
+}
+
 export type SessionEvent =
   | { type: "text"; text: string }
   | { type: "thought"; text: string }
   | ToolCallEvent
+  | PermissionRequestEvent
+  | PermissionDecisionEvent
   | UsageEvent
   | { type: "output"; output: unknown; stop_reason: string };
 
@@ -186,8 +219,10 @@ export interface HistoryPage {
   total: number;
 }
 
+export type PermissionMode = "ask" | "allow" | "deny";
+
 export type AgentSpec =
-  | { kind: "acp"; cwd: string; command: string[] }
+  | { kind: "acp"; cwd: string; command: string[]; permission: PermissionMode }
   | { kind: "pydantic-ai"; cwd: string; agent: string }
   | { kind: "claude-tty"; cwd: string; args: string[]; trust_cwd: boolean };
 
@@ -299,6 +334,12 @@ export async function readFile(name: string, path: string): Promise<FileView> {
 export async function control(name: string, verb: "start" | "cancel" | "stop" | "delete"): Promise<void> {
   const path = `/api/sessions/${encodeURIComponent(name)}`;
   await (verb === "delete" ? request("DELETE", path) : request("POST", `${path}/${verb}`));
+}
+
+/** Answer a permission request the session waits on: one of its options, or null to cancel it. */
+export async function answerPermission(name: string, requestId: string, optionId: string | null): Promise<void> {
+  const path = `/api/sessions/${encodeURIComponent(name)}/permissions/${encodeURIComponent(requestId)}`;
+  await request("POST", path, { option_id: optionId });
 }
 
 /** Send a prompt and call `onEvent` for each event of the answer, which arrives as Server-Sent Events. */

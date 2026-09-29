@@ -16,6 +16,9 @@
       <button type="button" class:current={session.name === current} onclick={() => onselect(session.name)}>
         <span class="name">{session.name}</span>
         <span class="meta">{session.kind} · {session.running ? "running" : "stopped"}</span>
+        {#if session.permissions > 0}
+          <span class="asks">waits on {session.permissions === 1 ? "an approval" : `${session.permissions} approvals`}</span>
+        {/if}
       </button>
     </li>
   {:else}
@@ -43,6 +46,11 @@
   }
   button.current {
     background: color-mix(in srgb, var(--accent) 20%, transparent);
+  }
+  .asks {
+    color: var(--accent);
+    font-size: 0.9em;
+    font-weight: 600;
   }
   .meta,
   .none {
