@@ -17,6 +17,8 @@
   webUi,
   # The speech model the speech tests transcribe with.
   speechModel,
+  # The tree-sitter grammars the highlighter tests parse with.
+  grammars,
 }:
 let
   root = ../.;
@@ -53,7 +55,8 @@ let
   tests = runCommand "aid-tests" { nativeBuildInputs = [ testEnv pymuxApp dex ]; } ''
     cp -r ${testSources}/. .
     chmod -R +w .
-    export HOME="$TMPDIR" PYTHONDONTWRITEBYTECODE=1 AID_WEB_ASSETS=${webUi} AID_TEST_SPEECH_MODEL=${speechModel}
+    export HOME="$TMPDIR" PYTHONDONTWRITEBYTECODE=1 AID_WEB_ASSETS=${webUi} AID_TEST_SPEECH_MODEL=${speechModel} \
+      AID_TREE_SITTER_GRAMMARS=${grammars}
     # The sandbox sets it to /no-cert-file.crt, and httpx loads it for every client, http:// ones too.
     unset SSL_CERT_FILE
     python -m pytest -q -p no:cacheprovider

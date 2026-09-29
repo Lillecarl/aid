@@ -17,6 +17,7 @@ from aid.launcher import ForkserverLauncher
 from aid.paths import Paths
 from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
 from aid.speech import load as load_speech
+from aid.web.highlight import ENV_GRAMMARS, Grammars
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Iterator
@@ -111,3 +112,13 @@ SPEECH_MODEL = Path(os.environ["AID_TEST_SPEECH_MODEL"]) if os.environ.get("AID_
 def speech_recognizer() -> Recognizer | None:
     """AID_TEST_SPEECH_MODEL, loaded once: loading takes a second or two. The dev shell and the Nix tests set it."""
     return load_speech(SPEECH_MODEL) if SPEECH_MODEL is not None else None
+
+
+GRAMMARS = Path(os.environ[ENV_GRAMMARS]) if os.environ.get(ENV_GRAMMARS) else None
+needs_grammars = pytest.mark.skipif(GRAMMARS is None, reason=f"{ENV_GRAMMARS} is not set")
+
+
+@pytest.fixture(scope="session")
+def grammars() -> Grammars | None:
+    """AID_TREE_SITTER_GRAMMARS, which the dev shell and the Nix tests set."""
+    return Grammars(GRAMMARS) if GRAMMARS is not None else None

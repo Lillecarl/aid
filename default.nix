@@ -16,6 +16,7 @@ let
   venv = set.mkVirtualEnv "aid-env" { aid = [ ]; };
   ui = pkgs.callPackage ./web { pymuxElement = p.pymux-element; };
   speechModel = pkgs.callPackage ./nix/speech-model.nix { };
+  grammars = pkgs.callPackage ./nix/tree-sitter-grammars.nix { };
   # Drafts turn on libzmq's ws:// transport (Lillecarl/aid#1): remote workers reach the daemon through an HTTP
   # reverse proxy. GnuTLS adds wss://, for a worker whose proxy speaks only HTTPS.
   # Propagated: libzmq.pc names gnutls in Requires.private, and pyzmq links what pkg-config reports.
@@ -41,26 +42,28 @@ let
           pymuxApp = p.pymux;
           dex = pkgs.dex-oidc;
           webUi = ui;
-          inherit speechModel;
+          inherit speechModel grammars;
         };
       }
     );
   };
 in
 {
-  inherit set ui speechModel;
+  inherit set ui speechModel grammars;
 
   # Only `bin/aid`: a profile that installs this next to another virtualenv, such as pymux's, would otherwise
-  # get two `bin/python` and `bin/activate` and refuse to build. The wrapper points `aid web` at the built UI.
+  # get two `bin/python` and `bin/activate` and refuse to build. The wrapper points `aid web` at the built UI
+  # and the highlighter's grammars.
   aid =
     pkgs.runCommand "aid-${set.aid.version}"
       {
         inherit (set.aid) meta;
-        passthru = { inherit venv ui speechModel; };
+        passthru = { inherit venv ui speechModel grammars; };
         nativeBuildInputs = [ pkgs.makeWrapper ];
       }
       ''
-        makeWrapper ${venv}/bin/aid $out/bin/aid --set-default AID_WEB_ASSETS ${ui}
+        makeWrapper ${venv}/bin/aid $out/bin/aid --set-default AID_WEB_ASSETS ${ui} \
+          --set-default AID_TREE_SITTER_GRAMMARS ${grammars}
       '';
 
   inherit (set.aid) tests;
@@ -86,6 +89,7 @@ in
       export PYTHONPATH=${lib.escapeShellArg (toString ./src)}''${PYTHONPATH:+:$PYTHONPATH}
       export AID_WEB_ASSETS=${ui}
       export AID_TEST_SPEECH_MODEL=${speechModel}
+      export AID_TREE_SITTER_GRAMMARS=${grammars}
       # The element the web build links in; `npm ci` in web/ removes it, and the next shell puts it back.
       mkdir -p ${lib.escapeShellArg (toString ./web)}/node_modules
       ln -sfn ${p.pymux-element} ${lib.escapeShellArg (toString ./web)}/node_modules/pymux-pane

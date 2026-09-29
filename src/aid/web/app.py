@@ -52,6 +52,7 @@ if TYPE_CHECKING:
     from aid.client import Client
     from aid.paths import Paths
     from aid.speech import Recognizer
+    from aid.web.highlight import Grammars
 
 log = logging.getLogger(__name__)
 
@@ -194,6 +195,9 @@ async def list_files(request: Request) -> Response:
 async def read_file(request: Request) -> Response:
     query = PathQuery.model_validate(dict(request.query_params))
     view = await files.read_file(await _cwd(request), query.path)
+    grammars: Grammars | None = request.app.state.grammars
+    if grammars is not None and view.text is not None:
+        view.highlights = await anyio.to_thread.run_sync(grammars.highlight, view.path, view.text)
     return JSONResponse(view.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
 
 
@@ -397,10 +401,12 @@ def create_app(
     assets: Path | None = None,
     recognizer: Recognizer | None = None,
     colors: theme.Theme | None = None,
+    grammars: Grammars | None = None,
 ) -> Starlette:
     """The app. `assets` is the built UI (web/dist); without it the API still works and `/` says what is missing.
     `recognizer` is a loaded speech model (`aid.speech.load`); without one there is no speech to text.
-    `colors` is a pymux theme for `/theme.css`; without one the page keeps the browser's light or dark."""
+    `colors` is a pymux theme for `/theme.css`; without one the page keeps the browser's light or dark.
+    `grammars` highlight the file viewer's files; without them the browser highlights what it can."""
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncGenerator[None]:
@@ -453,6 +459,7 @@ def create_app(
     app.state.assets = assets
     app.state.recognizer = recognizer
     app.state.theme_css = theme.css(colors)
+    app.state.grammars = grammars
     return app
 
 

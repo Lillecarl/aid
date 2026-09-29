@@ -33,6 +33,7 @@ from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
 from aid.web import OidcConfig, create_app
 from aid.web import serve as serve_web
 from aid.web.app import ENV_ASSETS
+from aid.web.highlight import ENV_GRAMMARS, Grammars
 from aid.web.theme import Theme
 
 if TYPE_CHECKING:
@@ -103,6 +104,11 @@ def _parser() -> argparse.ArgumentParser:
     web.add_argument(
         "--speech-model",
         help="a sherpa-onnx streaming transducer directory, for speech to text (default: none, no microphone)",
+    )
+    web.add_argument(
+        "--grammars",
+        default=os.environ.get(ENV_GRAMMARS),
+        help=f"tree-sitter grammars for the file viewer (default: ${ENV_GRAMMARS})",
     )
     web.add_argument(
         "--theme",
@@ -330,7 +336,15 @@ async def _web(args: argparse.Namespace) -> None:
     assets = Path(args.assets) if args.assets else None
     # About a second, once, before aid web listens.
     recognizer = await anyio.to_thread.run_sync(speech.load, Path(args.speech_model)) if args.speech_model else None
-    app = create_app(oidc, _secret(ENV_SESSION_SECRET), assets=assets, recognizer=recognizer, colors=args.theme)
+    grammars = Grammars(Path(args.grammars)) if args.grammars else None
+    app = create_app(
+        oidc,
+        _secret(ENV_SESSION_SECRET),
+        assets=assets,
+        recognizer=recognizer,
+        colors=args.theme,
+        grammars=grammars,
+    )
     shutdown = anyio.Event()
     async with anyio.create_task_group() as tg:
         tg.start_soon(lambda: serve_web(app, args.bind, shutdown=shutdown))

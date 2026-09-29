@@ -20,7 +20,7 @@ from websockets.exceptions import InvalidStatus
 
 from aid.web import OidcConfig, create_app, serve
 from aid.web.app import ENV_ASSETS
-from tests.conftest import SPEECH_MODEL, fake_spec, needs_pymux, py_spec
+from tests.conftest import GRAMMARS, SPEECH_MODEL, fake_spec, needs_pymux, py_spec
 from tests.test_speech import SAID, speech
 
 if TYPE_CHECKING:
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
     from aid.paths import Paths
     from aid.speech import Recognizer
+    from aid.web.highlight import Grammars
 
 # The built Svelte UI. The Nix test run and the dev shell set it; without it the API tests still run.
 ASSETS = Path(os.environ[ENV_ASSETS]) if os.environ.get(ENV_ASSETS) else None
@@ -88,7 +89,9 @@ async def wait_for(url: str) -> None:
 
 
 @pytest.fixture
-async def web(daemon: Paths, tmp_path: Path, speech_recognizer: Recognizer | None) -> AsyncIterator[Web]:
+async def web(
+    daemon: Paths, tmp_path: Path, speech_recognizer: Recognizer | None, grammars: Grammars | None
+) -> AsyncIterator[Web]:
     dex_port, web_port = free_port(), free_port()
     web_url = f"http://127.0.0.1:{web_port}"
     config = tmp_path / "dex.json"
@@ -108,7 +111,14 @@ async def web(daemon: Paths, tmp_path: Path, speech_recognizer: Recognizer | Non
             with anyio.fail_after(TIMEOUT):
                 await wait_for(f"{issuer}/.well-known/openid-configuration")
             async with anyio.create_task_group() as tg:
-                app = create_app(oidc, secrets.token_hex(32), daemon, assets=ASSETS, recognizer=speech_recognizer)
+                app = create_app(
+                    oidc,
+                    secrets.token_hex(32),
+                    daemon,
+                    assets=ASSETS,
+                    recognizer=speech_recognizer,
+                    grammars=grammars,
+                )
                 tg.start_soon(lambda: serve(app, f"127.0.0.1:{web_port}", shutdown=shutdown))
                 with anyio.fail_after(TIMEOUT):
                     await wait_for(f"{web_url}/healthz")
@@ -210,6 +220,7 @@ async def test_session_round_trip(web: Web, tmp_path: Path) -> None:
 
 async def test_session_files(web: Web, tmp_path: Path) -> None:
     (tmp_path / "notes.md").write_text("# hi\n")
+    (tmp_path / "code.py").write_text("def f(): pass\n")
     with anyio.fail_after(TIMEOUT):
         async with httpx.AsyncClient() as client:
             anonymous = await client.get(f"{web.url}/api/sessions/files/files")
@@ -219,10 +230,13 @@ async def test_session_files(web: Web, tmp_path: Path) -> None:
             await client.post(f"{web.url}/api/sessions", json={"name": "files", "spec": spec}, headers=headers)
             listed = (await client.get(f"{web.url}/api/sessions/files/files")).json()
             read = (await client.get(f"{web.url}/api/sessions/files/file", params={"path": "notes.md"})).json()
+            code = (await client.get(f"{web.url}/api/sessions/files/file", params={"path": "code.py"})).json()
             escape = await client.get(f"{web.url}/api/sessions/files/file", params={"path": "../x"})
     assert anonymous.status_code == 401
     assert {"name": "notes.md", "dir": False, "size": 5} in listed
-    assert read == {"path": "notes.md", "size": 5, "text": "# hi\n", "truncated": False}
+    assert read == {"path": "notes.md", "size": 5, "text": "# hi\n", "truncated": False, "highlights": None}
+    if GRAMMARS is not None:
+        assert code["highlights"][:2] == [[0, 3, "k"], [4, 5, "nf"]]
     assert escape.status_code == 403
 
 

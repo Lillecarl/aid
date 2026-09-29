@@ -35,6 +35,8 @@ class FileView(BaseModel):
     text: str | None
     """None for a binary file."""
     truncated: bool
+    highlights: list[tuple[int, int, str]] | None = None
+    """UTF-16 start, end and Pygments class (`web.highlight`); None when no grammar knows the file."""
 
 
 def inside(root: str, rel: str) -> Path:

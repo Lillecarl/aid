@@ -87,5 +87,9 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 - Colours: `aid web --theme pygments:<name>|base16:<name>`, pymux's spelling, served as `/theme.css`
   (`web/theme.py`): page variables from pymux's roles, code as Pygments short token classes under `.hl`.
   Components use the variables (`--bad`, `--muted`, …), never literal colours.
+- Highlighting: `/file` carries `highlights`, tree-sitter spans (`web/highlight.py`) as UTF-16 offsets and Pygments
+  classes. Grammars: `nix/tree-sitter-grammars.nix` → `AID_TREE_SITTER_GRAMMARS` (wrapper, shell, tests). Same node:
+  the later pattern wins, as tree-sitter-highlight does. Unknown capture names fall back by prefix (`CLASSES`).
+  Measured: 1 MiB of Python, 1.0 s and 105k spans.
 - `/api/sessions/{name}/files` and `/file` (`web/files.py`) read the session cwd in aid web itself; every path
   must resolve inside it.
