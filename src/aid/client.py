@@ -203,10 +203,13 @@ class Session:
         """The whole history totalled: tokens, models, agent sessions, cost, and the files tool calls touched."""
         return SessionSummary.model_validate(await self._client.call(GetSummary(session=self.name)))
 
-    async def history(self, *, before: int | None = None, after: int | None = None, limit: int = 100) -> HistoryPage:
+    async def history(
+        self, *, before: int | None = None, after: int | None = None, limit: int = 100, wait: float = 0
+    ) -> HistoryPage:
         """A page of this session's history: the newest entries before `before`, the oldest after `after`, or
-        the newest of all. Entry `seq` numbers are what `before` and `after` take."""
-        request = GetHistory(session=self.name, before=before, after=after, limit=limit)
+        the newest of all. Entry `seq` numbers are what `before` and `after` take. With `after`, `wait` waits up
+        to that many seconds for a newer entry to be recorded."""
+        request = GetHistory(session=self.name, before=before, after=after, limit=limit, wait=wait)
         return HistoryPage.model_validate(await self._client.call(request))
 
     async def screen(self, *, stylesheet: bool = False, since: int | None = None, wait: float = 25) -> PaneView:

@@ -18,6 +18,7 @@ import pytest
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import InvalidStatus
 
+import aid
 from aid.web import OidcConfig, create_app, serve
 from aid.web.app import ENV_ASSETS
 from tests.conftest import GRAMMARS, SPEECH_MODEL, fake_spec, needs_pymux, py_spec
@@ -301,6 +302,44 @@ async def test_status_streams_changes(web: Web, tmp_path: Path) -> None:
     assert no_csrf is not None
     assert no_csrf.status_code == 403
     assert [s["running"] for s in seen] == [True, False, True]
+
+
+async def test_history_streams_turns_from_other_clients(web: Web, tmp_path: Path, daemon: Paths) -> None:
+    url = f"{web.url}/api/sessions/echo/history/events"
+    with anyio.fail_after(TIMEOUT):
+        async with httpx.AsyncClient() as client, aid.connect(daemon) as other:
+            await login(client, web, ALLOWED)
+            csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
+            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
+            await client.post(
+                f"{web.url}/api/sessions", json={"name": "echo", "spec": spec}, headers={"X-CSRF-Token": csrf}
+            )
+            start = (await client.get(f"{web.url}/api/sessions/echo/history")).json()["total"] - 1
+            seen: list[tuple[int, str]] = []
+            async with client.stream("GET", url, params={"after": start}) as response:
+                # The turn comes from another client, not from this page.
+                await other.session("echo").run("elsewhere")
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        entry = json.loads(line.removeprefix("data: "))
+                        seen.append((entry["seq"], entry["item"]["type"]))
+                        if entry["item"]["type"] == "output":
+                            break
+            last = seen[-1][0]
+            headers = {"Last-Event-ID": str(last - 1)}
+            async with client.stream("GET", url, params={"after": -1}, headers=headers) as resumed:
+                first = next_event_id = None
+                async for line in resumed.aiter_lines():
+                    if line.startswith("id: "):
+                        next_event_id = int(line.removeprefix("id: "))
+                    if line.startswith("data: "):
+                        first = json.loads(line.removeprefix("data: "))
+                        break
+    assert [kind for _seq, kind in seen] == ["prompt", "text", "usage", "output"]
+    assert [seq for seq, _kind in seen] == list(range(start + 1, start + 5))
+    # A reconnecting EventSource's Last-Event-ID wins over the page's `after`.
+    assert first is not None
+    assert (first["seq"], next_event_id) == (last, last)
 
 
 async def speak(web: Web, cookie: str, *, origin: str | None = None) -> list[dict[str, Any]]:

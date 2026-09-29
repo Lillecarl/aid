@@ -342,6 +342,9 @@ class Daemon:
                 return Done(id=request.id, data=summary.model_dump(mode="json"))
             case GetHistory():
                 session = self._session(request.session)
+                if request.after is not None and request.wait:
+                    with anyio.move_on_after(request.wait):
+                        await session.history.wait_after(request.after)
                 page = await session.history.page(before=request.before, after=request.after, limit=request.limit)
                 return Done(id=request.id, data=page.model_dump(mode="json"))
 

@@ -51,6 +51,20 @@ async def test_pages(tmp_path: Path) -> None:
     assert [e.seq for e in everything_after_start.entries] == list(range(10))
 
 
+async def test_wait_after(tmp_path: Path) -> None:
+    log = await filled(tmp_path / "h.jsonl", 2)
+    with anyio.fail_after(1):
+        await log.wait_after(0)  # Entry 1 is newer already.
+    with anyio.move_on_after(0.1) as quiet:
+        await log.wait_after(1)
+    assert quiet.cancelled_caught  # Nothing newer came.
+    with anyio.fail_after(5):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(log.wait_after, 1)
+            await anyio.sleep(0.1)
+            await log.append(PromptEntry(text="new"), turn="t")
+
+
 async def test_empty_log(tmp_path: Path) -> None:
     page = await HistoryLog(anyio.Path(tmp_path / "none.jsonl")).page()
     assert (page.entries, page.has_older, page.has_newer, page.total) == ([], False, False, 0)

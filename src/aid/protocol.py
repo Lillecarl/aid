@@ -94,6 +94,9 @@ class GetHistory(_Request):
     before: Annotated[int, Field(ge=0)] | None = None
     after: Annotated[int, Field(ge=-1)] | None = None
     limit: Annotated[int, Field(ge=1, le=1000)] = 100
+    wait: Annotated[float, Field(ge=0, le=60)] = 0
+    """With `after`: when nothing is newer yet, wait up to this many seconds for an entry. An empty page means
+    none came."""
 
 
 class SendMessage(_Request):

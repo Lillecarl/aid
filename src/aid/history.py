@@ -35,6 +35,8 @@ class HistoryLog:
         self._offsets: list[int] | None = None
         """Byte offset of each entry's line, then of the end of the last complete line."""
         self._lock = anyio.Lock()
+        self._appended = anyio.Event()
+        """Set by the next append, then replaced."""
 
     async def _index(self) -> list[int]:
         if self._offsets is not None:
@@ -65,7 +67,17 @@ class HistoryLog:
                 async with await anyio.open_file(self._path, "ab") as f:
                     await f.write(line)
                 offsets.append(offsets[-1] + len(line))
+            self._appended.set()
+            self._appended = anyio.Event()
             return entry
+
+    async def wait_after(self, after: int) -> None:
+        """Return once an entry newer than `after` exists. The caller bounds the wait."""
+        async with self._lock:
+            appended = self._appended
+            if len(await self._index()) - 2 > after:
+                return
+        await appended.wait()
 
     async def entries(self) -> list[HistoryEntry]:
         """Every entry. Reads the whole file: for totals, not for display."""

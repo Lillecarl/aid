@@ -37,6 +37,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect
 
 from aid.client import connect
+from aid.history import MAX_PAGE
 from aid.protocol import AidError, CreateSession
 from aid.speech import Transcription
 from aid.web import auth, files, theme
@@ -157,6 +158,39 @@ async def history(request: Request) -> Response:
     session = _client(request).session(request.path_params["name"])
     page = await session.history(before=query.before, after=query.after, limit=query.limit)
     return JSONResponse(page.model_dump(mode="json"))
+
+
+class HistoryEventsQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    after: int = Field(-1, ge=-1)
+
+
+@api()
+async def history_events(request: Request) -> Response:
+    """Server-Sent Events: each history entry after `after` as the daemon records it, whoever started its turn.
+    Each event's id is the entry's seq; a reconnecting EventSource sends it back as Last-Event-ID."""
+    query = HistoryEventsQuery.model_validate(dict(request.query_params))
+    session = _client(request).session(request.path_params["name"])
+    await session.status()  # A missing session is a 404 here, not an error inside the stream.
+    resumed = request.headers.get("last-event-id", "")
+    after = max(query.after, int(resumed)) if resumed.isdecimal() else query.after
+
+    async def events() -> AsyncIterator[str]:
+        nonlocal after
+        while True:
+            try:
+                page = await session.history(after=after, limit=MAX_PAGE, wait=KEEPALIVE)
+            except AidError as error:
+                yield f"event: error\ndata: {json.dumps({'error': error.message, 'code': error.code})}\n\n"
+                return
+            if not page.entries:
+                # A comment: it tells a dead connection apart from a quiet one.
+                yield ": still here\n\n"
+            for entry in page.entries:
+                after = entry.seq
+                yield f"id: {entry.seq}\ndata: {entry.model_dump_json()}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
 
 
 @api()
@@ -443,6 +477,7 @@ def create_app(
             Route("/api/sessions/{name}", delete, methods=["DELETE"]),
             Route("/api/sessions/{name}/history", history, methods=["GET"]),
             Route("/api/sessions/{name}/summary", summary, methods=["GET"]),
+            Route("/api/sessions/{name}/history/events", history_events, methods=["GET"]),
             Route("/api/sessions/{name}/status", status, methods=["GET"]),
             Route("/api/sessions/{name}/files", list_files, methods=["GET"]),
             Route("/api/sessions/{name}/file", read_file, methods=["GET"]),
