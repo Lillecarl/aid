@@ -184,6 +184,27 @@ async def test_ui_is_served(web: Web) -> None:
     assert "javascript" in script.headers["content-type"]
 
 
+async def test_the_app_manifest_needs_no_login(web: Web) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with httpx.AsyncClient() as anonymous:
+            manifest = await anonymous.get(f"{web.url}/manifest.webmanifest")
+            icons = [await anonymous.get(f"{web.url}{icon['src']}") for icon in manifest.json()["icons"]]
+            page = await anonymous.get(f"{web.url}/")
+        async with httpx.AsyncClient() as client:
+            await login(client, web, ALLOWED)
+            index = await client.get(f"{web.url}/")
+    assert manifest.headers["content-type"] == "application/manifest+json"
+    assert manifest.json()["display"] == "standalone"
+    assert [(i.status_code, i.headers["content-type"].split(";")[0]) for i in icons] == [
+        (200, "image/svg+xml"),
+        (200, "image/png"),
+        (200, "image/png"),
+        (200, "image/png"),
+    ]
+    assert page.status_code == 303  # Everything else still needs the login.
+    assert '<link rel="manifest" href="/manifest.webmanifest"' in index.text
+
+
 async def test_session_round_trip(web: Web, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with httpx.AsyncClient() as client:

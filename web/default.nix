@@ -21,6 +21,7 @@ buildNpmPackage {
       ./tsconfig.json
       ./vite.config.ts
       ./src
+      ./public
     ];
   };
 

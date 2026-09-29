@@ -443,6 +443,24 @@ async def index(request: Request) -> Response:
     return FileResponse(assets / "index.html", headers={"Cache-Control": "no-store"})
 
 
+PUBLIC_FILES: Final = {
+    "manifest.webmanifest": "application/manifest+json",
+    "icon.svg": "image/svg+xml",
+    "icon-192.png": "image/png",
+    "icon-512.png": "image/png",
+    "icon-maskable-512.png": "image/png",
+}
+"""The app's manifest and icons, served without a login: browsers fetch a manifest without cookies."""
+
+
+async def public_file(request: Request) -> Response:
+    assets: Path | None = request.app.state.assets
+    name = request.url.path.removeprefix("/")
+    if assets is None or not (assets / name).is_file():
+        return PlainTextResponse("not built", status_code=404)
+    return FileResponse(assets / name, media_type=PUBLIC_FILES[name], headers={"Cache-Control": "no-cache"})
+
+
 async def health(_request: Request) -> Response:
     return PlainTextResponse("ok")
 
@@ -497,6 +515,7 @@ def create_app(
             *static,
             Route("/healthz", health),
             Route("/theme.css", theme_css),
+            *(Route(f"/{name}", public_file) for name in PUBLIC_FILES),
             Route("/login", auth.login),
             Route(auth.CALLBACK_PATH, auth.callback),
             Route("/logout", auth.logout, methods=["POST"]),
