@@ -83,7 +83,7 @@ async def connect(paths: Paths | None = None) -> AsyncGenerator[Client]:
     ctx = zmq.asyncio.Context()
     sock = ctx.socket(zmq.DEALER)
     sock.connect(paths.control)
-    client = Client(sock, ctx, paths.events)
+    client = Client(sock, ctx, paths)
     try:
         async with anyio.create_task_group() as tg:
             tg.start_soon(client.read_replies)
@@ -98,19 +98,33 @@ async def connect(paths: Paths | None = None) -> AsyncGenerator[Client]:
         raise
     finally:
         sock.close(linger=0)
-        for subscription in list(client.subscriptions):  # A follower still open would hold ctx.term() forever.
-            subscription.close(linger=0)
+        for opened in list(client.sockets):  # A socket still open would hold ctx.term() forever.
+            opened.close(linger=0)
         ctx.term()
 
 
 class Client:
-    def __init__(self, sock: zmq.asyncio.Socket, ctx: zmq.asyncio.Context, events_endpoint: str) -> None:
+    def __init__(self, sock: zmq.asyncio.Socket, ctx: zmq.asyncio.Context, paths: Paths) -> None:
         self._sock = sock
         self._ctx = ctx
-        self._events_endpoint = events_endpoint
+        self._endpoints = {zmq.DEALER: paths.control, zmq.SUB: paths.events}
         self._send_lock = anyio.Lock()
         self._pending: dict[str, MemoryObjectSendStream[Reply]] = {}
-        self.subscriptions: set[zmq.asyncio.Socket] = set()
+        self.sockets: set[zmq.asyncio.Socket] = set()
+
+    @asynccontextmanager
+    async def open_socket(self, socket_type: int) -> AsyncGenerator[zmq.asyncio.Socket]:
+        """A socket of its own on the daemon, while the block runs: `zmq.DEALER` on the control socket, `zmq.SUB`
+        on the events. For a relay that speaks the protocol itself: this client neither routes its replies nor
+        checks what it sends."""
+        sock = self._ctx.socket(socket_type)
+        sock.connect(self._endpoints[socket_type])
+        self.sockets.add(sock)
+        try:
+            yield sock
+        finally:
+            self.sockets.discard(sock)
+            sock.close(linger=0)
 
     @asynccontextmanager
     async def subscribed(
@@ -121,26 +135,20 @@ class Client:
 
         A subscription reaches the daemon a moment after this returns, and what is published before then is
         missed: fetch a baseline after subscribing, as the `follow_*` methods do."""
-        sock = self._ctx.socket(zmq.SUB)
-        sock.connect(self._events_endpoint)
-        for prefix in prefixes:
-            sock.setsockopt(zmq.SUBSCRIBE, prefix)
-        self.subscriptions.add(sock)
+        async with self.open_socket(zmq.SUB) as sock:
+            for prefix in prefixes:
+                sock.setsockopt(zmq.SUBSCRIBE, prefix)
 
-        async def messages() -> AsyncIterator[tuple[bytes, bytes] | None]:
-            while True:
-                # A poll with a timeout, not a cancelled receive: cancelling inside an async generator ends it.
-                if idle is not None and not await sock.poll(int(idle * 1000)):
-                    yield None
-                    continue
-                topic, payload = await sock.recv_multipart()
-                yield topic, payload
+            async def messages() -> AsyncIterator[tuple[bytes, bytes] | None]:
+                while True:
+                    # A poll with a timeout, not a cancelled receive: cancelling inside an async generator ends it.
+                    if idle is not None and not await sock.poll(int(idle * 1000)):
+                        yield None
+                        continue
+                    topic, payload = await sock.recv_multipart()
+                    yield topic, payload
 
-        try:
             yield messages()
-        finally:
-            self.subscriptions.discard(sock)
-            sock.close(linger=0)
 
     @overload
     def follow_sessions(self, *, idle: None = None) -> AsyncGenerator[list[SessionInfo]]: ...

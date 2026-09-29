@@ -39,7 +39,7 @@ from starlette.websockets import WebSocketDisconnect
 from aid.client import connect
 from aid.protocol import AidError, CreateSession, SessionInfosAdapter
 from aid.speech import Transcription
-from aid.web import auth, files, theme
+from aid.web import auth, files, theme, zws
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
@@ -521,6 +521,8 @@ def create_app(
             Route("/api/speech", speech, methods=["GET"]),
             WebSocketRoute("/api/transcribe", transcribe),
             WebSocketRoute("/api/sessions/{name}/pane", pane),
+            WebSocketRoute("/api/zws/control", zws.control),
+            WebSocketRoute("/api/zws/events", zws.events),
         ],
         middleware=[
             Middleware(security_headers),

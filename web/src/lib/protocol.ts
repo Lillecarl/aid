@@ -30,6 +30,22 @@ export type AgentSpec = AcpSpec | PydanticAISpec | ClaudeTtySpec;
 export type PermissionMode1 = "allow" | "deny" | "ask";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "SessionEvent".
+ */
+export type SessionEvent =
+  TextDelta | ThoughtDelta | ToolCall | PermissionRequest | PermissionDecision | Usage | Output;
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "PermissionDecider".
+ */
+export type PermissionDecider = "person" | "policy" | "timeout" | "cancel" | "terminal";
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "JsonValue".
+ */
+export type JsonValue = unknown;
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "HistoryItem".
  */
 export type HistoryItem =
@@ -47,14 +63,26 @@ export type HistoryItem =
   | TurnError;
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "PermissionDecider".
+ * via the `definition` "PageReply".
  */
-export type PermissionDecider = "person" | "policy" | "timeout" | "cancel" | "terminal";
+export type PageReply = Event | Done | Failure;
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "JsonValue".
+ * via the `definition` "PageRequest".
  */
-export type JsonValue = unknown;
+export type PageRequest =
+  | ListSessions
+  | ListAgents
+  | CreateSession
+  | GetStatus
+  | GetHistory
+  | GetSummary
+  | Prompt
+  | Cancel
+  | AnswerPermission
+  | StartSession
+  | StopSession
+  | DeleteSession;
 /**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
  *
@@ -62,12 +90,6 @@ export type JsonValue = unknown;
  * via the `definition` "PermissionMode".
  */
 export type PermissionMode2 = "allow" | "deny" | "ask";
-/**
- * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "SessionEvent".
- */
-export type SessionEvent =
-  TextDelta | ThoughtDelta | ToolCall | PermissionRequest | PermissionDecision | Usage | Output;
 
 export interface AidProtocol {
   [k: string]: unknown;
@@ -89,7 +111,7 @@ export interface AcpSpec {
     [k: string]: string;
   };
   inherit_env?: boolean;
-  kind?: "acp";
+  kind: "acp";
   mcp_servers?: McpServers;
   permission?: PermissionMode;
   permission_timeout?: number;
@@ -107,7 +129,7 @@ export interface McpStdio {
     [k: string]: string;
   };
   name: string;
-  type?: "stdio";
+  type: "stdio";
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -118,7 +140,7 @@ export interface McpHttp {
     [k: string]: string;
   };
   name: string;
-  type?: "http";
+  type: "http";
   url: string;
 }
 /**
@@ -130,7 +152,7 @@ export interface McpSse {
     [k: string]: string;
   };
   name: string;
-  type?: "sse";
+  type: "sse";
   url: string;
 }
 /**
@@ -174,7 +196,7 @@ export interface PydanticAISpec {
   env?: {
     [k: string]: string;
   };
-  kind?: "pydantic-ai";
+  kind: "pydantic-ai";
   permission?: PermissionMode1;
   permission_timeout?: number;
   python_path?: string[];
@@ -200,7 +222,7 @@ export interface ClaudeTtySpec {
     [k: string]: string;
   };
   inherit_env?: boolean;
-  kind?: "claude-tty";
+  kind: "claude-tty";
   mcp_servers?: McpServers;
   /**
    * @minItems 1
@@ -210,12 +232,64 @@ export interface ClaudeTtySpec {
   trust_cwd?: boolean;
 }
 /**
+ * A person's answer to a pending PermissionRequest: one of its options, or None to cancel it.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "AnswerPermission".
+ */
+export interface AnswerPermission {
+  id?: string;
+  op: "answer_permission";
+  option_id: string | null;
+  request_id: string;
+  session: string;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "Cancel".
+ */
+export interface Cancel {
+  id?: string;
+  op: "cancel";
+  session: string;
+}
+/**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Cost".
  */
 export interface Cost {
   amount: number;
   currency: string;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "CreateSession".
+ */
+export interface CreateSession {
+  id?: string;
+  name: string;
+  op: "create";
+  spec: AgentSpec;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "DeleteSession".
+ */
+export interface DeleteSession {
+  id?: string;
+  op: "delete";
+  session: string;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "Done".
+ */
+export interface Done {
+  data: {
+    [k: string]: unknown;
+  };
+  id: string;
+  reply: "done";
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -228,80 +302,12 @@ export interface Entry {
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "FileActivity".
+ * via the `definition` "Event".
  */
-export interface FileActivity {
-  last_seq: number;
-  path: string;
-  reads: number;
-  writes: number;
-}
-/**
- * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "FileView".
- */
-export interface FileView {
-  highlights: [number, number, string][] | null;
-  path: string;
-  size: number;
-  text: string | null;
-  truncated: boolean;
-}
-/**
- * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "HistoryEntry".
- */
-export interface HistoryEntry {
-  at: number;
-  item: HistoryItem;
-  seq: number;
-  turn: string;
-}
-/**
- * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "PromptEntry".
- */
-export interface PromptEntry {
-  text: string;
-  type: "prompt";
-}
-/**
- * A message another session, or a person, sent to this one.
- *
- * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "MessageEntry".
- */
-export interface MessageEntry {
-  sender: string | null;
-  text: string;
-  type: "message";
-}
-/**
- * A worker started, and what its backend said about itself. The daemon records one per start.
- *
- * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "Started".
- */
-export interface Started {
-  agent: string | null;
-  agent_session: string | null;
-  model: string | null;
-  pid: number;
-  resumed: boolean;
-  type: "started";
-}
-/**
- * Something happened to the agent's session outside a turn: interactive Claude compacted its context,
- * cleared it (a new agent session follows, with a Started), or ended.
- *
- * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "Lifecycle".
- */
-export interface Lifecycle {
-  detail: string | null;
-  event: "compacted" | "cleared" | "ended";
-  summary: string | null;
-  type: "lifecycle";
+export interface Event {
+  event: SessionEvent;
+  id: string;
+  reply: "event";
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -425,6 +431,127 @@ export interface Output {
   type: "output";
 }
 /**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "Failure".
+ */
+export interface Failure {
+  code: string;
+  id: string;
+  message: string;
+  reply: "failure";
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "FileActivity".
+ */
+export interface FileActivity {
+  last_seq: number;
+  path: string;
+  reads: number;
+  writes: number;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "FileView".
+ */
+export interface FileView {
+  highlights: [number, number, string][] | null;
+  path: string;
+  size: number;
+  text: string | null;
+  truncated: boolean;
+}
+/**
+ * A page of a session's history: the newest entries before `before`, the oldest after `after`, or the
+ * newest of all when neither is given.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "GetHistory".
+ */
+export interface GetHistory {
+  after?: number | null;
+  before?: number | null;
+  id?: string;
+  limit?: number;
+  op: "history";
+  session: string;
+  wait?: number;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "GetStatus".
+ */
+export interface GetStatus {
+  id?: string;
+  op: "status";
+  session: string;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "GetSummary".
+ */
+export interface GetSummary {
+  id?: string;
+  op: "summary";
+  session: string;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "HistoryEntry".
+ */
+export interface HistoryEntry {
+  at: number;
+  item: HistoryItem;
+  seq: number;
+  turn: string;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "PromptEntry".
+ */
+export interface PromptEntry {
+  text: string;
+  type: "prompt";
+}
+/**
+ * A message another session, or a person, sent to this one.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "MessageEntry".
+ */
+export interface MessageEntry {
+  sender: string | null;
+  text: string;
+  type: "message";
+}
+/**
+ * A worker started, and what its backend said about itself. The daemon records one per start.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "Started".
+ */
+export interface Started {
+  agent: string | null;
+  agent_session: string | null;
+  model: string | null;
+  pid: number;
+  resumed: boolean;
+  type: "started";
+}
+/**
+ * Something happened to the agent's session outside a turn: interactive Claude compacted its context,
+ * cleared it (a new agent session follows, with a Started), or ended.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "Lifecycle".
+ */
+export interface Lifecycle {
+  detail: string | null;
+  event: "compacted" | "cleared" | "ended";
+  summary: string | null;
+  type: "lifecycle";
+}
+/**
  * A prompt that ended in a Failure rather than an Output.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -446,6 +573,56 @@ export interface HistoryPage {
   total: number;
 }
 /**
+ * The `aid.PydanticAgent`s on the daemon's agents path.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ListAgents".
+ */
+export interface ListAgents {
+  id?: string;
+  op: "agents";
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ListSessions".
+ */
+export interface ListSessions {
+  id?: string;
+  op: "list";
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "Prompt".
+ */
+export interface Prompt {
+  id?: string;
+  op: "prompt";
+  session: string;
+  text: string;
+}
+/**
+ * Start a stopped session's worker without a turn; for interactive Claude, its pane. A running one is left be.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "StartSession".
+ */
+export interface StartSession {
+  id?: string;
+  op: "start";
+  session: string;
+}
+/**
+ * Stop the worker and keep the session's state, so the next prompt starts it again.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "StopSession".
+ */
+export interface StopSession {
+  id?: string;
+  op: "stop";
+  session: string;
+}
+/**
  * What aid web sends the page. Only the definitions matter; this model names them.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -458,6 +635,7 @@ export interface Received {
   history_entry: HistoryEntry;
   history_item: HistoryItem;
   history_page: HistoryPage;
+  page_reply: PageReply;
   session_event: SessionEvent;
   session_info: SessionInfo;
   session_status: SessionStatus;
@@ -532,4 +710,5 @@ export interface SessionSummary {
  */
 export interface Sent {
   agent_spec: AgentSpec;
+  page_request: PageRequest;
 }

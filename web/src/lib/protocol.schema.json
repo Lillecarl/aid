@@ -48,6 +48,7 @@
       },
       "required": [
         "cwd",
+        "kind",
         "command"
       ],
       "title": "AcpSpec",
@@ -134,6 +135,66 @@
         }
       ]
     },
+    "AnswerPermission": {
+      "additionalProperties": false,
+      "description": "A person's answer to a pending PermissionRequest: one of its options, or None to cancel it.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "answer_permission",
+          "default": "answer_permission",
+          "type": "string"
+        },
+        "option_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session",
+        "request_id",
+        "option_id"
+      ],
+      "title": "AnswerPermission",
+      "type": "object"
+    },
+    "Cancel": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "cancel",
+          "default": "cancel",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session"
+      ],
+      "title": "Cancel",
+      "type": "object"
+    },
     "ClaudeTtySpec": {
       "additionalProperties": false,
       "description": "Interactive Claude Code in a pymux window: prompts are pasted in, events come from its transcript.\n\nA person can attach to the window, and Remote Control works, which the Agent SDK behind ACP does not offer.",
@@ -200,7 +261,8 @@
         }
       },
       "required": [
-        "cwd"
+        "cwd",
+        "kind"
       ],
       "title": "ClaudeTtySpec",
       "type": "object"
@@ -220,6 +282,79 @@
         "currency"
       ],
       "title": "Cost",
+      "type": "object"
+    },
+    "CreateSession": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "pattern": "^[A-Za-z0-9_.-]{1,64}$",
+          "type": "string"
+        },
+        "op": {
+          "const": "create",
+          "default": "create",
+          "type": "string"
+        },
+        "spec": {
+          "$ref": "#/$defs/AgentSpec"
+        }
+      },
+      "required": [
+        "op",
+        "name",
+        "spec"
+      ],
+      "title": "CreateSession",
+      "type": "object"
+    },
+    "DeleteSession": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "delete",
+          "default": "delete",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session"
+      ],
+      "title": "DeleteSession",
+      "type": "object"
+    },
+    "Done": {
+      "additionalProperties": false,
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/JsonValue",
+          "default": null
+        },
+        "id": {
+          "type": "string"
+        },
+        "reply": {
+          "const": "done",
+          "default": "done",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reply",
+        "id",
+        "data"
+      ],
+      "title": "Done",
       "type": "object"
     },
     "Entry": {
@@ -247,6 +382,56 @@
         "size"
       ],
       "title": "Entry",
+      "type": "object"
+    },
+    "Event": {
+      "additionalProperties": false,
+      "properties": {
+        "event": {
+          "$ref": "#/$defs/SessionEvent"
+        },
+        "id": {
+          "type": "string"
+        },
+        "reply": {
+          "const": "event",
+          "default": "event",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reply",
+        "id",
+        "event"
+      ],
+      "title": "Event",
+      "type": "object"
+    },
+    "Failure": {
+      "additionalProperties": false,
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "reply": {
+          "const": "failure",
+          "default": "failure",
+          "type": "string"
+        }
+      },
+      "required": [
+        "reply",
+        "id",
+        "code",
+        "message"
+      ],
+      "title": "Failure",
       "type": "object"
     },
     "FileActivity": {
@@ -333,6 +518,109 @@
         "highlights"
       ],
       "title": "FileView",
+      "type": "object"
+    },
+    "GetHistory": {
+      "additionalProperties": false,
+      "description": "A page of a session's history: the newest entries before `before`, the oldest after `after`, or the\nnewest of all when neither is given.",
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "minimum": -1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "before": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "type": "string"
+        },
+        "limit": {
+          "default": 100,
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "op": {
+          "const": "history",
+          "default": "history",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "wait": {
+          "default": 0,
+          "maximum": 60,
+          "minimum": 0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "op",
+        "session"
+      ],
+      "title": "GetHistory",
+      "type": "object"
+    },
+    "GetStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "status",
+          "default": "status",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session"
+      ],
+      "title": "GetStatus",
+      "type": "object"
+    },
+    "GetSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "summary",
+          "default": "summary",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session"
+      ],
+      "title": "GetSummary",
       "type": "object"
     },
     "HistoryEntry": {
@@ -495,6 +783,43 @@
       "title": "Lifecycle",
       "type": "object"
     },
+    "ListAgents": {
+      "additionalProperties": false,
+      "description": "The `aid.PydanticAgent`s on the daemon's agents path.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "agents",
+          "default": "agents",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "title": "ListAgents",
+      "type": "object"
+    },
+    "ListSessions": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "list",
+          "default": "list",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "title": "ListSessions",
+      "type": "object"
+    },
     "McpHttp": {
       "additionalProperties": false,
       "properties": {
@@ -519,6 +844,7 @@
       },
       "required": [
         "name",
+        "type",
         "url"
       ],
       "title": "McpHttp",
@@ -575,6 +901,7 @@
       },
       "required": [
         "name",
+        "type",
         "url"
       ],
       "title": "McpSse",
@@ -608,6 +935,7 @@
       },
       "required": [
         "name",
+        "type",
         "command"
       ],
       "title": "McpStdio",
@@ -667,6 +995,84 @@
       ],
       "title": "Output",
       "type": "object"
+    },
+    "PageReply": {
+      "discriminator": {
+        "mapping": {
+          "done": "#/$defs/Done",
+          "event": "#/$defs/Event",
+          "failure": "#/$defs/Failure"
+        },
+        "propertyName": "reply"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/Event"
+        },
+        {
+          "$ref": "#/$defs/Done"
+        },
+        {
+          "$ref": "#/$defs/Failure"
+        }
+      ]
+    },
+    "PageRequest": {
+      "discriminator": {
+        "mapping": {
+          "agents": "#/$defs/ListAgents",
+          "answer_permission": "#/$defs/AnswerPermission",
+          "cancel": "#/$defs/Cancel",
+          "create": "#/$defs/CreateSession",
+          "delete": "#/$defs/DeleteSession",
+          "history": "#/$defs/GetHistory",
+          "list": "#/$defs/ListSessions",
+          "prompt": "#/$defs/Prompt",
+          "start": "#/$defs/StartSession",
+          "status": "#/$defs/GetStatus",
+          "stop": "#/$defs/StopSession",
+          "summary": "#/$defs/GetSummary"
+        },
+        "propertyName": "op"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/ListSessions"
+        },
+        {
+          "$ref": "#/$defs/ListAgents"
+        },
+        {
+          "$ref": "#/$defs/CreateSession"
+        },
+        {
+          "$ref": "#/$defs/GetStatus"
+        },
+        {
+          "$ref": "#/$defs/GetHistory"
+        },
+        {
+          "$ref": "#/$defs/GetSummary"
+        },
+        {
+          "$ref": "#/$defs/Prompt"
+        },
+        {
+          "$ref": "#/$defs/Cancel"
+        },
+        {
+          "$ref": "#/$defs/AnswerPermission"
+        },
+        {
+          "$ref": "#/$defs/StartSession"
+        },
+        {
+          "$ref": "#/$defs/StopSession"
+        },
+        {
+          "$ref": "#/$defs/DeleteSession"
+        }
+      ]
     },
     "PermissionChoice": {
       "additionalProperties": false,
@@ -816,6 +1222,32 @@
       "title": "PermissionRequest",
       "type": "object"
     },
+    "Prompt": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "prompt",
+          "default": "prompt",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session",
+        "text"
+      ],
+      "title": "Prompt",
+      "type": "object"
+    },
     "PromptEntry": {
       "additionalProperties": false,
       "properties": {
@@ -898,7 +1330,8 @@
         }
       },
       "required": [
-        "cwd"
+        "cwd",
+        "kind"
       ],
       "title": "PydanticAISpec",
       "type": "object"
@@ -924,6 +1357,9 @@
         "history_page": {
           "$ref": "#/$defs/HistoryPage"
         },
+        "page_reply": {
+          "$ref": "#/$defs/PageReply"
+        },
         "session_event": {
           "$ref": "#/$defs/SessionEvent"
         },
@@ -947,7 +1383,8 @@
         "session_summary",
         "agent_catalog",
         "file_entry",
-        "file_view"
+        "file_view",
+        "page_reply"
       ],
       "title": "Received",
       "type": "object"
@@ -957,10 +1394,14 @@
       "properties": {
         "agent_spec": {
           "$ref": "#/$defs/AgentSpec"
+        },
+        "page_request": {
+          "$ref": "#/$defs/PageRequest"
         }
       },
       "required": [
-        "agent_spec"
+        "agent_spec",
+        "page_request"
       ],
       "title": "Sent",
       "type": "object"
@@ -1243,6 +1684,29 @@
       "title": "SessionSummary",
       "type": "object"
     },
+    "StartSession": {
+      "additionalProperties": false,
+      "description": "Start a stopped session's worker without a turn; for interactive Claude, its pane. A running one is left be.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "start",
+          "default": "start",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session"
+      ],
+      "title": "StartSession",
+      "type": "object"
+    },
     "Started": {
       "additionalProperties": false,
       "description": "A worker started, and what its backend said about itself. The daemon records one per start.",
@@ -1302,6 +1766,29 @@
         "model"
       ],
       "title": "Started",
+      "type": "object"
+    },
+    "StopSession": {
+      "additionalProperties": false,
+      "description": "Stop the worker and keep the session's state, so the next prompt starts it again.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "stop",
+          "default": "stop",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session"
+      ],
+      "title": "StopSession",
       "type": "object"
     },
     "TextDelta": {

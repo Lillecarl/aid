@@ -16,8 +16,9 @@ from typing import TYPE_CHECKING, Any, BinaryIO, cast
 import anyio
 import httpx
 import pytest
+from websockets.asyncio.client import ClientConnection
 from websockets.asyncio.client import connect as ws_connect
-from websockets.exceptions import InvalidStatus
+from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 import aid
 from aid.web import OidcConfig, create_app, serve
@@ -28,7 +29,7 @@ from tests.test_speech import SAID, speech
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from websockets.typing import Origin
+    from websockets.typing import Origin, Subprotocol
 
     from aid.paths import Paths
     from aid.speech import Recognizer
@@ -435,6 +436,115 @@ async def test_speech_to_text(web: Web) -> None:
     assert replies[-1] == {"done": True}
     assert " ".join(r["text"] for r in replies if r.get("final")) == SAID
     assert any(r.get("final") is False for r in replies)
+
+
+async def zws_cookie(web: Web) -> dict[str, str]:
+    async with httpx.AsyncClient() as client:
+        await login(client, web, ALLOWED)
+        return {"Cookie": f"aid_session={client.cookies['aid_session']}"}
+
+
+def zws_connect(web: Web, path: str, headers: dict[str, str], *, origin: str | None = None) -> ws_connect:
+    return ws_connect(
+        web.url.replace("http://", "ws://") + path,
+        origin=cast("Origin", origin or web.url),
+        additional_headers=headers,
+        subprotocols=[cast("Subprotocol", "ZWS2.0")],
+    )
+
+
+async def zws_recv(ws: ClientConnection) -> list[bytes]:
+    """One multipart message from a ZWS relay."""
+    parts: list[bytes] = []
+    while True:
+        frame = await ws.recv()
+        assert isinstance(frame, bytes)
+        assert not frame[0] & 0x02, "a data frame"
+        parts.append(frame[1:])
+        if not frame[0] & 0x01:
+            return parts
+
+
+async def zws_call(ws: ClientConnection, request: dict[str, Any]) -> list[dict[str, Any]]:
+    """Send one request over the control relay; return its replies up to the last."""
+    await ws.send(b"\x00" + json.dumps(request).encode())
+    replies: list[dict[str, Any]] = []
+    while not replies or replies[-1]["reply"] == "event":
+        [reply] = await zws_recv(ws)
+        replies.append(json.loads(reply))
+    return replies
+
+
+async def test_zws_control_relays_what_the_page_may_ask(web: Web, tmp_path: Path) -> None:
+    spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
+    with anyio.fail_after(TIMEOUT):
+        headers = await zws_cookie(web)
+        async with zws_connect(web, "/api/zws/control", headers) as ws:
+            assert ws.subprotocol == "ZWS2.0"
+            created = await zws_call(ws, {"op": "create", "id": "c", "name": "echo", "spec": spec})
+            prompted = await zws_call(ws, {"op": "prompt", "id": "p", "session": "echo", "text": "hi"})
+            hook = await zws_call(ws, {"op": "hook", "id": "h", "session": "echo", "event": "Stop", "payload": {}})
+            await ws.send(b"\x02\x04PING\x00\x0ahello")
+            ponged = await ws.recv()
+            listed = await zws_call(ws, {"op": "list", "id": "l"})
+            await ws.send(b"\x01{}")
+            await ws.send(b"\x00{}")
+            with pytest.raises(ConnectionClosed) as closed:
+                await ws.recv()
+    assert created == [{"reply": "done", "id": "c", "data": {"name": "echo"}}]
+    assert [r["reply"] for r in prompted][-1] == "done"
+    assert {"type": "output", "output": "turn 1: echo hi", "stop_reason": "end_turn"} in [
+        r["event"] for r in prompted if r["reply"] == "event"
+    ]
+    # Never reaches the daemon: a page may not speak for a claude-tty worker.
+    assert (hook[0]["reply"], hook[0]["id"], hook[0]["code"]) == ("failure", "h", "invalid_request")
+    assert "does not match any of the expected tags" in hook[0]["message"]
+    assert ponged == b"\x02\x04PONGhello"
+    assert listed[0]["data"] == [{"name": "echo", "kind": "pydantic-ai", "running": True, **IDLE}]
+    assert closed.value.rcvd is not None
+    assert closed.value.rcvd.code == 1008  # A request of two frames.
+
+
+async def test_zws_events_follow_subscriptions(web: Web, tmp_path: Path) -> None:
+    spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
+    with anyio.fail_after(TIMEOUT):
+        headers = await zws_cookie(web)
+        async with (
+            zws_connect(web, "/api/zws/events", headers) as events_ws,
+            zws_connect(web, "/api/zws/control", headers) as control,
+        ):
+            await events_ws.send(b"\x00\x01sessions/")
+            await anyio.sleep(0.1)  # A subscription reaches the daemon a moment after it is sent.
+            await zws_call(control, {"op": "create", "id": "c", "name": "echo", "spec": spec})
+            topic, payload = await zws_recv(events_ws)
+            await events_ws.send(b"\x00\x00sessions/")
+            await events_ws.send(b"\x00\x01session/echo/status/")
+            await anyio.sleep(0.1)
+            await zws_call(control, {"op": "stop", "id": "s", "session": "echo"})
+            status_topic, status = await zws_recv(events_ws)
+    assert topic == b"sessions/"
+    assert [s["name"] for s in json.loads(payload)] == ["echo"]
+    assert status_topic == b"session/echo/status/"
+    assert json.loads(status)["running"] is False
+
+
+async def test_zws_needs_the_login_the_origin_and_the_subprotocol(web: Web) -> None:
+    with anyio.fail_after(TIMEOUT):
+        headers = await zws_cookie(web)
+        for path in ("/api/zws/control", "/api/zws/events"):
+            with pytest.raises(InvalidStatus):
+                async with zws_connect(web, path, {"Cookie": "aid_session=not-a-session"}):
+                    pass
+            with pytest.raises(InvalidStatus):
+                async with zws_connect(web, path, headers, origin="http://elsewhere.example"):
+                    pass
+            with pytest.raises(InvalidStatus):
+                async with ws_connect(
+                    web.url.replace("http://", "ws://") + path,
+                    origin=cast("Origin", web.url),
+                    additional_headers=headers,
+                ):
+                    pass
 
 
 @needs_pymux

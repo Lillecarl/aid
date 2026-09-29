@@ -29,6 +29,7 @@ from aid.protocol import (
 )
 from aid.spec import AgentSpec
 from aid.web.files import Entry, FileView
+from aid.web.zws import PageReply, PageRequest
 
 SCHEMA_FILE: Final = Path(__file__).parents[2] / "web" / "src" / "lib" / "protocol.schema.json"
 
@@ -46,12 +47,14 @@ class Received(BaseModel):
     agent_catalog: AgentCatalog
     file_entry: Entry
     file_view: FileView
+    page_reply: PageReply
 
 
 class Sent(BaseModel):
     """What the page sends aid web."""
 
     agent_spec: AgentSpec
+    page_request: PageRequest
 
 
 class _Untitled(GenerateJsonSchema):
@@ -59,6 +62,14 @@ class _Untitled(GenerateJsonSchema):
 
     def field_title_should_be_set(self, schema: Any) -> bool:  # pydantic's own type for it is private
         return False
+
+    def field_is_required(self, field: Any, total: bool) -> bool:
+        """A Literal with a default is a union's tag (`op`, `kind`, …): a discriminated union refuses input without
+        it, whatever the default says."""
+        inner = field["schema"]
+        if inner["type"] == "default" and inner["schema"]["type"] == "literal":
+            return True
+        return super().field_is_required(field, total)
 
 
 def _tuples_as_items(node: Any) -> Any:
