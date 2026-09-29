@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +17,7 @@ from pydantic_ai.messages import (
     FunctionToolResultEvent,
     ModelMessage,
     ModelMessagesTypeAdapter,
+    ModelResponse,
     PartDeltaEvent,
     PartStartEvent,
     RetryPromptPart,
@@ -29,12 +31,13 @@ from pydantic_ai.run import AgentRunResultEvent
 from pydantic_core import to_jsonable_python
 
 from aid.agents import ENV_AGENTS_PATH, Catalog, agents_path, discover
-from aid.protocol import Output, SessionEvent, TextDelta, ThoughtDelta, ToolCall, clip, to_json
+from aid.protocol import Output, SessionEvent, Started, TextDelta, ThoughtDelta, ToolCall, Usage, clip, to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from pydantic_ai.agent import AgentRunEvents
+    from pydantic_ai.run import AgentRunResult
     from pydantic_ai.toolsets import AbstractToolset
 
     from aid.backends.base import Emit
@@ -91,6 +94,27 @@ def to_event(event: object) -> SessionEvent | None:
             return None
 
 
+def usage_of(result: AgentRunResult[Any]) -> Usage:
+    usage = result.usage
+    models = [m.model_name for m in result.new_messages() if isinstance(m, ModelResponse) and m.model_name]
+    # Providers name thinking tokens differently in `details`.
+    thought = usage.details.get("reasoning_tokens") or usage.details.get("thinking_tokens")
+    return Usage(
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cache_read_tokens=usage.cache_read_tokens,
+        cache_write_tokens=usage.cache_write_tokens,
+        thought_tokens=thought,
+        requests=usage.requests,
+        models=list(dict.fromkeys(models)),
+    )
+
+
+def model_name(agent: AbstractAgent[Any, Any]) -> str | None:
+    model = agent.model
+    return model if isinstance(model, str) or model is None else model.model_name
+
+
 class PydanticAIBackend:
     def __init__(
         self,
@@ -98,12 +122,17 @@ class PydanticAIBackend:
         history_file: anyio.Path,
         history: list[ModelMessage],
         toolsets: list[AbstractToolset[Any]],
+        started: Started,
     ) -> None:
         self._agent = agent
         self._history_file = history_file
         self._history = history
         self._toolsets = toolsets
+        self._started = started
         self._run: AgentRunEvents[Any] | None = None
+
+    def started(self) -> Started:
+        return self._started
 
     async def prompt(self, text: str, emit: Emit) -> Output:
         async with self._agent.run_stream_events(text, message_history=self._history, toolsets=self._toolsets) as run:
@@ -123,6 +152,7 @@ class PydanticAIBackend:
                 self._run = None
         self._history = result.all_messages()
         await _write_atomic(self._history_file, ModelMessagesTypeAdapter.dump_json(self._history))
+        await emit(usage_of(result))
         return Output(output=to_jsonable_python(result.output), stop_reason="end_turn")
 
     async def cancel(self) -> None:
@@ -152,4 +182,5 @@ async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> Async
         ModelMessagesTypeAdapter.validate_json(await history_file.read_bytes()) if await history_file.exists() else []
     )
     log.info("loaded %s with %d history messages", spec.agent or spec.target, len(history))
-    yield PydanticAIBackend(agent, history_file, history, toolsets)
+    started = Started(pid=os.getpid(), resumed=bool(history), agent=spec.agent or spec.target, model=model_name(agent))
+    yield PydanticAIBackend(agent, history_file, history, toolsets, started)

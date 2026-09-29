@@ -8,7 +8,6 @@ launcher owns process-wide setup.
 from __future__ import annotations
 
 import logging
-import os
 import sys
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, cast
@@ -74,7 +73,7 @@ async def serve(
                 raise
             tg = await stack.enter_async_context(anyio.create_task_group())
             worker = _Worker(sock, backend, tg)
-            await worker.send(Hello(pid=os.getpid()))
+            await worker.send(Hello(started=backend.started()))
             await worker.serve()
     finally:
         sock.close()

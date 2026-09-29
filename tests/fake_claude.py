@@ -21,6 +21,14 @@ PASTE_START = b"\x1b[200~"
 PASTE_END = b"\x1b[201~"
 DOWN = b"\x1b[B"
 COUNT = 20
+MODEL = "claude-fake-1"
+USAGE = {
+    "input_tokens": 3,
+    "output_tokens": 5,
+    "cache_read_input_tokens": 100,
+    "cache_creation_input_tokens": 7,
+    "output_tokens_details": {"thinking_tokens": 2},
+}
 
 
 def transcript_path(session_id: str) -> Path:
@@ -41,8 +49,13 @@ class Fake:
         with transcript_path(self.session_id).open("a") as f:
             f.write(json.dumps(entry) + "\n")
 
+    def assistant(self, message_id: str, block: dict[str, Any]) -> None:
+        """Real Claude repeats a message's id, model and whole usage on every entry of it."""
+        message = {"id": message_id, "model": MODEL, "usage": USAGE, "content": [block]}
+        self.write({"type": "assistant", "message": message})
+
     def say(self, text: str) -> None:
-        self.write({"type": "assistant", "message": {"id": "msg", "content": [{"type": "text", "text": text}]}})
+        self.assistant("msg", {"type": "text", "text": text})
 
     def read_byte_chunk(self, timeout: float | None = None) -> bytes:
         ready, _, _ = select.select([0], [], [], timeout)
@@ -126,7 +139,7 @@ class Fake:
             self.say(Path(self.mcp_config).read_text() if self.mcp_config else "none")
         elif text == "tool":
             use = {"type": "tool_use", "id": "toolu_fake", "name": "Bash", "input": {"command": "true"}}
-            self.write({"type": "assistant", "message": {"id": "msg", "content": [use]}})
+            self.assistant("msg_tool", use)
             result = {"type": "tool_result", "tool_use_id": "toolu_fake", "content": "ok"}
             self.write({"type": "user", "toolUseResult": {"stdout": "ok"}, "message": {"content": [result]}})
             self.say("ran it")

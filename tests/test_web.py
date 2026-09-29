@@ -202,7 +202,7 @@ async def test_session_round_trip(web: Web, tmp_path: Path) -> None:
             ) as response:
                 assert response.headers["content-type"].startswith("text/event-stream")
                 streamed = await events(response)
-            history = (await client.get(f"{web.url}/api/sessions/echo/history?limit=2")).json()
+            history = (await client.get(f"{web.url}/api/sessions/echo/history?limit=3")).json()
             bad_query = await client.get(f"{web.url}/api/sessions/echo/history?limit=many")
             listed = (await client.get(f"{web.url}/api/sessions")).json()
             deleted = await client.delete(f"{web.url}/api/sessions/echo", headers=headers)
@@ -210,7 +210,7 @@ async def test_session_round_trip(web: Web, tmp_path: Path) -> None:
 
     assert streamed[-1] == {"type": "output", "output": "turn 1: echo hi", "stop_reason": "end_turn"}
     assert {"type": "text", "text": "echo hi"} in streamed
-    assert [e["item"]["type"] for e in history["entries"]] == ["text", "output"]
+    assert [e["item"]["type"] for e in history["entries"]] == ["text", "usage", "output"]
     assert history["has_older"] is True
     assert bad_query.status_code == 422
     assert listed == [{"name": "echo", "kind": "pydantic-ai", "running": True}]

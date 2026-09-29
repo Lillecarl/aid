@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from contextlib import asynccontextmanager
 from importlib.metadata import version
 from typing import TYPE_CHECKING, Any, cast
@@ -16,27 +17,33 @@ from acp.schema import (
     AgentThoughtChunk,
     AllowedOutcome,
     ClientCapabilities,
+    ConfigOptionUpdate,
     ContentToolCallContent,
     DeniedOutcome,
     FileEditToolCallContent,
     Implementation,
     RequestPermissionResponse,
+    SessionConfigOptionSelect,
     SessionNotification,
     TextContentBlock,
     ToolCallProgress,
     ToolCallStart,
+    UsageUpdate,
 )
 from pydantic import BaseModel, Field, ValidationError
 
 from aid.env import agent_environment
 from aid.mcp import AID_TOOL_PREFIX, session_servers, to_acp
 from aid.protocol import (
+    Cost,
     Output,
     SessionEvent,
+    Started,
     TextDelta,
     ThoughtDelta,
     ToolCall,
     ToolDiff,
+    Usage,
     clip,
     to_json,
     tool_text,
@@ -51,10 +58,12 @@ if TYPE_CHECKING:
     from acp.schema import (
         AcpMcpServer,
         HttpMcpServer,
+        InitializeResponse,
         McpCapabilities,
         McpServerStdio,
         PermissionOption,
         PromptResponse,
+        SessionConfigOptionBoolean,
         SseMcpServer,
         ToolCallUpdate,
     )
@@ -112,6 +121,53 @@ def to_event(update: object) -> SessionEvent | None:
             )
         case _:
             return None
+
+
+type ConfigOption = SessionConfigOptionSelect | SessionConfigOptionBoolean
+
+
+def model_of(options: list[ConfigOption] | None) -> str | None:
+    """The current value of the session's model option: ACP's `model` category."""
+    for option in options or []:
+        if isinstance(option, SessionConfigOptionSelect) and option.category == "model":
+            return option.current_value
+    return None
+
+
+class _ModelTokens(BaseModel):
+    model: str
+
+
+class _Quota(BaseModel):
+    model_usage: list[_ModelTokens] = Field(default_factory=list[_ModelTokens])
+
+
+class _PromptMeta(BaseModel):
+    """claude-agent-acp's `_meta.quota`, outside the ACP schema: the turn's tokens per model it resolved."""
+
+    quota: _Quota = Field(default_factory=_Quota)
+
+
+def usage_of(response: PromptResponse, context: UsageUpdate | None, model: str | None) -> Usage:
+    """The turn's Usage, from the prompt response and the last `usage_update` the turn sent."""
+    try:
+        models = [m.model for m in _PromptMeta.model_validate(response.field_meta or {}).quota.model_usage]
+    except ValidationError:
+        models = []
+    tokens = response.usage
+    return Usage(
+        input_tokens=tokens.input_tokens if tokens else None,
+        output_tokens=tokens.output_tokens if tokens else None,
+        cache_read_tokens=tokens.cached_read_tokens if tokens else None,
+        cache_write_tokens=tokens.cached_write_tokens if tokens else None,
+        thought_tokens=tokens.thought_tokens if tokens else None,
+        models=models or ([model] if model else []),
+        context_used=context.used if context else None,
+        context_size=context.size if context else None,
+        session_cost=Cost(amount=context.cost.amount, currency=context.cost.currency)
+        if context and context.cost
+        else None,
+    )
 
 
 def permission_for(spec: AcpSpec, tool_name: str | None) -> PermissionMode:
@@ -174,10 +230,16 @@ class _Client:
 
 
 class AcpBackend:
-    def __init__(self, conn: ClientSideConnection, session_id: str) -> None:
+    def __init__(self, conn: ClientSideConnection, session_id: str, started: Started) -> None:
         self._conn = conn
         self._session_id = session_id
+        self._started = started
+        self._model = started.model
+        self._context: UsageUpdate | None = None
         self._events: MemoryObjectSendStream[SessionEvent] | None = None
+
+    def started(self) -> Started:
+        return self._started
 
     def observe(self, event: StreamEvent) -> None:
         """Runs synchronously in the receive loop, so updates keep wire order and precede the prompt response.
@@ -185,7 +247,7 @@ class AcpBackend:
         The acp library dispatches `session_update` to the client as separate tasks, which can run after
         `prompt()` has already returned.
         """
-        if self._events is None or event.message.get("method") != "session/update":
+        if event.message.get("method") != "session/update":
             return
         try:
             notification = SessionNotification.model_validate(event.message.get("params"))
@@ -194,8 +256,14 @@ class AcpBackend:
             return
         if notification.session_id != self._session_id:
             return
-        if (session_event := to_event(notification.update)) is not None:
-            self._events.send_nowait(session_event)
+        match notification.update:
+            case UsageUpdate() as usage:
+                self._context = usage
+            case ConfigOptionUpdate(config_options=options):
+                self._model = model_of(options) or self._model
+            case update:
+                if self._events is not None and (session_event := to_event(update)) is not None:
+                    self._events.send_nowait(session_event)
 
     async def prompt(self, text: str, emit: Emit) -> Output:
         send, receive = anyio.create_memory_object_stream[SessionEvent](math.inf)
@@ -209,11 +277,14 @@ class AcpBackend:
                     await emit(event)
 
         response: PromptResponse | None = None
+        self._context = None
         async with anyio.create_task_group() as tg:
             tg.start_soon(forward)
             response = await self._send_prompt(text, send)
         if response is None:
             raise RuntimeError("ACP prompt returned no response")
+        if response.usage is not None or self._context is not None:
+            await emit(usage_of(response, self._context, self._model))
         return Output(output="".join(chunks), stop_reason=response.stop_reason)
 
     async def _send_prompt(self, text: str, events: MemoryObjectSendStream[SessionEvent]) -> PromptResponse:
@@ -260,10 +331,20 @@ async def open_acp(spec: AcpSpec, state_dir: anyio.Path) -> AsyncGenerator[AcpBa
             servers: list[HttpMcpServer | SseMcpServer | AcpMcpServer | McpServerStdio] = [
                 to_acp(server) for server in session_servers(spec, state_dir.name)
             ]
-            session_id = await _resume(conn, spec, id_file, servers, can_load=bool(caps and caps.load_session))
+            session_id, resumed, options = await _resume(
+                conn, spec, id_file, servers, can_load=bool(caps and caps.load_session)
+            )
         await id_file.write_text(session_id)
-        backend = AcpBackend(conn, session_id)
+        started = Started(
+            pid=os.getpid(), agent_session=session_id, resumed=resumed, agent=agent_name(init), model=model_of(options)
+        )
+        backend = AcpBackend(conn, session_id, started)
         yield backend
+
+
+def agent_name(init: InitializeResponse) -> str | None:
+    info = init.agent_info
+    return None if info is None else f"{info.name} {info.version}" if info.version else info.name
 
 
 def unsupported_transports(spec: AcpSpec, caps: McpCapabilities | None) -> list[str]:
@@ -280,15 +361,16 @@ async def _resume(
     servers: list[HttpMcpServer | SseMcpServer | AcpMcpServer | McpServerStdio],
     *,
     can_load: bool,
-) -> str:
+) -> tuple[str, bool, list[ConfigOption] | None]:
+    """The session id, whether it is the earlier one, and the session's config options."""
     # The same list on load as on new: claude-agent-acp restarts its query process when they differ.
     if can_load and await id_file.exists():
         previous = (await id_file.read_text()).strip()
         try:
-            await conn.load_session(cwd=spec.cwd, session_id=previous, mcp_servers=servers)
+            loaded = await conn.load_session(cwd=spec.cwd, session_id=previous, mcp_servers=servers)
         except acp.RequestError:
             log.warning("agent could not load session %s; starting a new one", previous, exc_info=True)
         else:
-            return previous
+            return previous, True, loaded.config_options if loaded else None
     session = await conn.new_session(cwd=spec.cwd, mcp_servers=servers)
-    return session.session_id
+    return session.session_id, False, session.config_options

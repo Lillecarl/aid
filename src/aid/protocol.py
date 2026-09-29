@@ -230,6 +230,41 @@ class ToolCall(_Message):
     """Files the call touches, `path` or `path:line`."""
 
 
+class Cost(_Message):
+    amount: float
+    currency: str
+
+
+class Usage(_Message):
+    """Tokens a turn used, as its agent reports them; sent just before the turn's Output. None where the agent
+    says nothing.
+
+    What "the turn" covers differs by agent (measured 2026-09):
+    - claude-agent-acp 0.75.1: every model call of the turn, subagents included.
+    - opencode 1.x: the turn's last model response only.
+    - pydantic-ai: the run, every request.
+    - claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,
+      which aid does not read.
+    """
+
+    type: Literal["usage"] = "usage"
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    cache_read_tokens: int | None = None
+    cache_write_tokens: int | None = None
+    thought_tokens: int | None = None
+    """Included in output_tokens where the agent bills them together (Claude)."""
+    requests: int | None = None
+    """Model calls in the turn."""
+    models: list[str] = Field(default_factory=list[str])
+    context_used: int | None = None
+    """Tokens in the context window at the turn's end."""
+    context_size: int | None = None
+    session_cost: Cost | None = None
+    """The agent's own running total for its session, not this turn's share: ACP's `usage_update` cost is
+    cumulative. It restarts with the agent's session."""
+
+
 class Output(_Message):
     """Final event of a prompt. `output` is text for ACP and the agent's typed output for pydantic-ai."""
 
@@ -238,7 +273,22 @@ class Output(_Message):
     stop_reason: str
 
 
-type SessionEvent = Annotated[TextDelta | ThoughtDelta | ToolCall | Output, Field(discriminator="type")]
+type SessionEvent = Annotated[TextDelta | ThoughtDelta | ToolCall | Usage | Output, Field(discriminator="type")]
+
+
+class Started(_Message):
+    """A worker started, and what its backend said about itself. The daemon records one per start."""
+
+    type: Literal["started"] = "started"
+    pid: int
+    agent_session: str | None = None
+    """The agent's own session id: ACP's, or Claude Code's (its transcript's name). None for pydantic-ai."""
+    resumed: bool = False
+    """It carried on an earlier agent session rather than starting one."""
+    agent: str | None = None
+    """The agent's name and version where it reports them, such as `claude-agent-acp 0.75.1`."""
+    model: str | None = None
+    """The model when the session started, where the agent reports one. A turn's Usage names what it used."""
 
 
 class PromptEntry(_Message):
@@ -263,7 +313,8 @@ class MessageEntry(_Message):
 
 
 type HistoryItem = Annotated[
-    PromptEntry | MessageEntry | TextDelta | ThoughtDelta | ToolCall | Output | TurnError, Field(discriminator="type")
+    PromptEntry | MessageEntry | Started | TextDelta | ThoughtDelta | ToolCall | Usage | Output | TurnError,
+    Field(discriminator="type"),
 ]
 
 
@@ -306,6 +357,11 @@ class SessionStatus(_Message):
     """The agent command, or the pydantic-ai agent's name or target."""
     mcp_servers: list[str]
     aid_tools: bool
+    agent_session: str | None = None
+    """From the last start (`Started`); None before the first."""
+    agent: str | None = None
+    model: str | None = None
+    """The model at the last start. A turn's Usage names what it used."""
 
 
 class PaneAddress(_Message):
@@ -349,7 +405,7 @@ class Hello(_Message):
     """First message from a worker, once its backend is ready for prompts."""
 
     reply: Literal["hello"] = "hello"
-    pid: int
+    started: Started
 
 
 class StartFailed(_Message):

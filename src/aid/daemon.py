@@ -6,6 +6,7 @@ import logging
 import shlex
 import shutil
 import sys
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
@@ -40,6 +41,7 @@ from aid.protocol import (
     SendMessage,
     SessionInfo,
     SessionStatus,
+    Started,
     StartFailed,
     StartSession,
     StopSession,
@@ -92,6 +94,8 @@ class _Session:
     """Messages not yet handed over: to a wake turn, or to the channel server of interactive Claude."""
     mail: anyio.Event = field(default_factory=anyio.Event)
     """Set when `inbox` gains a message, for a channel server waiting on it."""
+    started: Started | None = None
+    """What the last worker said about its agent. Kept after it exits: the agent session carries on."""
 
     @property
     def running(self) -> bool:
@@ -123,6 +127,9 @@ class _Session:
             runs=runs,
             mcp_servers=servers,
             aid_tools=self.spec.aid_tools,
+            agent_session=self.started.agent_session if self.started else None,
+            agent=self.started.agent if self.started else None,
+            model=self.started.model if self.started else None,
         )
 
 
@@ -520,9 +527,14 @@ class Daemon:
             match reply:
                 case Hello():
                     if (session := self._sessions.get(name)) is not None:
-                        log.info("worker %s ready (pid %d)", name, reply.pid)
+                        log.info("worker %s ready (pid %d)", name, reply.started.pid)
                         session.peer = peer.bytes
+                        session.started = reply.started
                         session.ready.set()
+                        try:
+                            await session.history.append(reply.started, uuid.uuid4().hex)
+                        except OSError:
+                            log.exception("could not record %s's start", name)
                 case StartFailed():
                     if (session := self._sessions.get(name)) is not None:
                         log.warning("worker %s did not start: %s", name, reply.message)

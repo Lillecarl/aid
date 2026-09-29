@@ -12,10 +12,10 @@ import aid
 from aid.backends.claude_tty import Screen, classify, claude_argv, launcher_script
 from aid.mcp import claude_config
 from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR
-from aid.protocol import AidError, MessageEntry, Output, PaneView, TextDelta, ToolCall
+from aid.protocol import AidError, MessageEntry, Output, PaneView, Started, TextDelta, ToolCall, Usage
 from aid.spec import ClaudeTtySpec, McpHttp
 from tests.conftest import acp_spec, fake_spec, needs_pymux
-from tests.fake_claude import COUNT
+from tests.fake_claude import COUNT, MODEL
 from tests.test_tools import Rpc
 
 if TYPE_CHECKING:
@@ -91,10 +91,22 @@ async def test_prompt_round_trip(daemon: Paths, tmp_path: Path, pymux_socket: st
     assert plain.stop_reason == "end_turn"
     assert multi.output == "echo: one\ntwo; three"
     assert counted.text == "".join(f"{i} " for i in range(COUNT))
+    two = 2  # the Bash call's message and the answer's
     assert events == [
-        ToolCall(tool_call_id="toolu_fake", title="Bash", status="in_progress", input={"command": "true"}),
+        ToolCall(
+            tool_call_id="toolu_fake", title="Bash", kind="execute", status="in_progress", input={"command": "true"}
+        ),
         ToolCall(tool_call_id="toolu_fake", status="completed", output="ok"),
         TextDelta(text="ran it"),
+        Usage(
+            input_tokens=3 * two,
+            output_tokens=5 * two,
+            cache_read_tokens=100 * two,
+            cache_write_tokens=7 * two,
+            thought_tokens=2 * two,
+            requests=two,
+            models=[MODEL],
+        ),
         Output(output="ran it", stop_reason="end_turn"),
     ]
 
@@ -188,7 +200,7 @@ async def test_messages_reach_claude_through_its_channel(daemon: Paths, tmp_path
     assert "send_message" in init["instructions"]
     assert first == {"content": "ping", "meta": {"from": "bob"}}
     assert second == {"content": "from a person", "meta": {}}
-    assert [e.item for e in history.entries] == [
+    assert [e.item for e in history.entries if not isinstance(e.item, Started)] == [
         MessageEntry(sender="bob", text="ping"),
         MessageEntry(sender=None, text="from a person"),
     ]

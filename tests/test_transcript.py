@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING, Any
 import anyio
 import pytest
 
-from aid.protocol import TextDelta, ThoughtDelta, ToolCall
-from aid.transcript import TranscriptFollower, TurnEnded, find_transcript, items_from_entry
+from aid.protocol import TextDelta, ThoughtDelta, ToolCall, ToolDiff, Usage
+from aid.transcript import TranscriptFollower, TurnEnded, TurnUsage, find_transcript, items_from_entry
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -19,6 +19,39 @@ def assistant(block: dict[str, Any], stop_reason: str = "tool_use") -> dict[str,
     return {"type": "assistant", "message": {"id": "msg_1", "stop_reason": stop_reason, "content": [block]}}
 
 
+def tool_result(tool_use_id: str, result: dict[str, Any]) -> dict[str, Any]:
+    block = {"type": "tool_result", "tool_use_id": tool_use_id}
+    return {"type": "user", "toolUseResult": result, "message": {"content": [block]}}
+
+
+def billed(message_id: str, model: str, block: dict[str, Any]) -> dict[str, Any]:
+    usage = {"input_tokens": 1, "output_tokens": 10, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 5}
+    message = {"id": message_id, "model": model, "usage": usage, "content": [block]}
+    return {"type": "assistant", "message": message}
+
+
+def test_turn_usage_counts_each_message_once() -> None:
+    tally = TurnUsage()
+    for entry in (
+        billed("msg_a", "claude-x", {"type": "thinking", "thinking": "hm"}),
+        billed("msg_a", "claude-x", {"type": "text", "text": "a"}),
+        billed("msg_a", "claude-x", {"type": "tool_use", "id": "t", "name": "Bash", "input": {}}),
+        {"type": "user", "message": {"content": "not billed"}},
+        billed("msg_b", "claude-y", {"type": "text", "text": "b"}),
+        billed("msg_c", "<synthetic>", {"type": "text", "text": "API error"}),
+    ):
+        tally.add(entry)
+    assert tally.usage() == Usage(
+        input_tokens=3,
+        output_tokens=30,
+        cache_read_tokens=300,
+        cache_write_tokens=15,
+        thought_tokens=0,
+        requests=3,
+        models=["claude-x", "claude-y"],
+    )
+
+
 @pytest.mark.parametrize(
     ("entry", "items"),
     [
@@ -26,7 +59,46 @@ def assistant(block: dict[str, Any], stop_reason: str = "tool_use") -> dict[str,
         (assistant({"type": "thinking", "thinking": "hmm"}), [ThoughtDelta(text="hmm")]),
         (
             assistant({"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}),
-            [ToolCall(tool_call_id="toolu_1", title="Bash", status="in_progress", input={"command": "ls"})],
+            [
+                ToolCall(
+                    tool_call_id="toolu_1", title="Bash", kind="execute", status="in_progress", input={"command": "ls"}
+                )
+            ],
+        ),
+        (
+            assistant({"type": "tool_use", "id": "toolu_4", "name": "Read", "input": {"file_path": "/a.py"}}),
+            [
+                ToolCall(
+                    tool_call_id="toolu_4",
+                    title="Read",
+                    kind="read",
+                    status="in_progress",
+                    input={"file_path": "/a.py"},
+                    paths=["/a.py"],
+                )
+            ],
+        ),
+        (
+            tool_result(
+                "toolu_5", {"filePath": "/a.py", "oldString": "x = 1", "newString": "x = 2", "originalFile": "big"}
+            ),
+            [
+                ToolCall(
+                    tool_call_id="toolu_5", status="completed", diffs=[ToolDiff(path="/a.py", old="x = 1", new="x = 2")]
+                )
+            ],
+        ),
+        (
+            tool_result("toolu_6", {"type": "create", "filePath": "/b.py", "content": "new", "originalFile": None}),
+            [ToolCall(tool_call_id="toolu_6", status="completed", diffs=[ToolDiff(path="/b.py", old=None, new="new")])],
+        ),
+        (
+            tool_result("toolu_7", {"type": "update", "filePath": "/b.py", "content": "two", "originalFile": "one"}),
+            [
+                ToolCall(
+                    tool_call_id="toolu_7", status="completed", diffs=[ToolDiff(path="/b.py", old="one", new="two")]
+                )
+            ],
         ),
         (
             {

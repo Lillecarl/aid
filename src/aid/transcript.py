@@ -10,6 +10,13 @@ against 2.1.283. What this module relies on:
 - `system` / `turn_duration` ends a turn, once, after any Stop-hook
   continuations. `assistant` with `stop_reason: end_turn` does not: a hook can
   block the stop and the model goes on.
+- Every `assistant` entry of one API message repeats that message's `id`,
+  `model` and whole `usage` (2 to 16 entries per id measured): count usage once
+  per id.
+- `toolUseResult` for Edit: `filePath`, `oldString`, `newString`; for Write:
+  `type` create|update, `filePath`, `content`, `originalFile`; for Read:
+  `file.filePath`. Checked against 2.1.283.
+- Subagents write `<session>/subagents/agent-<id>.jsonl`, not this file.
 """
 
 from __future__ import annotations
@@ -19,15 +26,15 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import anyio
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from watchfiles import (
     awatch,  # pyright: ignore[reportUnknownVariableType] -- its stop_event type names trio, which is not installed
 )
 
-from aid.protocol import TextDelta, ThoughtDelta, ToolCall, clip, to_json
+from aid.protocol import TextDelta, ThoughtDelta, ToolCall, ToolDiff, Usage, clip, to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -84,7 +91,22 @@ class _Block(_Lenient):
         return self.content
 
 
+class _OutputDetails(_Lenient):
+    thinking_tokens: int = 0
+
+
+class _Usage(_Lenient):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    output_tokens_details: _OutputDetails = Field(default_factory=_OutputDetails)
+
+
 class _Message(_Lenient):
+    id: str = ""
+    model: str = ""
+    usage: _Usage | None = None
     content: str | list[_Block] = ""
 
     def text(self) -> str:
@@ -97,6 +119,93 @@ class _Entry(_Lenient):
     is_sidechain: bool = Field(False, alias="isSidechain")
     message: _Message = Field(default_factory=_Message)
     tool_use_result: Any = Field(None, alias="toolUseResult")
+
+
+class _ToolResult(_Lenient):
+    """The fields of a `toolUseResult` that say which file changed and how."""
+
+    type: str = ""
+    file_path: str = Field("", alias="filePath")
+    old_string: str | None = Field(None, alias="oldString")
+    new_string: str | None = Field(None, alias="newString")
+    content: str | None = None
+    original_file: str | None = Field(None, alias="originalFile")
+
+
+# Claude Code's tool names to ACP's tool kinds, which the web UI already reads.
+TOOL_KINDS: Final = {
+    "Read": "read",
+    "Edit": "edit",
+    "MultiEdit": "edit",
+    "Write": "edit",
+    "NotebookEdit": "edit",
+    "Bash": "execute",
+    "Grep": "search",
+    "Glob": "search",
+    "WebFetch": "fetch",
+    "WebSearch": "fetch",
+    "Task": "think",
+    "Agent": "think",
+}
+
+
+def tool_paths(input: Any) -> list[str]:
+    if not isinstance(input, dict):
+        return []
+    arguments = cast("dict[str, Any]", input)
+    return [p for key in ("file_path", "notebook_path") if isinstance(p := arguments.get(key), str)]
+
+
+def tool_diffs(result: Any) -> list[ToolDiff]:
+    """An Edit's or Write's change. The strings are the edit's own, never the whole file an Edit changed."""
+    if not isinstance(result, dict):
+        return []
+    try:
+        found = _ToolResult.model_validate(result)
+    except ValidationError:
+        return []
+    if not found.file_path:
+        return []
+    if found.old_string is not None and found.new_string is not None:
+        return [ToolDiff(path=found.file_path, old=clip(found.old_string), new=clip(found.new_string))]
+    if found.type in ("create", "update") and found.content is not None:
+        old = None if found.type == "create" or found.original_file is None else clip(found.original_file)
+        return [ToolDiff(path=found.file_path, old=old, new=clip(found.content))]
+    return []
+
+
+class TurnUsage:
+    """The Usage of one turn's transcript entries, each API message counted once."""
+
+    def __init__(self) -> None:
+        self._seen: set[str] = set()
+        self._models: dict[str, None] = {}
+        self._usage = Usage(
+            input_tokens=0, output_tokens=0, cache_read_tokens=0, cache_write_tokens=0, thought_tokens=0, requests=0
+        )
+
+    def add(self, raw: dict[str, Any]) -> None:
+        entry = _Entry.model_validate(raw)
+        message = entry.message
+        if entry.type != "assistant" or message.usage is None or not message.id or message.id in self._seen:
+            return
+        self._seen.add(message.id)
+        if message.model and not message.model.startswith("<"):  # "<synthetic>" marks a message no model wrote
+            self._models[message.model] = None
+        tokens, total = message.usage, self._usage
+        self._usage = total.model_copy(
+            update={
+                "input_tokens": (total.input_tokens or 0) + tokens.input_tokens,
+                "output_tokens": (total.output_tokens or 0) + tokens.output_tokens,
+                "cache_read_tokens": (total.cache_read_tokens or 0) + tokens.cache_read_input_tokens,
+                "cache_write_tokens": (total.cache_write_tokens or 0) + tokens.cache_creation_input_tokens,
+                "thought_tokens": (total.thought_tokens or 0) + tokens.output_tokens_details.thinking_tokens,
+                "requests": (total.requests or 0) + 1,
+            }
+        )
+
+    def usage(self) -> Usage:
+        return self._usage.model_copy(update={"models": list(self._models)})
 
 
 def items_from_entry(raw: dict[str, Any]) -> list[TranscriptItem]:
@@ -115,19 +224,27 @@ def items_from_entry(raw: dict[str, Any]) -> list[TranscriptItem]:
                 elif block.type == "tool_use":
                     items.append(
                         ToolCall(
-                            tool_call_id=block.id, title=block.name, status="in_progress", input=to_json(block.input)
+                            tool_call_id=block.id,
+                            title=block.name,
+                            kind=TOOL_KINDS.get(block.name or "", "other"),
+                            status="in_progress",
+                            input=to_json(block.input),
+                            paths=tool_paths(block.input),
                         )
                     )
             return items
         case "user" if "tool_use_result" in entry.model_fields_set:
+            results = [b for b in blocks if b.type == "tool_result"]
+            # One toolUseResult per entry: it belongs to a block only when the entry has one.
+            diffs = tool_diffs(entry.tool_use_result) if len(results) == 1 else []
             return [
                 ToolCall(
                     tool_call_id=b.tool_use_id,
                     status="failed" if b.is_error else "completed",
                     output=clip(text) if (text := b.result_text()) else None,
+                    diffs=diffs,
                 )
-                for b in blocks
-                if b.type == "tool_result"
+                for b in results
             ]
         case "user" if entry.message.text().startswith(INTERRUPTED_MARKER):
             return [TurnEnded(interrupted=True)]

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shlex
 import uuid
@@ -36,9 +37,9 @@ from libpymux import Server
 from aid.env import agent_environment
 from aid.mcp import AID_TOOLS_RULE, claude_config, session_servers
 from aid.paths import default_paths
-from aid.protocol import Output, PaneAddress, PaneView, TextDelta
+from aid.protocol import Output, PaneAddress, PaneView, Started, TextDelta
 from aid.spec import BUILTIN_MCP_SERVER
-from aid.transcript import TranscriptFollower, TurnEnded, config_dir, find_transcript, items_from_entry
+from aid.transcript import TranscriptFollower, TurnEnded, TurnUsage, config_dir, find_transcript, items_from_entry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -118,11 +119,15 @@ def claude_argv(spec: ClaudeTtySpec, session_id: str, *, resume: bool, mcp_confi
 
 
 class ClaudeTtyBackend:
-    def __init__(self, server: Server, pane: Pane, transcripts: Path, session_id: str) -> None:
+    def __init__(self, server: Server, pane: Pane, transcripts: Path, session_id: str, started: Started) -> None:
         self._server = server
         self._pane = pane
         self._transcripts = transcripts
         self._session_id = session_id
+        self._started = started
+
+    def started(self) -> Started:
+        return self._started
 
     async def _pane_alive(self) -> bool:
         def alive() -> bool:
@@ -149,6 +154,7 @@ class ClaudeTtyBackend:
 
         result: Output | None = None
         chunks: list[str] = []
+        usage = TurnUsage()
         async with anyio.create_task_group() as tg:
 
             async def watch_pane() -> None:
@@ -158,10 +164,12 @@ class ClaudeTtyBackend:
 
             tg.start_soon(watch_pane)
             async for entry in follower.follow():
+                usage.add(entry)
                 for item in items_from_entry(entry):
                     if isinstance(item, TurnEnded):
                         reason = "cancelled" if item.interrupted else "end_turn"
                         result = Output(output="".join(chunks), stop_reason=reason)
+                        await emit(usage.usage())
                         break
                     if isinstance(item, TextDelta):
                         chunks.append(item.text)
@@ -273,7 +281,8 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
     log.info("claude %s in pymux pane %s on %s (%s)", session_id, pane.id, socket, "resumed" if resume else "new")
     try:
         await _wait_ready(pane, spec.trust_cwd)
-        yield ClaudeTtyBackend(server, pane, transcripts, session_id)
+        started = Started(pid=os.getpid(), agent_session=session_id, resumed=resume)
+        yield ClaudeTtyBackend(server, pane, transcripts, session_id, started)
     finally:
         with anyio.CancelScope(shield=True):
             await anyio.to_thread.run_sync(lambda: server.cmd(["kill-window", "-t", pane.window_id], check=False))

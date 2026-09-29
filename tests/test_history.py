@@ -7,9 +7,9 @@ import pytest
 
 import aid
 from aid.history import HistoryLog, Recorder
-from aid.protocol import Output, PromptEntry, TextDelta, ThoughtDelta, ToolCall, TurnError
+from aid.protocol import Output, PromptEntry, Started, TextDelta, ThoughtDelta, ToolCall, TurnError, Usage
 from tests.conftest import acp_spec, py_spec
-from tests.fake_acp_agent import CHUNKS
+from tests.fake_acp_agent import AGENT_NAME, AGENT_VERSION, CHUNKS, MODEL
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -114,23 +114,41 @@ async def test_daemon_records_every_turn(daemon: Paths, tmp_path: Path) -> None:
             echo = await client.create("echo", py_spec(tmp_path, "agents:echo"))
             for prompt in ("a", "b", "c"):
                 await echo.run(prompt)
-            latest = await echo.history(limit=3)
+            latest = await echo.history(limit=4)
             earlier = await echo.history(before=latest.entries[0].seq, limit=100)
             with pytest.raises(aid.AidError):
                 await client.session("missing").history()
 
     counted = "".join(f"{i} " for i in range(CHUNKS))
-    assert [e.item for e in acp_history.entries] == [
+    start, *turn = [e.item for e in acp_history.entries]
+    assert isinstance(start, Started)
+    assert (start.agent, start.model, start.resumed) == (f"{AGENT_NAME} {AGENT_VERSION}", MODEL, False)
+    assert turn == [
         PromptEntry(text="count"),
         TextDelta(text=counted),
         Output(output=counted, stop_reason="end_turn"),
     ]
-    assert latest.total == 9
-    assert [e.item for e in latest.entries] == [
+    assert acp_history.entries[0].turn != acp_history.entries[1].turn
+    # A start, then prompt, text, usage and output per turn.
+    assert latest.total == 1 + 3 * 4
+    prompt, text, usage, output = [e.item for e in latest.entries]
+    assert (prompt, text, output) == (
         PromptEntry(text="c"),
         TextDelta(text="turn 3: echo c"),
         Output(output="turn 3: echo c", stop_reason="end_turn"),
-    ]
+    )
+    assert isinstance(usage, Usage)
+    assert usage.requests == 1
     assert latest.has_older
-    assert [e.seq for e in earlier.entries] == list(range(6))
+    assert [e.seq for e in earlier.entries] == list(range(9))
     assert earlier.has_older is False
+
+
+async def test_history_from_before_usage_loads(tmp_path: Path) -> None:
+    path = tmp_path / "h.jsonl"
+    path.write_text(
+        '{"seq": 0, "at": 1.0, "turn": "t", "item": {"type": "prompt", "text": "old"}}\n'
+        '{"seq": 1, "at": 2.0, "turn": "t", "item": {"type": "output", "output": "x", "stop_reason": "end_turn"}}\n'
+    )
+    page = await HistoryLog(anyio.Path(path)).page()
+    assert [e.item for e in page.entries] == [PromptEntry(text="old"), Output(output="x", stop_reason="end_turn")]

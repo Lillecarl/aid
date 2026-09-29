@@ -13,17 +13,39 @@ import anyio
 from acp.schema import (
     AgentCapabilities,
     AllowedOutcome,
+    Cost,
+    Implementation,
     InitializeResponse,
     LoadSessionResponse,
     McpCapabilities,
     NewSessionResponse,
     PermissionOption,
     PromptResponse,
+    SessionConfigOptionSelect,
     TextContentBlock,
     ToolCallUpdate,
+    Usage,
+    UsageUpdate,
 )
 
 CHUNKS = 50
+AGENT_NAME = "fake-acp"
+AGENT_VERSION = "1.0"
+MODEL = "fake-default"
+RESOLVED_MODEL = "fake-model-2"
+
+
+def model_option() -> SessionConfigOptionSelect:
+    return SessionConfigOptionSelect.model_validate(
+        {
+            "type": "select",
+            "id": "model",
+            "name": "Model",
+            "category": "model",
+            "currentValue": MODEL,
+            "options": [{"value": MODEL, "name": "Default"}],
+        }
+    )
 
 
 class FakeAgent:
@@ -39,18 +61,19 @@ class FakeAgent:
 
     async def initialize(self, protocol_version: int, **kwargs: Any) -> InitializeResponse:
         caps = AgentCapabilities(load_session=True, mcp_capabilities=McpCapabilities(http=True))
-        return InitializeResponse(protocol_version=protocol_version, agent_capabilities=caps)
+        info = Implementation(name=AGENT_NAME, version=AGENT_VERSION)
+        return InitializeResponse(protocol_version=protocol_version, agent_capabilities=caps, agent_info=info)
 
     async def new_session(self, cwd: str, mcp_servers: list[Any] | None = None, **kwargs: Any) -> NewSessionResponse:
         self.mcp_servers, self.session_via = mcp_servers or [], "new"
-        return NewSessionResponse(session_id=uuid.uuid4().hex)
+        return NewSessionResponse(session_id=uuid.uuid4().hex, config_options=[model_option()])
 
     async def load_session(
         self, cwd: str, session_id: str, mcp_servers: list[Any] | None = None, **kwargs: Any
     ) -> LoadSessionResponse:
         self.mcp_servers, self.session_via = mcp_servers or [], "load"
         await self.say(session_id, "replayed history")
-        return LoadSessionResponse()
+        return LoadSessionResponse(config_options=[model_option()])
 
     async def say(self, session_id: str, text: str) -> None:
         await self.conn.session_update(session_id=session_id, update=acp.update_agent_message_text(text))
@@ -103,6 +126,18 @@ class FakeAgent:
             case "mcp":
                 servers = [s.model_dump(mode="json", exclude_none=True) for s in self.mcp_servers]
                 await self.say(session_id, json.dumps({"via": self.session_via, "servers": servers}))
+            case "usage":
+                await self.say(session_id, "counted")
+                context = UsageUpdate(
+                    session_update="usage_update", used=1234, size=200_000, cost=Cost(amount=0.5, currency="USD")
+                )
+                await self.conn.session_update(session_id=session_id, update=context)
+                tokens = Usage(
+                    total_tokens=26, input_tokens=10, output_tokens=6, cached_read_tokens=8, cached_write_tokens=2
+                )
+                # claude-agent-acp's `_meta.quota`: the model the agent resolved, not the option's alias.
+                meta: dict[str, Any] = {"quota": {"model_usage": [{"model": RESOLVED_MODEL, "token_count": {}}]}}
+                return PromptResponse(stop_reason="end_turn", usage=tokens, field_meta=meta)
             case _:
                 await self.say(session_id, f"echo: {text}")
         return PromptResponse(stop_reason="end_turn")

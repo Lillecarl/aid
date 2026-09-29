@@ -7,7 +7,7 @@ import pytest
 
 import aid
 from aid.daemon import wake_prompt
-from aid.protocol import HistoryItem, MessageEntry, Output, PromptEntry, SessionStatus, TextDelta
+from aid.protocol import HistoryItem, MessageEntry, Output, PromptEntry, SessionStatus, Started, TextDelta
 from aid.spec import McpHttp
 from tests.conftest import acp_spec, py_spec
 
@@ -29,9 +29,10 @@ def test_wake_prompt() -> None:
 
 
 async def outputs_after_message(session: aid.Session, count: int = 1) -> list[HistoryItem]:
-    """The session's history once `count` outputs follow its first message."""
+    """The session's history, less its worker starts, once `count` outputs follow its first message."""
     while True:
-        items = [e.item for e in (await session.history(limit=1000)).entries]
+        entries = (await session.history(limit=1000)).entries
+        items: list[HistoryItem] = [e.item for e in entries if not isinstance(e.item, Started)]
         first = next((i for i, item in enumerate(items) if isinstance(item, MessageEntry)), None)
         if first is not None and sum(isinstance(item, Output) for item in items[first:]) >= count:
             return items

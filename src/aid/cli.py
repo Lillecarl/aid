@@ -24,10 +24,12 @@ from aid.protocol import (
     MessageEntry,
     Output,
     PromptEntry,
+    Started,
     TextDelta,
     ThoughtDelta,
     ToolCall,
     TurnError,
+    Usage,
 )
 from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
 from aid.web import OidcConfig, create_app
@@ -242,6 +244,11 @@ def _history_line(entry: HistoryEntry) -> str:
             body = f"[message from {item.sender or 'a person'}] {item.text}"
         case TurnError():
             body = f"[error {item.code}] {item.message}"
+        case Started():
+            how = "[resumed]" if item.resumed else "[started]"
+            body = " ".join(p for p in (how, f"pid {item.pid}", item.agent, item.model, item.agent_session) if p)
+        case Usage():
+            body = " ".join([f"[usage] {item.input_tokens} in, {item.output_tokens} out", *item.models])
     return f"{entry.seq:>6}  {body}"
 
 

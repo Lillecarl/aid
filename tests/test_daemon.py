@@ -7,11 +7,11 @@ import pytest
 
 import aid
 from aid.daemon import Daemon
-from aid.protocol import AidError, Output, TextDelta
+from aid.protocol import AidError, Cost, Output, Started, TextDelta, Usage
 from aid.spec import PermissionMode
 from tests.agents import Review
 from tests.conftest import acp_spec, py_spec
-from tests.fake_acp_agent import CHUNKS
+from tests.fake_acp_agent import AGENT_NAME, AGENT_VERSION, CHUNKS, MODEL, RESOLVED_MODEL
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -90,7 +90,36 @@ async def test_start_runs_a_stopped_session_without_a_turn(daemon: Paths, tmp_pa
     assert started.running
     assert not started.busy
     assert again.pid == started.pid
-    assert history.entries == []
+    first, second = [e.item for e in history.entries]
+    assert isinstance(first, Started)
+    assert isinstance(second, Started)
+    assert not first.resumed
+    assert second.resumed
+    assert second.agent_session == first.agent_session == started.agent_session
+    assert second.pid == started.pid
+
+
+async def test_acp_usage_is_recorded(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("usage", acp_spec(tmp_path))
+            events = [e async for e in session.stream("usage")]
+            status = await session.status()
+    assert events[-2:] == [
+        Usage(
+            input_tokens=10,
+            output_tokens=6,
+            cache_read_tokens=8,
+            cache_write_tokens=2,
+            models=[RESOLVED_MODEL],
+            context_used=1234,
+            context_size=200_000,
+            session_cost=Cost(amount=0.5, currency="USD"),
+        ),
+        Output(output="counted", stop_reason="end_turn"),
+    ]
+    assert (status.agent, status.model) == (f"{AGENT_NAME} {AGENT_VERSION}", MODEL)
+    assert status.agent_session
 
 
 async def test_failed_start_leaves_no_session(daemon: Paths, tmp_path: Path) -> None:
