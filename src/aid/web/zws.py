@@ -86,7 +86,8 @@ type PageRequest = Annotated[
     Field(discriminator="op"),
 ]
 """What the page may ask the daemon. Not `Hook` (a claude-tty worker's), `SendMessage` (it names its sender),
-`ReceiveMessages` (it takes a session's messages), nor the pane requests (aid web relays the pane itself)."""
+`ReceiveMessages` (it takes a session's messages), the pane requests (aid web relays the pane itself), nor the plugin
+registry (it grants what the page itself cannot check)."""
 
 type PageReply = Annotated[Event | Done | Failure, Field(discriminator="reply")]
 """What the daemon answers a page's request with."""

@@ -14,7 +14,21 @@ API and a CLI.
   DEALER to the daemon.
 - `src/aid/zap.py` — every worker connection is CURVE. The daemon issues a keypair per launch; its ZAP handler
   names the session as the connection's User-Id, and the daemon routes by that, never by a worker's routing id.
-  A `wss://` worker sets WSS_HOSTNAME: without it libzmq accepts a trusted certificate for any name.
+  A `wss://` worker sets WSS_HOSTNAME: without it libzmq accepts a trusted certificate for any name. Domains:
+  workers, plugins, plugin events (wants `read`).
+- `src/aid/plugins.py` — plugins: a registered CURVE public key + grants (`read`, `prompt`, `message`,
+  `permissions`, `manage`; `NEEDS` maps op → grant, unlisted ops no plugin may send). Sockets `plugins.sock`
+  (ROUTER) and `plugin-events.sock` (PUB), both CURVE; `_plugin_loop` checks each request against the grants as they
+  are now → `forbidden`. The daemon stamps what a plugin cannot claim: a message's sender is `plugin:<name>`,
+  `AnswerPermission.plugin` is the connection's (None on control) → `PermissionDecision.by=plugin` + name.
+  Registry ops (`add_plugin`, `plugins`, `remove_plugin`) only on control.sock, never in `PageRequest`. State:
+  `state_dir/plugins/<name>/plugin.json` + `secret` (0600, `aid plugin add` makes it); the daemon writes its public
+  key to `runtime_dir/server.key` at start (new each start). Client: `aid.connect(plugin=NAME)`,
+  `register_plugin`. Grants bind only what arrives on the plugin sockets: a same-user local plugin can open
+  control.sock, which checks nothing, until confined (Lillecarl/aid#4). The events PUB cannot drop a subscriber: a
+  plugin losing `read` hears events until it reconnects.
+- `src/aid/guard.py` — `python -m aid.guard`: plugin (read, permissions) that allows a request whose command is one
+  program from `READERS` with no shell syntax, and leaves the rest for a person. Seed for aid#3.
 - `src/aid/backends/` — `acp.py`, `pydantic_ai.py`, `claude_tty.py`; each implements `base.Backend`.
 - `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON,
   plus the built-in `aid` server (`session_servers`). claude-agent-acp restarts its query when `session/load` gets
@@ -26,6 +40,8 @@ API and a CLI.
   For interactive Claude it is also the session's channel (research preview): it long-polls the daemon for the
   session's messages and pushes `notifications/claude/channel`.
 - `src/aid/builtin_tools.py` — aid's own tools, in every session: `send_message`, `list_sessions`.
+- Request ids route replies across all clients: the daemon refuses an id in flight (`duplicate_id`); relays and
+  plugins never pass a caller's id through unchecked.
 - Messages: `SendMessage` → recipient's history + inbox. ACP and pydantic-ai get a daemon-started wake turn after
   the running turn; interactive Claude gets a channel event. A wake turn has no client (`_Route.client` None).
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.
