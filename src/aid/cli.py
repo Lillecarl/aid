@@ -4,8 +4,10 @@ import argparse
 import json
 import logging
 import os
+import shlex
 import signal
 import sys
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -14,7 +16,7 @@ import anyio.to_thread
 
 from aid import daemon, speech
 from aid.client import connect
-from aid.launcher import ForkserverLauncher
+from aid.launcher import CommandLauncher, ForkserverLauncher, WorkerArgs, process_main
 from aid.mcp import from_claude_config
 from aid.paths import default_paths
 from aid.protocol import (
@@ -35,6 +37,7 @@ from aid.web.app import ENV_ASSETS
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from aid.launcher import Launcher
     from aid.protocol import HistoryEntry
     from aid.spec import AgentSpec, McpServer
 
@@ -56,7 +59,26 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="aid", description="AI daemon: persistent ACP and pydantic-ai agents.")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("daemon", help="run the daemon in the foreground")
+    daemon_cmd = sub.add_parser("daemon", help="run the daemon in the foreground")
+    daemon_cmd.add_argument(
+        "--workers-listen",
+        action="append",
+        default=[],
+        metavar="ENDPOINT",
+        help="also take worker connections here, such as ws://0.0.0.0:7070/aid behind a reverse proxy (repeatable)",
+    )
+    daemon_cmd.add_argument(
+        "--worker-command",
+        metavar="COMMAND",
+        help="start workers by running COMMAND (split like a shell), which must run `aid worker`; "
+        "by default the daemon forks them",
+    )
+    daemon_cmd.add_argument(
+        "--worker-endpoint",
+        metavar="ENDPOINT",
+        help="with --worker-command: the workers socket as the worker reaches it, such as ws://aid.example:7070/aid",
+    )
+    sub.add_parser("worker", help="run one worker; `aid daemon --worker-command` starts it and sends its arguments")
     sub.add_parser("list", help="list sessions")
 
     web = sub.add_parser(
@@ -251,9 +273,20 @@ async def _client_command(args: argparse.Namespace) -> None:
                 raise SystemExit(f"unknown command {other!r}")
 
 
-async def _serve() -> None:
+def _launcher(args: argparse.Namespace) -> Launcher:
+    if args.worker_command is None:
+        if args.worker_endpoint is not None:
+            raise SystemExit("aid daemon: --worker-endpoint needs --worker-command")
+        return ForkserverLauncher()
+    if args.worker_endpoint is None:
+        raise SystemExit("aid daemon: --worker-command needs --worker-endpoint")
+    return CommandLauncher(shlex.split(args.worker_command), args.worker_endpoint)
+
+
+async def _serve(args: argparse.Namespace) -> None:
+    launcher = _launcher(args)
     async with anyio.create_task_group() as tg:
-        tg.start_soon(daemon.run, default_paths(), ForkserverLauncher())
+        tg.start_soon(partial(daemon.run, default_paths(), launcher, workers_listen=args.workers_listen))
         with anyio.open_signal_receiver(signal.SIGTERM, signal.SIGINT) as signals:
             async for signum in signals:
                 logging.getLogger("aid").info("%s: stopping workers", signal.Signals(signum).name)
@@ -292,9 +325,12 @@ def main(argv: Sequence[str] | None = None) -> None:
     head, agent_command = _split_agent_command(sys.argv[1:] if argv is None else argv)
     args = _parser().parse_args(head)
     args.agent_command = agent_command
-    if args.command in ("daemon", "web"):
+    if args.command in ("daemon", "web", "worker"):
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(processName)s %(name)s %(levelname)s %(message)s")
-        anyio.run(_serve if args.command == "daemon" else lambda: _web(args))
+        if args.command == "worker":
+            process_main(WorkerArgs.from_json(sys.stdin.read()))
+        else:
+            anyio.run(lambda: _serve(args) if args.command == "daemon" else _web(args))
         return
     try:
         anyio.run(_client_command, args)

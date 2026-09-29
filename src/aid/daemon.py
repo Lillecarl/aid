@@ -49,6 +49,8 @@ from aid.protocol import (
 from aid.spec import BUILTIN_MCP_SERVER, AcpSpec, AgentKind, AgentSpecAdapter, ClaudeTtySpec, PydanticAISpec
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from anyio.abc import TaskGroup, TaskStatus
 
     from aid.launcher import Launcher, WorkerHandle
@@ -147,9 +149,11 @@ class _Route:
 
 
 class Daemon:
-    def __init__(self, paths: Paths, launcher: Launcher) -> None:
+    def __init__(self, paths: Paths, launcher: Launcher, *, workers_listen: Sequence[str] = ()) -> None:
+        """`workers_listen`: endpoints for workers besides `paths.workers`, such as `ws://` for remote ones."""
         self._paths = paths
         self._launcher = launcher
+        self._workers_listen = list(workers_listen)
         self._sessions: dict[str, _Session] = {}
         self._routes: dict[str, _Route] = {}
         self._ctx = zmq.asyncio.Context()
@@ -170,6 +174,9 @@ class Daemon:
         # Before the workers socket: libzmq accepts every CURVE client while no handler is bound.
         self._zap.bind(zap.ZAP_ENDPOINT)
         self._workers.bind(self._paths.workers)
+        for endpoint in self._workers_listen:
+            self._workers.bind(endpoint)
+            log.info("workers can connect on %s", endpoint)
         log.info("listening on %s", self._paths.control)
         try:
             async with anyio.create_task_group() as tg:
@@ -216,10 +223,10 @@ class Daemon:
         async with self._client_lock:
             await self._clients.send_multipart([client, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
 
-    async def _send_worker(self, name: str, request: Request) -> None:
-        peer = self._sessions[name].peer
+    async def _send_worker(self, session: _Session, request: Request) -> None:
+        peer = session.peer
         if peer is None:
-            raise zmq.ZMQError(zmq.EHOSTUNREACH, f"no worker connected for {name!r}")
+            raise zmq.ZMQError(zmq.EHOSTUNREACH, f"no worker connected for {session.name!r}")
         async with self._worker_lock:
             await self._workers.send_multipart([peer, encode(request)])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
 
@@ -266,7 +273,7 @@ class Daemon:
                     recorder = Recorder(session.history, request.id)
                     await recorder.prompt(request.text)
                     self._routes[request.id] = _Route(client, session.name, recorder)
-                    await self._send_worker(session.name, request)
+                    await self._send_worker(session, request)
                 except BaseException:
                     self._routes.pop(request.id, None)
                     session.turn = None
@@ -279,7 +286,7 @@ class Daemon:
                 if not session.running:
                     raise AidError("not_running", f"{session.name!r} is stopped, so it has no screen")
                 self._routes[request.id] = _Route(client, session.name)
-                await self._send_worker(session.name, request)
+                await self._send_worker(session, request)
                 return None
             case GetStatus():
                 return Done(id=request.id, data=self._session(request.session).status().model_dump(mode="json"))
@@ -301,7 +308,7 @@ class Daemon:
                 if not session.running:
                     return Done(id=request.id)
                 self._routes[request.id] = _Route(client, session.name)
-                await self._send_worker(session.name, request)
+                await self._send_worker(session, request)
                 return None
             case StopSession():
                 await self._stop(self._session(request.session))
@@ -377,7 +384,7 @@ class Daemon:
         try:
             await self._ensure_running(session)
             self._routes[request.id] = _Route(None, session.name, recorder)
-            await self._send_worker(session.name, request)
+            await self._send_worker(session, request)
         except (AidError, zmq.ZMQError) as error:
             log.exception("could not deliver %d messages to %s", len(messages), session.name)
             self._routes.pop(request.id, None)
@@ -421,8 +428,14 @@ class Daemon:
             handle = await self._launcher.launch(args)
             session.handle = handle
             self._tg.start_soon(self._watch, session, handle)
-            with anyio.move_on_after(START_TIMEOUT) as scope:
-                await session.ready.wait()
+            try:
+                with anyio.move_on_after(START_TIMEOUT) as scope:
+                    await session.ready.wait()
+            except anyio.get_cancelled_exc_class():
+                # `_create` forgets a session whose start is cancelled, so `_stop_all` can miss it, and the
+                # shielded `_watch` would wait on this worker forever.
+                handle.kill()
+                raise
             if scope.cancelled_caught:
                 handle.kill()
                 raise AidError("start_timeout", f"worker for {session.name!r} sent no hello in {START_TIMEOUT}s")
@@ -465,7 +478,7 @@ class Daemon:
         if handle is None or session.exited.is_set():
             return
         try:
-            await self._send_worker(session.name, StopSession(session=session.name))
+            await self._send_worker(session, StopSession(session=session.name))
         except zmq.ZMQError:
             log.warning("could not ask worker %s to stop", session.name, exc_info=True)
         with anyio.move_on_after(STOP_TIMEOUT):
@@ -544,5 +557,5 @@ async def list_agents() -> AgentCatalog:
     return AgentCatalog.model_validate_json(result.stdout)
 
 
-async def run(paths: Paths, launcher: Launcher) -> None:
-    await Daemon(paths, launcher).serve()
+async def run(paths: Paths, launcher: Launcher, *, workers_listen: Sequence[str] = ()) -> None:
+    await Daemon(paths, launcher, workers_listen=workers_listen).serve()

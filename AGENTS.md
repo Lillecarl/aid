@@ -63,7 +63,7 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 - Keep workers subinterpreter-ready, for when pydantic-core and pyzmq load in more than one interpreter
   (measured 2026-09 on 3.14.7: both refuse isolated subinterpreters; PyO3 allows one interpreter per process):
   - `worker.main` takes only `str` arguments and mutates no process-wide state (cwd, `os.environ`, signals).
-  - Process-wide setup (chdir, environ) lives in `launcher._process_main`.
+  - Process-wide setup (chdir, environ) lives in `launcher.process_main`.
   - The daemon depends on `Launcher`/`WorkerHandle`, never on multiprocessing.
 - ACP `session/update` must be read through the connection observer (`AcpBackend.observe`). The library runs
   `Client.session_update` as separate tasks, which can land after `prompt()` returns.

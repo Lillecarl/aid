@@ -5,10 +5,16 @@ imported the heavy modules, so workers share those pages copy-on-write.
 A subinterpreter launcher can implement the same protocol by calling
 `aid.worker.main` in a new interpreter, once pydantic-core and pyzmq load
 in more than one interpreter per process.
+
+`CommandLauncher` runs a command per worker (`aid worker`, locally, over
+ssh, in a pod) that reaches the daemon on an endpoint of its own, such as
+`ws://` through a reverse proxy.
 """
 
 from __future__ import annotations
 
+import dataclasses
+import json
 import multiprocessing
 import os
 from dataclasses import dataclass
@@ -24,6 +30,8 @@ from aid.spec import AgentSpecAdapter
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from multiprocessing.context import ForkServerProcess
+
+    from anyio.abc import Process
 
 PRELOAD: Final = ("aid.launcher", "aid.worker", "pydantic_ai", "acp", "zmq.asyncio")
 
@@ -44,6 +52,13 @@ class WorkerArgs:
     daemon_state_dir: str
     """The daemon's own paths, so code in the worker that calls `aid.connect()` finds this daemon."""
 
+    def to_json(self) -> str:
+        return json.dumps(dataclasses.asdict(self))
+
+    @classmethod
+    def from_json(cls, text: str) -> WorkerArgs:
+        return cls(**json.loads(text))
+
 
 class WorkerHandle(Protocol):
     @property
@@ -60,7 +75,8 @@ class Launcher(Protocol):
     async def launch(self, args: WorkerArgs) -> WorkerHandle: ...
 
 
-def _process_main(args: WorkerArgs) -> None:
+def process_main(args: WorkerArgs) -> None:
+    """A worker process's entry: process-wide setup, then `worker.main`."""
     spec = AgentSpecAdapter.validate_json(args.spec_json)
     os.chdir(spec.cwd)
     os.environ.update(spec.env)
@@ -93,6 +109,42 @@ class ForkserverLauncher:
         self._ctx.set_forkserver_preload(list(preload))
 
     async def launch(self, args: WorkerArgs) -> ProcessHandle:
-        process = self._ctx.Process(target=_process_main, args=(args,), name=f"aid-worker-{args.name}")
+        process = self._ctx.Process(target=process_main, args=(args,), name=f"aid-worker-{args.name}")
         await anyio.to_thread.run_sync(process.start)
         return ProcessHandle(process)
+
+
+class CommandHandle:
+    def __init__(self, process: Process) -> None:
+        self._process = process
+
+    @property
+    def pid(self) -> int | None:
+        return self._process.pid
+
+    async def wait(self) -> int | None:
+        code = await self._process.wait()
+        await self._process.aclose()
+        return code
+
+    def kill(self) -> None:
+        self._process.kill()
+
+
+class CommandLauncher:
+    """Runs `command` per worker and writes its `WorkerArgs` to the command's stdin as JSON; `aid worker` reads
+    them. Stdin, because argv is visible to every user on the host and the args hold the worker's secret key.
+
+    `endpoint` is the daemon's workers socket as the worker reaches it; the daemon must listen there too."""
+
+    def __init__(self, command: Sequence[str], endpoint: str) -> None:
+        self._command = list(command)
+        self._endpoint = endpoint
+
+    async def launch(self, args: WorkerArgs) -> CommandHandle:
+        process = await anyio.open_process(self._command, stdout=None, stderr=None)
+        if process.stdin is None:
+            raise RuntimeError("the worker command has no stdin")
+        async with process.stdin:
+            await process.stdin.send(dataclasses.replace(args, endpoint=self._endpoint).to_json().encode())
+        return CommandHandle(process)
