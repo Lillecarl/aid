@@ -2,7 +2,6 @@
   import "pymux-pane";
   import { onMount } from "svelte";
   import * as api from "./api";
-  import type { SessionStatus } from "./api";
 
   let { name }: { name: string } = $props();
 
@@ -23,8 +22,8 @@
       visible = document.visibilityState === "visible";
     };
     document.addEventListener("visibilitychange", onvisibility);
-    const unwatch = api.watch<SessionStatus>(
-      api.statusEventsUrl(name),
+    const unwatch = api.followStatus(
+      name,
       (status) => {
         // A stopped session's pane is gone; the element mounts afresh, and connects, when it runs again.
         if (status.running && running === false) note = "Connecting…";

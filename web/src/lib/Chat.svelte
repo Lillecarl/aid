@@ -354,9 +354,15 @@
   onMount(() => {
     let unwatch: (() => void) | null = null;
     let mounted = true;
-    // Streams while this tab is mounted and the browser tab visible, from wherever the rows end then.
+    // Streams while this tab is mounted and the browser tab visible. Each subscription fetches what was recorded
+    // since the rows end, as a jump in seq does.
     void loadLatest().then(() => {
-      if (mounted) unwatch = api.watch(() => api.historyEventsUrl(name, newest), arrived, () => undefined);
+      if (!mounted) return;
+      unwatch = api.followHistory(name, arrived, () => {
+        if (hasNewer) return; // The rows end before the newest entries: scrolling fetches them.
+        behind = true;
+        if (!busy && !loading) void reconcile().catch(() => undefined);
+      });
     });
     api.speechEnabled().then(
       (enabled) => (canDictate = enabled),

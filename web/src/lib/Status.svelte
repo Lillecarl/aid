@@ -21,8 +21,8 @@
   // Mounted only while its tab is shown. The totals change when a turn ends or a worker starts, which the
   // status stream reports.
   onMount(() =>
-    api.watch<SessionStatus>(
-      api.statusEventsUrl(name),
+    api.followStatus(
+      name,
       (data) => {
         const changed = !status || status.working !== data.working || status.running !== data.running;
         status = data;
