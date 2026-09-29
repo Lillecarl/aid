@@ -17,10 +17,12 @@ import zmq
 import zmq.asyncio
 from pydantic import JsonValue, TypeAdapter
 
-from aid import events
+from aid import events, zap
 from aid.history import MAX_PAGE
 from aid.paths import default_paths
+from aid.plugins import SECRET_FILE, Grant, PluginSpec
 from aid.protocol import (
+    AddPlugin,
     AgentCatalog,
     AidError,
     AnswerPermission,
@@ -38,6 +40,7 @@ from aid.protocol import (
     HistoryEntry,
     HistoryPage,
     ListAgents,
+    ListPlugins,
     ListSessions,
     MessageEntry,
     Output,
@@ -45,6 +48,7 @@ from aid.protocol import (
     PaneView,
     Prompt,
     ReceiveMessages,
+    RemovePlugin,
     Reply,
     SendMessage,
     SessionInfo,
@@ -68,6 +72,7 @@ if TYPE_CHECKING:
     from aid.spec import AgentSpec
 
 _MESSAGES = TypeAdapter(list[MessageEntry])
+_PLUGINS = TypeAdapter(list[PluginSpec])
 
 
 @dataclass(frozen=True)
@@ -77,13 +82,56 @@ class RunResult[T]:
     stop_reason: str
 
 
+@dataclass(frozen=True)
+class Endpoints:
+    """Where a client's sockets connect: the control socket and events, or with `curve`, a plugin's sockets."""
+
+    control: str
+    events: str
+    curve: tuple[str, zap.Keypair] | None = None
+    """The daemon's public key and the plugin's keypair."""
+
+    def connect(self, sock: zmq.asyncio.Socket, endpoint: str) -> None:
+        if self.curve is None:
+            sock.connect(endpoint)
+        else:
+            zap.connect_curve(sock, endpoint, *self.curve)
+
+
+async def plugin_endpoints(paths: Paths, name: str) -> Endpoints:
+    """Plugin `name`'s sockets, with the secret key `aid plugin add` wrote and the running daemon's public key."""
+    secret = (await anyio.Path(paths.plugin_dir(name), SECRET_FILE).read_text()).strip()
+    server = (await anyio.Path(paths.server_key).read_text()).strip()
+    keys = zap.Keypair(public=zmq.curve_public(secret.encode()).decode(), secret=secret)
+    return Endpoints(paths.plugins, paths.plugin_events, (server, keys))
+
+
+async def register_plugin(
+    client: Client, paths: Paths, name: str, grants: frozenset[Grant], *, public_key: str | None = None
+) -> str:
+    """Register plugin `name` with `grants`; return its public key. Without `public_key` a keypair is made, and the
+    secret kept where `connect(plugin=name)` reads it."""
+    keys = None if public_key else zap.Keypair.new()
+    public = keys.public if keys is not None else public_key or ""
+    await client.add_plugin(PluginSpec(name=name, public_key=public, grants=grants))
+    secret = anyio.Path(paths.plugin_dir(name), SECRET_FILE)
+    if keys is None:
+        await secret.unlink(missing_ok=True)  # A secret made here before would not match the new key.
+    else:
+        await secret.touch(mode=0o600)
+        await secret.write_text(keys.secret)
+    return public
+
+
 @asynccontextmanager
-async def connect(paths: Paths | None = None) -> AsyncGenerator[Client]:
+async def connect(paths: Paths | None = None, *, plugin: str | None = None) -> AsyncGenerator[Client]:
+    """A client of the daemon; with `plugin`, as that plugin, held to its grants (`aid.plugins`)."""
     paths = paths or default_paths()
+    endpoints = await plugin_endpoints(paths, plugin) if plugin else Endpoints(paths.control, paths.events)
     ctx = zmq.asyncio.Context()
     sock = ctx.socket(zmq.DEALER)
-    sock.connect(paths.control)
-    client = Client(sock, ctx, paths)
+    endpoints.connect(sock, endpoints.control)
+    client = Client(sock, ctx, endpoints)
     try:
         async with anyio.create_task_group() as tg:
             tg.start_soon(client.read_replies)
@@ -104,10 +152,10 @@ async def connect(paths: Paths | None = None) -> AsyncGenerator[Client]:
 
 
 class Client:
-    def __init__(self, sock: zmq.asyncio.Socket, ctx: zmq.asyncio.Context, paths: Paths) -> None:
+    def __init__(self, sock: zmq.asyncio.Socket, ctx: zmq.asyncio.Context, endpoints: Endpoints) -> None:
         self._sock = sock
         self._ctx = ctx
-        self._endpoints = {zmq.DEALER: paths.control, zmq.SUB: paths.events}
+        self._endpoints = endpoints
         self._send_lock = anyio.Lock()
         self._pending: dict[str, MemoryObjectSendStream[Reply]] = {}
         self.sockets: set[zmq.asyncio.Socket] = set()
@@ -118,7 +166,8 @@ class Client:
         on the events. For a relay that speaks the protocol itself: this client neither routes its replies nor
         checks what it sends."""
         sock = self._ctx.socket(socket_type)
-        sock.connect(self._endpoints[socket_type])
+        endpoints = self._endpoints
+        endpoints.connect(sock, endpoints.control if socket_type == zmq.DEALER else endpoints.events)
         self.sockets.add(sock)
         try:
             yield sock
@@ -213,6 +262,16 @@ class Client:
 
     def session(self, name: str) -> Session:
         return Session(self, name)
+
+    async def add_plugin(self, spec: PluginSpec) -> None:
+        """Register a plugin, or replace its key and grants. Only the control socket may."""
+        await self.call(AddPlugin(spec=spec))
+
+    async def plugins(self) -> list[PluginSpec]:
+        return _PLUGINS.validate_python(await self.call(ListPlugins()))
+
+    async def remove_plugin(self, name: str) -> None:
+        await self.call(RemovePlugin(name=name))
 
     async def send_message(self, to: str, text: str, *, sender: str | None = None) -> None:
         """Leave a message for session `to`; the daemon wakes it. `sender` names the session it is from, or None

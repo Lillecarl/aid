@@ -30,6 +30,24 @@ class Paths:
     def workers(self) -> str:
         return f"ipc://{self.runtime_dir / 'workers.sock'}"
 
+    @property
+    def plugins(self) -> str:
+        """Plugins' requests, CURVE (`aid.plugins`)."""
+        return f"ipc://{self.runtime_dir / 'plugins.sock'}"
+
+    @property
+    def plugin_events(self) -> str:
+        """What the daemon publishes, CURVE, for plugins granted `read`."""
+        return f"ipc://{self.runtime_dir / 'plugin-events.sock'}"
+
+    @property
+    def server_key(self) -> Path:
+        """The daemon's CURVE public key while it runs, which a plugin's sockets need."""
+        return self.runtime_dir / "server.key"
+
+    def plugin_dir(self, name: str) -> Path:
+        return self.state_dir / "plugins" / name
+
     def session_dir(self, name: str) -> Path:
         return self.state_dir / "sessions" / name
 

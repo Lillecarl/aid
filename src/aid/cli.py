@@ -15,10 +15,11 @@ import anyio
 import anyio.to_thread
 
 from aid import daemon, speech
-from aid.client import connect
+from aid.client import connect, register_plugin
 from aid.launcher import CommandLauncher, ForkserverLauncher, WorkerArgs, process_main
 from aid.mcp import from_claude_config
 from aid.paths import default_paths
+from aid.plugins import Grant
 from aid.protocol import (
     AidError,
     Lifecycle,
@@ -45,6 +46,7 @@ from aid.web.theme import Theme
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from aid.client import Client
     from aid.launcher import Launcher
     from aid.protocol import HistoryEntry
     from aid.spec import AgentSpec, McpServer
@@ -196,6 +198,25 @@ def _parser() -> argparse.ArgumentParser:
 
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
+
+    plugin = sub.add_parser("plugin", help="register the processes that reach the daemon as plugins, with grants")
+    plugin_sub = plugin.add_subparsers(dest="plugin_command", required=True)
+    add = plugin_sub.add_parser("add", help="register a plugin, or replace its key and grants; prints its public key")
+    add.add_argument("name")
+    add.add_argument(
+        "--grant",
+        action="append",
+        default=[],
+        choices=[g.value for g in Grant],
+        help="what it may do; repeat for more",
+    )
+    add.add_argument(
+        "--public-key",
+        help="a key made elsewhere, for a plugin on another host; by default aid makes a keypair and keeps the "
+        "secret where `aid.connect(plugin=NAME)` reads it",
+    )
+    plugin_sub.add_parser("list", help="list plugins and their grants")
+    plugin_sub.add_parser("remove", help="remove a plugin; it is refused from its next request").add_argument("name")
     return parser
 
 
@@ -341,8 +362,24 @@ async def _client_command(args: argparse.Namespace) -> None:
                 await client.session(args.name).stop()
             case "delete":
                 await client.session(args.name).delete()
+            case "plugin":
+                await _plugin_command(client, args)
             case other:
                 raise SystemExit(f"unknown command {other!r}")
+
+
+async def _plugin_command(client: Client, args: argparse.Namespace) -> None:
+    match args.plugin_command:
+        case "add":
+            grants = frozenset(Grant(g) for g in args.grant)
+            print(await register_plugin(client, default_paths(), args.name, grants, public_key=args.public_key))
+        case "list":
+            for spec in await client.plugins():
+                print(f"{spec.name}\t{','.join(sorted(spec.grants)) or '-'}\t{spec.public_key}")
+        case "remove":
+            await client.remove_plugin(args.name)
+        case other:
+            raise SystemExit(f"unknown plugin command {other!r}")
 
 
 def _launcher(args: argparse.Namespace) -> Launcher:

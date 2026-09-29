@@ -11,6 +11,7 @@ import zmq.asyncio
 import zmq.utils.z85
 
 from aid import zap
+from aid.plugins import Grant, PluginSpec
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -51,7 +52,7 @@ def _worker(
     ctx: zmq.asyncio.Context, router: zmq.asyncio.Socket, server: str, keys: zap.Keypair, trust_pem: str = ""
 ) -> zmq.asyncio.Socket:
     sock = ctx.socket(zmq.DEALER)
-    zap.connect_worker(sock, router.get_string(zmq.LAST_ENDPOINT), server, keys, trust_pem)
+    zap.connect_curve(sock, router.get_string(zmq.LAST_ENDPOINT), server, keys, trust_pem)
     return sock
 
 
@@ -115,3 +116,18 @@ def test_revoke_leaves_a_newer_key() -> None:
     assert keys.reply(request)[2:5] == [b"200", b"", b"alice"]
     keys.revoke("alice", new.public)
     assert keys.reply(request)[2] == b"400"
+
+
+def test_a_plugin_key_names_the_plugin_and_events_want_read() -> None:
+    keys = zap.Keys()
+    reader, writer, session = zap.Keypair.new(), zap.Keypair.new(), keys.issue("alice")
+    keys.plugins["reader"] = PluginSpec(name="reader", public_key=reader.public, grants=frozenset({Grant.READ}))
+    keys.plugins["writer"] = PluginSpec(name="writer", public_key=writer.public, grants=frozenset({Grant.PROMPT}))
+    assert keys.user_id(zap.PLUGINS_DOMAIN, reader.public) == "reader"
+    assert keys.user_id(zap.PLUGINS_DOMAIN, writer.public) == "writer"
+    assert keys.user_id(zap.PLUGIN_EVENTS_DOMAIN, reader.public) == "reader"
+    assert keys.user_id(zap.PLUGIN_EVENTS_DOMAIN, writer.public) is None
+    # Each domain knows its own keys only.
+    assert keys.user_id(zap.DOMAIN, reader.public) is None
+    assert keys.user_id(zap.PLUGINS_DOMAIN, session.public) is None
+    assert keys.user_id(zap.PLUGINS_DOMAIN, zap.Keypair.new().public) is None

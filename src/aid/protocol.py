@@ -16,6 +16,7 @@ from typing import Annotated, Final, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
+from aid.plugins import PluginSpec
 from aid.spec import AgentKind, AgentSpec
 
 PROTOCOL_VERSION = 1
@@ -163,6 +164,24 @@ class Hook(_Request):
     payload: JsonValue
 
 
+class AddPlugin(_Request):
+    """Register a plugin, or replace its key and grants (`aid.plugins`)."""
+
+    op: Literal["add_plugin"] = "add_plugin"
+    spec: PluginSpec
+
+
+class ListPlugins(_Request):
+    """Done's data: every registered `PluginSpec`."""
+
+    op: Literal["plugins"] = "plugins"
+
+
+class RemovePlugin(_Request):
+    op: Literal["remove_plugin"] = "remove_plugin"
+    name: str
+
+
 type Request = Annotated[
     GetStatus
     | GetScreen
@@ -180,7 +199,10 @@ type Request = Annotated[
     | SendMessage
     | ReceiveMessages
     | AnswerPermission
-    | Hook,
+    | Hook
+    | AddPlugin
+    | ListPlugins
+    | RemovePlugin,
     Field(discriminator="op"),
 ]
 

@@ -37,7 +37,7 @@ from aid.protocol import (
     encode,
 )
 from aid.spec import AgentSpecAdapter, PydanticAISpec
-from aid.zap import Keypair, connect_worker
+from aid.zap import Keypair, connect_curve
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup
@@ -66,7 +66,7 @@ async def serve(
     ctx = zmq.asyncio.Context()
     sock = ctx.socket(zmq.DEALER)
     sock.setsockopt(zmq.LINGER, 1000)
-    connect_worker(sock, endpoint, server_key, keys, trust_pem)
+    connect_curve(sock, endpoint, server_key, keys, trust_pem)
     try:
         async with AsyncExitStack() as stack:
             try:

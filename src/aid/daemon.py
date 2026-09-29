@@ -17,11 +17,13 @@ import zmq
 import zmq.asyncio
 from pydantic import ValidationError
 
-from aid import events, zap
+from aid import events, plugins, zap
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
 from aid.launcher import WorkerArgs
+from aid.plugins import PLUGIN_FILE, PluginSpec
 from aid.protocol import (
     Activity,
+    AddPlugin,
     AgentCatalog,
     AidError,
     AnswerPermission,
@@ -39,6 +41,7 @@ from aid.protocol import (
     Hello,
     Hook,
     ListAgents,
+    ListPlugins,
     ListSessions,
     MessageEntry,
     Observed,
@@ -46,6 +49,7 @@ from aid.protocol import (
     PermissionRequest,
     Prompt,
     ReceiveMessages,
+    RemovePlugin,
     SendMessage,
     SessionInfo,
     SessionInfosAdapter,
@@ -212,6 +216,8 @@ class _Peer:
 
     listener: _Listener
     routing_id: bytes
+    plugin: str | None = None
+    """The plugin whose key the connection holds; None on the control socket."""
 
     async def send(self, payload: bytes) -> None:
         await self.listener.send(self.routing_id, payload)
@@ -244,6 +250,10 @@ class Daemon:
         zap.serve_curve(self._workers, self._keys)
         self._zap = self._ctx.socket(zmq.REP)
         self._events = self._ctx.socket(zmq.PUB)
+        self._plugins = _Listener(self._ctx.socket(zmq.ROUTER))
+        zap.serve_curve(self._plugins.sock, self._keys, zap.PLUGINS_DOMAIN)
+        self._plugin_events = self._ctx.socket(zmq.PUB)
+        zap.serve_curve(self._plugin_events, self._keys, zap.PLUGIN_EVENTS_DOMAIN)
         self._worker_lock = anyio.Lock()
         self._events_lock = anyio.Lock()
         self._published: dict[bytes, bytes] = {}
@@ -253,12 +263,16 @@ class Daemon:
     async def serve(self, *, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
         await anyio.Path(self._paths.runtime_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
         await self._load_sessions()
+        await self._load_plugins()
+        await anyio.Path(self._paths.server_key).write_text(self._keys.server.public)
         self._published = self._state()  # As loaded: a reader's first fetch sees this, so it is no change.
         self._events.bind(self._paths.events)
         self._clients.sock.bind(self._paths.control)
         # Before the workers socket: libzmq accepts every CURVE client while no handler is bound.
         self._zap.bind(zap.ZAP_ENDPOINT)
         self._workers.bind(self._paths.workers)
+        self._plugins.sock.bind(self._paths.plugins)
+        self._plugin_events.bind(self._paths.plugin_events)
         for endpoint in self._workers_listen:
             self._workers.bind(endpoint)
             log.info("workers can connect on %s", endpoint)
@@ -269,6 +283,7 @@ class Daemon:
                 tg.start_soon(zap.handle, self._zap, self._keys)
                 tg.start_soon(self._client_loop)
                 tg.start_soon(self._worker_loop)
+                tg.start_soon(self._plugin_loop)
                 task_status.started()
                 try:
                     await anyio.sleep_forever()
@@ -281,6 +296,8 @@ class Daemon:
             self._workers.close(linger=0)
             self._zap.close(linger=0)
             self._events.close(linger=0)
+            self._plugins.sock.close(linger=0)
+            self._plugin_events.close(linger=0)
             self._ctx.term()
 
     async def _load_sessions(self) -> None:
@@ -300,6 +317,22 @@ class Daemon:
             self._sessions[session_dir.name] = self._new_session(session_dir.name, spec)
         log.info("restored %d sessions", len(self._sessions))
 
+    async def _load_plugins(self) -> None:
+        plugins_dir = anyio.Path(self._paths.state_dir) / "plugins"
+        if not await plugins_dir.exists():
+            return
+        async for plugin_dir in plugins_dir.iterdir():
+            spec_file = plugin_dir / PLUGIN_FILE
+            if not await spec_file.exists():
+                continue
+            try:
+                spec = PluginSpec.model_validate_json(await spec_file.read_bytes())
+            except ValidationError:
+                log.exception("skipping plugin %s with an invalid spec", plugin_dir.name)
+                continue
+            self._keys.plugins[spec.name] = spec
+        log.info("registered %d plugins", len(self._keys.plugins))
+
     async def _stop_all(self) -> None:
         async with anyio.create_task_group() as tg:
             for session in self._sessions.values():
@@ -308,6 +341,7 @@ class Daemon:
     async def _publish(self, topic: bytes, payload: bytes) -> None:
         async with self._events_lock:
             await self._events.send_multipart([topic, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
+            await self._plugin_events.send_multipart([topic, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
 
     def _state(self) -> dict[bytes, bytes]:
         current = {events.status_topic(s.name): s.status().model_dump_json().encode() for s in self._sessions.values()}
@@ -348,6 +382,34 @@ class Daemon:
             except ValidationError as error:
                 await client.send(encode(Failure(id="", code="invalid_request", message=str(error))))
                 continue
+            self._tg.start_soon(self._handle, client, request)
+
+    async def _plugin_loop(self) -> None:
+        """Requests from plugins: each checked against the grants its plugin holds now."""
+        if self._tg is None:
+            raise RuntimeError("daemon is not serving")
+        while True:
+            frames = await self._plugins.sock.recv_multipart(copy=False)
+            # The plugin the ZAP handler named for this connection's key.
+            name = frames[-1].get("User-Id")  # pyright: ignore[reportArgumentType] -- pyzmq's stub knows only the int options; libzmq also takes metadata names
+            if not isinstance(name, str):
+                raise TypeError(f"User-Id is {name!r}")
+            client = _Peer(self._plugins, frames[0].bytes, plugin=name)
+            if len(frames) != 2:
+                await client.send(encode(Failure(id="", code="invalid_request", message="a request is one frame")))
+                continue
+            try:
+                request = decode_request(frames[1].bytes)
+            except ValidationError as error:
+                await client.send(encode(Failure(id="", code="invalid_request", message=str(error))))
+                continue
+            spec = self._keys.plugins.get(name)
+            if spec is None or not spec.allows(request.op):
+                message = f"plugin {name!r} may not send {request.op!r}"
+                await client.send(encode(Failure(id=request.id, code="forbidden", message=message)))
+                continue
+            if isinstance(request, SendMessage):
+                request = request.model_copy(update={"sender": plugins.sender(name)})
             self._tg.start_soon(self._handle, client, request)
 
     async def _handle(self, client: _Peer, request: Request) -> None:
@@ -456,6 +518,22 @@ class Daemon:
                 await self._stop(session)
                 del self._sessions[session.name]
                 await anyio.to_thread.run_sync(shutil.rmtree, self._paths.session_dir(session.name), True)
+                return Done(id=request.id)
+            case AddPlugin():
+                holder = self._keys.plugin(request.spec.public_key)
+                if holder is not None and holder.name != request.spec.name:
+                    raise AidError("exists", f"plugin {holder.name!r} holds that key")
+                plugin_dir = anyio.Path(self._paths.plugin_dir(request.spec.name))
+                await plugin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                await (plugin_dir / PLUGIN_FILE).write_text(request.spec.model_dump_json())
+                self._keys.plugins[request.spec.name] = request.spec
+                return Done(id=request.id)
+            case ListPlugins():
+                return Done(id=request.id, data=[s.model_dump(mode="json") for s in self._keys.plugins.values()])
+            case RemovePlugin():
+                if self._keys.plugins.pop(request.name, None) is None:
+                    raise AidError("not_found", f"no plugin named {request.name!r}")
+                await anyio.to_thread.run_sync(shutil.rmtree, self._paths.plugin_dir(request.name), True)
                 return Done(id=request.id)
             case GetSummary():
                 entries = await self._session(request.session).history.entries()
