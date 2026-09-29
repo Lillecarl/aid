@@ -31,6 +31,9 @@ from aid.protocol import (
     MessageEntry,
     Output,
     PaneView,
+    PermissionDecider,
+    PermissionDecision,
+    PermissionRequest,
     PromptEntry,
     Started,
     TextDelta,
@@ -39,7 +42,7 @@ from aid.protocol import (
 )
 from aid.spec import ClaudeTtySpec, McpHttp
 from tests.conftest import acp_spec, fake_spec, needs_pymux
-from tests.fake_claude import COUNT, MODEL, NOTICE
+from tests.fake_claude import COUNT, MODEL, NOTICE, PERMISSION_INPUT
 from tests.test_tools import Rpc
 
 if TYPE_CHECKING:
@@ -177,6 +180,48 @@ async def test_hooks_tell_what_claude_does(daemon: Paths, tmp_path: Path, pymux_
     assert status.attention == NOTICE
     assert (info.working, info.attention) == (False, NOTICE)
     assert (tmp_path / "own-hook-ran").exists()
+
+
+@needs_pymux
+@pytest.mark.parametrize(("option", "said"), [("allow", "allowed"), ("deny", "denied: A person refused this in aid.")])
+async def test_claude_asks_aid_for_permission(
+    daemon: Paths, tmp_path: Path, pymux_socket: str, option: str, said: str
+) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            events: list[aid.SessionEvent] = []
+            waiting: list[PermissionRequest] = []
+            async for event in session.stream("permission"):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    waiting = (await session.status()).permissions
+                    await session.answer(event.request_id, option)
+            after = (await session.status()).permissions
+    request = next(e for e in events if isinstance(e, PermissionRequest))
+    assert (request.tool_call_id, request.tool_name, request.title) == (
+        "toolu_perm",
+        "Bash",
+        "Remove the build directory",
+    )
+    assert request.input == PERMISSION_INPUT
+    assert waiting == [request]
+    assert after == []
+    assert PermissionDecision(request_id=request.request_id, option_id=option, by=PermissionDecider.PERSON) in events
+    assert "".join(e.text for e in events if isinstance(e, TextDelta)) == said
+
+
+@needs_pymux
+async def test_a_permission_answered_in_the_pane(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            events = [event async for event in session.stream("permission-pane")]
+            after = (await session.status()).permissions
+    request = next(e for e in events if isinstance(e, PermissionRequest))
+    assert PermissionDecision(request_id=request.request_id, option_id=None, by=PermissionDecider.TERMINAL) in events
+    assert after == []
+    assert "".join(e.text for e in events if isinstance(e, TextDelta)) == "the hook said ''"
 
 
 async def typed_items(session: aid.Session) -> list[HistoryItem]:

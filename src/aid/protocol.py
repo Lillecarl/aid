@@ -328,6 +328,8 @@ class PermissionDecider(StrEnum):
     """Nobody answered in time; the request was refused."""
     CANCEL = "cancel"
     """The turn ended first."""
+    TERMINAL = "terminal"
+    """Someone answered in the agent's own terminal; aid does not see which answer."""
 
 
 class PermissionDecision(_Message):

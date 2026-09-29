@@ -1,7 +1,8 @@
 """A stand-in for interactive Claude Code: reads a terminal like it, writes a transcript like it.
 
 Prompts: "slow" waits for Escape; "count" writes one text block per number; "tool" makes a tool call;
-"mcp" says the --mcp-config file; "term" says TERM; "notify" runs the Notification hook; anything else is echoed.
+"mcp" says the --mcp-config file; "term" says TERM; "notify" runs the Notification hook; "permission" asks through the PermissionRequest hook and obeys it;
+"permission-pane" asks, then answers yes in the pane while the hook still waits; anything else is echoed.
 Each turn runs the UserPromptSubmit and Stop hooks from --settings. FAKE_CLAUDE_TRUST=1 shows the trust dialog until a `.fake-trusted` file exists.
 FAKE_CLAUDE_CHANNELS=1 shows the development channels warning, when the flag is given, until Enter.
 """
@@ -14,6 +15,7 @@ import select
 import subprocess  # noqa: TID251 -- a synchronous stand-in; it runs hooks as Claude does
 import sys
 import termios
+import time
 import tty
 import uuid
 from pathlib import Path
@@ -25,6 +27,7 @@ DOWN = b"\x1b[B"
 COUNT = 20
 MODEL = "claude-fake-1"
 NOTICE = "Claude has a question for you"
+PERMISSION_INPUT = {"command": "rm -rf build", "description": "Remove the build directory"}
 USAGE = {
     "input_tokens": 3,
     "output_tokens": 5,
@@ -48,8 +51,8 @@ class Fake:
         self.settings: dict[str, Any] = json.loads(Path(settings).read_text()) if settings else {}
         self.buffer = b""
 
-    def hook(self, event: str, **fields: Any) -> dict[str, Any] | None:
-        """Run the settings' hooks for `event` as Claude does: payload on stdin, a JSON answer on stdout."""
+    def hook_processes(self, event: str, **fields: Any) -> list[subprocess.Popen[str]]:
+        """Start the settings' hooks for `event` as Claude does: the payload on stdin, an answer on stdout."""
         payload = {
             "session_id": self.session_id,
             "transcript_path": str(transcript_path(self.session_id)),
@@ -57,21 +60,51 @@ class Fake:
             "hook_event_name": event,
             **fields,
         }
-        answer: dict[str, Any] | None = None
+        processes: list[subprocess.Popen[str]] = []
         for entry in self.settings.get("hooks", {}).get(event, []):
             for handler in entry["hooks"]:
-                done = subprocess.run(
+                process = subprocess.Popen(
                     handler["command"],
                     shell=True,
-                    input=json.dumps(payload),
-                    capture_output=True,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.DEVNULL,
                     text=True,
-                    timeout=handler.get("timeout", 600),
-                    check=False,
                 )
-                if done.stdout.strip():
-                    answer = json.loads(done.stdout)
+                assert process.stdin is not None
+                process.stdin.write(json.dumps(payload))
+                process.stdin.close()
+                processes.append(process)
+        return processes
+
+    def hook(self, event: str, **fields: Any) -> dict[str, Any] | None:
+        answer: dict[str, Any] | None = None
+        for process in self.hook_processes(event, **fields):
+            out, _ = process.communicate(timeout=600)
+            if out.strip():
+                answer = json.loads(out)
         return answer
+
+    def permission(self, pane_answers: bool) -> None:
+        """A Bash call that needs permission. The pane answers yes itself when `pane_answers`, while the hook waits."""
+        use = {"type": "tool_use", "id": "toolu_perm", "name": "Bash", "input": PERMISSION_INPUT}
+        self.assistant("msg_perm", use)
+        result = {"type": "tool_result", "tool_use_id": "toolu_perm", "content": "ok"}
+        fields: dict[str, Any] = {"tool_name": "Bash", "tool_input": PERMISSION_INPUT, "permission_suggestions": []}
+        if pane_answers:
+            [process] = self.hook_processes("PermissionRequest", **fields)
+            time.sleep(1.5)  # The hook reaches aid, and aid opens its request.
+            self.write({"type": "user", "toolUseResult": {"stdout": "ok"}, "message": {"content": [result]}})
+            out, _ = process.communicate(timeout=30)
+            self.say(f"the hook said {out.strip()!r}")
+            return
+        answer = self.hook("PermissionRequest", **fields)
+        decision = (answer or {}).get("hookSpecificOutput", {}).get("decision", {})
+        if decision.get("behavior") == "allow":
+            self.write({"type": "user", "toolUseResult": {"stdout": "ok"}, "message": {"content": [result]}})
+            self.say("allowed")
+        else:
+            self.say(f"denied: {decision.get('message')}")
 
     def write(self, entry: dict[str, Any]) -> None:
         entry = {"uuid": str(uuid.uuid4()), "sessionId": self.session_id, "isSidechain": False, **entry}
@@ -171,6 +204,8 @@ class Fake:
             self.say(os.environ.get("TERM", "unset"))
         elif text == "mcp":
             self.say(Path(self.mcp_config).read_text() if self.mcp_config else "none")
+        elif text in ("permission", "permission-pane"):
+            self.permission(pane_answers=text == "permission-pane")
         elif text == "notify":
             self.hook("Notification", message=NOTICE, notification_type="elicitation_dialog")
             self.say("notified")

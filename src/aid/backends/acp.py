@@ -8,7 +8,6 @@ import math
 import os
 import uuid
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import TYPE_CHECKING, Any, cast
 
@@ -35,6 +34,7 @@ from acp.schema import (
 )
 from pydantic import BaseModel, Field, ValidationError
 
+from aid.backends.permissions import PermissionWaits
 from aid.env import agent_environment
 from aid.mcp import AID_TOOL_PREFIX, session_servers, to_acp
 from aid.protocol import (
@@ -215,21 +215,13 @@ class _PermissionParams(BaseModel):
     tool_call: _NamedToolCall = Field(alias="toolCall")
 
 
-@dataclass
-class _Waiting:
-    request: PermissionRequest
-    answered: anyio.Event = field(default_factory=anyio.Event)
-    option_id: str | None = None
-    by: PermissionDecider = PermissionDecider.CANCEL
-
-
 class _Client:
     """The `acp.Client` side. Session updates arrive through `AcpBackend.observe`, not here."""
 
     def __init__(self, spec: AcpSpec) -> None:
         self._spec = spec
         self._tool_names: dict[str, str] = {}
-        self._waiting: dict[str, _Waiting] = {}
+        self.waits = PermissionWaits()
         self.events: MemoryObjectSendStream[SessionEvent] | None = None
         """The running prompt's events; permission requests only come during one."""
 
@@ -256,7 +248,9 @@ class _Client:
         if events is not None:
             events.send_nowait(request)
         if mode is PermissionMode.ASK and events is not None:
-            option_id, by = await self._ask(request)
+            option_id, by = choose_permission(PermissionMode.DENY, request.options), PermissionDecider.TIMEOUT
+            with anyio.move_on_after(self._spec.permission_timeout):
+                option_id, by = await self.waits.wait(request)
         else:
             option_id, by = choose_permission(mode, request.options), PermissionDecider.POLICY
         log.info("permission for %s %r: %s by %s", tool_name, tool_call.title, option_id, by)
@@ -264,31 +258,6 @@ class _Client:
             with contextlib.suppress(anyio.ClosedResourceError):  # The prompt ended while the request waited.
                 events.send_nowait(PermissionDecision(request_id=request.request_id, option_id=option_id, by=by))
         return permission_response(option_id)
-
-    async def _ask(self, request: PermissionRequest) -> tuple[str | None, PermissionDecider]:
-        waiting = self._waiting[request.request_id] = _Waiting(request)
-        try:
-            with anyio.move_on_after(self._spec.permission_timeout):
-                await waiting.answered.wait()
-                return waiting.option_id, waiting.by
-            return choose_permission(PermissionMode.DENY, request.options), PermissionDecider.TIMEOUT
-        finally:
-            del self._waiting[request.request_id]
-
-    def answer(self, request_id: str, option_id: str | None) -> bool:
-        waiting = self._waiting.get(request_id)
-        if waiting is None or waiting.answered.is_set():
-            return False
-        if option_id is not None and option_id not in {o.option_id for o in waiting.request.options}:
-            return False
-        waiting.option_id, waiting.by = option_id, PermissionDecider.PERSON
-        waiting.answered.set()
-        return True
-
-    def cancel_waiting(self) -> None:
-        """ACP: a client that cancels a turn answers its pending permission requests `cancelled`."""
-        for waiting in self._waiting.values():
-            waiting.answered.set()
 
     async def session_update(self, session_id: str, update: object, **kwargs: Any) -> None:
         return None
@@ -361,16 +330,17 @@ class AcpBackend:
         try:
             return await self._conn.prompt(session_id=self._session_id, prompt=[acp.text_block(text)])
         finally:
-            self._client.cancel_waiting()
+            self._client.waits.cancel_all()
             self._events = self._client.events = None
             events.close()
 
     async def cancel(self) -> None:
-        self._client.cancel_waiting()
+        # ACP: a client that cancels a turn answers its pending permission requests `cancelled`.
+        self._client.waits.cancel_all()
         await self._conn.cancel(session_id=self._session_id)
 
     def answer_permission(self, request_id: str, option_id: str | None) -> bool:
-        return self._client.answer(request_id, option_id)
+        return self._client.waits.answer(request_id, option_id)
 
 
 @asynccontextmanager

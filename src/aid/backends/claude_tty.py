@@ -49,12 +49,27 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import anyio
 import anyio.to_thread
 from libpymux import Server
+from pydantic import JsonValue
 
 from aid import hook as hook_command
+from aid.backends.permissions import PermissionWaits
 from aid.env import agent_environment
 from aid.mcp import AID_TOOLS_RULE, claude_config, session_servers
 from aid.paths import default_paths
-from aid.protocol import Activity, Output, PaneAddress, PaneView, PromptEntry, Started, TextDelta
+from aid.protocol import (
+    Activity,
+    Output,
+    PaneAddress,
+    PaneView,
+    PermissionChoice,
+    PermissionDecider,
+    PermissionDecision,
+    PermissionRequest,
+    PromptEntry,
+    Started,
+    TextDelta,
+    ToolCall,
+)
 from aid.spec import BUILTIN_MCP_SERVER
 from aid.transcript import (
     TranscriptFollower,
@@ -71,7 +86,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from libpymux import Pane
-    from pydantic import JsonValue
 
     from aid.backends.base import Emit, Record, Report
     from aid.protocol import SessionEvent
@@ -98,9 +112,16 @@ PASTE_SETTLE: Final = 0.4
 PANE_CHECK: Final = 2.0
 HOOKS_FILE: Final = "settings.json"
 HOOK_SCRIPT: Final = str(Path(hook_command.__file__))
-HOOK_EVENTS: Final = ("UserPromptSubmit", "Stop", "StopFailure", "Notification")
-# Claude kills a hook at its timeout; the pane's own dialog still asks.
+HOOK_EVENTS: Final = ("UserPromptSubmit", "Stop", "StopFailure", "Notification", "PermissionRequest")
+# Claude kills a hook at its timeout; the pane's own dialog still asks. aid gives up a little before, to record it.
 WAITING_HOOK_TIMEOUT: Final = 3600
+HOOK_MARGIN: Final = 5
+REQUEST_TURN_WAIT: Final = 5.0
+ALLOW_OPTION: Final = "allow"
+HOOK_OPTIONS: Final = [
+    PermissionChoice(option_id=ALLOW_OPTION, name="Yes", kind="allow_once"),
+    PermissionChoice(option_id="deny", name="No", kind="reject_once"),
+]
 # Notifications that need no one: an idle prompt is `working` false, a permission prompt a PermissionRequest.
 QUIET_NOTIFICATIONS: Final = frozenset({"idle_prompt", "permission_prompt"})
 
@@ -124,6 +145,24 @@ def classify(capture: str) -> Screen:
     if _PROMPT_LINE.search(capture):
         return Screen.READY
     return Screen.STARTING
+
+
+def permission_title(tool_input: JsonValue) -> str | None:
+    if not isinstance(tool_input, dict):
+        return None
+    for key in ("description", "command", "file_path", "url"):
+        if isinstance(value := tool_input.get(key), str):
+            return value
+    return None
+
+
+def hook_decision(option_id: str | None) -> dict[str, Any]:
+    """PermissionRequest's answer: allow for the allow option, deny for anything else (a person's cancel too)."""
+    if option_id == ALLOW_OPTION:
+        decision: dict[str, Any] = {"behavior": "allow"}
+    else:
+        decision = {"behavior": "deny", "message": "A person refused this in aid."}
+    return {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}}
 
 
 def launcher_script(env: dict[str, str], cwd: str, argv: list[str]) -> str:
@@ -213,6 +252,19 @@ class _Turn:
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
     chunks: list[str] = field(default_factory=list[str])
     usage: TurnUsage = field(default_factory=TurnUsage)
+    inputs: dict[str, JsonValue] = field(default_factory=dict[str, JsonValue])
+    """Each tool call's input, by tool call id: a PermissionRequest names no call, only its input."""
+    asking: dict[str, PermissionRequest] = field(default_factory=dict[str, PermissionRequest])
+    """Requests no decision is recorded for yet, by request id. Whoever takes one out records it."""
+
+    def call_with(self, tool_input: JsonValue) -> str | None:
+        return next((call for call, seen in reversed(self.inputs.items()) if seen == tool_input), None)
+
+    def take_asking(self, tool_call_id: str) -> list[PermissionRequest]:
+        taken = [r for r in self.asking.values() if tool_call_id and r.tool_call_id == tool_call_id]
+        for request in taken:
+            del self.asking[request.request_id]
+        return taken
 
 
 class ClaudeTtyBackend:
@@ -239,6 +291,7 @@ class ClaudeTtyBackend:
         self._turn: _Turn | None = None
         self._working = False
         self._attention: str | None = None
+        self._waits = PermissionWaits()
 
     def started(self) -> Started:
         return self._started
@@ -253,9 +306,57 @@ class ClaudeTtyBackend:
             case "Notification" if fields.get("notification_type") not in QUIET_NOTIFICATIONS:
                 message = fields.get("message")
                 await self._activity(working=self._working, attention=message if isinstance(message, str) else None)
+            case "PermissionRequest":
+                return await self._permission(fields)
             case _:
                 pass
         return None
+
+    def answer_permission(self, request_id: str, option_id: str | None) -> bool:
+        return self._waits.answer(request_id, option_id)
+
+    async def _permission(self, fields: dict[str, JsonValue]) -> JsonValue:
+        """Ask aid's people while the pane asks too. Whoever answers first decides; the hook answers Claude only for
+        a person in aid."""
+        turn = await self._request_turn()
+        tool_input = fields.get("tool_input")
+        tool_name = fields.get("tool_name")
+        request = PermissionRequest(
+            request_id=uuid.uuid4().hex,
+            tool_call_id=await self._call_with(turn, tool_input) or "",
+            tool_name=tool_name if isinstance(tool_name, str) else None,
+            title=permission_title(tool_input),
+            input=tool_input,
+            options=HOOK_OPTIONS,
+        )
+        turn.asking[request.request_id] = request
+        await self._send(turn, request)
+        option_id, by = None, PermissionDecider.TIMEOUT
+        with anyio.move_on_after(WAITING_HOOK_TIMEOUT - HOOK_MARGIN):
+            option_id, by = await self._waits.wait(request)
+        if turn.asking.pop(request.request_id, None) is not None:
+            await self._send(turn, PermissionDecision(request_id=request.request_id, option_id=option_id, by=by))
+        return hook_decision(option_id) if by is PermissionDecider.PERSON else None
+
+    async def _request_turn(self) -> _Turn:
+        """The turn a PermissionRequest belongs to. The hook can come before the follower has read the turn's
+        start; a turn it never finds is recorded as its own."""
+        with anyio.move_on_after(REQUEST_TURN_WAIT):
+            while self._turn is None:  # noqa: ASYNC110 -- the follower polls the transcript; nothing signals
+                await anyio.sleep(POLL)
+        return self._turn or _Turn(claim=None)
+
+    async def _call_with(self, turn: _Turn, tool_input: JsonValue) -> str | None:
+        with anyio.move_on_after(REQUEST_TURN_WAIT):
+            while (call := turn.call_with(tool_input)) is None:  # noqa: ASYNC110 -- as above
+                await anyio.sleep(POLL)
+            return call
+        return None
+
+    async def _settle(self, turn: _Turn, requests: list[PermissionRequest], by: PermissionDecider) -> None:
+        for request in requests:
+            self._waits.settle(request.request_id, None, by)
+            await self._send(turn, PermissionDecision(request_id=request.request_id, option_id=None, by=by))
 
     async def _activity(self, *, working: bool, attention: str | None) -> None:
         if (working, attention) == (self._working, self._attention):
@@ -295,10 +396,19 @@ class ClaudeTtyBackend:
         for item in items:
             if isinstance(item, TurnEnded):
                 self._turn = None
+                asking = list(turn.asking.values())
+                turn.asking.clear()
+                await self._settle(turn, asking, PermissionDecider.CANCEL)
                 await self._end(turn, "cancelled" if item.interrupted else "end_turn")
                 return
             if isinstance(item, TextDelta):
                 turn.chunks.append(item.text)
+            if isinstance(item, ToolCall):
+                if item.input is not None:
+                    turn.inputs[item.tool_call_id] = item.input
+                if item.status in ("completed", "failed"):
+                    # The call ran or failed with a request still open: the pane answered it.
+                    await self._settle(turn, turn.take_asking(item.tool_call_id), PermissionDecider.TERMINAL)
             await self._send(turn, item)
 
     async def _send(self, turn: _Turn, item: SessionEvent | PromptEntry) -> None:
