@@ -34,6 +34,7 @@ from aid.protocol import (
     encode,
 )
 from aid.spec import AgentSpecAdapter, PydanticAISpec
+from aid.zap import Keypair
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup
@@ -45,19 +46,22 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-def main(endpoint: str, name: str, spec_json: str, state_dir: str) -> None:
+def main(endpoint: str, server_key: str, public_key: str, secret_key: str, spec_json: str, state_dir: str) -> None:
     spec = AgentSpecAdapter.validate_json(spec_json)
     if isinstance(spec, PydanticAISpec):
         sys.path[:0] = spec.python_path
-    anyio.run(serve, endpoint, name, spec, anyio.Path(state_dir))
+    keys = Keypair(public=public_key, secret=secret_key)
+    anyio.run(serve, endpoint, server_key, keys, spec, anyio.Path(state_dir))
 
 
-async def serve(endpoint: str, name: str, spec: AgentSpec, state_dir: anyio.Path) -> None:
+async def serve(endpoint: str, server_key: str, keys: Keypair, spec: AgentSpec, state_dir: anyio.Path) -> None:
     await state_dir.mkdir(parents=True, exist_ok=True)
     ctx = zmq.asyncio.Context()
     sock = ctx.socket(zmq.DEALER)
-    sock.setsockopt(zmq.IDENTITY, name.encode())
     sock.setsockopt(zmq.LINGER, 1000)
+    sock.curve_serverkey = server_key.encode()
+    sock.curve_publickey = keys.public.encode()
+    sock.curve_secretkey = keys.secret.encode()
     sock.connect(endpoint)
     try:
         async with AsyncExitStack() as stack:

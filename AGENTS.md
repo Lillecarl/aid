@@ -10,7 +10,10 @@ API and a CLI.
 - `src/aid/protocol.py` — pydantic messages on the zmq sockets; `AidError`.
 - `src/aid/daemon.py` — ROUTER for clients (`control.sock`), ROUTER for workers (`workers.sock`), session state.
 - `src/aid/launcher.py` — `Launcher` protocol; `ForkserverLauncher`.
-- `src/aid/worker.py` — worker entry `main(endpoint, name, spec_json, state_dir)`; DEALER to the daemon.
+- `src/aid/worker.py` — worker entry `main(endpoint, server_key, public_key, secret_key, spec_json, state_dir)`;
+  DEALER to the daemon.
+- `src/aid/zap.py` — every worker connection is CURVE. The daemon issues a keypair per launch; its ZAP handler
+  names the session as the connection's User-Id, and the daemon routes by that, never by a worker's routing id.
 - `src/aid/backends/` — `acp.py`, `pydantic_ai.py`, `claude_tty.py`; each implements `base.Backend`.
 - `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON,
   plus the built-in `aid` server (`session_servers`). claude-agent-acp restarts its query when `session/load` gets

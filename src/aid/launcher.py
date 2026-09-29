@@ -33,6 +33,10 @@ class WorkerArgs:
     """Everything a worker needs. Plain strings only, so any launcher can pass it on."""
 
     endpoint: str
+    server_key: str
+    public_key: str
+    secret_key: str
+    """CURVE keys, Z85: the daemon's public key, and the keypair the daemon issued to this worker."""
     name: str
     spec_json: str
     state_dir: str
@@ -63,7 +67,7 @@ def _process_main(args: WorkerArgs) -> None:
     os.environ[ENV_SESSION] = args.name
     os.environ[ENV_RUNTIME_DIR] = args.daemon_runtime_dir
     os.environ[ENV_STATE_DIR] = args.daemon_state_dir
-    worker.main(args.endpoint, args.name, args.spec_json, args.state_dir)
+    worker.main(args.endpoint, args.server_key, args.public_key, args.secret_key, args.spec_json, args.state_dir)
 
 
 class ProcessHandle:

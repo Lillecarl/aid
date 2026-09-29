@@ -15,6 +15,7 @@ import zmq
 import zmq.asyncio
 from pydantic import ValidationError
 
+from aid import zap
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
 from aid.launcher import WorkerArgs
 from aid.protocol import (
@@ -72,6 +73,10 @@ class _Session:
     spec: AgentSpec
     history: HistoryLog
     handle: WorkerHandle | None = None
+    key: str | None = None
+    """The CURVE public key issued to the running worker."""
+    peer: bytes | None = None
+    """The routing id of the worker's connection, from its Hello."""
     ready: anyio.Event = field(default_factory=anyio.Event)
     exited: anyio.Event = field(default_factory=anyio.Event)
     exit_code: int | None = None
@@ -150,8 +155,10 @@ class Daemon:
         self._ctx = zmq.asyncio.Context()
         self._clients = self._ctx.socket(zmq.ROUTER)
         self._workers = self._ctx.socket(zmq.ROUTER)
-        self._workers.setsockopt(zmq.ROUTER_HANDOVER, 1)
         self._workers.setsockopt(zmq.ROUTER_MANDATORY, 1)
+        self._keys = zap.Keys()
+        zap.serve_curve(self._workers, self._keys)
+        self._zap = self._ctx.socket(zmq.REP)
         self._client_lock = anyio.Lock()
         self._worker_lock = anyio.Lock()
         self._tg: TaskGroup | None = None
@@ -160,11 +167,14 @@ class Daemon:
         await anyio.Path(self._paths.runtime_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
         await self._load_sessions()
         self._clients.bind(self._paths.control)
+        # Before the workers socket: libzmq accepts every CURVE client while no handler is bound.
+        self._zap.bind(zap.ZAP_ENDPOINT)
         self._workers.bind(self._paths.workers)
         log.info("listening on %s", self._paths.control)
         try:
             async with anyio.create_task_group() as tg:
                 self._tg = tg
+                tg.start_soon(zap.handle, self._zap, self._keys)
                 tg.start_soon(self._client_loop)
                 tg.start_soon(self._worker_loop)
                 task_status.started()
@@ -177,6 +187,7 @@ class Daemon:
         finally:
             self._clients.close(linger=0)
             self._workers.close(linger=0)
+            self._zap.close(linger=0)
             self._ctx.term()
 
     async def _load_sessions(self) -> None:
@@ -206,8 +217,11 @@ class Daemon:
             await self._clients.send_multipart([client, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
 
     async def _send_worker(self, name: str, request: Request) -> None:
+        peer = self._sessions[name].peer
+        if peer is None:
+            raise zmq.ZMQError(zmq.EHOSTUNREACH, f"no worker connected for {name!r}")
         async with self._worker_lock:
-            await self._workers.send_multipart([name.encode(), encode(request)])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
+            await self._workers.send_multipart([peer, encode(request)])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
 
     async def _client_loop(self) -> None:
         if self._tg is None:
@@ -390,8 +404,14 @@ class Daemon:
             session.exited = anyio.Event()
             session.start_failed = anyio.Event()
             session.start_error = None
+            session.peer = None
+            keys = self._keys.issue(session.name)
+            session.key = keys.public
             args = WorkerArgs(
                 endpoint=self._paths.workers,
+                server_key=self._keys.server.public,
+                public_key=keys.public,
+                secret_key=keys.secret,
                 name=session.name,
                 spec_json=AgentSpecAdapter.dump_json(session.spec).decode(),
                 state_dir=str(self._paths.session_dir(session.name)),
@@ -424,6 +444,9 @@ class Daemon:
             session.exit_code = code
             if session.handle is handle:
                 session.handle = None
+                session.peer = None
+                if session.key is not None:
+                    self._keys.revoke(session.name, session.key)
             for request_id, route in list(self._routes.items()):
                 if route.session == session.name:
                     del self._routes[request_id]
@@ -454,17 +477,29 @@ class Daemon:
 
     async def _worker_loop(self) -> None:
         while True:
-            identity, payload = await self._workers.recv_multipart()
-            name = identity.decode()
+            peer, frame = await self._workers.recv_multipart(copy=False)
+            # The session the ZAP handler named for this connection's key.
+            name = frame.get("User-Id")  # pyright: ignore[reportArgumentType] -- pyzmq's stub knows only the int options; libzmq also takes metadata names
+            if not isinstance(name, str):
+                raise TypeError(f"User-Id is {name!r}")
+            payload = frame.bytes
             try:
                 reply = decode_reply(payload)
             except ValidationError:
                 log.exception("invalid reply from worker %s", name)
                 continue
+            if (
+                isinstance(reply, Event | Done | Failure)
+                and (route := self._routes.get(reply.id)) is not None
+                and route.session != name
+            ):
+                log.warning("worker %s replied to %s's request %s", name, route.session, reply.id)
+                continue
             match reply:
                 case Hello():
                     if (session := self._sessions.get(name)) is not None:
                         log.info("worker %s ready (pid %d)", name, reply.pid)
+                        session.peer = peer.bytes
                         session.ready.set()
                 case StartFailed():
                     if (session := self._sessions.get(name)) is not None:
