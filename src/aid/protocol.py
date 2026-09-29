@@ -152,6 +152,16 @@ class AnswerPermission(_Request):
     option_id: str | None
 
 
+class Hook(_Request):
+    """A Claude Code hook event of a claude-tty session, from `aid/hook.py`. Done's data is what the hook prints
+    for Claude, or None."""
+
+    op: Literal["hook"] = "hook"
+    session: str
+    event: str
+    payload: JsonValue
+
+
 type Request = Annotated[
     GetStatus
     | GetScreen
@@ -168,7 +178,8 @@ type Request = Annotated[
     | GetSummary
     | SendMessage
     | ReceiveMessages
-    | AnswerPermission,
+    | AnswerPermission
+    | Hook,
     Field(discriminator="op"),
 ]
 
@@ -444,6 +455,10 @@ class SessionInfo(_Message):
     running: bool
     permissions: int = 0
     """Permission requests the agent waits on an answer to."""
+    working: bool = False
+    """In a turn: aid's, or one typed into the pane."""
+    attention: str | None = None
+    """What the agent asks a person to look at, in its own words."""
 
 
 class SessionStatus(_Message):
@@ -469,6 +484,10 @@ class SessionStatus(_Message):
     """What the latest turn used, since this daemon started; else the model at the last start."""
     permissions: list[PermissionRequest] = Field(default_factory=list[PermissionRequest])
     """Requests the agent waits on an answer to."""
+    working: bool = False
+    """In a turn: aid's, or one typed into the pane."""
+    attention: str | None = None
+    """What the agent asks a person to look at, in its own words."""
 
 
 class PaneAddress(_Message):
@@ -531,7 +550,16 @@ class Observed(_Message):
     item: HistoryItem
 
 
-type Reply = Annotated[Event | Done | Failure | Hello | StartFailed | Observed, Field(discriminator="reply")]
+class Activity(_Message):
+    """From a worker, unasked: what its agent is doing, where aid learns it besides its own turns (Claude Code's
+    hooks)."""
+
+    reply: Literal["activity"] = "activity"
+    working: bool
+    attention: str | None = None
+
+
+type Reply = Annotated[Event | Done | Failure | Hello | StartFailed | Observed | Activity, Field(discriminator="reply")]
 
 RequestAdapter: TypeAdapter[Request] = TypeAdapter(Request)
 ReplyAdapter: TypeAdapter[Reply] = TypeAdapter(Reply)

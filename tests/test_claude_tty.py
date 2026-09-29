@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import sys
 from typing import TYPE_CHECKING
 
@@ -11,7 +12,17 @@ import pytest
 from libpymux import Server
 
 import aid
-from aid.backends.claude_tty import Screen, classify, claude_argv, launcher_script
+from aid.backends.claude_tty import (
+    HOOK_EVENTS,
+    HOOK_SCRIPT,
+    Screen,
+    classify,
+    claude_argv,
+    hook_settings,
+    launcher_script,
+    read_settings,
+    split_settings,
+)
 from aid.mcp import claude_config
 from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR
 from aid.protocol import (
@@ -28,7 +39,7 @@ from aid.protocol import (
 )
 from aid.spec import ClaudeTtySpec, McpHttp
 from tests.conftest import acp_spec, fake_spec, needs_pymux
-from tests.fake_claude import COUNT, MODEL
+from tests.fake_claude import COUNT, MODEL, NOTICE
 from tests.test_tools import Rpc
 
 if TYPE_CHECKING:
@@ -72,7 +83,7 @@ def test_launcher_script_quotes_everything() -> None:
 
 def test_variadic_options_go_before_other_arguments() -> None:
     spec = ClaudeTtySpec(cwd="/", args=["first prompt"])
-    assert claude_argv(spec, "id", resume=False, mcp_config="/s/mcp.json") == [
+    assert claude_argv(spec, spec.args, "id", resume=False, mcp_config="/s/mcp.json", settings="/s/settings.json") == [
         "claude",
         "--mcp-config",
         "/s/mcp.json",
@@ -80,12 +91,38 @@ def test_variadic_options_go_before_other_arguments() -> None:
         "mcp__aid",
         "--dangerously-load-development-channels",
         "server:aid",
+        "--settings",
+        "/s/settings.json",
         "--session-id",
         "id",
         "first prompt",
     ]
     without = spec.model_copy(update={"aid_tools": False})
-    assert claude_argv(without, "id", resume=True, mcp_config=None) == ["claude", "--resume", "id", "first prompt"]
+    assert claude_argv(without, ["x"], "id", resume=True, mcp_config=None, settings="/s") == [
+        "claude",
+        "--settings",
+        "/s",
+        "--resume",
+        "id",
+        "x",
+    ]
+
+
+def test_a_persons_settings_join_aids_hooks(tmp_path: Path) -> None:
+    value, rest = split_settings(["--model", "opus", "--settings", "mine.json", "--settings=ignored", "hi"])
+    assert (value, rest) == ("ignored", ["--model", "opus", "hi"])
+    assert split_settings(["--settings", "a.json"]) == ("a.json", [])
+
+    (tmp_path / "mine.json").write_text(json.dumps({"model": "opus", "hooks": {"Stop": [{"hooks": ["theirs"]}]}}))
+    own = read_settings("mine.json", str(tmp_path))
+    assert read_settings('{"model": "haiku"}', "/nowhere") == {"model": "haiku"}
+    merged = hook_settings("ipc:///run/aid/control.sock", "s1", own)
+
+    assert merged["model"] == "opus"
+    assert set(merged["hooks"]) == set(HOOK_EVENTS)
+    assert merged["hooks"]["Stop"][0] == {"hooks": ["theirs"]}
+    [aid_stop] = merged["hooks"]["Stop"][1]["hooks"]
+    assert shlex.split(aid_stop["command"])[1:] == [HOOK_SCRIPT, "ipc:///run/aid/control.sock", "s1", "Stop"]
 
 
 pytestmark = pytest.mark.anyio
@@ -122,6 +159,24 @@ async def test_prompt_round_trip(daemon: Paths, tmp_path: Path, pymux_socket: st
         ),
         Output(output="ran it", stop_reason="end_turn"),
     ]
+
+
+@needs_pymux
+async def test_hooks_tell_what_claude_does(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    own = tmp_path / "own-settings.json"
+    own.write_text(json.dumps({"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "touch own-hook-ran"}]}]}}))
+    spec = fake_spec(tmp_path, pymux_socket).model_copy(update={"args": ["--settings", str(own)]})
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("tty", spec)
+            result = await session.run("notify")
+            while (status := await session.status()).working:  # noqa: ASYNC110 -- Claude runs Stop after the turn ends
+                await anyio.sleep(0.1)
+            [info] = await client.sessions()
+    assert result.text == "notified"
+    assert status.attention == NOTICE
+    assert (info.working, info.attention) == (False, NOTICE)
+    assert (tmp_path / "own-hook-ran").exists()
 
 
 async def typed_items(session: aid.Session) -> list[HistoryItem]:

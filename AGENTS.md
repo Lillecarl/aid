@@ -33,6 +33,9 @@ API and a CLI.
   worker start records `Started` (agent session id, agent, model) under a turn id of its own. What a turn's tokens
   cover differs per agent: `Usage`'s docstring says how, measured. The web UI must render every `HistoryItem` type:
   an unknown one breaks Chat.
+- claude-tty hooks: `aid/hook.py` runs as a file (no aid import: 0.04 s against 0.2 s per event), sends a `hook`
+  request, prints the answer, and fails open (exit 0, no output). The daemon routes it to the worker
+  (`HookBackend.hook`); worker state goes back as `Activity` (working, attention). Events: `HOOK_EVENTS`.
 - claude-tty follows its transcript for the worker's life (`FollowingBackend.follow`): a turn aid's `prompt()` waits
   for is aid's; any other (typed into the pane, woken by a channel event) goes to the daemon as `Observed` entries
   under a turn id of its own.

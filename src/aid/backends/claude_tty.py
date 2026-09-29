@@ -16,6 +16,19 @@ And on 2.1.284, with `--dangerously-load-development-channels server:aid`:
 - A channel event wakes an idle Claude. Its turn is in the transcript as a `user` entry with `isMeta` and
   `origin.kind == "channel"`, ended by turn_duration as usual. It is recorded like a typed turn, without a
   prompt: the daemon recorded the message when it arrived.
+
+Hooks, measured on 2.1.284: aid passes its own `--settings` file (`hook_settings`) whose hooks run `aid/hook.py`.
+Claude takes only the last `--settings`, so a person's own `--settings` in the args is merged into aid's.
+
+- Payloads carry session_id, transcript_path, cwd, hook_event_name, and mostly prompt_id and permission_mode.
+- UserPromptSubmit has `prompt`; Stop has `last_assistant_message`; Notification has `message` and
+  `notification_type` (idle_prompt a minute after a turn, permission_prompt with a permission dialog).
+- PermissionRequest has tool_name, tool_input and permission_suggestions, and no tool_use_id. The pane shows its
+  own dialog while the hook runs; whichever answers first wins. When the pane wins, Claude neither kills the hook
+  nor reads its late answer. The answer is `hookSpecificOutput.decision.behavior` allow or deny.
+- `/clear` runs SessionEnd (reason clear); later events carry a new session_id and transcript. `/exit` runs
+  SessionEnd with reason prompt_input_exit. PreCompact has `trigger`; PostCompact has `compact_summary`.
+- SubagentStop has agent_id, agent_type and agent_transcript_path; one ran after a plain turn, agent_type "".
 """
 
 from __future__ import annotations
@@ -25,20 +38,23 @@ import logging
 import os
 import re
 import shlex
+import sys
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Final
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import anyio
 import anyio.to_thread
 from libpymux import Server
 
+from aid import hook as hook_command
 from aid.env import agent_environment
 from aid.mcp import AID_TOOLS_RULE, claude_config, session_servers
 from aid.paths import default_paths
-from aid.protocol import Output, PaneAddress, PaneView, PromptEntry, Started, TextDelta
+from aid.protocol import Activity, Output, PaneAddress, PaneView, PromptEntry, Started, TextDelta
 from aid.spec import BUILTIN_MCP_SERVER
 from aid.transcript import (
     TranscriptFollower,
@@ -53,11 +69,11 @@ from aid.transcript import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
-    from pathlib import Path
 
     from libpymux import Pane
+    from pydantic import JsonValue
 
-    from aid.backends.base import Emit, Record
+    from aid.backends.base import Emit, Record, Report
     from aid.protocol import SessionEvent
     from aid.spec import ClaudeTtySpec
 
@@ -80,6 +96,13 @@ POLL: Final = 0.2
 # 0.4 s between the paste and Enter worked every time; nothing shorter was tried.
 PASTE_SETTLE: Final = 0.4
 PANE_CHECK: Final = 2.0
+HOOKS_FILE: Final = "settings.json"
+HOOK_SCRIPT: Final = str(Path(hook_command.__file__))
+HOOK_EVENTS: Final = ("UserPromptSubmit", "Stop", "StopFailure", "Notification")
+# Claude kills a hook at its timeout; the pane's own dialog still asks.
+WAITING_HOOK_TIMEOUT: Final = 3600
+# Notifications that need no one: an idle prompt is `working` false, a permission prompt a PermissionRequest.
+QUIET_NOTIFICATIONS: Final = frozenset({"idle_prompt", "permission_prompt"})
 
 _PROMPT_LINE = re.compile(r"^❯(\s|$)", re.MULTILINE)
 _TRUST_DIALOG = "trust this folder"
@@ -118,16 +141,59 @@ def launcher_script(env: dict[str, str], cwd: str, argv: list[str]) -> str:
     return f"#!/bin/sh\ncd {shlex.quote(cwd)} || exit 1\nexec env -i {terminal} {assignments} {shlex.join(argv)}\n"
 
 
-def claude_argv(spec: ClaudeTtySpec, session_id: str, *, resume: bool, mcp_config: str | None) -> list[str]:
+def claude_argv(
+    spec: ClaudeTtySpec, args: list[str], session_id: str, *, resume: bool, mcp_config: str | None, settings: str
+) -> list[str]:
+    """`args`: spec.args less any --settings, which `settings` holds merged into aid's."""
     # --mcp-config and --allowedTools are variadic: each goes before another option, or it would take the first
-    # of spec.args too. A repeated --allowedTools in spec.args adds to this one.
+    # of the args too. A repeated --allowedTools in the args adds to this one.
     mcp = ["--mcp-config", mcp_config] if mcp_config else []
     aid = (
         ["--allowedTools", AID_TOOLS_RULE, "--dangerously-load-development-channels", f"server:{BUILTIN_MCP_SERVER}"]
         if spec.aid_tools
         else []
     )
-    return [*spec.command, *mcp, *aid, "--resume" if resume else "--session-id", session_id, *spec.args]
+    session = ["--resume" if resume else "--session-id", session_id]
+    return [*spec.command, *mcp, *aid, "--settings", settings, *session, *args]
+
+
+def split_settings(args: list[str]) -> tuple[str | None, list[str]]:
+    """The last --settings value in Claude's args, and the args without any. Measured on 2.1.284: Claude takes
+    only the last --settings, so aid's hooks and a person's own settings must be one document."""
+    value: str | None = None
+    rest: list[str] = []
+    it = iter(args)
+    for arg in it:
+        if arg == "--settings":
+            value = next(it, None)
+        elif arg.startswith("--settings="):
+            value = arg.removeprefix("--settings=")
+        else:
+            rest.append(arg)
+    return value, rest
+
+
+def read_settings(value: str, cwd: str) -> dict[str, Any]:
+    """A --settings value as Claude reads it: JSON text, or a path to a JSON file (relative to the cwd)."""
+    text = value if value.lstrip().startswith("{") else (Path(cwd) / value).read_text()
+    document = json.loads(text)
+    if not isinstance(document, dict):
+        raise ValueError(f"--settings {value!r} is not a JSON object")
+    return cast("dict[str, Any]", document)
+
+
+def hook_settings(control: str, session: str, own: dict[str, Any]) -> dict[str, Any]:
+    """`own` with aid's hook added to each event in HOOK_EVENTS, after any hook `own` has for it."""
+    hooks: dict[str, list[Any]] = {event: list(entries) for event, entries in dict(own.get("hooks") or {}).items()}
+    for event in HOOK_EVENTS:
+        handler: dict[str, Any] = {
+            "type": "command",
+            "command": shlex.join([sys.executable, HOOK_SCRIPT, control, session, event]),
+        }
+        if event in hook_command.WAITING_EVENTS:
+            handler["timeout"] = WAITING_HOOK_TIMEOUT
+        hooks.setdefault(event, []).append({"hooks": [handler]})
+    return {**own, "hooks": hooks}
 
 
 @dataclass
@@ -168,14 +234,39 @@ class ClaudeTtyBackend:
         # Where the transcript ended before Claude started: earlier turns are in history already, or predate aid.
         self._offset = offset
         self._record: Record | None = None
+        self._report: Report | None = None
         self._claim: _Claim | None = None
         self._turn: _Turn | None = None
+        self._working = False
+        self._attention: str | None = None
 
     def started(self) -> Started:
         return self._started
 
-    async def follow(self, record: Record) -> None:
+    async def hook(self, event: str, payload: JsonValue) -> JsonValue:
+        fields = cast("dict[str, JsonValue]", payload) if isinstance(payload, dict) else {}
+        match event:
+            case "UserPromptSubmit":
+                await self._activity(working=True, attention=None)
+            case "Stop" | "StopFailure":
+                await self._activity(working=False, attention=self._attention)
+            case "Notification" if fields.get("notification_type") not in QUIET_NOTIFICATIONS:
+                message = fields.get("message")
+                await self._activity(working=self._working, attention=message if isinstance(message, str) else None)
+            case _:
+                pass
+        return None
+
+    async def _activity(self, *, working: bool, attention: str | None) -> None:
+        if (working, attention) == (self._working, self._attention):
+            return
+        self._working, self._attention = working, attention
+        if self._report is not None:
+            await self._report(Activity(working=working, attention=attention))
+
+    async def follow(self, record: Record, report: Report) -> None:
         self._record = record
+        self._report = report
         while (path := await self._find_transcript()) is None:  # noqa: ASYNC110 -- Claude creates the file; nothing signals it
             await anyio.sleep(POLL)
         async for entry in TranscriptFollower(path, self._offset).follow():
@@ -349,7 +440,12 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
         mcp_file = state_dir / MCP_CONFIG_FILE
         await _write_private(mcp_file, json.dumps(claude_config(servers)), 0o600)
         mcp_config = str(mcp_file)
-    argv = claude_argv(spec, session_id, resume=resume, mcp_config=mcp_config)
+    own_settings, args = split_settings(spec.args)
+    own = await anyio.to_thread.run_sync(read_settings, own_settings, spec.cwd) if own_settings else {}
+    settings_file = state_dir / HOOKS_FILE
+    settings = hook_settings(default_paths().control, state_dir.name, own)
+    await _write_private(settings_file, json.dumps(settings), 0o600)
+    argv = claude_argv(spec, args, session_id, resume=resume, mcp_config=mcp_config, settings=str(settings_file))
 
     launcher = state_dir / LAUNCHER_FILE
     await _write_private(launcher, launcher_script(env, spec.cwd, argv), 0o700)

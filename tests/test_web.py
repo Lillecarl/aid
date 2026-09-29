@@ -40,6 +40,7 @@ pytestmark = [pytest.mark.anyio, pytest.mark.skipif(shutil.which("dex") is None,
 
 TIMEOUT = 30
 ALLOWED = "admin@example.com"
+IDLE = {"permissions": 0, "working": False, "attention": None}
 REFUSED = "other@example.com"
 # bcrypt of "password", from dex's example configuration.
 PASSWORD_HASH = "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"
@@ -221,7 +222,7 @@ async def test_session_round_trip(web: Web, tmp_path: Path) -> None:
     assert bad_query.status_code == 422
     assert unasked.status_code == 403
     assert unknown.status_code == 409
-    assert listed == [{"name": "echo", "kind": "pydantic-ai", "running": True, "permissions": 0}]
+    assert listed == [{"name": "echo", "kind": "pydantic-ai", "running": True, **IDLE}]
     assert deleted.status_code == 200
     assert after == []
 
@@ -332,8 +333,8 @@ async def test_session_list_streams_changes(web: Web, tmp_path: Path) -> None:
                             break
     assert seen == [
         [],
-        [{"name": "echo", "kind": "pydantic-ai", "running": True, "permissions": 0}],
-        [{"name": "echo", "kind": "pydantic-ai", "running": False, "permissions": 0}],
+        [{"name": "echo", "kind": "pydantic-ai", "running": True, **IDLE}],
+        [{"name": "echo", "kind": "pydantic-ai", "running": False, **IDLE}],
     ]
 
 

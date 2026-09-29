@@ -17,8 +17,9 @@ import zmq
 import zmq.asyncio
 
 from aid.backends import open_backend
-from aid.backends.base import FollowingBackend, PermissionBackend, ScreenBackend
+from aid.backends.base import FollowingBackend, HookBackend, PermissionBackend, ScreenBackend
 from aid.protocol import (
+    Activity,
     AnswerPermission,
     Cancel,
     Done,
@@ -27,6 +28,7 @@ from aid.protocol import (
     GetPane,
     GetScreen,
     Hello,
+    Hook,
     Observed,
     Prompt,
     StartFailed,
@@ -77,7 +79,7 @@ async def serve(
             worker = _Worker(sock, backend, tg)
             await worker.send(Hello(started=backend.started()))
             if isinstance(backend, FollowingBackend):
-                tg.start_soon(backend.follow, worker.record)
+                tg.start_soon(worker.follow, backend)
             await worker.serve()
     finally:
         sock.close()
@@ -100,12 +102,17 @@ class _Worker:
         self._send_lock = anyio.Lock()
         self._busy = False
 
-    async def send(self, reply: Hello | Event | Done | Failure | Observed) -> None:
+    async def send(self, reply: Hello | Event | Done | Failure | Observed | Activity) -> None:
         async with self._send_lock:
             await self._sock.send(encode(reply))
 
     async def record(self, turn: str, item: HistoryItem) -> None:
         await self.send(Observed(turn=turn, item=item))
+
+    async def follow(self, backend: FollowingBackend) -> None:
+        await backend.follow(self.record, self.send)
+        log.info("the agent has gone; the worker ends")
+        self._tg.cancel_scope.cancel()
 
     async def serve(self) -> None:
         while True:
@@ -129,6 +136,11 @@ class _Worker:
                         await self.send(
                             Failure(id=request.id, code="no_screen", message="this session has no terminal")
                         )
+                case Hook():
+                    if isinstance(self._backend, HookBackend):
+                        self._tg.start_soon(self._hook, self._backend, request)
+                    else:
+                        await self.send(Done(id=request.id))
                 case AnswerPermission():
                     if isinstance(self._backend, PermissionBackend) and self._backend.answer_permission(
                         request.request_id, request.option_id
@@ -145,6 +157,15 @@ class _Worker:
                     return
                 case _:
                     await self.send(Failure(id=request.id, code="unsupported", message=f"worker cannot {request.op}"))
+
+    async def _hook(self, backend: HookBackend, request: Hook) -> None:
+        try:
+            answer = await backend.hook(request.event, request.payload)
+        except Exception as error:
+            log.exception("hook %s failed", request.event)
+            await self.send(Failure(id=request.id, code="hook_failed", message=f"{type(error).__name__}: {error}"))
+        else:
+            await self.send(Done(id=request.id, data=answer))
 
     async def _screen(self, request: GetScreen) -> None:
         if not isinstance(self._backend, ScreenBackend):

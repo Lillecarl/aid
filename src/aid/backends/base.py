@@ -4,11 +4,15 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from aid.protocol import HistoryItem, Output, PaneAddress, PaneView, SessionEvent, Started
+    from pydantic import JsonValue
+
+    from aid.protocol import Activity, HistoryItem, Output, PaneAddress, PaneView, SessionEvent, Started
 
 type Emit = Callable[[SessionEvent], Awaitable[None]]
 type Record = Callable[[str, HistoryItem], Awaitable[None]]
 """Records an entry of a turn nobody sent through aid, under the turn id the backend chose."""
+type Report = Callable[[Activity], Awaitable[None]]
+"""Tells the daemon what the agent is doing."""
 
 
 class Backend(Protocol):
@@ -29,8 +33,18 @@ class FollowingBackend(Backend, Protocol):
 
     `runtime_checkable` matches by method name alone: keep `follow` unique among backends."""
 
-    async def follow(self, record: Record) -> None:
-        """Runs for the worker's life, recording those turns."""
+    async def follow(self, record: Record, report: Report) -> None:
+        """Runs for the worker's life, recording those turns. It returns when the agent has gone, which ends the
+        worker."""
+        ...
+
+
+@runtime_checkable
+class HookBackend(Backend, Protocol):
+    """A backend whose agent calls aid from its hooks (`aid/hook.py`)."""
+
+    async def hook(self, event: str, payload: JsonValue) -> JsonValue:
+        """What the hook prints for the agent to act on; None for nothing."""
         ...
 
 

@@ -20,6 +20,7 @@ from aid import zap
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
 from aid.launcher import WorkerArgs
 from aid.protocol import (
+    Activity,
     AgentCatalog,
     AidError,
     AnswerPermission,
@@ -35,6 +36,7 @@ from aid.protocol import (
     GetStatus,
     GetSummary,
     Hello,
+    Hook,
     ListAgents,
     ListSessions,
     MessageEntry,
@@ -65,7 +67,7 @@ if TYPE_CHECKING:
 
     from aid.launcher import Launcher, WorkerHandle
     from aid.paths import Paths
-    from aid.protocol import Request
+    from aid.protocol import HistoryItem, Request
     from aid.spec import AgentSpec
 
 log = logging.getLogger(__name__)
@@ -107,10 +109,37 @@ class _Session:
     """What the latest turn's Usage named."""
     permissions: dict[str, PermissionRequest] = field(default_factory=dict[str, PermissionRequest])
     """Requests the agent waits on, by request id."""
+    working: bool = False
+    """In a turn aid did not start, as the worker's Activity says."""
+    attention: str | None = None
 
     @property
     def running(self) -> bool:
         return self.handle is not None and self.ready.is_set() and not self.exited.is_set()
+
+    def note(self, item: HistoryItem) -> None:
+        """What a turn's entry changes in the status, whoever started the turn."""
+        match item:
+            case Usage(models=models) if models:
+                self.models = models
+            case PermissionRequest():
+                self.permissions[item.request_id] = item
+            case PermissionDecision():
+                self.permissions.pop(item.request_id, None)
+            case Started():
+                self.started = item
+            case _:
+                pass
+
+    def info(self) -> SessionInfo:
+        return SessionInfo(
+            name=self.name,
+            kind=self.spec.kind,
+            running=self.running,
+            permissions=len(self.permissions),
+            working=self.working or self.turn is not None,
+            attention=self.attention,
+        )
 
     @property
     def uses_channel(self) -> bool:
@@ -142,6 +171,8 @@ class _Session:
             agent=self.started.agent if self.started else None,
             model=", ".join(self.models) or (self.started.model if self.started else None),
             permissions=list(self.permissions.values()),
+            working=self.working or self.turn is not None,
+            attention=self.attention,
         )
 
 
@@ -279,10 +310,7 @@ class Daemon:
                 await self._create(request)
                 return Done(id=request.id, data={"name": request.name})
             case ListSessions():
-                infos = [
-                    SessionInfo(name=s.name, kind=s.spec.kind, running=s.running, permissions=len(s.permissions))
-                    for s in self._sessions.values()
-                ]
+                infos = [s.info() for s in self._sessions.values()]
                 return Done(id=request.id, data=[info.model_dump(mode="json") for info in infos])
             case ListAgents():
                 return Done(id=request.id, data=(await list_agents()).model_dump(mode="json"))
@@ -330,6 +358,13 @@ class Daemon:
                 session = self._session(request.session)
                 if not session.running:
                     return Done(id=request.id)
+                self._routes[request.id] = _Route(client, session.name)
+                await self._send_worker(session, request)
+                return None
+            case Hook():
+                session = self._session(request.session)
+                if not session.running or session.peer is None:
+                    return Done(id=request.id)  # A hook from before Hello, or after the worker went: nobody to tell.
                 self._routes[request.id] = _Route(client, session.name)
                 await self._send_worker(session, request)
                 return None
@@ -517,6 +552,7 @@ class Daemon:
             # start a crashing worker again and again.
             session.turn = None
             session.permissions.clear()
+            session.working, session.attention = False, None
             session.exited.set()
             session.ready.set()
 
@@ -578,26 +614,20 @@ class Daemon:
                         session.ready.set()
                 case Observed():
                     if (session := self._sessions.get(name)) is not None:
-                        if isinstance(reply.item, Usage) and reply.item.models:
-                            session.models = reply.item.models
+                        session.note(reply.item)
                         try:
                             await session.history.append(reply.item, reply.turn)
                         except OSError:
                             log.exception("could not record %s's turn %s", name, reply.turn)
+                case Activity():
+                    if (session := self._sessions.get(name)) is not None:
+                        session.working, session.attention = reply.working, reply.attention
                 case Event():
                     if (route := self._routes.get(reply.id)) is not None:
                         if route.client is not None:
                             await self._send_client(route.client, payload)
-                        if (s := self._sessions.get(name)) is not None:
-                            match reply.event:
-                                case Usage(models=models) if models:
-                                    s.models = models
-                                case PermissionRequest():
-                                    s.permissions[reply.event.request_id] = reply.event
-                                case PermissionDecision():
-                                    s.permissions.pop(reply.event.request_id, None)
-                                case _:
-                                    pass
+                        if (session := self._sessions.get(name)) is not None:
+                            session.note(reply.event)
                         await self._record(route, reply)
                 case Done() | Failure():
                     if (route := self._routes.pop(reply.id, None)) is not None:
