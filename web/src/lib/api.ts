@@ -224,7 +224,7 @@ export async function readFile(name: string, path: string): Promise<FileView> {
   return (await request("GET", fileUrl(name, "file", path))).json();
 }
 
-export async function control(name: string, verb: "cancel" | "stop" | "delete"): Promise<void> {
+export async function control(name: string, verb: "start" | "cancel" | "stop" | "delete"): Promise<void> {
   const path = `/api/sessions/${encodeURIComponent(name)}`;
   await (verb === "delete" ? request("DELETE", path) : request("POST", `${path}/${verb}`));
 }
