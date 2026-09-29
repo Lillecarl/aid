@@ -46,6 +46,7 @@ from aid.protocol import (
     StartFailed,
     StartSession,
     StopSession,
+    Usage,
     decode_reply,
     decode_request,
     encode,
@@ -98,6 +99,8 @@ class _Session:
     """Set when `inbox` gains a message, for a channel server waiting on it."""
     started: Started | None = None
     """What the last worker said about its agent. Kept after it exits: the agent session carries on."""
+    models: list[str] = field(default_factory=list[str])
+    """What the latest turn's Usage named."""
 
     @property
     def running(self) -> bool:
@@ -131,7 +134,7 @@ class _Session:
             aid_tools=self.spec.aid_tools,
             agent_session=self.started.agent_session if self.started else None,
             agent=self.started.agent if self.started else None,
-            model=self.started.model if self.started else None,
+            model=", ".join(self.models) or (self.started.model if self.started else None),
         )
 
 
@@ -551,6 +554,8 @@ class Daemon:
                     if (route := self._routes.get(reply.id)) is not None:
                         if route.client is not None:
                             await self._send_client(route.client, payload)
+                        if isinstance(reply.event, Usage) and reply.event.models and (s := self._sessions.get(name)):
+                            s.models = reply.event.models
                         await self._record(route, reply)
                 case Done() | Failure():
                     if (route := self._routes.pop(reply.id, None)) is not None:

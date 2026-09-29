@@ -398,7 +398,7 @@ class SessionStatus(_Message):
     """From the last start (`Started`); None before the first."""
     agent: str | None = None
     model: str | None = None
-    """The model at the last start. A turn's Usage names what it used."""
+    """What the latest turn used, since this daemon started; else the model at the last start."""
 
 
 class PaneAddress(_Message):

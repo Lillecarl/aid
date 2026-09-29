@@ -39,7 +39,15 @@ from aid.mcp import AID_TOOLS_RULE, claude_config, session_servers
 from aid.paths import default_paths
 from aid.protocol import Output, PaneAddress, PaneView, Started, TextDelta
 from aid.spec import BUILTIN_MCP_SERVER
-from aid.transcript import TranscriptFollower, TurnEnded, TurnUsage, config_dir, find_transcript, items_from_entry
+from aid.transcript import (
+    TranscriptFollower,
+    TurnEnded,
+    TurnUsage,
+    config_dir,
+    find_transcript,
+    items_from_entry,
+    last_version,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -255,7 +263,10 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
     id_file = state_dir / SESSION_ID_FILE
     session_id = (await id_file.read_text()).strip() if await id_file.exists() else str(uuid.uuid4())
     await id_file.write_text(session_id)
-    resume = await anyio.to_thread.run_sync(find_transcript, transcripts, session_id) is not None
+    transcript = await anyio.to_thread.run_sync(find_transcript, transcripts, session_id)
+    resume = transcript is not None
+    # Known only from a transcript: a new session has none until its first turn.
+    version = await anyio.to_thread.run_sync(last_version, transcript) if transcript else None
     mcp_config: str | None = None
     if servers := session_servers(spec, state_dir.name):
         mcp_file = state_dir / MCP_CONFIG_FILE
@@ -281,7 +292,8 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
     log.info("claude %s in pymux pane %s on %s (%s)", session_id, pane.id, socket, "resumed" if resume else "new")
     try:
         await _wait_ready(pane, spec.trust_cwd)
-        started = Started(pid=os.getpid(), agent_session=session_id, resumed=resume)
+        agent = f"Claude Code {version}" if version else None
+        started = Started(pid=os.getpid(), agent_session=session_id, resumed=resume, agent=agent)
         yield ClaudeTtyBackend(server, pane, transcripts, session_id, started)
     finally:
         with anyio.CancelScope(shield=True):

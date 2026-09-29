@@ -63,6 +63,25 @@ def find_transcript(base: Path, session_id: str) -> Path | None:
     return next((base / "projects").glob(f"*/{session_id}.jsonl"), None)
 
 
+# Enough of a transcript's end to hold its last few entries; one entry can be a whole file's diff.
+_TAIL: Final = 256 * 1024
+
+
+def last_version(path: Path) -> str | None:
+    """The Claude Code version that wrote the transcript's latest entry: every entry names it."""
+    with path.open("rb") as f:
+        f.seek(max(0, f.seek(0, os.SEEK_END) - _TAIL))
+        tail = f.read()
+    for line in reversed(tail.splitlines()):
+        try:
+            version = json.loads(line).get("version")
+        except json.JSONDecodeError, AttributeError:
+            continue
+        if isinstance(version, str):
+            return version
+    return None
+
+
 class _Lenient(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 

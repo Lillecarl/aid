@@ -11,7 +11,7 @@ from aid.protocol import AidError, Cost, Output, Started, TextDelta, Usage
 from aid.spec import PermissionMode
 from tests.agents import Review
 from tests.conftest import acp_spec, py_spec
-from tests.fake_acp_agent import AGENT_NAME, AGENT_VERSION, CHUNKS, MODEL, RESOLVED_MODEL
+from tests.fake_acp_agent import AGENT_NAME, AGENT_VERSION, CHUNKS, RESOLVED_MODEL
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -118,7 +118,8 @@ async def test_acp_usage_is_recorded(daemon: Paths, tmp_path: Path) -> None:
         ),
         Output(output="counted", stop_reason="end_turn"),
     ]
-    assert (status.agent, status.model) == (f"{AGENT_NAME} {AGENT_VERSION}", MODEL)
+    # The model the turn used, over the option's value at the start.
+    assert (status.agent, status.model) == (f"{AGENT_NAME} {AGENT_VERSION}", RESOLVED_MODEL)
     assert status.agent_session
 
 

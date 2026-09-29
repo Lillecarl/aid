@@ -7,7 +7,14 @@ import anyio
 import pytest
 
 from aid.protocol import TextDelta, ThoughtDelta, ToolCall, ToolDiff, Usage
-from aid.transcript import TranscriptFollower, TurnEnded, TurnUsage, find_transcript, items_from_entry
+from aid.transcript import (
+    TranscriptFollower,
+    TurnEnded,
+    TurnUsage,
+    find_transcript,
+    items_from_entry,
+    last_version,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -157,6 +164,16 @@ def test_find_transcript(tmp_path: Path) -> None:
     (project / "abc.jsonl").write_text("")
     assert find_transcript(tmp_path, "abc") == project / "abc.jsonl"
     assert find_transcript(tmp_path, "nope") is None
+
+
+def test_last_version(tmp_path: Path) -> None:
+    path = tmp_path / "t.jsonl"
+    lines = [{"type": "user", "version": "2.1.1"}, {"type": "assistant", "version": "2.1.283"}, {"type": "summary"}]
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines) + '{"version": "cut sho')
+    assert last_version(path) == "2.1.283"
+    empty = tmp_path / "e.jsonl"
+    empty.write_text("")
+    assert last_version(empty) is None
 
 
 async def test_follower_joins_partial_lines_and_sees_late_writes(tmp_path: Path) -> None:
