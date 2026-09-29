@@ -19,6 +19,10 @@ export interface SessionStatus {
   runs: string;
   mcp_servers: string[];
   aid_tools: boolean;
+  /** From the last worker start; null before the first. */
+  agent_session: string | null;
+  agent: string | null;
+  model: string | null;
 }
 
 export const statusEventsUrl = (name: string): string => `/api/sessions/${encodeURIComponent(name)}/status/events`;
@@ -92,14 +96,42 @@ export interface ToolCallEvent {
   paths?: string[];
 }
 
+/** A turn's tokens as its agent reports them; null where it says nothing. See `aid.protocol.Usage`. */
+export interface UsageEvent {
+  type: "usage";
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  thought_tokens: number | null;
+  requests: number | null;
+  models: string[];
+  context_used: number | null;
+  context_size: number | null;
+  /** The agent's running total for its session, not this turn's share. */
+  session_cost: { amount: number; currency: string } | null;
+}
+
+/** A worker start. */
+export interface StartedEntry {
+  type: "started";
+  pid: number;
+  agent_session: string | null;
+  resumed: boolean;
+  agent: string | null;
+  model: string | null;
+}
+
 export type SessionEvent =
   | { type: "text"; text: string }
   | { type: "thought"; text: string }
   | ToolCallEvent
+  | UsageEvent
   | { type: "output"; output: unknown; stop_reason: string };
 
 export type HistoryItem =
   | SessionEvent
+  | StartedEntry
   | { type: "prompt"; text: string }
   | { type: "message"; sender: string | null; text: string }
   | { type: "error"; code: string; message: string };

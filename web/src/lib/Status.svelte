@@ -32,6 +32,12 @@
     <dd>{status.pending}</dd>
     <dt>Kind</dt>
     <dd>{status.kind}</dd>
+    <dt>Agent</dt>
+    <dd>{status.agent ?? "not reported"}</dd>
+    <dt>Model</dt>
+    <dd>{status.model ?? "not reported"}</dd>
+    <dt>Agent session</dt>
+    <dd>{#if status.agent_session}<code>{status.agent_session}</code>{:else}none{/if}</dd>
     <dt>Runs</dt>
     <dd><code>{status.runs}</code></dd>
     <dt>Directory</dt>

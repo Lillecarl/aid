@@ -6,6 +6,7 @@
   import Markdown from "./Markdown.svelte";
   import ToolCard from "./ToolCard.svelte";
   import { merge, type Tool, toolOf } from "./tools";
+  import { startedLine, usageLine } from "./usage";
 
   interface Props {
     name: string;
@@ -57,6 +58,10 @@
       }
       case "error":
         return [row("error", `${item.code}: ${item.message}`)];
+      case "usage":
+        return [row("meta", usageLine(item))];
+      case "started":
+        return [row("meta", startedLine(item))];
     }
   }
 
