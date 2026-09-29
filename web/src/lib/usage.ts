@@ -13,6 +13,7 @@ export function usageLine(u: UsageEvent): string {
       : null;
   const cost = u.session_cost ? `session ${u.session_cost.amount.toFixed(2)} ${u.session_cost.currency}` : null;
   return [
+    u.agent ? `subagent ${u.agent}` : null,
     u.models.join(", ") || null,
     part(u.input_tokens, "in"),
     part(u.output_tokens, "out"),

@@ -128,6 +128,8 @@ export interface UsageEvent {
   models: string[];
   context_used: number | null;
   context_size: number | null;
+  /** A subagent's own tokens: its type. Absent in history from before aid recorded them. */
+  agent?: string | null;
   /** The agent's running total for its session, not this turn's share. */
   session_cost: { amount: number; currency: string } | null;
 }

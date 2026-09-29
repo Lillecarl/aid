@@ -2,7 +2,8 @@
 
 Prompts: "slow" waits for Escape; "count" writes one text block per number; "tool" makes a tool call;
 "mcp" says the --mcp-config file; "term" says TERM; "notify" runs the Notification hook; "permission" asks through the PermissionRequest hook and obeys it;
-"permission-pane" asks, then answers yes in the pane while the hook still waits; anything else is echoed.
+"permission-pane" asks, then answers yes in the pane while the hook still waits; "subagent" writes a subagent's
+transcript and runs SubagentStop; anything else is echoed.
 Each turn runs the UserPromptSubmit and Stop hooks from --settings. Typed /clear, /compact and /exit run theirs. FAKE_CLAUDE_TRUST=1 shows the trust dialog until a `.fake-trusted` file exists.
 FAKE_CLAUDE_CHANNELS=1 shows the development channels warning, when the flag is given, until Enter.
 """
@@ -27,6 +28,7 @@ DOWN = b"\x1b[B"
 COUNT = 20
 MODEL = "claude-fake-1"
 NOTICE = "Claude has a question for you"
+SUBAGENT_MODEL = "claude-fake-small"
 COMPACT_SUMMARY = "The person asked for a greeting."
 PERMISSION_INPUT = {"command": "rm -rf build", "description": "Remove the build directory"}
 USAGE = {
@@ -207,6 +209,14 @@ class Fake:
             self.say(Path(self.mcp_config).read_text() if self.mcp_config else "none")
         elif text in ("permission", "permission-pane"):
             self.permission(pane_answers=text == "permission-pane")
+        elif text == "subagent":
+            agent = transcript_path(self.session_id).with_suffix("") / "subagents" / "agent-fake.jsonl"
+            agent.parent.mkdir(parents=True, exist_ok=True)
+            message = {"id": "msg_sub", "model": SUBAGENT_MODEL, "usage": USAGE, "content": [{"type": "text"}]}
+            agent.write_text(json.dumps({"type": "assistant", "isSidechain": True, "message": message}) + "\n")
+            time.sleep(1)  # A subagent works a while; by its stop aid has read the turn's start.
+            self.hook("SubagentStop", agent_id="fake", agent_type="general-purpose", agent_transcript_path=str(agent))
+            self.say("delegated")
         elif text == "notify":
             self.hook("Notification", message=NOTICE, notification_type="elicitation_dialog")
             self.say("notified")

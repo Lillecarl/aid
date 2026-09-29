@@ -43,7 +43,7 @@ from aid.protocol import (
 )
 from aid.spec import ClaudeTtySpec, McpHttp
 from tests.conftest import acp_spec, fake_spec, needs_pymux
-from tests.fake_claude import COMPACT_SUMMARY, COUNT, MODEL, NOTICE, PERMISSION_INPUT
+from tests.fake_claude import COMPACT_SUMMARY, COUNT, MODEL, NOTICE, PERMISSION_INPUT, SUBAGENT_MODEL
 from tests.test_tools import Rpc
 
 if TYPE_CHECKING:
@@ -258,6 +258,22 @@ async def test_a_turn_typed_into_the_pane_is_recorded(daemon: Paths, tmp_path: P
     assert usage.models == [MODEL]
     # aid's prompts still get their own turns, and the typed one is not taken for aid's.
     assert after.text == "echo: after"
+
+
+@needs_pymux
+async def test_a_subagents_tokens_are_recorded(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            events = [event async for event in session.stream("subagent")]
+            status = await session.status()
+            summary = await session.summary()
+    subagent, turn = [e for e in events if isinstance(e, Usage)]
+    assert (subagent.agent, subagent.models, subagent.requests) == ("general-purpose", [SUBAGENT_MODEL], 1)
+    assert (subagent.input_tokens, subagent.output_tokens) == (3, 5)
+    assert (turn.agent, turn.models) == (None, [MODEL])
+    assert status.model == MODEL
+    assert summary.input_tokens == 3 + (turn.input_tokens or 0)
 
 
 async def type_command(session: aid.Session, command: str) -> None:

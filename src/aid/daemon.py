@@ -120,7 +120,7 @@ class _Session:
     def note(self, item: HistoryItem) -> None:
         """What a turn's entry changes in the status, whoever started the turn."""
         match item:
-            case Usage(models=models) if models:
+            case Usage(models=models, agent=None) if models:
                 self.models = models
             case PermissionRequest():
                 self.permissions[item.request_id] = item

@@ -286,6 +286,9 @@ class Usage(_Message):
     context_used: int | None = None
     """Tokens in the context window at the turn's end."""
     context_size: int | None = None
+    agent: str | None = None
+    """Set for a subagent's tokens (interactive Claude): its type, or `subagent` where Claude names none. They
+    are the subagent's own, recorded when it stops, and not in the turn's Usage."""
     session_cost: Cost | None = None
     """The agent's own running total for its session, not this turn's share: ACP's `usage_update` cost is
     cumulative. It restarts with the agent's session."""

@@ -82,6 +82,7 @@ from aid.transcript import (
     human_prompt,
     items_from_entry,
     last_version,
+    usage_since,
 )
 
 if TYPE_CHECKING:
@@ -123,6 +124,7 @@ HOOK_EVENTS: Final = (
     "Notification",
     "PermissionRequest",
     "PostCompact",
+    "SubagentStop",
 )
 # Claude kills a hook at its timeout; the pane's own dialog still asks. aid gives up a little before, to record it.
 WAITING_HOOK_TIMEOUT: Final = 3600
@@ -314,6 +316,8 @@ class ClaudeTtyBackend:
         self._working = False
         self._attention: str | None = None
         self._waits = PermissionWaits()
+        self._subagent_read: dict[Path, int] = {}
+        """How far each subagent transcript is counted: a subagent can stop, resume and stop again."""
 
     def started(self) -> Started:
         return self._started
@@ -350,6 +354,10 @@ class ClaudeTtyBackend:
                 await self._activity(working=self._working, attention=message if isinstance(message, str) else None)
             case "PermissionRequest":
                 return await self._permission(fields)
+            case "SubagentStop":
+                path, kind = fields.get("agent_transcript_path"), fields.get("agent_type")
+                if isinstance(path, str):
+                    await self._subagent_usage(Path(path), kind if isinstance(kind, str) and kind else "subagent")
             case _:
                 pass
         return None
@@ -443,6 +451,18 @@ class ClaudeTtyBackend:
         await self._record_alone(self._started)
         if self._following is not None:
             self._following.cancel()
+
+    async def _subagent_usage(self, path: Path, agent: str) -> None:
+        """Tokens a subagent spent since it last stopped, under the running turn if there is one."""
+        start = self._subagent_read.get(path, 0)
+        usage, self._subagent_read[path] = await anyio.to_thread.run_sync(usage_since, path, start)
+        if not usage.requests:
+            return
+        usage = usage.model_copy(update={"agent": agent})
+        if self._turn is not None:
+            await self._send(self._turn, usage)
+        else:
+            await self._record_alone(usage)
 
     async def _record_alone(self, item: HistoryItem) -> None:
         """An entry of no turn: it gets a turn id of its own."""

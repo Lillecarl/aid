@@ -245,6 +245,24 @@ class TurnUsage:
         return self._usage.model_copy(update={"models": list(self._models)})
 
 
+def usage_since(path: Path, offset: int) -> tuple[Usage, int]:
+    """The Usage of a transcript's complete lines from byte `offset` on, and the offset after them. A subagent's
+    transcript (`<session>/subagents/agent-<id>.jsonl`) is shaped like the session's."""
+    usage = TurnUsage()
+    with path.open("rb") as f:
+        f.seek(offset)
+        data = f.read()
+    complete = data[: data.rfind(b"\n") + 1]
+    for line in complete.splitlines():
+        try:
+            raw = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(raw, dict):
+            usage.add(cast("dict[str, Any]", raw))
+    return usage.usage(), offset + len(complete)
+
+
 def items_from_entry(raw: dict[str, Any]) -> list[TranscriptItem]:
     entry = _Entry.model_validate(raw)
     if entry.is_sidechain:
