@@ -32,6 +32,8 @@
     ),
   );
 
+  const plural = (n: number, noun: string): string => `${n} ${noun}${n === 1 ? "" : "s"}`;
+
   const entries = (record: Record<string, number>): [string, number][] =>
     Object.entries(record).sort(([, a], [, b]) => b - a);
 </script>
@@ -72,17 +74,17 @@
   <p class="muted">What the agents reported; how much a turn's count covers differs by agent.</p>
   <dl>
     <dt>Turns</dt>
-    <dd>{summary.turns} <span class="muted">({summary.starts} worker starts)</span></dd>
+    <dd>{summary.turns} <span class="muted">({plural(summary.starts, "worker start")})</span></dd>
     <dt>Tokens</dt>
     <dd>
       {tokens(summary.input_tokens)} in · {tokens(summary.output_tokens)} out · {tokens(summary.cache_read_tokens)}
       cached · {tokens(summary.cache_write_tokens)} cache written
-      {#if summary.requests}<span class="muted">({summary.requests} requests)</span>{/if}
+      {#if summary.requests}<span class="muted">({plural(summary.requests, "request")})</span>{/if}
     </dd>
     <dt>Models</dt>
     <dd>
       {#each entries(summary.models) as [model, turns], i (model)}{i ? ", " : ""}{model}
-        <span class="muted">({turns} turns)</span>{:else}none reported{/each}
+        <span class="muted">({plural(turns, "turn")})</span>{:else}none reported{/each}
     </dd>
     <dt>Cost</dt>
     <dd>
