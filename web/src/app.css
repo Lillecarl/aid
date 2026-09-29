@@ -6,6 +6,9 @@
   --code-bg: #8881;
   --ok: #3a9b5b;
   --bad: #d33;
+  --surface: Canvas;
+  --surface-raised: color-mix(in srgb, CanvasText 7%, Canvas);
+  --text: CanvasText;
   font: 15px/1.45 system-ui, sans-serif;
 }
 * {
@@ -24,6 +27,15 @@ button {
   border-radius: 0.3rem;
   border: 1px solid var(--line);
   cursor: pointer;
+  background: var(--surface-raised);
+  color: var(--text);
+}
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+button:disabled {
+  color: var(--muted);
+  cursor: default;
 }
 input,
 select,
@@ -31,6 +43,15 @@ textarea {
   font: inherit;
   padding: 0.3rem;
   width: 100%;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 0.3rem;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: 1px solid var(--accent);
 }
 .error {
   color: var(--bad);

@@ -38,9 +38,11 @@
     background: none;
     text-align: left;
   }
-  button:hover,
+  button:hover {
+    background: var(--code-bg);
+  }
   button.current {
-    background: var(--line);
+    background: color-mix(in srgb, var(--accent) 20%, transparent);
   }
   .meta,
   .none {
