@@ -244,6 +244,8 @@ async def outline(path: str) -> str:
     """Every named definition in a file, with its lines: find your way in a file too big to read whole."""
     coding = _coding()
     target = coding.resolve(path)
+    if target.is_dir():
+        raise AidError("is_dir", f"{path} is a directory; outline reads a single file")
     nodes = cast("list[NodeInfo]", await coding.edit(lambda s: s.outline(target)))  # pyright: ignore[reportUnknownMemberType, reportUnknownLambdaType] -- pyedit names the type as a string it does not import
     return "\n".join(f"{n.start_line}-{n.end_line}\t{n.kind}\t{n.name}" for n in nodes) or f"{path} defines nothing"
 

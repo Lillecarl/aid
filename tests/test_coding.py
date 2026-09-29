@@ -59,6 +59,15 @@ async def test_edits_stage_until_applied(daemon: Paths, tmp_path: Path) -> None:
     assert (work / "app.py").read_text() == 'def greet():\n    print("Hello")\n'
 
 
+async def test_outline_names_a_directory(daemon: Paths, tmp_path: Path) -> None:
+    (tmp_path / "pkg").mkdir()
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(plan(("outline", {"path": "pkg"})))
+    assert "pkg is a directory; outline reads a single file" in str(result.output)
+
+
 async def test_apply_writes_only_what_changed(daemon: Paths, tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("A = 1\n")
     (tmp_path / "b.py").write_text("B = 1\n")
