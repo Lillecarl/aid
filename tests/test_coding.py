@@ -6,11 +6,15 @@ from typing import TYPE_CHECKING, Any
 
 import anyio
 import pytest
+from pydantic_ai import Agent
+from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
+from pydantic_ai.models.test import TestModel
 
 import aid
 from aid.backends.permissions import PermissionWaits
-from aid.coding import CODING, SPILL_LIMIT, Coding, spill
-from aid.protocol import Output, PermissionDecider, PermissionDecision, PermissionRequest
+from aid.backends.pydantic_ai import PydanticAIBackend
+from aid.coding import CODING, SPILL_LIMIT, Coding, compact, spill
+from aid.protocol import Output, PermissionDecider, PermissionDecision, PermissionRequest, Started
 from aid.spec import PermissionMode
 from tests.conftest import py_spec
 
@@ -109,6 +113,59 @@ async def test_spill_writes_big_results_to_stable_files(tmp_path: Path) -> None:
         assert coding.resolve(str(expected)) == expected
     finally:
         CODING.reset(token)
+
+
+async def test_compact_replaces_past_with_digest(tmp_path: Path) -> None:
+    agent = Agent(TestModel(custom_output_text="billing decisions kept"))
+    history: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart(content="first")]),
+        ModelResponse(parts=[TextPart(content="did one")]),
+        ModelRequest(parts=[UserPromptPart(content="second")]),
+        ModelResponse(parts=[TextPart(content="did two")]),
+    ]
+    coding = Coding(
+        cwd=tmp_path,
+        store=tmp_path / "runs",
+        outputs=tmp_path / "outputs",
+        mode=PermissionMode.ALLOW,
+        timeout=60,
+        waits=PermissionWaits(),
+    )
+    PydanticAIBackend(  # constructed for its side effect: wiring compact into coding
+        agent, anyio.Path(tmp_path / "history.json"), history, [], Started(pid=1, agent="t", model="m"), coding
+    )
+    token = CODING.set(coding)
+    try:
+        assert await compact("the billing work") == "billing decisions kept"
+    finally:
+        CODING.reset(token)
+    stored = json.loads((tmp_path / "history.json").read_bytes())
+    first, *tail = stored
+    assert first["parts"][0]["content"].startswith("[Summary of earlier work]\nbilling decisions kept")
+    assert len(tail) == 2
+    assert tail[0]["parts"][0]["content"] == "second"
+
+
+async def test_compact_leaves_short_history(tmp_path: Path) -> None:
+    agent = Agent(TestModel(custom_output_text="unused"))
+    history: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart(content="only")])]
+    coding = Coding(
+        cwd=tmp_path,
+        store=tmp_path / "runs",
+        outputs=tmp_path / "outputs",
+        mode=PermissionMode.ALLOW,
+        timeout=60,
+        waits=PermissionWaits(),
+    )
+    PydanticAIBackend(  # constructed for its side effect: wiring compact into coding
+        agent, anyio.Path(tmp_path / "history.json"), history, [], Started(pid=1, agent="t", model="m"), coding
+    )
+    token = CODING.set(coding)
+    try:
+        assert await compact("anything") == "history is short; nothing compacted"
+    finally:
+        CODING.reset(token)
+    assert not (tmp_path / "history.json").exists()
 
 
 async def test_outline_names_a_directory(daemon: Paths, tmp_path: Path) -> None:

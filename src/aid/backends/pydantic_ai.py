@@ -20,23 +20,38 @@ from pydantic_ai.messages import (
     FunctionToolResultEvent,
     ModelMessage,
     ModelMessagesTypeAdapter,
+    ModelRequest,
     ModelResponse,
     PartDeltaEvent,
     PartStartEvent,
     RetryPromptPart,
+    SystemPromptPart,
     TextPart,
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
     ToolReturnPart,
+    UserPromptPart,
 )
+from pydantic_ai.models import ModelRequestParameters, infer_model
 from pydantic_ai.run import AgentRunResultEvent
 from pydantic_core import to_jsonable_python
 
 from aid.agents import ENV_AGENTS_PATH, Catalog, agents_path, discover
 from aid.backends.permissions import PermissionWaits
 from aid.coding import CODING, OUTPUTS_DIR, Coding
-from aid.protocol import Output, SessionEvent, Started, TextDelta, ThoughtDelta, ToolCall, Usage, clip, to_json
+from aid.protocol import (
+    AidError,
+    Output,
+    SessionEvent,
+    Started,
+    TextDelta,
+    ThoughtDelta,
+    ToolCall,
+    Usage,
+    clip,
+    to_json,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -174,6 +189,7 @@ class PydanticAIBackend:
         self._started = started
         self._run: AgentRunEvents[Any] | None = None
         self._coding = coding
+        coding.compact = self._compact
 
     def started(self) -> Started:
         return self._started
@@ -222,6 +238,43 @@ class PydanticAIBackend:
         self._coding.waits.cancel_all()
         if self._run is not None:
             self._run.cancel()
+
+    async def _compact(self, instructions: str) -> str:
+        """Summarize the history into a digest focused by `instructions`, and replace everything before the
+        latest turn with it. A direct model call, no tools: the turn's own run stays out of it."""
+        tail_at = max(
+            (i for i, m in enumerate(self._history) if any(p.part_kind == "user-prompt" for p in m.parts)),
+            default=None,
+        )
+        if tail_at is None or not self._history[:tail_at]:
+            return "history is short; nothing compacted"
+        if self._agent.model is None:
+            raise AidError("no_model", "compaction needs the agent to name a model")
+        model = infer_model(self._agent.model)
+        request: list[ModelMessage] = [
+            ModelRequest(
+                parts=[
+                    SystemPromptPart(
+                        content="You summarize conversations so other turns can continue the work. "
+                        "Keep decisions, file paths, and what remains to do."
+                    )
+                ]
+            ),
+            *self._history[:tail_at],
+            ModelRequest(
+                parts=[UserPromptPart(content=f"Summarize this conversation for upcoming work: {instructions}")]
+            ),
+        ]
+        response = await model.request(request, model_settings=None, model_request_parameters=ModelRequestParameters())
+        digest = "\n".join(part.content for part in response.parts if isinstance(part, TextPart)).strip()
+        if not digest:
+            raise AidError("empty_digest", "the summarizer returned no text")
+        self._history = [
+            ModelRequest(parts=[UserPromptPart(content=f"[Summary of earlier work]\n{digest}")]),
+            *self._history[tail_at:],
+        ]
+        await _write_atomic(self._history_file, ModelMessagesTypeAdapter.dump_json(self._history))
+        return digest
 
 
 async def _write_atomic(path: anyio.Path, data: bytes) -> None:

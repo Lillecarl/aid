@@ -74,6 +74,8 @@ class Coding:
     """The running turn's; the worker sets it before each turn."""
     always: set[str] = field(default_factory=set[str])
     """Programs a person allowed for the rest of the session."""
+    compact: Callable[[str], Awaitable[str]] | None = None
+    """Summarize the conversation into a digest; the worker sets it per session, and `compact` calls it."""
     _lock: anyio.Lock = field(default_factory=anyio.Lock)
 
     def __post_init__(self) -> None:
@@ -295,6 +297,16 @@ async def show_edits() -> str:
     return _coding().diff() or "nothing is staged"
 
 
+async def compact(instructions: str) -> str:
+    """Summarize the conversation so far into a digest focused by `instructions`, and replace older history
+    with it: the digest plus recent turns is what later turns are sent. Call it when the context grows heavy,
+    naming what the upcoming work needs. Returns the digest."""
+    coding = _coding()
+    if coding.compact is None:
+        raise AidError("no_compact", "compaction needs an aid pydantic-ai session")
+    return await coding.compact(instructions)
+
+
 async def discard_edits() -> str:
     """Drop everything staged."""
     coding = _coding()
@@ -391,6 +403,7 @@ coding_tools: FunctionToolset[Any] = FunctionToolset[Any](
         _retrying(outline),
         _retrying(show_edits),
         _retrying(discard_edits),
+        _retrying(compact),
         _retrying(apply_edits),
         _retrying(python),
     ]
