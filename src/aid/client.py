@@ -17,6 +17,8 @@ import zmq
 import zmq.asyncio
 from pydantic import JsonValue, TypeAdapter
 
+from aid import events
+from aid.history import MAX_PAGE
 from aid.paths import default_paths
 from aid.protocol import (
     AgentCatalog,
@@ -33,6 +35,7 @@ from aid.protocol import (
     GetScreen,
     GetStatus,
     GetSummary,
+    HistoryEntry,
     HistoryPage,
     ListAgents,
     ListSessions,
@@ -80,7 +83,7 @@ async def connect(paths: Paths | None = None) -> AsyncGenerator[Client]:
     ctx = zmq.asyncio.Context()
     sock = ctx.socket(zmq.DEALER)
     sock.connect(paths.control)
-    client = Client(sock)
+    client = Client(sock, ctx, paths.events)
     try:
         async with anyio.create_task_group() as tg:
             tg.start_soon(client.read_replies)
@@ -95,14 +98,49 @@ async def connect(paths: Paths | None = None) -> AsyncGenerator[Client]:
         raise
     finally:
         sock.close(linger=0)
+        for subscription in list(client.subscriptions):  # A follower still open would hold ctx.term() forever.
+            subscription.close(linger=0)
         ctx.term()
 
 
 class Client:
-    def __init__(self, sock: zmq.asyncio.Socket) -> None:
+    def __init__(self, sock: zmq.asyncio.Socket, ctx: zmq.asyncio.Context, events_endpoint: str) -> None:
         self._sock = sock
+        self._ctx = ctx
+        self._events_endpoint = events_endpoint
         self._send_lock = anyio.Lock()
         self._pending: dict[str, MemoryObjectSendStream[Reply]] = {}
+        self.subscriptions: set[zmq.asyncio.Socket] = set()
+
+    @asynccontextmanager
+    async def subscribed(self, *prefixes: bytes) -> AsyncGenerator[AsyncIterator[tuple[bytes, bytes]]]:
+        """The daemon's published `[topic, payload]` messages under `prefixes` (`aid.events`), while the block runs.
+
+        A subscription reaches the daemon a moment after this returns, and what is published before then is
+        missed: fetch a baseline after subscribing, as the `follow_*` methods do."""
+        sock = self._ctx.socket(zmq.SUB)
+        sock.connect(self._events_endpoint)
+        for prefix in prefixes:
+            sock.setsockopt(zmq.SUBSCRIBE, prefix)
+        self.subscriptions.add(sock)
+
+        async def messages() -> AsyncIterator[tuple[bytes, bytes]]:
+            while True:
+                topic, payload = await sock.recv_multipart()
+                yield topic, payload
+
+        try:
+            yield messages()
+        finally:
+            self.subscriptions.discard(sock)
+            sock.close(linger=0)
+
+    async def follow_sessions(self) -> AsyncGenerator[list[SessionInfo]]:
+        """The session list now, then each time it changes."""
+        async with self.subscribed(events.SESSIONS) as published:
+            yield await self.sessions()
+            async for _topic, payload in published:
+                yield SessionInfosAdapter.validate_json(payload)
 
     async def read_replies(self) -> None:
         while True:
@@ -228,6 +266,40 @@ class Session:
 
     async def status(self) -> SessionStatus:
         return SessionStatus.model_validate(await self._client.call(GetStatus(session=self.name)))
+
+    async def follow_status(self) -> AsyncGenerator[SessionStatus]:
+        """The status now, then each time it changes. A missing session raises, as `status` does."""
+        async with self._client.subscribed(events.status_topic(self.name)) as published:
+            yield await self.status()
+            async for _topic, payload in published:
+                yield SessionStatus.model_validate_json(payload)
+
+    async def follow_history(self, after: int = -1) -> AsyncGenerator[HistoryEntry]:
+        """Every entry after seq `after`, in order and once each: what is recorded now, then each as it is
+        recorded. An entry the subscription dropped shows as a jump in seq, and is fetched."""
+        async with self._client.subscribed(events.history_topic(self.name)) as published:
+            last = after
+            async for entry in self._entries_after(last):
+                last = entry.seq
+                yield entry
+            async for _topic, payload in published:
+                entry = HistoryEntry.model_validate_json(payload)
+                if entry.seq > last + 1:
+                    async for missed in self._entries_after(last):
+                        last = missed.seq
+                        yield missed
+                if entry.seq == last + 1:
+                    last = entry.seq
+                    yield entry
+
+    async def _entries_after(self, after: int) -> AsyncGenerator[HistoryEntry]:
+        while True:
+            page = await self.history(after=after, limit=MAX_PAGE)
+            for entry in page.entries:
+                yield entry
+            if not page.has_newer or not page.entries:
+                return
+            after = page.entries[-1].seq
 
     async def cancel(self) -> None:
         await self._client.call(Cancel(session=self.name))

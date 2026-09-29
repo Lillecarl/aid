@@ -229,6 +229,7 @@ class Daemon:
     async def serve(self, *, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
         await anyio.Path(self._paths.runtime_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
         await self._load_sessions()
+        self._published = self._state()  # As loaded: a reader's first fetch sees this, so it is no change.
         self._events.bind(self._paths.events)
         self._clients.bind(self._paths.control)
         # Before the workers socket: libzmq accepts every CURVE client while no handler is bound.
@@ -288,10 +289,14 @@ class Daemon:
         async with self._events_lock:
             await self._events.send_multipart([topic, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
 
-    async def _publish_changes(self) -> None:
-        """Publish each status and the list if it differs from what was published last."""
+    def _state(self) -> dict[bytes, bytes]:
         current = {events.status_topic(s.name): s.status().model_dump_json().encode() for s in self._sessions.values()}
         current[events.SESSIONS] = SessionInfosAdapter.dump_json([s.info() for s in self._sessions.values()])
+        return current
+
+    async def _publish_changes(self) -> None:
+        """Publish each status and the list if it differs from what was published last."""
+        current = self._state()
         for topic, payload in current.items():
             if self._published.get(topic) != payload:
                 self._published[topic] = payload
