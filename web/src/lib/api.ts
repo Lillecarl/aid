@@ -136,6 +136,32 @@ export type HistoryItem =
   | { type: "message"; sender: string | null; text: string }
   | { type: "error"; code: string; message: string };
 
+export interface FileActivity {
+  path: string;
+  reads: number;
+  writes: number;
+  last_seq: number;
+}
+
+/** A session's whole history totalled; see `aid.protocol.SessionSummary`. */
+export interface SessionSummary {
+  turns: number;
+  starts: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  thought_tokens: number;
+  requests: number;
+  /** Turns per model. */
+  models: Record<string, number>;
+  /** Per currency, summed over agent sessions. */
+  cost: Record<string, number>;
+  agent_sessions: string[];
+  /** Most recently touched first. */
+  files: FileActivity[];
+}
+
 export interface HistoryEntry {
   seq: number;
   at: number;
@@ -248,6 +274,10 @@ const fileUrl = (name: string, what: "files" | "file", path: string): string =>
   `/api/sessions/${encodeURIComponent(name)}/${what}?${new URLSearchParams({ path })}`;
 
 /** A directory of the session's working directory; `path` is relative to it. */
+export async function summary(name: string): Promise<SessionSummary> {
+  return (await request("GET", `/api/sessions/${encodeURIComponent(name)}/summary`)).json();
+}
+
 export async function listFiles(name: string, path: string): Promise<FileEntry[]> {
   return (await request("GET", fileUrl(name, "files", path))).json();
 }
