@@ -20,7 +20,7 @@ from hypercorn.asyncio import (
 )
 from hypercorn.config import Config as HypercornConfig
 from libpymux.streams import PaneStream, StreamRefused
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -38,7 +38,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from aid.client import connect
 from aid.history import MAX_PAGE
-from aid.protocol import AidError, CreateSession
+from aid.protocol import AidError, CreateSession, SessionInfo
 from aid.speech import Transcription
 from aid.web import auth, files, theme
 
@@ -273,6 +273,20 @@ def _changes(fetch: Callable[[], Awaitable[BaseModel]], poll: float) -> Streamin
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
 
 
+class _Sessions(RootModel[list[SessionInfo]]):
+    pass
+
+
+@api()
+async def sessions_events(request: Request) -> Response:
+    client = _client(request)
+
+    async def fetch() -> _Sessions:
+        return _Sessions(await client.sessions())
+
+    return _changes(fetch, STATUS_POLL)
+
+
 @api()
 async def status_events(request: Request) -> Response:
     session = _client(request).session(request.path_params["name"])
@@ -474,6 +488,7 @@ def create_app(
             Route("/api/agents", list_agents, methods=["GET"]),
             Route("/api/sessions", list_sessions, methods=["GET"]),
             Route("/api/sessions", create_session, methods=["POST"]),
+            Route("/api/sessions/events", sessions_events, methods=["GET"]),
             Route("/api/sessions/{name}", delete, methods=["DELETE"]),
             Route("/api/sessions/{name}/history", history, methods=["GET"]),
             Route("/api/sessions/{name}/summary", summary, methods=["GET"]),

@@ -304,6 +304,34 @@ async def test_status_streams_changes(web: Web, tmp_path: Path) -> None:
     assert [s["running"] for s in seen] == [True, False, True]
 
 
+async def test_session_list_streams_changes(web: Web, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with httpx.AsyncClient() as client:
+            await login(client, web, ALLOWED)
+            csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
+            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
+            seen: list[list[dict[str, Any]]] = []
+            async with client.stream("GET", f"{web.url}/api/sessions/events") as response:
+                async for line in response.aiter_lines():
+                    if line.startswith("data: "):
+                        seen.append(json.loads(line.removeprefix("data: ")))
+                        if len(seen) == 1:
+                            await client.post(
+                                f"{web.url}/api/sessions",
+                                json={"name": "echo", "spec": spec},
+                                headers={"X-CSRF-Token": csrf},
+                            )
+                        elif len(seen) == 2:
+                            await client.post(f"{web.url}/api/sessions/echo/stop", headers={"X-CSRF-Token": csrf})
+                        else:
+                            break
+    assert seen == [
+        [],
+        [{"name": "echo", "kind": "pydantic-ai", "running": True}],
+        [{"name": "echo", "kind": "pydantic-ai", "running": False}],
+    ]
+
+
 async def test_history_streams_turns_from_other_clients(web: Web, tmp_path: Path, daemon: Paths) -> None:
     url = f"{web.url}/api/sessions/echo/history/events"
     with anyio.fail_after(TIMEOUT):

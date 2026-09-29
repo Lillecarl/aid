@@ -25,9 +25,14 @@
     location.href = "/";
   }
 
-  onMount(async () => {
-    email = (await api.me()).email;
-    await refresh();
+  onMount(() => {
+    void api.me().then((me) => (email = me.email));
+    // Sessions start, stop and appear from other pages and the CLI too, so the list follows the daemon.
+    return api.watch<SessionInfo[]>(
+      "/api/sessions/events",
+      (sessions) => (list = sessions),
+      (problem) => (error = problem),
+    );
   });
 </script>
 
