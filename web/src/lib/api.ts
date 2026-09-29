@@ -195,6 +195,32 @@ export async function history(
   return (await request("GET", `/api/sessions/${encodeURIComponent(name)}/history?${query}`)).json();
 }
 
+export interface FileEntry {
+  name: string;
+  dir: boolean;
+  size: number | null;
+}
+
+export interface FileView {
+  path: string;
+  size: number;
+  /** null for a binary file. */
+  text: string | null;
+  truncated: boolean;
+}
+
+const fileUrl = (name: string, what: "files" | "file", path: string): string =>
+  `/api/sessions/${encodeURIComponent(name)}/${what}?${new URLSearchParams({ path })}`;
+
+/** A directory of the session's working directory; `path` is relative to it. */
+export async function listFiles(name: string, path: string): Promise<FileEntry[]> {
+  return (await request("GET", fileUrl(name, "files", path))).json();
+}
+
+export async function readFile(name: string, path: string): Promise<FileView> {
+  return (await request("GET", fileUrl(name, "file", path))).json();
+}
+
 export async function control(name: string, verb: "cancel" | "stop" | "delete"): Promise<void> {
   const path = `/api/sessions/${encodeURIComponent(name)}`;
   await (verb === "delete" ? request("DELETE", path) : request("POST", `${path}/${verb}`));

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { AgentKind } from "./api";
   import Chat from "./Chat.svelte";
+  import Files from "./Files.svelte";
   import Status from "./Status.svelte";
   import Terminal from "./Terminal.svelte";
 
@@ -11,13 +12,14 @@
     ondeleted: () => void | Promise<void>;
   }
 
-  type Tab = "chat" | "terminal" | "status";
+  type Tab = "chat" | "files" | "terminal" | "status";
   const TAB_KEY = "aid.sessionTab";
 
   let { name, kind, onchange, ondeleted }: Props = $props();
 
   const tabs = $derived<{ id: Tab; label: string }[]>([
     { id: "chat", label: "Chat" },
+    { id: "files", label: "Files" },
     ...(kind === "claude-tty" ? [{ id: "terminal" as const, label: "Terminal" }] : []),
     { id: "status", label: "Status" },
   ]);
@@ -25,7 +27,7 @@
   function stored(): Tab {
     try {
       const value = localStorage.getItem(TAB_KEY);
-      return value === "terminal" || value === "status" ? value : "chat";
+      return value === "files" || value === "terminal" || value === "status" ? value : "chat";
     } catch {
       return "chat";
     }
@@ -34,6 +36,11 @@
   let chosen: Tab = $state(stored());
   // The remembered tab may not exist for this session: a Terminal tab only for interactive Claude.
   const tab = $derived(tabs.some((t) => t.id === chosen) ? chosen : "chat");
+  // Files mounts when first shown and then stays, keeping the open folders and file across tab switches.
+  let filesShown = $state(false);
+  $effect(() => {
+    if (tab === "files") filesShown = true;
+  });
   $effect(() => {
     try {
       localStorage.setItem(TAB_KEY, chosen);
@@ -62,6 +69,11 @@
 <div class="panel" hidden={tab !== "chat"}>
   <Chat {name} {onchange} {ondeleted} />
 </div>
+{#if filesShown}
+  <div class="panel" hidden={tab !== "files"}>
+    <Files {name} />
+  </div>
+{/if}
 {#if tab === "terminal"}
   <div class="panel">
     <Terminal {name} />
