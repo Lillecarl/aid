@@ -29,6 +29,7 @@ from aid.protocol import (
     AidError,
     AnswerPermission,
     Cancel,
+    CompactSession,
     CreateSession,
     DeleteSession,
     Done,
@@ -497,6 +498,14 @@ class Daemon:
                 session = self._session(request.session)
                 if not session.running:
                     return Done(id=request.id)
+                self._routes[request.id] = _Route(client, session.name)
+                await self._send_worker(session, request)
+                return None
+            case CompactSession():
+                session = self._session(request.session)
+                if session.turn is not None:
+                    raise AidError("busy", f"{session.name!r} is in a turn")
+                await self._ensure_running(session)
                 self._routes[request.id] = _Route(client, session.name)
                 await self._send_worker(session, request)
                 return None

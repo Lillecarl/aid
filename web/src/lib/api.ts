@@ -309,6 +309,14 @@ export async function answerPermission(
   });
 }
 
+/** Summarize the session's history into a digest, outside a turn; resolve with the digest. */
+export const compact = async (name: string, instructions?: string): Promise<string> =>
+  (await call({
+    op: "compact",
+    session: name,
+    ...(instructions === undefined ? {} : { instructions }),
+  })) as string;
+
 /** Send a prompt and call `onEvent` for each event of the answer. */
 export async function prompt(
   name: string,

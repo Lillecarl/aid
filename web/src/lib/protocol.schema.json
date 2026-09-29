@@ -352,6 +352,33 @@
       "title": "ClaudeTtySpec",
       "type": "object"
     },
+    "CompactSession": {
+      "additionalProperties": false,
+      "description": "Summarize the session's history into a digest, outside a turn; the worker records a `compacted` lifecycle.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "instructions": {
+          "default": "Summarize this conversation so later turns can continue the work.",
+          "type": "string"
+        },
+        "op": {
+          "const": "compact",
+          "default": "compact",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session"
+      ],
+      "title": "CompactSession",
+      "type": "object"
+    },
     "Cost": {
       "additionalProperties": false,
       "properties": {
@@ -1108,6 +1135,7 @@
           "agents": "#/$defs/ListAgents",
           "answer_permission": "#/$defs/AnswerPermission",
           "cancel": "#/$defs/Cancel",
+          "compact": "#/$defs/CompactSession",
           "create": "#/$defs/CreateSession",
           "delete": "#/$defs/DeleteSession",
           "history": "#/$defs/GetHistory",
@@ -1144,6 +1172,9 @@
         },
         {
           "$ref": "#/$defs/Cancel"
+        },
+        {
+          "$ref": "#/$defs/CompactSession"
         },
         {
           "$ref": "#/$defs/AnswerPermission"

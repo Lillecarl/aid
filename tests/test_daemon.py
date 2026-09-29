@@ -15,6 +15,7 @@ from aid.protocol import (
     Failure,
     GetHistory,
     GetStatus,
+    Lifecycle,
     Output,
     PermissionDecider,
     PermissionDecision,
@@ -282,6 +283,37 @@ async def test_pydantic_ai_cancel(daemon: Paths, tmp_path: Path) -> None:
             after = await session.run("hi")
     assert events[-1] == Output(output=None, stop_reason="cancelled")
     assert after.output == "turn 1: echo hi"
+
+
+async def test_compact_session(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("s", py_spec(tmp_path, "agents:summarizer"))
+            await session.run("first")
+            await session.run("second")
+            assert await session.compact("the billing work") == "kept decisions"
+            entries = [entry.item for entry in (await session.history(limit=100)).entries]
+            lifecycle = next(item for item in entries if isinstance(item, Lifecycle))
+            assert (lifecycle.event, lifecycle.detail, lifecycle.summary) == (
+                "compacted",
+                "manual",
+                "kept decisions",
+            )
+            assert (await session.run("third")).output == "kept decisions"
+
+
+async def test_compact_refuses_a_running_turn(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("slow", py_spec(tmp_path, "agents:echo"))
+            events: list[aid.SessionEvent] = []
+            async for event in session.stream("slow"):
+                events.append(event)
+                if event == TextDelta(text="waiting"):
+                    with pytest.raises(aid.AidError, match="busy"):
+                        await client.session("slow").compact()
+                    await session.cancel()
+    assert events[-1] == Output(output=None, stop_reason="cancelled")
 
 
 async def test_pydantic_ai_history_survives_daemon_restart(

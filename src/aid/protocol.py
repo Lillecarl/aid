@@ -63,6 +63,15 @@ class Cancel(_Request):
     session: str
 
 
+class CompactSession(_Request):
+    """Summarize the session's history into a digest, outside a turn; the worker records a `compacted` lifecycle."""
+
+    op: Literal["compact"] = "compact"
+    session: str
+    instructions: str = "Summarize this conversation so later turns can continue the work."
+    """What the digest keeps: the caller names what the upcoming work needs."""
+
+
 class StartSession(_Request):
     """Start a stopped session's worker without a turn; for interactive Claude, its pane. A running one is left be."""
 
@@ -192,6 +201,7 @@ type Request = Annotated[
     | ListSessions
     | Prompt
     | Cancel
+    | CompactSession
     | StartSession
     | StopSession
     | DeleteSession

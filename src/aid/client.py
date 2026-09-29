@@ -27,6 +27,7 @@ from aid.protocol import (
     AidError,
     AnswerPermission,
     Cancel,
+    CompactSession,
     CreateSession,
     DeleteSession,
     Done,
@@ -402,6 +403,17 @@ class Session:
 
     async def cancel(self) -> None:
         await self._client.call(Cancel(session=self.name))
+
+    async def compact(self, instructions: str | None = None) -> str:
+        """Summarize the session's history into a digest, outside a turn; defaults to continuing the work."""
+        if instructions is None:
+            request = CompactSession(session=self.name)
+        else:
+            request = CompactSession(session=self.name, instructions=instructions)
+        result = await self._client.call(request)
+        if not isinstance(result, str):
+            raise AidError("compact_failed", f"compaction returned {result!r}")
+        return result
 
     async def answer(self, request_id: str, option_id: str | None) -> None:
         """Answer a PermissionRequest the session waits on: one of its options, or None to cancel it."""

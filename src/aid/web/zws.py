@@ -31,6 +31,7 @@ from starlette.websockets import WebSocketDisconnect
 from aid.protocol import (
     AnswerPermission,
     Cancel,
+    CompactSession,
     CreateSession,
     DeleteSession,
     Done,
@@ -79,6 +80,7 @@ type PageRequest = Annotated[
     | GetSummary
     | Prompt
     | Cancel
+    | CompactSession
     | AnswerPermission
     | StartSession
     | StopSession

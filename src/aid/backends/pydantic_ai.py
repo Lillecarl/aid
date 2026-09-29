@@ -214,7 +214,7 @@ class PydanticAIBackend:
         self._run: AgentRunEvents[Any] | None = None
         self._coding = coding
         self._desired_max = desired_max
-        coding.compact = self._compact
+        coding.compact = self.compact
 
     def started(self) -> Started:
         return self._started
@@ -264,7 +264,7 @@ class PydanticAIBackend:
         if self._run is not None:
             self._run.cancel()
 
-    async def _compact(self, instructions: str) -> str:
+    async def compact(self, instructions: str) -> str:
         """Summarize the history into a digest focused by `instructions`, and replace everything before the
         latest turn with it. A direct model call, no tools: the turn's own run stays out of it."""
         tail_at = max(

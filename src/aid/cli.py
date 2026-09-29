@@ -238,6 +238,10 @@ def _parser() -> argparse.ArgumentParser:
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
 
+    compact = sub.add_parser("compact", help="summarize a session's history into a digest, outside a turn")
+    compact.add_argument("name")
+    compact.add_argument("focus", nargs="?", help="what the digest keeps for the upcoming work")
+
     plugin = sub.add_parser("plugin", help="register the processes that reach the daemon as plugins, with grants")
     plugin_sub = plugin.add_subparsers(dest="plugin_command", required=True)
     add = plugin_sub.add_parser("add", help="register a plugin, or replace its key and grants; prints its public key")
@@ -424,6 +428,8 @@ async def _client_command(args: argparse.Namespace) -> None:
                 await client.send_message(args.name, text, sender=args.sender)
             case "start":
                 await client.session(args.name).start()
+            case "compact":
+                print(await client.session(args.name).compact(args.focus))
             case "cancel":
                 await client.session(args.name).cancel()
             case "answer":

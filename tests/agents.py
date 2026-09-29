@@ -61,6 +61,18 @@ async def _echo(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[
 echo = Agent(FunctionModel(stream_function=_echo))
 
 
+def _summarize(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """A summarizer for compaction tests: the digest is always the same text."""
+    return ModelResponse(parts=[TextPart("kept decisions")])
+
+
+async def _summarize_stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+    yield "kept decisions"
+
+
+summarizer = Agent(FunctionModel(_summarize, stream_function=_summarize_stream))
+
+
 class Review(BaseModel):
     verdict: str
     score: int

@@ -49,6 +49,15 @@ class HookBackend(Backend, Protocol):
 
 
 @runtime_checkable
+class CompactionBackend(Backend, Protocol):
+    """A backend that summarizes its own history into a digest on request."""
+
+    async def compact(self, instructions: str) -> str:
+        """Replace older history with a digest focused by `instructions`; return the digest."""
+        ...
+
+
+@runtime_checkable
 class PermissionBackend(Backend, Protocol):
     """A backend whose agent can wait on a person's answer to a PermissionRequest."""
 

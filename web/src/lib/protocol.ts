@@ -79,6 +79,7 @@ export type PageRequest =
   | GetSummary
   | Prompt
   | Cancel
+  | CompactSession
   | AnswerPermission
   | StartSession
   | StopSession
@@ -262,6 +263,18 @@ export interface AnswerPermission {
 export interface Cancel {
   id?: string;
   op: "cancel";
+  session: string;
+}
+/**
+ * Summarize the session's history into a digest, outside a turn; the worker records a `compacted` lifecycle.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "CompactSession".
+ */
+export interface CompactSession {
+  id?: string;
+  instructions?: string;
+  op: "compact";
   session: string;
 }
 /**

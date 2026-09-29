@@ -257,6 +257,10 @@
     const prompt = text.trim();
     if (prompt === "" || busy) return;
     text = "";
+    if (prompt.startsWith("/")) {
+      await slash(prompt);
+      return;
+    }
     busy = true;
     if (hasNewer) await loadLatest();
     rows.push({ key: `l${liveCount++}`, kind: "user", text: prompt });
@@ -279,6 +283,54 @@
       else await onchange();
     } catch (e) {
       rows.push({ key: `l${liveCount++}`, kind: "error", text: e instanceof Error ? e.message : String(e) });
+    }
+  }
+
+  /** Slash commands: parsed here, run against the daemon; the digest a command returns arrives through history. */
+  type Slash = {
+    name: string;
+    usage: string;
+    description: string;
+    run: (args: string) => Promise<void>;
+  };
+  const slashes: Slash[] = [
+    {
+      name: "help",
+      usage: "/help",
+      description: "List these commands",
+      run: async () => {
+        for (const s of slashes)
+          rows.push({ key: `l${liveCount++}`, kind: "meta", text: `${s.usage} — ${s.description}` });
+      },
+    },
+    {
+      name: "compact",
+      usage: "/compact [focus]",
+      description: "Summarize history into a digest outside a turn",
+      run: async (args: string) => {
+        await api.compact(name, args === "" ? undefined : args);
+      },
+    },
+  ];
+
+  async function slash(line: string): Promise<void> {
+    const [head = "", ...rest] = line.split(/\s+/);
+    const command = slashes.find((s) => s.name === head.slice(1));
+    rows.push({ key: `l${liveCount++}`, kind: "user", text: line });
+    await toBottom();
+    if (command === undefined) {
+      rows.push({ key: `l${liveCount++}`, kind: "error", text: `unknown slash command ${head} (try /help)` });
+      return;
+    }
+    busy = true;
+    try {
+      await command.run(rest.join(" "));
+    } catch (e) {
+      rows.push({ key: `l${liveCount++}`, kind: "error", text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      busy = false;
+      await reconcile().catch(() => undefined);
+      await onchange();
     }
   }
 
@@ -409,7 +461,7 @@
   {#if hasNewer}<div class="more">{loading ? "Loading…" : "Scroll down for newer entries"}</div>{/if}
 </div>
 <form onsubmit={send}>
-  <textarea bind:value={text} onkeydown={keydown} rows="4" placeholder={touchOnly ? "Prompt" : "Prompt (Enter sends, Shift+Enter or Ctrl+J for a new line)"}></textarea>
+  <textarea bind:value={text} onkeydown={keydown} rows="4" placeholder={touchOnly ? "Prompt" : "Prompt (Enter sends, Shift+Enter or Ctrl+J for a new line, /help for commands)"}></textarea>
   <div class="buttons">
     <button type="submit" disabled={busy}>{busy ? "Working…" : "Send"}</button>
     {#if canDictate}

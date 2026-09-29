@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import uuid
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, cast
 
@@ -17,11 +18,12 @@ import zmq
 import zmq.asyncio
 
 from aid.backends import open_backend
-from aid.backends.base import FollowingBackend, HookBackend, PermissionBackend, ScreenBackend
+from aid.backends.base import CompactionBackend, FollowingBackend, HookBackend, PermissionBackend, ScreenBackend
 from aid.protocol import (
     Activity,
     AnswerPermission,
     Cancel,
+    CompactSession,
     Done,
     Event,
     Failure,
@@ -29,6 +31,7 @@ from aid.protocol import (
     GetScreen,
     Hello,
     Hook,
+    Lifecycle,
     Observed,
     Prompt,
     StartFailed,
@@ -127,6 +130,12 @@ class _Worker:
                 case Cancel():
                     await self._backend.cancel()
                     await self.send(Done(id=request.id))
+                case CompactSession():
+                    if self._busy:
+                        await self.send(Failure(id=request.id, code="busy", message="a prompt is running"))
+                    else:
+                        self._busy = True
+                        self._tg.start_soon(self._compact, request)
                 case GetScreen():
                     self._tg.start_soon(self._screen, request)
                 case GetPane():
@@ -178,6 +187,22 @@ class _Worker:
             await self.send(Failure(id=request.id, code="screen_failed", message=f"{type(error).__name__}: {error}"))
         else:
             await self.send(Done(id=request.id, data=view.model_dump(mode="json")))
+
+    async def _compact(self, request: CompactSession) -> None:
+        try:
+            if not isinstance(self._backend, CompactionBackend):
+                await self.send(
+                    Failure(id=request.id, code="unsupported", message="this session cannot compact itself")
+                )
+                return
+            digest = await self._backend.compact(request.instructions)
+            await self.record(uuid.uuid4().hex, Lifecycle(event="compacted", detail="manual", summary=digest))
+            await self.send(Done(id=request.id, data=digest))
+        except Exception as error:
+            log.exception("compact %s failed", request.id)
+            await self.send(Failure(id=request.id, code="compact_failed", message=f"{type(error).__name__}: {error}"))
+        finally:
+            self._busy = False
 
     async def _prompt(self, request: Prompt) -> None:
         async def emit(event: SessionEvent) -> None:
