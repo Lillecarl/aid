@@ -49,19 +49,37 @@ def test_daemon_preload(argv: list[str], expected: list[str]) -> None:
 
 
 def test_new_py_worker_command(tmp_path: Path) -> None:
-    argv = ["new-py", "s", "agents:echo", "--worker-command", "aid worker", "--worker-endpoint", "ipc://x"]
+    argv = [
+        "new-py",
+        "s",
+        "agents:echo",
+        "--worker-command",
+        "aid worker",
+        "--worker-endpoint",
+        "ipc://x",
+        "--worker-ca",
+        "/ca.pem",
+    ]
     args = _parser().parse_args(argv)
     args.agent_command = []
     spec = _spec(args)
     assert isinstance(spec, PydanticAISpec)
     assert spec.worker_command == ["aid", "worker"]
     assert spec.worker_endpoint == "ipc://x"
+    assert spec.worker_ca == "/ca.pem"
 
 
 def test_new_py_worker_endpoint_needs_command() -> None:
     args = _parser().parse_args(["new-py", "s", "agents:echo", "--worker-endpoint", "ipc://x"])
     args.agent_command = []
-    with pytest.raises(SystemExit, match="--worker-endpoint needs --worker-command"):
+    with pytest.raises(SystemExit, match="need --worker-command"):
+        _spec(args)
+
+
+def test_new_py_worker_command_names_a_program() -> None:
+    args = _parser().parse_args(["new-py", "s", "agents:echo", "--worker-command", "   "])
+    args.agent_command = []
+    with pytest.raises(SystemExit, match="names no program"):
         _spec(args)
 
 

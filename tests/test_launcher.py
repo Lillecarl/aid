@@ -24,8 +24,12 @@ def test_preload_keeps_worker_code_fresh() -> None:
 
 
 def test_worker_endpoint_needs_command(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError, match="worker_endpoint needs worker_command"):
+    with pytest.raises(ValidationError, match="need worker_command"):
         PydanticAISpec(cwd=str(tmp_path), target="agents:echo", worker_endpoint="ipc://x")
+    with pytest.raises(ValidationError, match="need worker_command"):
+        PydanticAISpec(cwd=str(tmp_path), target="agents:echo", worker_ca="/ca.pem")
+    with pytest.raises(ValidationError, match="names no program"):
+        PydanticAISpec(cwd=str(tmp_path), target="agents:echo", worker_command=[""])
     spec = PydanticAISpec(
         cwd=str(tmp_path),
         target="agents:echo",

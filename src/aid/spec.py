@@ -38,11 +38,15 @@ class _Spec(BaseModel):
     worker_endpoint: str | None = None
     """The workers socket the command reaches. None means the daemon's own; set it for a command on another
     host, with the daemon listening there (`aid daemon --workers-listen`)."""
+    worker_ca: str | None = None
+    """PEM CAs file for a `wss://` worker_endpoint with a private certificate, like `aid daemon --worker-ca`."""
 
     @model_validator(mode="after")
-    def _endpoint_needs_command(self) -> Self:
-        if self.worker_command is None and self.worker_endpoint is not None:
-            raise ValueError("worker_endpoint needs worker_command")
+    def _worker_launch_is_sane(self) -> Self:
+        if self.worker_command is not None and not self.worker_command[0]:
+            raise ValueError("worker_command names no program")
+        if self.worker_command is None and (self.worker_endpoint is not None or self.worker_ca is not None):
+            raise ValueError("worker_endpoint and worker_ca need worker_command")
         return self
 
 

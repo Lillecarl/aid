@@ -45,6 +45,17 @@
           "exclusiveMinimum": 0,
           "type": "number"
         },
+        "worker_ca": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "worker_command": {
           "anyOf": [
             {
@@ -295,6 +306,17 @@
         "trust_cwd": {
           "default": false,
           "type": "boolean"
+        },
+        "worker_ca": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "worker_command": {
           "anyOf": [
@@ -1396,6 +1418,17 @@
           "anyOf": [
             {
               "pattern": "^[\\w.]+:[\\w.]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "worker_ca": {
+          "anyOf": [
+            {
               "type": "string"
             },
             {

@@ -156,7 +156,9 @@ async def ls(path: str = ".") -> str:
     """List a directory's entries, directories first with a trailing `/`: find your way before you read."""
     coding = _coding()
     target = coding.resolve(path)
-    if not target.is_dir():
+    if not await anyio.Path(target).exists():
+        raise AidError("no_such_file", f"{path} does not exist")
+    if not await anyio.Path(target).is_dir():
         raise AidError("not_dir", f"{path} is a file; read it with read")
     entries = [(entry.name, await entry.is_dir()) async for entry in anyio.Path(target).iterdir()]
     entries.sort(key=lambda entry: (not entry[1], entry[0]))
@@ -257,7 +259,7 @@ async def outline(path: str) -> str:
     """Every named definition in a file, with its lines: find your way in a file too big to read whole."""
     coding = _coding()
     target = coding.resolve(path)
-    if target.is_dir():
+    if await anyio.Path(target).is_dir():
         raise AidError("is_dir", f"{path} is a directory; outline reads a single file")
     nodes = cast("list[NodeInfo]", await coding.edit(lambda s: s.outline(target)))  # pyright: ignore[reportUnknownMemberType, reportUnknownLambdaType] -- pyedit names the type as a string it does not import
     return "\n".join(f"{n.start_line}-{n.end_line}\t{n.kind}\t{n.name}" for n in nodes) or f"{path} defines nothing"

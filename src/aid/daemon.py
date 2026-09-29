@@ -9,6 +9,7 @@ import shutil
 import sys
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Final
 
 import anyio
@@ -633,7 +634,11 @@ class Daemon:
     def _launcher_for(self, session: _Session) -> Launcher:
         """Who starts this session's worker: its own command wins, else the daemon's launcher."""
         if (command := session.spec.worker_command) is not None:
-            return CommandLauncher(command, session.spec.worker_endpoint or self._paths.workers)
+            try:
+                trust_pem = Path(session.spec.worker_ca).read_text() if session.spec.worker_ca else ""
+            except OSError as error:
+                raise AidError("worker_ca", f"cannot read {session.spec.worker_ca}: {error}") from error
+            return CommandLauncher(command, session.spec.worker_endpoint or self._paths.workers, trust_pem=trust_pem)
         return self._launcher
 
     async def _ensure_running(self, session: _Session) -> None:

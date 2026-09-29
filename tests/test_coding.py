@@ -67,9 +67,17 @@ async def test_ls_lists_directories_first(daemon: Paths, tmp_path: Path) -> None
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             session = await client.create("coder", py_spec(work, "agents:coder", PermissionMode.ALLOW))
-            result = await session.run(plan(("ls", {}), ("ls", {"path": "pkg"}), ("ls", {"path": "a.py"})))
-    root, pkg, not_dir = str(result.output).split("\n=====\n")
+            result = await session.run(
+                plan(
+                    ("ls", {}),
+                    ("ls", {"path": "missing"}),
+                    ("ls", {"path": "pkg"}),
+                    ("ls", {"path": "a.py"}),
+                )
+            )
+    root, no_such, pkg, not_dir = str(result.output).split("\n=====\n")
     assert root == "pkg/\na.py"
+    assert "missing does not exist" in no_such
     assert pkg == "b.py"
     assert "a.py is a file; read it with read" in not_dir
 

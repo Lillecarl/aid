@@ -101,7 +101,7 @@ def _parser() -> argparse.ArgumentParser:
     daemon_cmd.add_argument(
         "--preload-module",
         action="append",
-        default=[],
+        default=None,
         metavar="MODULE",
         help="also import MODULE in the forkserver, so workers share its pages copy-on-write (repeatable)",
     )
@@ -151,6 +151,11 @@ def _parser() -> argparse.ArgumentParser:
             "--worker-endpoint",
             metavar="ENDPOINT",
             help="with --worker-command: the workers socket as the worker reaches it (default: the daemon's own)",
+        )
+        p.add_argument(
+            "--worker-ca",
+            metavar="FILE",
+            help="with a wss:// --worker-endpoint: PEM CAs its certificate must chain to (default: the system's)",
         )
         return p
 
@@ -269,10 +274,16 @@ def _mcp_servers(files: Sequence[str]) -> list[McpServer]:
 def _spec(args: argparse.Namespace) -> AgentSpec:
     cwd = str(Path(args.cwd).resolve())
     env = _env(args.env)
-    worker_command = shlex.split(args.worker_command) if args.worker_command else None
+    if args.worker_command:
+        worker_command: list[str] | None = [part for part in shlex.split(args.worker_command) if part]
+        if not worker_command:
+            raise SystemExit("new: --worker-command names no program")
+    else:
+        worker_command = None
     worker_endpoint: str | None = args.worker_endpoint
-    if worker_command is None and worker_endpoint is not None:
-        raise SystemExit("new: --worker-endpoint needs --worker-command")
+    worker_ca: str | None = args.worker_ca
+    if worker_command is None and (worker_endpoint is not None or worker_ca is not None):
+        raise SystemExit("new: --worker-endpoint and --worker-ca need --worker-command")
     if args.command == "new-acp":
         command: list[str] = args.agent_command
         if not command:
@@ -286,6 +297,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             mcp_servers=_mcp_servers(args.mcp_config),
             worker_command=worker_command,
             worker_endpoint=worker_endpoint,
+            worker_ca=worker_ca,
         )
     if args.command == "new-claude":
         return ClaudeTtySpec(
@@ -298,6 +310,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             mcp_servers=_mcp_servers(args.mcp_config),
             worker_command=worker_command,
             worker_endpoint=worker_endpoint,
+            worker_ca=worker_ca,
         )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
     source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
@@ -308,6 +321,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         permission=args.permission,
         worker_command=worker_command,
         worker_endpoint=worker_endpoint,
+        worker_ca=worker_ca,
         **source,
     )
 
@@ -428,7 +442,8 @@ async def _plugin_command(client: Client, args: argparse.Namespace) -> None:
 
 def _preload(args: argparse.Namespace) -> list[str]:
     """The forkserver's preload: the default plus `--preload-module`, or only `--preload-module` after `--no-preload`."""
-    return list(args.preload_module) if args.no_preload else [*PRELOAD, *args.preload_module]
+    modules: list[str] = args.preload_module or []
+    return list(modules) if args.no_preload else [*PRELOAD, *modules]
 
 
 def _launcher(args: argparse.Namespace) -> Launcher:
