@@ -17,6 +17,7 @@ pytestmark = pytest.mark.anyio
 def test_libzmq_has_ws() -> None:
     # libzmq 4.3.5 spells the capability in upper case; zmq.has("ws") is False on the same build.
     assert zmq.has("WS")
+    assert zmq.has("WSS")
     assert zmq.has("curve")
 
 

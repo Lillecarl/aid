@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import anyio
 import pytest
+import trustme
 import zmq
 import zmq.asyncio
 import zmq.utils.z85
@@ -24,13 +25,19 @@ def endpoint(request: pytest.FixtureRequest, tmp_path: Path) -> str:
 
 
 @asynccontextmanager
-async def _daemon_side(endpoint: str, keys: zap.Keys) -> AsyncGenerator[tuple[zmq.asyncio.Context, zmq.asyncio.Socket]]:
+async def _daemon_side(
+    endpoint: str, keys: zap.Keys, tls: trustme.LeafCert | None = None
+) -> AsyncGenerator[tuple[zmq.asyncio.Context, zmq.asyncio.Socket]]:
+    """A ROUTER as the daemon sets it up. With `tls` it also stands in for the proxy that terminates wss://."""
     ctx = zmq.asyncio.Context()
     try:
         handler = ctx.socket(zmq.REP)
         handler.bind(zap.ZAP_ENDPOINT)
         router = ctx.socket(zmq.ROUTER)
         zap.serve_curve(router, keys)
+        if tls is not None:
+            router.setsockopt(zmq.WSS_CERT_PEM, b"".join(blob.bytes() for blob in tls.cert_chain_pems))
+            router.setsockopt(zmq.WSS_KEY_PEM, tls.private_key_pem.bytes())
         router.bind(endpoint)
         async with anyio.create_task_group() as tg:
             tg.start_soon(zap.handle, handler, keys)
@@ -40,12 +47,11 @@ async def _daemon_side(endpoint: str, keys: zap.Keys) -> AsyncGenerator[tuple[zm
         ctx.destroy(linger=0)
 
 
-def _worker(ctx: zmq.asyncio.Context, router: zmq.asyncio.Socket, server: str, keys: zap.Keypair) -> zmq.asyncio.Socket:
+def _worker(
+    ctx: zmq.asyncio.Context, router: zmq.asyncio.Socket, server: str, keys: zap.Keypair, trust_pem: str = ""
+) -> zmq.asyncio.Socket:
     sock = ctx.socket(zmq.DEALER)
-    sock.curve_serverkey = server.encode()
-    sock.curve_publickey = keys.public.encode()
-    sock.curve_secretkey = keys.secret.encode()
-    sock.connect(router.get_string(zmq.LAST_ENDPOINT))
+    zap.connect_worker(sock, router.get_string(zmq.LAST_ENDPOINT), server, keys, trust_pem)
     return sock
 
 
@@ -82,6 +88,21 @@ async def test_a_new_launch_revokes_the_last_key(endpoint: str) -> None:
         stale = _worker(ctx, router, keys.server.public, old)
         await stale.send(b"hello")
         assert await _user_id(router) is None
+
+
+@pytest.mark.parametrize(
+    ("identity", "trusted", "delivered"),
+    [("127.0.0.1", True, True), ("other.example", True, False), ("127.0.0.1", False, False)],
+    ids=["trusted", "wrong-name", "unknown-ca"],
+)
+async def test_wss(identity: str, trusted: bool, delivered: bool) -> None:
+    ca = trustme.CA()
+    trust = (ca if trusted else trustme.CA()).cert_pem.bytes().decode()
+    keys = zap.Keys()
+    async with _daemon_side("wss://127.0.0.1:*/aid", keys, ca.issue_cert(identity)) as (ctx, router):
+        worker = _worker(ctx, router, keys.server.public, keys.issue("alice"), trust)
+        await worker.send(b"hello")
+        assert await _user_id(router) == ("alice" if delivered else None)
 
 
 def test_revoke_leaves_a_newer_key() -> None:

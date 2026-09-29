@@ -17,8 +17,11 @@ let
   ui = pkgs.callPackage ./web { pymuxElement = p.pymux-element; };
   speechModel = pkgs.callPackage ./nix/speech-model.nix { };
   # Drafts turn on libzmq's ws:// transport (Lillecarl/aid#1): remote workers reach the daemon through an HTTP
-  # reverse proxy, which also terminates TLS, so no GnuTLS and no wss://.
-  zeromq = pkgs.zeromq.override { enableDrafts = true; };
+  # reverse proxy. GnuTLS adds wss://, for a worker whose proxy speaks only HTTPS.
+  # Propagated: libzmq.pc names gnutls in Requires.private, and pyzmq links what pkg-config reports.
+  zeromq = (pkgs.zeromq.override { enableDrafts = true; }).overrideAttrs (old: {
+    propagatedBuildInputs = (old.propagatedBuildInputs or [ ]) ++ [ pkgs.gnutls ];
+  });
   python = pkgs.python3.override {
     self = python;
     packageOverrides = _final: prev: { pyzmq = prev.pyzmq.override { inherit zeromq; }; };

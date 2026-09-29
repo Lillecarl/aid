@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Final
+from urllib.parse import urlsplit
 
 import zmq
 import zmq.asyncio
@@ -65,6 +66,25 @@ def serve_curve(sock: zmq.asyncio.Socket, keys: Keys) -> None:
     sock.curve_secretkey = keys.server.secret.encode()
     sock.curve_publickey = keys.server.public.encode()
     sock.zap_domain = DOMAIN
+
+
+def connect_worker(sock: zmq.asyncio.Socket, endpoint: str, server_key: str, keys: Keypair, trust_pem: str) -> None:
+    """Connect a worker's socket. For `wss://`, TLS checks the certificate against `trust_pem`, or the system's CAs
+    (GnuTLS reads /etc/ssl/certs/ca-certificates.crt) when it is empty."""
+    sock.curve_serverkey = server_key.encode()
+    sock.curve_publickey = keys.public.encode()
+    sock.curve_secretkey = keys.secret.encode()
+    url = urlsplit(endpoint)
+    if url.scheme == "wss":
+        if not url.hostname:
+            raise ValueError(f"{endpoint!r} names no host")
+        # Without it libzmq accepts any trusted certificate, whatever name it is for.
+        sock.setsockopt_string(zmq.WSS_HOSTNAME, url.hostname)
+        if trust_pem:
+            sock.setsockopt_string(zmq.WSS_TRUST_PEM, trust_pem)
+        else:
+            sock.setsockopt(zmq.WSS_TRUST_SYSTEM, 1)
+    sock.connect(endpoint)
 
 
 async def handle(zap: zmq.asyncio.Socket, keys: Keys) -> None:

@@ -416,6 +416,7 @@ class Daemon:
             session.key = keys.public
             args = WorkerArgs(
                 endpoint=self._paths.workers,
+                trust_pem="",
                 server_key=self._keys.server.public,
                 public_key=keys.public,
                 secret_key=keys.secret,

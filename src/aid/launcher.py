@@ -41,6 +41,8 @@ class WorkerArgs:
     """Everything a worker needs. Plain strings only, so any launcher can pass it on."""
 
     endpoint: str
+    trust_pem: str
+    """For a `wss://` endpoint: the CAs to check its certificate against, PEM; empty means the system's."""
     server_key: str
     public_key: str
     secret_key: str
@@ -83,7 +85,9 @@ def process_main(args: WorkerArgs) -> None:
     os.environ[ENV_SESSION] = args.name
     os.environ[ENV_RUNTIME_DIR] = args.daemon_runtime_dir
     os.environ[ENV_STATE_DIR] = args.daemon_state_dir
-    worker.main(args.endpoint, args.server_key, args.public_key, args.secret_key, args.spec_json, args.state_dir)
+    worker.main(
+        args.endpoint, args.trust_pem, args.server_key, args.public_key, args.secret_key, args.spec_json, args.state_dir
+    )
 
 
 class ProcessHandle:
@@ -135,16 +139,20 @@ class CommandLauncher:
     """Runs `command` per worker and writes its `WorkerArgs` to the command's stdin as JSON; `aid worker` reads
     them. Stdin, because argv is visible to every user on the host and the args hold the worker's secret key.
 
-    `endpoint` is the daemon's workers socket as the worker reaches it; the daemon must listen there too."""
+    `endpoint` is the daemon's workers socket as the worker reaches it; the daemon must listen there too.
+    `trust_pem`: see `WorkerArgs.trust_pem`."""
 
-    def __init__(self, command: Sequence[str], endpoint: str) -> None:
+    def __init__(self, command: Sequence[str], endpoint: str, *, trust_pem: str = "") -> None:
         self._command = list(command)
         self._endpoint = endpoint
+        self._trust_pem = trust_pem
 
     async def launch(self, args: WorkerArgs) -> CommandHandle:
         process = await anyio.open_process(self._command, stdout=None, stderr=None)
         if process.stdin is None:
             raise RuntimeError("the worker command has no stdin")
         async with process.stdin:
-            await process.stdin.send(dataclasses.replace(args, endpoint=self._endpoint).to_json().encode())
+            await process.stdin.send(
+                dataclasses.replace(args, endpoint=self._endpoint, trust_pem=self._trust_pem).to_json().encode()
+            )
         return CommandHandle(process)

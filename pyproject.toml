@@ -29,7 +29,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-test = ["pytest", "websockets"]
+test = ["pytest", "trustme", "websockets"]
 
 [project.scripts]
 aid = "aid.cli:main"

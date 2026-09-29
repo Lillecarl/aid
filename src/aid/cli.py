@@ -76,7 +76,12 @@ def _parser() -> argparse.ArgumentParser:
     daemon_cmd.add_argument(
         "--worker-endpoint",
         metavar="ENDPOINT",
-        help="with --worker-command: the workers socket as the worker reaches it, such as ws://aid.example:7070/aid",
+        help="with --worker-command: the workers socket as the worker reaches it, such as wss://aid.example/aid",
+    )
+    daemon_cmd.add_argument(
+        "--worker-ca",
+        metavar="FILE",
+        help="with a wss:// --worker-endpoint: PEM CAs its certificate must chain to (default: the system's)",
     )
     sub.add_parser("worker", help="run one worker; `aid daemon --worker-command` starts it and sends its arguments")
     sub.add_parser("list", help="list sessions")
@@ -280,7 +285,8 @@ def _launcher(args: argparse.Namespace) -> Launcher:
         return ForkserverLauncher()
     if args.worker_endpoint is None:
         raise SystemExit("aid daemon: --worker-command needs --worker-endpoint")
-    return CommandLauncher(shlex.split(args.worker_command), args.worker_endpoint)
+    trust_pem = Path(args.worker_ca).read_text() if args.worker_ca else ""
+    return CommandLauncher(shlex.split(args.worker_command), args.worker_endpoint, trust_pem=trust_pem)
 
 
 async def _serve(args: argparse.Namespace) -> None:
