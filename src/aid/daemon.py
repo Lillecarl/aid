@@ -490,7 +490,11 @@ class Daemon:
 
     async def _worker_loop(self) -> None:
         while True:
-            peer, frame = await self._workers.recv_multipart(copy=False)
+            frames = await self._workers.recv_multipart(copy=False)
+            if len(frames) != 2:
+                log.warning("dropped a message of %d frames from a worker", len(frames))
+                continue
+            peer, frame = frames
             # The session the ZAP handler named for this connection's key.
             name = frame.get("User-Id")  # pyright: ignore[reportArgumentType] -- pyzmq's stub knows only the int options; libzmq also takes metadata names
             if not isinstance(name, str):
