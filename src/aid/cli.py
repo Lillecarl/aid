@@ -24,6 +24,7 @@ from aid.protocol import (
     Lifecycle,
     MessageEntry,
     Output,
+    PermissionDecider,
     PermissionDecision,
     PermissionRequest,
     PromptEntry,
@@ -282,6 +283,8 @@ def _permission_line(item: PermissionRequest | PermissionDecision) -> str:
         case PermissionRequest():
             options = ", ".join(f"{o.option_id} ({o.name})" for o in item.options)
             return f"[permission {item.request_id}] {item.tool_name or ''} {item.title or ''}: {options}"
+        case PermissionDecision(by=PermissionDecider.TERMINAL):
+            return f"[permission {item.request_id}] answered in the terminal"
         case PermissionDecision():
             return f"[permission {item.request_id}] {item.option_id or 'cancelled'} by {item.by}"
 
