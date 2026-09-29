@@ -220,8 +220,10 @@
   async function reconcile(): Promise<void> {
     behind = false;
     const page = await api.history(name, { after: newest, limit: 1000 });
-    rows = [...rows.filter((r) => r.seq !== undefined), ...fromHistory(page.entries)];
-    newest = page.entries.at(-1)?.seq ?? newest;
+    // The history stream can add entries while the page loads; `newest` covers those by now.
+    const fresh = page.entries.filter((e) => e.seq > newest);
+    rows = [...rows.filter((r) => r.seq !== undefined), ...fromHistory(fresh)];
+    newest = fresh.at(-1)?.seq ?? newest;
     await keepingPosition(trimTop);
     await toBottom();
   }
