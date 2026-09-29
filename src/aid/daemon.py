@@ -194,9 +194,32 @@ def wake_prompt(messages: list[MessageEntry]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+class _Listener:
+    """A ROUTER socket the daemon answers requests on, and the lock its sends take."""
+
+    def __init__(self, sock: zmq.asyncio.Socket) -> None:
+        self.sock = sock
+        self._lock = anyio.Lock()
+
+    async def send(self, peer: bytes, payload: bytes) -> None:
+        async with self._lock:
+            await self.sock.send_multipart([peer, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
+
+
+@dataclass(frozen=True)
+class _Peer:
+    """Who sent a request: a connection on one of the daemon's ROUTER sockets."""
+
+    listener: _Listener
+    routing_id: bytes
+
+    async def send(self, payload: bytes) -> None:
+        await self.listener.send(self.routing_id, payload)
+
+
 @dataclass(frozen=True)
 class _Route:
-    client: bytes | None
+    client: _Peer | None
     """None for a turn the daemon started itself, which only history sees."""
     session: str
     recorder: Recorder | None = None
@@ -214,14 +237,13 @@ class Daemon:
         self._handling: set[str] = set()
         """Ids of requests still in `_dispatch`, which a route does not name yet."""
         self._ctx = zmq.asyncio.Context()
-        self._clients = self._ctx.socket(zmq.ROUTER)
+        self._clients = _Listener(self._ctx.socket(zmq.ROUTER))
         self._workers = self._ctx.socket(zmq.ROUTER)
         self._workers.setsockopt(zmq.ROUTER_MANDATORY, 1)
         self._keys = zap.Keys()
         zap.serve_curve(self._workers, self._keys)
         self._zap = self._ctx.socket(zmq.REP)
         self._events = self._ctx.socket(zmq.PUB)
-        self._client_lock = anyio.Lock()
         self._worker_lock = anyio.Lock()
         self._events_lock = anyio.Lock()
         self._published: dict[bytes, bytes] = {}
@@ -233,7 +255,7 @@ class Daemon:
         await self._load_sessions()
         self._published = self._state()  # As loaded: a reader's first fetch sees this, so it is no change.
         self._events.bind(self._paths.events)
-        self._clients.bind(self._paths.control)
+        self._clients.sock.bind(self._paths.control)
         # Before the workers socket: libzmq accepts every CURVE client while no handler is bound.
         self._zap.bind(zap.ZAP_ENDPOINT)
         self._workers.bind(self._paths.workers)
@@ -255,7 +277,7 @@ class Daemon:
                     with anyio.CancelScope(shield=True):
                         await self._stop_all()
         finally:
-            self._clients.close(linger=0)
+            self._clients.sock.close(linger=0)
             self._workers.close(linger=0)
             self._zap.close(linger=0)
             self._events.close(linger=0)
@@ -282,10 +304,6 @@ class Daemon:
         async with anyio.create_task_group() as tg:
             for session in self._sessions.values():
                 tg.start_soon(self._stop, session)
-
-    async def _send_client(self, client: bytes, payload: bytes) -> None:
-        async with self._client_lock:
-            await self._clients.send_multipart([client, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
 
     async def _publish(self, topic: bytes, payload: bytes) -> None:
         async with self._events_lock:
@@ -320,21 +338,19 @@ class Daemon:
         if self._tg is None:
             raise RuntimeError("daemon is not serving")
         while True:
-            frames = await self._clients.recv_multipart()
+            frames = await self._clients.sock.recv_multipart()
+            client = _Peer(self._clients, frames[0])
             if len(frames) != 2:  # A DEALER's request is one frame; anything else would end this loop.
-                await self._send_client(
-                    frames[0], encode(Failure(id="", code="invalid_request", message="a request is one frame"))
-                )
+                await client.send(encode(Failure(id="", code="invalid_request", message="a request is one frame")))
                 continue
-            client, payload = frames
             try:
-                request = decode_request(payload)
+                request = decode_request(frames[1])
             except ValidationError as error:
-                await self._send_client(client, encode(Failure(id="", code="invalid_request", message=str(error))))
+                await client.send(encode(Failure(id="", code="invalid_request", message=str(error))))
                 continue
             self._tg.start_soon(self._handle, client, request)
 
-    async def _handle(self, client: bytes, request: Request) -> None:
+    async def _handle(self, client: _Peer, request: Request) -> None:
         try:
             # Replies route by request id, whichever client sent it: a second request under an id in flight would
             # take the first one's replies.
@@ -351,10 +367,10 @@ class Daemon:
             log.exception("request %s failed", request.id)
             reply = Failure(id=request.id, code="internal", message=f"{type(error).__name__}: {error}")
         if reply is not None:
-            await self._send_client(client, encode(reply))
+            await client.send(encode(reply))
         await self._publish_changes()
 
-    async def _dispatch(self, client: bytes, request: Request) -> Done | None:
+    async def _dispatch(self, client: _Peer, request: Request) -> Done | None:
         match request:
             case CreateSession():
                 await self._create(request)
@@ -601,7 +617,7 @@ class Daemon:
                     del self._routes[request_id]
                     failure = Failure(id=request_id, code="worker_exited", message=f"worker exited with {code}")
                     if route.client is not None:
-                        await self._send_client(route.client, encode(failure))
+                        await route.client.send(encode(failure))
                     await self._record(route, failure)
             # Messages still in the inbox wait for the next turn to end or the next message: a wake now could
             # start a crashing worker again and again.
@@ -682,14 +698,14 @@ class Daemon:
                 case Event():
                     if (route := self._routes.get(reply.id)) is not None:
                         if route.client is not None:
-                            await self._send_client(route.client, payload)
+                            await route.client.send(payload)
                         if (session := self._sessions.get(name)) is not None:
                             session.note(reply.event)
                         await self._record(route, reply)
                 case Done() | Failure():
                     if (route := self._routes.pop(reply.id, None)) is not None:
                         if route.client is not None:
-                            await self._send_client(route.client, payload)
+                            await route.client.send(payload)
                         await self._record(route, reply)
                         self._end_turn(route.session, reply.id)
             # A turn streams many deltas a second, and they change no status.
