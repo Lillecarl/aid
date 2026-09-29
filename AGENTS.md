@@ -51,6 +51,10 @@ API and a CLI.
   baseline, then follow; a jump in seq is fetched. `idle=` yields None on quiet spells (never cancel the
   generator's receive). One SUB socket per follower, closed with it.
 - `src/aid/web/` — `aid web`: Starlette on hypercorn, OIDC login (`auth.py`), JSON API + SSE (`app.py`).
+- `src/aid/schema.py` — `python -m aid.schema`: JSON Schema of what the page reads (serialization mode: defaults
+  required) and sends (validation mode). Committed as `web/src/lib/protocol.schema.json`; `npm run types` in web/
+  generates `protocol.ts` from it, which `api.ts` re-exports. Never hand-edit either: `tests/test_schema.py` and the
+  web build's `types:check` fail on drift. After changing a model: regenerate both.
 - `web/` — the Svelte 5 UI (runes, TypeScript, Vite). `web/default.nix` builds it; `aid web` serves the result
   from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.
 - `src/aid/coding.py` — `aid.coding_tools`, a toolset pydantic-ai agents opt into: read, pyedit edits through its

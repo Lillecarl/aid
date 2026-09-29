@@ -33,7 +33,8 @@ def _request_id() -> str:
 
 
 class _Message(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    # The last: a field with a default is always sent, so the page's generated types (aid.schema) require it.
+    model_config = ConfigDict(extra="forbid", frozen=True, json_schema_serialization_defaults_required=True)
 
 
 class _Request(_Message):

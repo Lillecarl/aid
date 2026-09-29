@@ -12,7 +12,7 @@ import stat
 from typing import Final
 
 import anyio.to_thread
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from aid.confine import inside
 from aid.protocol import AidError
@@ -30,6 +30,8 @@ class Entry(BaseModel):
 
 
 class FileView(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
     path: str
     size: int
     text: str | None
