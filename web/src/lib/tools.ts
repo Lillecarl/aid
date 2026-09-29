@@ -48,6 +48,24 @@ export function gist(input: unknown): string | null {
   return null;
 }
 
+/** Arguments worth showing: not an empty object or list. */
+export function hasInput(input: unknown): boolean {
+  if (input === null || input === undefined) return false;
+  if (typeof input === "object") return Object.keys(input).length > 0;
+  return true;
+}
+
+/** Output as the card shows it: JSON indented, anything else as it came. */
+export function readable(output: string): string {
+  const start = output.trimStart()[0];
+  if (start !== "{" && start !== "[") return output;
+  try {
+    return JSON.stringify(JSON.parse(output), null, 2);
+  } catch {
+    return output;
+  }
+}
+
 /** The shell command of a call, when its only interesting argument is one. */
 export function command(input: unknown): string | null {
   if (input === null || typeof input !== "object") return null;

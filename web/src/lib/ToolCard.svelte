@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { command, type DiffLine, diffLines, gist, type Tool } from "./tools";
+  import { command, type DiffLine, diffLines, gist, hasInput, readable, type Tool } from "./tools";
 
   interface Props {
     tool: Tool;
@@ -12,8 +12,9 @@
   const status = $derived(tool.status ?? "pending");
   const hint = $derived(gist(tool.input));
   const shell = $derived(command(tool.input));
+  const showInput = $derived(shell === null && hasInput(tool.input) && !tool.diffs.length);
   const hasDetails = $derived(
-    tool.input !== null || tool.output !== null || tool.diffs.length > 0 || tool.paths.length > 0,
+    shell !== null || showInput || tool.output !== null || tool.diffs.length > 0 || tool.paths.length > 0,
   );
   // Only while open: a diff of a big file costs time, and most cards stay closed.
   let open = $state(false);
@@ -35,7 +36,8 @@
       {/if}
       {#if shell !== null}
         <pre class="input">$ {shell}</pre>
-      {:else if tool.input !== null && !tool.diffs.length}
+      {:else if showInput}
+        <div class="label">input</div>
         <pre class="input">{JSON.stringify(tool.input, null, 2)}</pre>
       {/if}
       {#each tool.diffs as diff (diff.path)}
@@ -47,7 +49,8 @@
         </div>
       {/each}
       {#if tool.output !== null}
-        <pre class="output">{tool.output}</pre>
+        <div class="label">{status === "failed" ? "error" : "output"}</div>
+        <pre class="output">{readable(tool.output)}</pre>
       {/if}
     </div>
   {/if}
@@ -135,6 +138,14 @@
   .output {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+  .label {
+    color: var(--muted);
+    font-size: 0.85em;
+    margin-bottom: -0.3rem;
+  }
+  .failed .output {
+    color: var(--bad);
   }
   .paths {
     margin: 0;
