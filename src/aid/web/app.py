@@ -39,7 +39,7 @@ from starlette.websockets import WebSocketDisconnect
 from aid.client import connect
 from aid.protocol import AidError, CreateSession
 from aid.speech import Transcription
-from aid.web import auth
+from aid.web import auth, files
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
@@ -77,6 +77,9 @@ _STATUS: Final = {
     "busy": 409,
     "no_screen": 404,
     "not_running": 409,
+    "outside": 403,
+    "not_a_directory": 400,
+    "not_a_file": 400,
 }
 
 
@@ -168,6 +171,30 @@ async def prompt(request: Request) -> Response:
             yield f"event: error\ndata: {json.dumps({'error': error.message, 'code': error.code})}\n\n"
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
+
+
+class PathQuery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    path: str = ""
+    """Relative to the session's working directory."""
+
+
+async def _cwd(request: Request) -> str:
+    return (await _client(request).session(request.path_params["name"]).status()).cwd
+
+
+@api()
+async def list_files(request: Request) -> Response:
+    query = PathQuery.model_validate(dict(request.query_params))
+    entries = await files.list_dir(await _cwd(request), query.path)
+    return JSONResponse([e.model_dump(mode="json") for e in entries])
+
+
+@api()
+async def read_file(request: Request) -> Response:
+    query = PathQuery.model_validate(dict(request.query_params))
+    view = await files.read_file(await _cwd(request), query.path)
+    return JSONResponse(view.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
 
 
 @api()
@@ -391,6 +418,8 @@ def create_app(
             Route("/api/sessions/{name}", delete, methods=["DELETE"]),
             Route("/api/sessions/{name}/history", history, methods=["GET"]),
             Route("/api/sessions/{name}/status", status, methods=["GET"]),
+            Route("/api/sessions/{name}/files", list_files, methods=["GET"]),
+            Route("/api/sessions/{name}/file", read_file, methods=["GET"]),
             Route("/api/sessions/{name}/status/events", status_events, methods=["GET"]),
             Route("/api/sessions/{name}/prompt", prompt, methods=["POST"]),
             Route("/api/sessions/{name}/cancel", cancel, methods=["POST"]),

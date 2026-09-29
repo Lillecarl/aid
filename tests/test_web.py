@@ -204,6 +204,24 @@ async def test_session_round_trip(web: Web, tmp_path: Path) -> None:
     assert after == []
 
 
+async def test_session_files(web: Web, tmp_path: Path) -> None:
+    (tmp_path / "notes.md").write_text("# hi\n")
+    with anyio.fail_after(TIMEOUT):
+        async with httpx.AsyncClient() as client:
+            anonymous = await client.get(f"{web.url}/api/sessions/files/files")
+            await login(client, web, ALLOWED)
+            headers = {"X-CSRF-Token": (await client.get(f"{web.url}/api/me")).json()["csrf"]}
+            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
+            await client.post(f"{web.url}/api/sessions", json={"name": "files", "spec": spec}, headers=headers)
+            listed = (await client.get(f"{web.url}/api/sessions/files/files")).json()
+            read = (await client.get(f"{web.url}/api/sessions/files/file", params={"path": "notes.md"})).json()
+            escape = await client.get(f"{web.url}/api/sessions/files/file", params={"path": "../x"})
+    assert anonymous.status_code == 401
+    assert {"name": "notes.md", "dir": False, "size": 5} in listed
+    assert read == {"path": "notes.md", "size": 5, "text": "# hi\n", "truncated": False}
+    assert escape.status_code == 403
+
+
 async def test_unknown_session_is_404(web: Web) -> None:
     with anyio.fail_after(TIMEOUT):
         async with httpx.AsyncClient() as client:
