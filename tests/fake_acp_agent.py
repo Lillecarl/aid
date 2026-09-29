@@ -99,10 +99,11 @@ class FakeAgent:
             case "count":
                 for i in range(CHUNKS):
                     await self.say(session_id, f"{i} ")
-            case "permission":
+            case "permission" | "permission-to-read":
+                command = "rm -rf /" if text == "permission" else "ls -la"
                 response = await self.conn.request_permission(
                     session_id=session_id,
-                    tool_call=ToolCallUpdate(tool_call_id="t1", title="rm -rf /"),
+                    tool_call=ToolCallUpdate(tool_call_id="t1", title=command, raw_input={"command": command}),
                     options=[
                         PermissionOption(option_id="yes", name="Yes", kind="allow_once"),
                         PermissionOption(option_id="no", name="No", kind="reject_once"),
