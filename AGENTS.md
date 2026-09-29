@@ -81,3 +81,8 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   through the CSSOM, so the CSP stays `default-src 'self'`: do not add inline allowances.
 - Web: a session runs commands on the host, so login needs a verified email on the allowlist, and every
   mutating request needs the CSRF header. The CSP forbids inline script; agent output is text, never HTML.
+  Markdown goes through marked's lexer into Svelte elements (`Markdown.svelte`), never `{@html}`.
+- CodeMirror (`CodeView.svelte`) must live in a shadow root: on a document style-mod adds a style element,
+  which the CSP refuses; in a shadow root it adopts a constructed stylesheet.
+- `/api/sessions/{name}/files` and `/file` (`web/files.py`) read the session cwd in aid web itself; every path
+  must resolve inside it.
