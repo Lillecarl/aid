@@ -178,9 +178,18 @@ export type SessionEvent =
   | UsageEvent
   | { type: "output"; output: unknown; stop_reason: string };
 
+/** Interactive Claude's session outside a turn; see `aid.protocol.Lifecycle`. */
+export interface LifecycleEntry {
+  type: "lifecycle";
+  event: "compacted" | "cleared" | "ended";
+  detail: string | null;
+  summary: string | null;
+}
+
 export type HistoryItem =
   | SessionEvent
   | StartedEntry
+  | LifecycleEntry
   | { type: "prompt"; text: string }
   | { type: "message"; sender: string | null; text: string }
   | { type: "error"; code: string; message: string };

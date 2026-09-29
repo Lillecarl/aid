@@ -4,6 +4,7 @@
   import type {
     HistoryEntry,
     HistoryItem,
+    LifecycleEntry,
     PermissionDecisionEvent,
     PermissionRequestEvent,
     SessionEvent,
@@ -21,7 +22,12 @@
     ondeleted: () => void | Promise<void>;
   }
 
-  type Kind = "user" | "message" | "assistant" | "thought" | "tool" | "permission" | "meta" | "error";
+  type Kind = "user" | "message" | "assistant" | "thought" | "summary" | "tool" | "permission" | "meta" | "error";
+  const LIFECYCLE: Record<LifecycleEntry["event"], string> = {
+    compacted: "Context compacted",
+    cleared: "Context cleared: a new session follows",
+    ended: "Claude exited",
+  };
   type Permission = { request: PermissionRequestEvent; decision: PermissionDecisionEvent | null };
   /** One entry of the log. `seq` is set for rows read from history; rows of a turn still streaming lack it. A
    * tool call is one row, which later updates of the same call change; so is a permission request and its
@@ -76,6 +82,10 @@
       case "permission_decision":
         // Its request is outside the rows loaded.
         return [row("meta", `permission ${item.option_id ?? "cancelled"} (${item.by})`)];
+      case "lifecycle": {
+        const line = row("meta", LIFECYCLE[item.event] + (item.detail ? ` (${item.detail})` : ""));
+        return item.summary ? [line, { ...row("summary", item.summary), key: `${key}s` }] : [line];
+      }
     }
   }
 
@@ -359,6 +369,11 @@
     {:else if row.kind === "thought"}
       <details class="thought">
         <summary>Thinking <span class="gist">{row.text.trim().split("\n", 1)[0]}</span></summary>
+        <Markdown text={row.text} />
+      </details>
+    {:else if row.kind === "summary"}
+      <details class="thought">
+        <summary>What Claude kept of the conversation</summary>
         <Markdown text={row.text} />
       </details>
     {:else if row.tool}
