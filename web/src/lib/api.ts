@@ -27,17 +27,27 @@ export interface SessionStatus {
 
 export const statusEventsUrl = (name: string): string => `/api/sessions/${encodeURIComponent(name)}/status/events`;
 
+/** Every history entry after `after`, as the daemon records it: turns from any client, and turns typed into the
+ * pane. */
+export const historyEventsUrl = (name: string, after: number): string =>
+  `/api/sessions/${encodeURIComponent(name)}/history/events?after=${after}`;
+
 /**
  * Follow a stream of Server-Sent Events, one per change, while the browser tab is visible; a hidden tab closes
  * it, so nothing streams that nobody sees. Returns the function that stops following.
  */
-export function watch<T>(url: string, ondata: (data: T) => void, onproblem: (problem: string) => void): () => void {
+export function watch<T>(
+  url: string | (() => string),
+  ondata: (data: T) => void,
+  onproblem: (problem: string) => void,
+): () => void {
   let source: EventSource | null = null;
   let ended = false;
 
   function open(): void {
     if (source !== null || ended) return;
-    source = new EventSource(url);
+    // A function is asked again each time the tab comes back, for a stream that resumes where the page is.
+    source = new EventSource(typeof url === "string" ? url : url());
     source.onmessage = (event: MessageEvent<string>) => {
       ondata(JSON.parse(event.data) as T);
       onproblem("");

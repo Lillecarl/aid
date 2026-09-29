@@ -93,7 +93,6 @@
   }
 
   const firstSeq = (): number | undefined => rows.find((r) => r.seq !== undefined)?.seq;
-  const lastSeq = (): number | undefined => rows.findLast((r) => r.seq !== undefined)?.seq;
   const nearBottom = (): boolean => !log || log.scrollHeight - log.scrollTop - log.clientHeight < EDGE_PX;
 
   /** Keep the view where it is while rows are added or removed above it. */
@@ -126,12 +125,19 @@
     } finally {
       loading = false;
     }
+    if (behind && !busy && !hasNewer) await reconcile().catch(() => undefined);
   }
+
+  /** The newest history entry the rows hold. Not the last row's seq: a tool call's updates join its first row. */
+  let newest = -1;
+  /** An entry arrived while the rows could not take it: fetch it once they can. */
+  let behind = false;
 
   const loadLatest = () =>
     guard(async () => {
       const page = await api.history(name, { limit: Math.min(PAGE, windowSize) });
       rows = fromHistory(page.entries);
+      newest = page.entries.at(-1)?.seq ?? -1;
       hasOlder = page.has_older;
       hasNewer = false;
       await toBottom();
@@ -154,13 +160,27 @@
 
   const loadNewer = () =>
     guard(async () => {
-      const after = lastSeq();
-      if (after === undefined) return;
-      const page = await api.history(name, { after, limit: PAGE });
+      const page = await api.history(name, { after: newest, limit: PAGE });
       rows = [...rows, ...fromHistory(page.entries)];
+      newest = page.entries.at(-1)?.seq ?? newest;
       hasNewer = page.has_newer;
       await keepingPosition(trimTop);
     });
+
+  /** An entry the history stream sent: a turn this page did not send, such as one typed into the pane. */
+  function arrived(entry: HistoryEntry): void {
+    if (entry.seq <= newest || hasNewer) return; // Seen already, or the rows end before it: scrolling fetches it.
+    if (busy || loading) {
+      // This page's own turn is streaming, or a page is loading; either one fetches what it missed once done.
+      behind = true;
+      return;
+    }
+    newest = entry.seq;
+    const follow = nearBottom();
+    append(rows, entry.item, `h${entry.seq}`, entry.seq);
+    trimTop();
+    if (follow) void toBottom();
+  }
 
   function onscroll(): void {
     if (!log || loading) return;
@@ -177,9 +197,10 @@
 
   /** Swap the streamed rows for the entries history recorded, which carry their seq. */
   async function reconcile(): Promise<void> {
-    const after = lastSeq() ?? -1;
-    const page = await api.history(name, { after, limit: 1000 });
+    behind = false;
+    const page = await api.history(name, { after: newest, limit: 1000 });
     rows = [...rows.filter((r) => r.seq !== undefined), ...fromHistory(page.entries)];
+    newest = page.entries.at(-1)?.seq ?? newest;
     await keepingPosition(trimTop);
     await toBottom();
   }
@@ -258,12 +279,21 @@
   }
 
   onMount(() => {
-    void loadLatest();
+    let unwatch: (() => void) | null = null;
+    let mounted = true;
+    // Streams while this tab is mounted and the browser tab visible, from wherever the rows end then.
+    void loadLatest().then(() => {
+      if (mounted) unwatch = api.watch(() => api.historyEventsUrl(name, newest), arrived, () => undefined);
+    });
     api.speechEnabled().then(
       (enabled) => (canDictate = enabled),
       () => (canDictate = false),
     );
-    return () => void dictation?.stop();
+    return () => {
+      mounted = false;
+      unwatch?.();
+      void dictation?.stop();
+    };
   });
 </script>
 
