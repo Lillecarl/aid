@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING
 import anyio
 import anyio.to_thread
 
-from aid import daemon, speech
+from aid import daemon, guard, speech
 from aid.client import connect, register_plugin
 from aid.launcher import CommandLauncher, ForkserverLauncher, WorkerArgs, process_main
 from aid.mcp import from_claude_config
@@ -216,6 +216,10 @@ def _parser() -> argparse.ArgumentParser:
         "secret where `aid.connect(plugin=NAME)` reads it",
     )
     plugin_sub.add_parser("list", help="list plugins and their grants")
+    guard_cmd = sub.add_parser(
+        "guard", help="run aid.guard: answer permission requests that only read, leave the rest for a person"
+    )
+    guard_cmd.add_argument("--plugin", default="guard", help="the plugin it registered as, with read and permissions")
     plugin_sub.add_parser("remove", help="remove a plugin; it is refused from its next request").add_argument("name")
     return parser
 
@@ -451,6 +455,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     head, agent_command = _split_agent_command(sys.argv[1:] if argv is None else argv)
     args = _parser().parse_args(head)
     args.agent_command = agent_command
+    if args.command == "guard":
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+        try:
+            anyio.run(guard.main, args.plugin)
+        except AidError as error:
+            raise SystemExit(f"aid guard: {error}") from None
+        return
     if args.command in ("daemon", "web", "worker"):
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(processName)s %(name)s %(levelname)s %(message)s")
         if args.command == "worker":

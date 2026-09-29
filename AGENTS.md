@@ -27,7 +27,7 @@ API and a CLI.
   `register_plugin`. Grants bind only what arrives on the plugin sockets: a same-user local plugin can open
   control.sock, which checks nothing, until confined (Lillecarl/aid#4). The events PUB cannot drop a subscriber: a
   plugin losing `read` hears events until it reconnects.
-- `src/aid/guard.py` — `python -m aid.guard`: plugin (read, permissions) that allows a request whose command is one
+- `src/aid/guard.py` — `aid guard`: plugin (read, permissions) that allows a request whose command is one
   program from `READERS` with no shell syntax, and leaves the rest for a person. Seed for aid#3.
 - `src/aid/backends/` — `acp.py`, `pydantic_ai.py`, `claude_tty.py`; each implements `base.Backend`.
 - `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON,

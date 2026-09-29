@@ -100,8 +100,14 @@ class Endpoints:
 
 async def plugin_endpoints(paths: Paths, name: str) -> Endpoints:
     """Plugin `name`'s sockets, with the secret key `aid plugin add` wrote and the running daemon's public key."""
-    secret = (await anyio.Path(paths.plugin_dir(name), SECRET_FILE).read_text()).strip()
-    server = (await anyio.Path(paths.server_key).read_text()).strip()
+    try:
+        secret = (await anyio.Path(paths.plugin_dir(name), SECRET_FILE).read_text()).strip()
+    except FileNotFoundError:
+        raise AidError("not_found", f"no key for plugin {name!r} here: register it with `aid plugin add`") from None
+    try:
+        server = (await anyio.Path(paths.server_key).read_text()).strip()
+    except FileNotFoundError:
+        raise AidError("not_running", f"no {paths.server_key}: the daemon is not running") from None
     keys = zap.Keypair(public=zmq.curve_public(secret.encode()).decode(), secret=secret)
     return Endpoints(paths.plugins, paths.plugin_events, (server, keys))
 

@@ -1,8 +1,8 @@
-"""`python -m aid.guard`: a plugin that answers permission requests that plainly only read, and leaves the rest for a
+"""`aid guard`: a plugin that answers permission requests that plainly only read, and leaves the rest for a
 person. A seed for Lillecarl/aid#3: rules, not a model.
 
     aid plugin add guard --grant read --grant permissions
-    python -m aid.guard
+    aid guard
 
 It follows the session list; a session with requests waiting has its status read, and each request judged once. A
 request it allows shows in the history as answered by plugin guard.
@@ -10,12 +10,9 @@ request it allows shows in the history as answered by plugin guard.
 
 from __future__ import annotations
 
-import argparse
 import logging
 import shlex
 from typing import TYPE_CHECKING, Final, cast
-
-import anyio
 
 import aid
 from aid.protocol import AidError
@@ -87,13 +84,3 @@ async def guard(client: Client) -> None:
 async def main(plugin: str) -> None:
     async with aid.connect(plugin=plugin) as client:
         await guard(client)
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        prog="python -m aid.guard", description="Answer permission requests that only read."
-    )
-    parser.add_argument("--plugin", default="guard", help="the plugin name it registered as (default: guard)")
-    args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    anyio.run(main, args.plugin)
