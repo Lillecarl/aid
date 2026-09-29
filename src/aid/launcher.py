@@ -1,7 +1,7 @@
 """Launchers start workers. The daemon depends only on the `Launcher` protocol.
 
 `ForkserverLauncher` forks each worker from a zygote that has already
-imported the heavy modules, so workers share those pages copy-on-write.
+imported the configured modules, so workers share those pages copy-on-write.
 A subinterpreter launcher can implement the same protocol by calling
 `aid.worker.main` in a new interpreter, once pydantic-core and pyzmq load
 in more than one interpreter per process.
@@ -33,7 +33,11 @@ if TYPE_CHECKING:
 
     from anyio.abc import Process
 
-PRELOAD: Final = ("aid.launcher", "aid.worker", "pydantic_ai", "acp", "zmq.asyncio")
+PRELOAD: Final = ("zmq.asyncio",)
+"""What the forkserver imports before forking workers. Only the transport: it is the daemon's side of the
+worker channel, so it must work whatever a session puts on `python_path`. Everything else — aid itself,
+`pydantic_ai`, `acp` — imports fresh in each worker, so restarting a worker picks up new code. A worker cannot
+bring its own version of a preloaded module; add one back only to share its pages with `--preload-module`."""
 
 
 @dataclass(frozen=True)

@@ -109,10 +109,11 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 ## Rules
 
 - anyio only. ruff bans `asyncio` and `subprocess` (TID251). The asyncio seam lives inside the `acp` library.
-- Worker isolation is a process per session, forked from a forkserver that preloads the heavy stack.
-  `PydanticAISpec.python_path` is prepended per worker, but modules in `launcher.PRELOAD` and their
-  dependencies are already imported and win: an agent cannot bring its own version of them. Shrinking
-  `PRELOAD` trades shared memory for isolation.
+- Worker isolation is a process per session, forked from a forkserver that preloads only the transport
+  (`launcher.PRELOAD`, default `zmq.asyncio`). Everything else — aid itself, `pydantic_ai`, `acp` — imports fresh
+  in each worker, so restarting a worker picks up new code. `PydanticAISpec.python_path` is prepended per worker,
+  but a preloaded module and its dependencies win over it. `aid daemon --preload-module` shares more pages
+  copy-on-write, `--no-preload` starts bare.
 - Keep workers subinterpreter-ready, for when pydantic-core and pyzmq load in more than one interpreter
   (measured 2026-09 on 3.14.7: both refuse isolated subinterpreters; PyO3 allows one interpreter per process):
   - `worker.main` takes only `str` arguments and mutates no process-wide state (cwd, `os.environ`, signals).

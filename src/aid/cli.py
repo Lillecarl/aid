@@ -16,7 +16,7 @@ import anyio.to_thread
 
 from aid import daemon, guard, speech
 from aid.client import connect, register_plugin
-from aid.launcher import CommandLauncher, ForkserverLauncher, WorkerArgs, process_main
+from aid.launcher import PRELOAD, CommandLauncher, ForkserverLauncher, WorkerArgs, process_main
 from aid.mcp import from_claude_config
 from aid.paths import default_paths
 from aid.plugins import Grant
@@ -92,6 +92,18 @@ def _parser() -> argparse.ArgumentParser:
         "--worker-ca",
         metavar="FILE",
         help="with a wss:// --worker-endpoint: PEM CAs its certificate must chain to (default: the system's)",
+    )
+    daemon_cmd.add_argument(
+        "--no-preload",
+        action="store_true",
+        help="fork workers from a bare interpreter: every worker imports everything fresh",
+    )
+    daemon_cmd.add_argument(
+        "--preload-module",
+        action="append",
+        default=[],
+        metavar="MODULE",
+        help="also import MODULE in the forkserver, so workers share its pages copy-on-write (repeatable)",
     )
     sub.add_parser("worker", help="run one worker; `aid daemon --worker-command` starts it and sends its arguments")
     sub.add_parser("list", help="list sessions")
@@ -387,11 +399,16 @@ async def _plugin_command(client: Client, args: argparse.Namespace) -> None:
             raise SystemExit(f"unknown plugin command {other!r}")
 
 
+def _preload(args: argparse.Namespace) -> list[str]:
+    """The forkserver's preload: the default plus `--preload-module`, or only `--preload-module` after `--no-preload`."""
+    return list(args.preload_module) if args.no_preload else [*PRELOAD, *args.preload_module]
+
+
 def _launcher(args: argparse.Namespace) -> Launcher:
     if args.worker_command is None:
         if args.worker_endpoint is not None:
             raise SystemExit("aid daemon: --worker-endpoint needs --worker-command")
-        return ForkserverLauncher()
+        return ForkserverLauncher(_preload(args))
     if args.worker_endpoint is None:
         raise SystemExit("aid daemon: --worker-command needs --worker-endpoint")
     trust_pem = Path(args.worker_ca).read_text() if args.worker_ca else ""

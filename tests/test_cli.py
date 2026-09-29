@@ -8,9 +8,11 @@ import pytest
 # The parsing rules under test are private to the CLI.
 from aid.cli import (
     _parser,  # pyright: ignore[reportPrivateUsage]
+    _preload,  # pyright: ignore[reportPrivateUsage]
     _spec,  # pyright: ignore[reportPrivateUsage]
     _split_agent_command,  # pyright: ignore[reportPrivateUsage]
 )
+from aid.launcher import PRELOAD
 from aid.spec import ClaudeTtySpec, McpHttp, McpStdio
 
 if TYPE_CHECKING:
@@ -31,6 +33,19 @@ if TYPE_CHECKING:
 )
 def test_split_agent_command(argv: list[str], head: list[str], tail: list[str]) -> None:
     assert _split_agent_command(argv) == (head, tail)
+
+
+@pytest.mark.parametrize(
+    ("argv", "expected"),
+    [
+        (["daemon"], [*PRELOAD]),
+        (["daemon", "--preload-module", "pydantic_ai"], [*PRELOAD, "pydantic_ai"]),
+        (["daemon", "--no-preload"], []),
+        (["daemon", "--no-preload", "--preload-module", "zmq.asyncio"], ["zmq.asyncio"]),
+    ],
+)
+def test_daemon_preload(argv: list[str], expected: list[str]) -> None:
+    assert _preload(_parser().parse_args(argv)) == expected
 
 
 def test_mcp_config_files(tmp_path: Path) -> None:
