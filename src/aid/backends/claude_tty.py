@@ -362,8 +362,8 @@ class ClaudeTtyBackend:
                 pass
         return None
 
-    def answer_permission(self, request_id: str, option_id: str | None) -> bool:
-        return self._waits.answer(request_id, option_id)
+    def answer_permission(self, request_id: str, option_id: str | None, plugin: str | None = None) -> bool:
+        return self._waits.answer(request_id, option_id, plugin)
 
     async def _permission(self, fields: dict[str, JsonValue]) -> JsonValue:
         """Ask aid's people while the pane asks too. Whoever answers first decides; the hook answers Claude only for
@@ -381,12 +381,13 @@ class ClaudeTtyBackend:
         )
         turn.asking[request.request_id] = request
         await self._send(turn, request)
-        option_id, by = None, PermissionDecider.TIMEOUT
+        decision = PermissionDecision(request_id=request.request_id, option_id=None, by=PermissionDecider.TIMEOUT)
         with anyio.move_on_after(WAITING_HOOK_TIMEOUT - HOOK_MARGIN):
-            option_id, by = await self._waits.wait(request)
+            decision = await self._waits.wait(request)
         if turn.asking.pop(request.request_id, None) is not None:
-            await self._send(turn, PermissionDecision(request_id=request.request_id, option_id=option_id, by=by))
-        return hook_decision(option_id) if by is PermissionDecider.PERSON else None
+            await self._send(turn, decision)
+        answered = decision.by in (PermissionDecider.PERSON, PermissionDecider.PLUGIN)
+        return hook_decision(decision.option_id) if answered else None
 
     async def _request_turn(self) -> _Turn:
         """The turn a PermissionRequest belongs to. The hook can come before the follower has read the turn's

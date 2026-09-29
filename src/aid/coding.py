@@ -115,10 +115,11 @@ class Coding:
         if self.emit is None:
             return False
         await self.emit(request)
-        option_id, by = NO, PermissionDecider.TIMEOUT
+        decision = PermissionDecision(request_id=request.request_id, option_id=NO, by=PermissionDecider.TIMEOUT)
         with anyio.move_on_after(self.timeout):
-            option_id, by = await self.waits.wait(request)
-        await self.emit(PermissionDecision(request_id=request.request_id, option_id=option_id, by=by))
+            decision = await self.waits.wait(request)
+        await self.emit(decision)
+        option_id = decision.option_id
         if option_id == ALWAYS and remember is not None:
             self.always.add(remember)
         return option_id in (YES, ALWAYS)

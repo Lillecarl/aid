@@ -8,9 +8,10 @@ import pytest
 import aid
 from aid.client import register_plugin
 from aid.plugins import Grant, PluginSpec
-from aid.protocol import AidError, MessageEntry
+from aid.protocol import AidError, MessageEntry, PermissionDecider, PermissionDecision, PermissionRequest
+from aid.spec import PermissionMode
 from aid.zap import Keypair
-from tests.conftest import py_spec
+from tests.conftest import acp_spec, py_spec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -84,3 +85,23 @@ async def test_a_key_another_plugin_holds_is_refused(daemon: Paths) -> None:
             await control.add_plugin(PluginSpec(name="one", public_key=key, grants=frozenset({Grant.READ})))
             plugins = await control.plugins()
     assert [(p.name, p.grants) for p in plugins] == [("one", frozenset({Grant.READ}))]
+
+
+async def test_a_plugins_answer_is_recorded_as_the_plugins(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as control:
+            session = await control.create("ask", acp_spec(tmp_path, PermissionMode.ASK))
+            await register_plugin(control, daemon, "guard", frozenset({Grant.PERMISSIONS}))
+            await register_plugin(control, daemon, "reader", frozenset({Grant.READ}))
+            async with (
+                aid.connect(daemon, plugin="guard") as guard,
+                aid.connect(daemon, plugin="reader") as reader,
+            ):
+                async for event in session.stream("permission"):
+                    if isinstance(event, PermissionRequest):
+                        with pytest.raises(AidError, match="may not send 'answer_permission'"):
+                            await reader.session("ask").answer(event.request_id, "no")
+                        await guard.session("ask").answer(event.request_id, "yes")
+            history = await session.history()
+    decision = next(e.item for e in history.entries if isinstance(e.item, PermissionDecision))
+    assert (decision.option_id, decision.by, decision.plugin) == ("yes", PermissionDecider.PLUGIN, "guard")

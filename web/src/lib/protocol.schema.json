@@ -157,6 +157,17 @@
             }
           ]
         },
+        "plugin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "request_id": {
           "type": "string"
         },
@@ -1101,7 +1112,8 @@
         "policy",
         "timeout",
         "cancel",
-        "terminal"
+        "terminal",
+        "plugin"
       ],
       "title": "PermissionDecider",
       "type": "string"
@@ -1122,6 +1134,17 @@
             }
           ]
         },
+        "plugin": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "request_id": {
           "type": "string"
         },
@@ -1135,7 +1158,8 @@
         "type",
         "request_id",
         "option_id",
-        "by"
+        "by",
+        "plugin"
       ],
       "title": "PermissionDecision",
       "type": "object"

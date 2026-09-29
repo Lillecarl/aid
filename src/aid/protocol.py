@@ -152,6 +152,8 @@ class AnswerPermission(_Request):
     session: str
     request_id: str
     option_id: str | None
+    plugin: str | None = None
+    """The plugin answering. The daemon sets it from the connection's key, whatever the sender put here."""
 
 
 class Hook(_Request):
@@ -356,6 +358,8 @@ class PermissionDecider(StrEnum):
     """The turn ended first."""
     TERMINAL = "terminal"
     """Someone answered in the agent's own terminal; aid does not see which answer."""
+    PLUGIN = "plugin"
+    """A plugin answered (`aid.plugins`); the decision names it."""
 
 
 class PermissionDecision(_Message):
@@ -364,6 +368,8 @@ class PermissionDecision(_Message):
     option_id: str | None
     """The chosen option; None when the request was cancelled."""
     by: PermissionDecider
+    plugin: str | None = None
+    """The plugin that answered, when `by` is plugin."""
 
 
 type SessionEvent = Annotated[

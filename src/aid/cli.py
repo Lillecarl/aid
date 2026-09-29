@@ -310,7 +310,8 @@ def _permission_line(item: PermissionRequest | PermissionDecision) -> str:
         case PermissionDecision(by=PermissionDecider.TERMINAL):
             return f"[permission {item.request_id}] answered in the terminal"
         case PermissionDecision():
-            return f"[permission {item.request_id}] {item.option_id or 'cancelled'} by {item.by}"
+            by = f"plugin {item.plugin}" if item.plugin else item.by
+            return f"[permission {item.request_id}] {item.option_id or 'cancelled'} by {by}"
 
 
 async def _client_command(args: argparse.Namespace) -> None:

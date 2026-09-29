@@ -15,6 +15,7 @@
     timeout: ": nobody answered in time",
     cancel: ": the turn ended",
     terminal: "",
+    plugin: " by a plugin",
   };
 
   let { session, request, decision }: Props = $props();
@@ -69,7 +70,7 @@
       <button type="button" disabled={sending} onclick={() => answer(null)} title="Cancel the request">Cancel</button>
     </div>
   {:else}
-    <div class="decided">{chosen}{BY[decision.by]}</div>
+    <div class="decided">{chosen}{decision.plugin ? ` by plugin ${decision.plugin}` : BY[decision.by]}</div>
   {/if}
   {#if error}<div class="error">{error}</div>{/if}
 </div>

@@ -248,16 +248,20 @@ class _Client:
         if events is not None:
             events.send_nowait(request)
         if mode is PermissionMode.ASK and events is not None:
-            option_id, by = choose_permission(PermissionMode.DENY, request.options), PermissionDecider.TIMEOUT
+            refused = choose_permission(PermissionMode.DENY, request.options)
+            decision = PermissionDecision(
+                request_id=request.request_id, option_id=refused, by=PermissionDecider.TIMEOUT
+            )
             with anyio.move_on_after(self._spec.permission_timeout):
-                option_id, by = await self.waits.wait(request)
+                decision = await self.waits.wait(request)
         else:
-            option_id, by = choose_permission(mode, request.options), PermissionDecider.POLICY
-        log.info("permission for %s %r: %s by %s", tool_name, tool_call.title, option_id, by)
+            chosen = choose_permission(mode, request.options)
+            decision = PermissionDecision(request_id=request.request_id, option_id=chosen, by=PermissionDecider.POLICY)
+        log.info("permission for %s %r: %s by %s", tool_name, tool_call.title, decision.option_id, decision.by)
         if events is not None:
             with contextlib.suppress(anyio.ClosedResourceError):  # The prompt ended while the request waited.
-                events.send_nowait(PermissionDecision(request_id=request.request_id, option_id=option_id, by=by))
-        return permission_response(option_id)
+                events.send_nowait(decision)
+        return permission_response(decision.option_id)
 
     async def session_update(self, session_id: str, update: object, **kwargs: Any) -> None:
         return None
@@ -339,8 +343,8 @@ class AcpBackend:
         self._client.waits.cancel_all()
         await self._conn.cancel(session_id=self._session_id)
 
-    def answer_permission(self, request_id: str, option_id: str | None) -> bool:
-        return self._client.waits.answer(request_id, option_id)
+    def answer_permission(self, request_id: str, option_id: str | None, plugin: str | None = None) -> bool:
+        return self._client.waits.answer(request_id, option_id, plugin)
 
 
 @asynccontextmanager

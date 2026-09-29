@@ -505,7 +505,7 @@ class Daemon:
                 if request.option_id is not None and request.option_id not in {o.option_id for o in pending.options}:
                     raise AidError("no_option", f"the request has no option {request.option_id!r}")
                 self._routes[request.id] = _Route(client, session.name)
-                await self._send_worker(session, request)
+                await self._send_worker(session, request.model_copy(update={"plugin": client.plugin}))
                 return None
             case StartSession():
                 await self._ensure_running(self._session(request.session))

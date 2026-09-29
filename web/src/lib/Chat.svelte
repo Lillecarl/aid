@@ -81,7 +81,7 @@
         return [{ ...row("permission", ""), permission: { request: item, decision: null } }];
       case "permission_decision":
         // Its request is outside the rows loaded.
-        return [row("meta", `permission ${item.option_id ?? "cancelled"} (${item.by})`)];
+        return [row("meta", `permission ${item.option_id ?? "cancelled"} (${item.plugin ?? item.by})`)];
       case "lifecycle": {
         const line = row("meta", LIFECYCLE[item.event] + (item.detail ? ` (${item.detail})` : ""));
         return item.summary ? [line, { ...row("summary", item.summary), key: `${key}s` }] : [line];

@@ -38,7 +38,7 @@ export type SessionEvent =
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "PermissionDecider".
  */
-export type PermissionDecider = "person" | "policy" | "timeout" | "cancel" | "terminal";
+export type PermissionDecider = "person" | "policy" | "timeout" | "cancel" | "terminal" | "plugin";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "JsonValue".
@@ -241,6 +241,7 @@ export interface AnswerPermission {
   id?: string;
   op: "answer_permission";
   option_id: string | null;
+  plugin?: string | null;
   request_id: string;
   session: string;
 }
@@ -388,6 +389,7 @@ export interface PermissionChoice {
 export interface PermissionDecision {
   by: PermissionDecider;
   option_id: string | null;
+  plugin: string | null;
   request_id: string;
   type: "permission_decision";
 }
