@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
-from aid.schema import SCHEMA_FILE, render
+from aid.schema import render
+
+# The checkout's, which the sandbox copies in with the tests.
+SCHEMA_FILE = Path(__file__).parents[1] / "web" / "src" / "lib" / "protocol.schema.json"
 
 
 def test_the_committed_schema_matches_the_models() -> None:

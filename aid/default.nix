@@ -49,6 +49,7 @@ let
     fileset = lib.fileset.unions [
       (root + "/tests")
       (root + "/pyproject.toml")
+      (root + "/web/src/lib/protocol.schema.json")
     ];
   };
 

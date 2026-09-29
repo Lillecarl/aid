@@ -11,8 +11,7 @@ make it required. What it sends is in validation mode, where a field with a defa
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any, Final, cast
+from typing import Any, cast
 
 from pydantic import BaseModel
 from pydantic.json_schema import GenerateJsonSchema, models_json_schema
@@ -30,8 +29,6 @@ from aid.protocol import (
 from aid.spec import AgentSpec
 from aid.web.files import Entry, FileView
 from aid.web.zws import PageReply, PageRequest
-
-SCHEMA_FILE: Final = Path(__file__).parents[2] / "web" / "src" / "lib" / "protocol.schema.json"
 
 
 class Received(BaseModel):
