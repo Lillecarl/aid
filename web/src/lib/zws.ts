@@ -28,7 +28,8 @@ function frame(flags: number, body: Uint8Array): Uint8Array<ArrayBuffer> {
 }
 
 /** One of aid web's ZWS relays, reconnecting with backoff while started. A PING every HEARTBEAT_MS tells a dead
- * connection from a quiet one: two intervals without a frame closes it. */
+ * connection from a quiet one: a PING still unanswered at the next one closes it. Not a clock: a hidden tab's
+ * timers run up to a minute late, and a late timer must not close a live connection. */
 export class ZwsSocket {
   private ws: WebSocket | null = null;
   private parts: Uint8Array[] = [];
@@ -36,7 +37,7 @@ export class ZwsSocket {
   private retryMs = RETRY_MIN_MS;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private beatTimer: ReturnType<typeof setInterval> | undefined;
-  private heard = 0;
+  private unanswered = false;
 
   constructor(
     private readonly path: string,
@@ -79,12 +80,12 @@ export class ZwsSocket {
     ws.onopen = () => {
       opened = true;
       this.retryMs = RETRY_MIN_MS;
-      this.heard = Date.now();
+      this.unanswered = false;
       this.beatTimer = setInterval(() => this.beat(), HEARTBEAT_MS);
       this.handlers.open();
     };
     ws.onmessage = (event: MessageEvent<unknown>) => {
-      this.heard = Date.now();
+      this.unanswered = false;
       if (!(event.data instanceof ArrayBuffer) || event.data.byteLength === 0)
         return;
       const data = new Uint8Array(event.data);
@@ -117,10 +118,11 @@ export class ZwsSocket {
   }
 
   private beat(): void {
-    if (Date.now() - this.heard > 2 * HEARTBEAT_MS) {
+    if (this.unanswered) {
       this.ws?.close(); // onclose reconnects.
       return;
     }
+    this.unanswered = true;
     this.ws?.send(PING);
   }
 }
