@@ -14,6 +14,7 @@
     policy: " by the session's policy",
     timeout: ": nobody answered in time",
     cancel: ": the turn ended",
+    terminal: "",
   };
 
   let { session, request, decision }: Props = $props();
@@ -24,7 +25,9 @@
   const chosen = $derived(
     decision === null
       ? null
-      : decision.option_id === null
+      : decision.by === "terminal"
+        ? "Answered in the terminal"
+        : decision.option_id === null
         ? "Cancelled"
         : (request.options.find((o) => o.option_id === decision.option_id)?.name ?? decision.option_id),
   );

@@ -166,7 +166,7 @@ export interface PermissionDecisionEvent {
   request_id: string;
   /** null: cancelled. */
   option_id: string | null;
-  by: "person" | "policy" | "timeout" | "cancel";
+  by: "person" | "policy" | "timeout" | "cancel" | "terminal";
 }
 
 export type SessionEvent =
