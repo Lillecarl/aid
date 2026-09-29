@@ -19,6 +19,8 @@
   speechModel,
   # The tree-sitter grammars the highlighter tests parse with.
   grammars,
+  # Certificates, which pygit2 needs to import and the sandbox lacks.
+  cacert,
 }:
 let
   root = ../.;
@@ -57,8 +59,9 @@ let
     chmod -R +w .
     export HOME="$TMPDIR" PYTHONDONTWRITEBYTECODE=1 AID_WEB_ASSETS=${webUi} AID_TEST_SPEECH_MODEL=${speechModel} \
       AID_TREE_SITTER_GRAMMARS=${grammars}
-    # The sandbox sets it to /no-cert-file.crt, and httpx loads it for every client, http:// ones too.
-    unset SSL_CERT_FILE
+    # The sandbox sets it to /no-cert-file.crt. httpx loads it for every client, http:// ones too, and pygit2
+    # (pyedit's) fails to import with no certificates at all: give both a real bundle.
+    export SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt
     python -m pytest -q -p no:cacheprovider
     touch $out
   '';

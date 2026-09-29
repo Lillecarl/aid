@@ -21,6 +21,9 @@ dependencies = [
   "openai>=2.0",
   "pydantic>=2.11",
   "pydantic-ai-slim>=2.30",
+  # aid.coding: agents edit through pyedit's library and run processes through pyrun (./pyrun).
+  "pyedit",
+  "pyrun",
   # aid web's colours: pymux's theme roles, and the catppuccin styles a pymux theme can name.
   "pymux[catppuccin]",
   "pyzmq>=27",
@@ -68,4 +71,4 @@ allowed-confusables = ["❯"]
 runtime-evaluated-base-classes = ["pydantic.BaseModel", "aid.protocol._Message", "aid.spec._Spec"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["aid"]
+known-first-party = ["aid", "pyrun"]

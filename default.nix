@@ -9,6 +9,14 @@
     rev = "096294d637c8781c65c17cbdbbba84a71e3685d2";
     narHash = "sha256-nyTfy4DQyg7wMGW0M6DNwKc0PmwZV6LB/Vh/KeBPKmk=";
   },
+  # aid's agents edit through pyedit's library (`aid.coding`); the same pin as croshome's.
+  pyedit ? builtins.fetchTree {
+    type = "github";
+    owner = "Lillecarl";
+    repo = "pyedit";
+    rev = "0910a2436bcbbbef6889be7c10d96520593e9578";
+    narHash = "sha256-AO0LvZeEB/kUNxym2tgpXOU2FpEq3kUWNTnUP8rHBus=";
+  },
 }:
 let
   inherit (pkgs) lib;
@@ -23,6 +31,26 @@ let
   zeromq = (pkgs.zeromq.override { enableDrafts = true; }).overrideAttrs (old: {
     propagatedBuildInputs = (old.propagatedBuildInputs or [ ]) ++ [ pkgs.gnutls ];
   });
+  # pyedit's grammar bindings, taken where its own build takes them: some are missing from nixpkgs' top level.
+  grammarsByName = map (lang: "tree-sitter-${lang}") [
+    "bash"
+    "c"
+    "cpp"
+    "go"
+    "java"
+    "javascript"
+    "json"
+    "lua"
+    "nix"
+    "python"
+    "ruby"
+    "rust"
+    "toml"
+    "tsx"
+    "typescript"
+    "yaml"
+    "zig"
+  ];
   python = pkgs.python3.override {
     self = python;
     packageOverrides = _final: prev: { pyzmq = prev.pyzmq.override { inherit zeromq; }; };
@@ -35,14 +63,22 @@ let
       projectRoots = p.projectRoots ++ [
         ./.
         ./pyrun
+        pyedit
       ];
       exclude = p.suppliedNames ++ [
         "aid"
         "pyrun"
-      ];
-    };
+        "pyedit"
+      ]
+      ++ grammarsByName;
+    }
+    ++ map (name: python.pkgs.tree-sitter-grammars.${name}) grammarsByName;
     overlay = lib.composeExtensions p.overlay (
       final: _prev: {
+        pyedit = final.callPackage ./nix/pyedit.nix {
+          inherit (p) mkProject;
+          src = pyedit;
+        };
         pyrun = final.callPackage ./pyrun {
           inherit (p) mkProject;
           utilLinux = pkgs.util-linux;
@@ -53,6 +89,7 @@ let
           dex = pkgs.dex-oidc;
           webUi = ui;
           inherit speechModel grammars;
+          inherit (pkgs) cacert;
         };
       }
     );
