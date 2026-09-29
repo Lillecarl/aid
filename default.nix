@@ -32,11 +32,21 @@ let
     inherit python;
     nixpkgsRoots = p.nixpkgsRootsFor {
       inherit python;
-      projectRoots = p.projectRoots ++ [ ./. ];
-      exclude = p.suppliedNames ++ [ "aid" ];
+      projectRoots = p.projectRoots ++ [
+        ./.
+        ./pyrun
+      ];
+      exclude = p.suppliedNames ++ [
+        "aid"
+        "pyrun"
+      ];
     };
     overlay = lib.composeExtensions p.overlay (
       final: _prev: {
+        pyrun = final.callPackage ./pyrun {
+          inherit (p) mkProject;
+          utilLinux = pkgs.util-linux;
+        };
         aid = final.callPackage ./aid {
           inherit (p) mkProject;
           pymuxApp = p.pymux;
@@ -67,6 +77,7 @@ in
       '';
 
   inherit (set.aid) tests;
+  pyrun-tests = set.pyrun.tests;
 
   # From the same pyterm pin as libpymux: aid starts its own server with it, and the wire protocol still moves.
   inherit (p) pymux;
@@ -76,7 +87,10 @@ in
 
   shell = pkgs.mkShell {
     packages = [
-      (set.mkVirtualEnv "aid-dev" { aid = [ "test" ]; })
+      (set.mkVirtualEnv "aid-dev" {
+        aid = [ "test" ];
+        pyrun = [ "test" ];
+      })
       p.pymux
       pkgs.dex-oidc
       pkgs.nodejs_24
@@ -86,7 +100,7 @@ in
     # The working copy, ahead of the aid the venv carries. The UI is the built one; `npm run dev` in web/
     # serves the working copy instead.
     shellHook = ''
-      export PYTHONPATH=${lib.escapeShellArg (toString ./src)}''${PYTHONPATH:+:$PYTHONPATH}
+      export PYTHONPATH=${lib.escapeShellArg (toString ./src)}:${lib.escapeShellArg (toString ./pyrun/src)}''${PYTHONPATH:+:$PYTHONPATH}
       export AID_WEB_ASSETS=${ui}
       export AID_TEST_SPEECH_MODEL=${speechModel}
       export AID_TREE_SITTER_GRAMMARS=${grammars}

@@ -47,6 +47,10 @@ API and a CLI.
 - `src/aid/web/` — `aid web`: Starlette on hypercorn, OIDC login (`auth.py`), JSON API + SSE (`app.py`).
 - `web/` — the Svelte 5 UI (runes, TypeScript, Vite). `web/default.nix` builds it; `aid web` serves the result
   from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.
+- `pyrun/` — async process library, a project of its own (own pyproject, `pyrun/default.nix`, tests) to be
+  extractable; contract in `pyrun/README.md`. Kills by the PYRUN_SCOPE/PYRUN_ID env marks found in /proc (no
+  subreaper, no process-wide state). Check: `cd pyrun && ruff check src tests && pyright && python -m pytest`;
+  sandbox: `nix build --file . pyrun-tests`.
 - `default.nix` — a pyproject.nix set from pyterm's builders (`mkPythonSet`, `mkProject`, its `overlay`);
   `aid/default.nix` — the aid project in it; `nix/` — NixOS and home-manager modules.
 
