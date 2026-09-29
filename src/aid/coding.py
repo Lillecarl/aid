@@ -18,6 +18,7 @@ child process, and every command they start asks the permission mode first.
 from __future__ import annotations
 
 import functools
+import hashlib
 import re
 import shlex
 import sys
@@ -48,6 +49,11 @@ if TYPE_CHECKING:
 
 READ_LIMIT: Final = 2000
 SCRIPT_TIME_LIMIT: Final = 600.0
+OUTPUTS_DIR: Final = "outputs"
+SPILL_LIMIT: Final = 32_000
+"""Characters of a tool result sent to the model; the rest lives in a content-addressed file under the
+session's outputs directory, named by the result. The head plus the path is stable across turns, so the
+prefix cache holds, and nothing is lost: the model reads the file with `read`."""
 YES, ALWAYS, NO = "yes", "always", "no"
 # A pyrun record, as a report names it: `<scope>.<n>/stdout`, or a scope's own file, `<scope>/printed`.
 _RECORD = re.compile(r"^(?P<scope>[0-9a-f]{6})(?:\.(?P<n>\d+))?/(?P<file>[\w.]+)$")
@@ -58,6 +64,8 @@ class Coding:
     cwd: Path
     store: Path
     """Where `python` scripts are recorded: the session's `runs` directory."""
+    outputs: Path
+    """Where oversize tool results spill: content-addressed files the model reads back with `read`."""
     mode: PermissionMode
     timeout: float
     waits: PermissionWaits
@@ -125,12 +133,15 @@ class Coding:
         return option_id in (YES, ALWAYS)
 
     def resolve(self, path: str) -> Path:
-        """A path the agent names: under the session's directory, or a pyrun record in the store."""
+        """A path the agent names: under the session's directory, a pyrun record in the store, or a spilled
+        tool result in the outputs directory."""
         if (record := _RECORD.match(path)) is not None:
             scope = self.store / record["scope"]
             return inside(scope / record["n"] if record["n"] else scope, record["file"])
-        if Path(path).is_absolute() and Path(path).resolve().is_relative_to(self.store.resolve()):
-            return Path(path).resolve()
+        if Path(path).is_absolute():
+            target = Path(path).resolve()
+            if target.is_relative_to(self.store.resolve()) or target.is_relative_to(self.outputs.resolve()):
+                return target
         return inside(self.cwd, path)
 
 
@@ -150,6 +161,20 @@ def numbered(text: str, offset: int, limit: int) -> str:
     body = "\n".join(f"{n:>6}\t{line}" for n, line in enumerate(shown, start=offset))
     rest = len(lines) - (offset - 1 + len(shown))
     return body + (f"\n… {rest} more lines; read with offset={offset + len(shown)}" if rest > 0 else "")
+
+
+async def spill(text: str) -> str:
+    """An oversize tool result as a stable head plus the file holding all of it. Content-addressed, so the
+    same result always names the same path and the history never shifts under the prefix cache."""
+    if len(text) <= SPILL_LIMIT:
+        return text
+    coding = _coding()
+    digest = hashlib.sha256(text.encode()).hexdigest()[:16]
+    path = coding.outputs / f"{digest}.txt"
+    await anyio.Path(path).parent.mkdir(parents=True, exist_ok=True)
+    if not await anyio.Path(path).exists():
+        await anyio.Path(path).write_text(text)
+    return f"{text[:SPILL_LIMIT]}\n… [full output in {path}; read it with read]"
 
 
 async def ls(path: str = ".") -> str:
@@ -334,17 +359,21 @@ async def python(ctx: RunContext[Any], script: str, time_limit: float = SCRIPT_T
 
 
 def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
-    """A tool's failure goes back to the model as a retry with the reason: an exception would end the run."""
+    """A tool's failure goes back to the model as a retry with the reason: an exception would end the run.
+    Oversize text results spill to a file, so no turn carries more than a head plus a path."""
 
     @functools.wraps(tool)
     async def wrapper(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
-            return await tool(*args, **kwargs)
+            result = await tool(*args, **kwargs)
         except ModelRetry:
             raise
         except Exception as error:
             reason = error.message if isinstance(error, AidError) else str(error)
             raise ModelRetry(f"{type(error).__name__}: {reason}") from error
+        if isinstance(result, str):
+            return cast("R", await spill(result))
+        return result
 
     return wrapper
 

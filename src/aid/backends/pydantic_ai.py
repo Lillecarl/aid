@@ -6,13 +6,15 @@ import importlib
 import logging
 import os
 from contextlib import asynccontextmanager
+from dataclasses import replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import anyio
 import anyio.to_thread
 from pydantic_ai import FunctionToolset, RunCancelled, Tool
 from pydantic_ai.agent import AbstractAgent
+from pydantic_ai.capabilities import ProcessHistory
 from pydantic_ai.messages import (
     FunctionToolCallEvent,
     FunctionToolResultEvent,
@@ -33,11 +35,11 @@ from pydantic_core import to_jsonable_python
 
 from aid.agents import ENV_AGENTS_PATH, Catalog, agents_path, discover
 from aid.backends.permissions import PermissionWaits
-from aid.coding import CODING, Coding
+from aid.coding import CODING, OUTPUTS_DIR, Coding
 from aid.protocol import Output, SessionEvent, Started, TextDelta, ThoughtDelta, ToolCall, Usage, clip, to_json
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Callable
 
     from pydantic_ai.agent import AgentRunEvents
     from pydantic_ai.run import AgentRunResult
@@ -51,6 +53,41 @@ log = logging.getLogger(__name__)
 HISTORY_FILE = "history.json"
 RUNS_DIR = "runs"
 """pyrun's store for what the session's `python` tool runs."""
+THOUGHT_LIMIT: Final = 500
+"""Characters of a thinking part kept for replay: thought serves the turn, not the replay."""
+
+
+def prune_history(history: list[ModelMessage], boundary: int) -> list[ModelMessage]:
+    """What the model is sent: before `boundary` past thinking rides as shells; the turn's own messages flow
+    whole. Oversize tool results never reach this filter: they spill to files at production time. The rule is
+    uniform per message and frozen once written — never by age, never retroactive — so sends grow
+    monotonically and the provider's prefix cache holds. The stored history keeps the turn whole; older turns
+    were already frozen this way when they ended."""
+    pruned: list[ModelMessage] = []
+    for index, message in enumerate(history):
+        past = index < boundary
+        parts: list[Any] = []
+        changed = False
+        for part in message.parts:
+            if past and isinstance(part, ThinkingPart):
+                # The provider's reasoning signature dwarfs the thought; each request stands alone without it.
+                thought = part.content[:THOUGHT_LIMIT] + "…" if len(part.content) > THOUGHT_LIMIT else part.content
+                parts.append(replace(part, content=thought, signature=None))
+                changed = True
+            else:
+                parts.append(part)
+        pruned.append(replace(message, parts=parts) if changed else message)
+    return pruned
+
+
+def _send_policy(boundary: int) -> Callable[[list[ModelMessage]], list[ModelMessage]]:
+    """A `ProcessHistory` processor for one turn: `boundary` is where the stored history ended when the turn
+    started, so the turn's own thinking flows whole and everything before it rides pruned."""
+
+    def policy(messages: list[ModelMessage]) -> list[ModelMessage]:
+        return prune_history(messages, boundary)
+
+    return policy
 
 
 def load_target(target: str) -> AbstractAgent[Any, Any]:
@@ -156,7 +193,12 @@ class PydanticAIBackend:
             self._coding.emit = None
 
     async def _prompt(self, text: str, emit: Emit) -> Output:
-        async with self._agent.run_stream_events(text, message_history=self._history, toolsets=self._toolsets) as run:
+        async with self._agent.run_stream_events(
+            text,
+            message_history=self._history,
+            toolsets=self._toolsets,
+            capabilities=[ProcessHistory(_send_policy(len(self._history)))],
+        ) as run:
             self._run = run
             try:
                 async for event in run:
@@ -208,6 +250,7 @@ async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> Async
     coding = Coding(
         cwd=Path(spec.cwd),
         store=Path(state_dir) / RUNS_DIR,
+        outputs=Path(state_dir) / OUTPUTS_DIR,
         mode=spec.permission,
         timeout=spec.permission_timeout,
         waits=PermissionWaits(),

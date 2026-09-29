@@ -82,7 +82,8 @@ API and a CLI.
   from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.
 - `src/aid/coding.py` — `aid.coding_tools`, a toolset pydantic-ai agents opt into: list and read, pyedit edits through its
   library (`EditSession`, staged until `apply_edits`; no agent code runs in the worker), and `python` (pyrun
-  `run_script` in a child, each command asked of `PydanticAISpec.permission`). One `Coding` per session, set per
+  `run_script` in a child, each command asked of `PydanticAISpec.permission`). Results over `SPILL_LIMIT`
+  spill to content-addressed files under the session, sent as a stable head plus the path. One `Coding` per session, set per
   turn in the `CODING` contextvar; tool errors go back to the model as `ModelRetry`. pyedit is built into the
   set from Lillecarl/pyedit (`nix/pyedit.nix`); its grammars come from `tree-sitter-grammars` (`grammarsByName`).
 - `pyrun/` — async process library, a project of its own (own pyproject, `pyrun/default.nix`, tests) to be

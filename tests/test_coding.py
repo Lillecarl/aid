@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -7,6 +8,8 @@ import anyio
 import pytest
 
 import aid
+from aid.backends.permissions import PermissionWaits
+from aid.coding import CODING, SPILL_LIMIT, Coding, spill
 from aid.protocol import Output, PermissionDecider, PermissionDecision, PermissionRequest
 from aid.spec import PermissionMode
 from tests.conftest import py_spec
@@ -80,6 +83,32 @@ async def test_ls_lists_directories_first(daemon: Paths, tmp_path: Path) -> None
     assert "missing does not exist" in no_such
     assert pkg == "b.py"
     assert "a.py is a file; read it with read" in not_dir
+
+
+async def test_spill_writes_big_results_to_stable_files(tmp_path: Path) -> None:
+    coding = Coding(
+        cwd=tmp_path,
+        store=tmp_path / "runs",
+        outputs=tmp_path / "outputs",
+        mode=PermissionMode.ALLOW,
+        timeout=60,
+        waits=PermissionWaits(),
+    )
+    token = CODING.set(coding)
+    try:
+        big = "x" * (SPILL_LIMIT + 100)
+        digest = hashlib.sha256(big.encode()).hexdigest()[:16]
+        expected = tmp_path / "outputs" / f"{digest}.txt"
+        first = await spill(big)
+        assert first.startswith(big[:SPILL_LIMIT])
+        assert len(first) <= SPILL_LIMIT + 500
+        assert str(expected) in first
+        assert expected.read_text() == big
+        assert await spill(big) == first
+        assert await spill("small") == "small"
+        assert coding.resolve(str(expected)) == expected
+    finally:
+        CODING.reset(token)
 
 
 async def test_outline_names_a_directory(daemon: Paths, tmp_path: Path) -> None:
