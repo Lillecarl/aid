@@ -105,6 +105,12 @@ def _parser() -> argparse.ArgumentParser:
         metavar="MODULE",
         help="also import MODULE in the forkserver, so workers share its pages copy-on-write (repeatable)",
     )
+    daemon_cmd.add_argument(
+        "--allow-worker-command",
+        action="store_true",
+        help="let sessions name their own worker command (runs as the daemon, with the session's worker "
+        "credentials: only where session creators are trusted)",
+    )
     sub.add_parser("worker", help="run one worker; `aid daemon --worker-command` starts it and sends its arguments")
     sub.add_parser("list", help="list sessions")
 
@@ -460,7 +466,15 @@ def _launcher(args: argparse.Namespace) -> Launcher:
 async def _serve(args: argparse.Namespace) -> None:
     launcher = _launcher(args)
     async with anyio.create_task_group() as tg:
-        tg.start_soon(partial(daemon.run, default_paths(), launcher, workers_listen=args.workers_listen))
+        tg.start_soon(
+            partial(
+                daemon.run,
+                default_paths(),
+                launcher,
+                workers_listen=args.workers_listen,
+                allow_worker_command=args.allow_worker_command,
+            )
+        )
         with anyio.open_signal_receiver(signal.SIGTERM, signal.SIGINT) as signals:
             async for signum in signals:
                 logging.getLogger("aid").info("%s: stopping workers", signal.Signals(signum).name)

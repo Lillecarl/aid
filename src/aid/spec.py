@@ -34,7 +34,9 @@ class _Spec(BaseModel):
     worker_command: Annotated[list[str], Field(min_length=1)] | None = None
     """Start this session's worker by running this command instead of forking it. It must run `aid worker`,
     which reads its arguments as JSON from stdin. A command runs with the daemon's environment and working
-    directory; point it at another checkout or closure to try new worker code while other sessions keep theirs."""
+    directory; point it at another checkout or closure to try new worker code while other sessions keep theirs.
+    The daemon refuses it unless started with --allow-worker-command: a command runs as the daemon with the
+    session's worker credentials."""
     worker_endpoint: str | None = None
     """The workers socket the command reaches. None means the daemon's own; set it for a command on another
     host, with the daemon listening there (`aid daemon --workers-listen`)."""

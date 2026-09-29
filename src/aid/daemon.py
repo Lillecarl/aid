@@ -234,11 +234,21 @@ class _Route:
 
 
 class Daemon:
-    def __init__(self, paths: Paths, launcher: Launcher, *, workers_listen: Sequence[str] = ()) -> None:
-        """`workers_listen`: endpoints for workers besides `paths.workers`, such as `ws://` for remote ones."""
+    def __init__(
+        self,
+        paths: Paths,
+        launcher: Launcher,
+        *,
+        workers_listen: Sequence[str] = (),
+        allow_worker_command: bool = False,
+    ) -> None:
+        """`workers_listen`: endpoints for workers besides `paths.workers`, such as `ws://` for remote ones.
+        `allow_worker_command`: let sessions name their own worker command. It runs as the daemon with the
+        session's worker credentials, so only allow it where session creators are trusted."""
         self._paths = paths
         self._launcher = launcher
         self._workers_listen = list(workers_listen)
+        self._allow_worker_command = allow_worker_command
         self._sessions: dict[str, _Session] = {}
         self._routes: dict[str, _Route] = {}
         self._handling: set[str] = set()
@@ -634,6 +644,11 @@ class Daemon:
     def _launcher_for(self, session: _Session) -> Launcher:
         """Who starts this session's worker: its own command wins, else the daemon's launcher."""
         if (command := session.spec.worker_command) is not None:
+            if not self._allow_worker_command:
+                raise AidError(
+                    "forbidden",
+                    "this daemon does not allow per-session worker commands (aid daemon --allow-worker-command)",
+                )
             try:
                 trust_pem = Path(session.spec.worker_ca).read_text() if session.spec.worker_ca else ""
             except OSError as error:
@@ -826,5 +841,7 @@ async def list_agents() -> AgentCatalog:
     return AgentCatalog.model_validate_json(result.stdout)
 
 
-async def run(paths: Paths, launcher: Launcher, *, workers_listen: Sequence[str] = ()) -> None:
-    await Daemon(paths, launcher, workers_listen=workers_listen).serve()
+async def run(
+    paths: Paths, launcher: Launcher, *, workers_listen: Sequence[str] = (), allow_worker_command: bool = False
+) -> None:
+    await Daemon(paths, launcher, workers_listen=workers_listen, allow_worker_command=allow_worker_command).serve()

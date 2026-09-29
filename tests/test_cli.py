@@ -48,6 +48,11 @@ def test_daemon_preload(argv: list[str], expected: list[str]) -> None:
     assert _preload(_parser().parse_args(argv)) == expected
 
 
+def test_daemon_allow_worker_command() -> None:
+    assert _parser().parse_args(["daemon"]).allow_worker_command is False
+    assert _parser().parse_args(["daemon", "--allow-worker-command"]).allow_worker_command is True
+
+
 def test_new_py_worker_command(tmp_path: Path) -> None:
     argv = [
         "new-py",

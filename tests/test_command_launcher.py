@@ -51,13 +51,27 @@ async def test_per_session_worker_command(paths: Paths, tmp_path: Path) -> None:
     command = [sys.executable, "-m", "aid", "worker"]
     with anyio.fail_after(TIMEOUT):
         async with anyio.create_task_group() as tg:
-            await tg.start(Daemon(paths, ForkserverLauncher()).serve)
+            await tg.start(Daemon(paths, ForkserverLauncher(), allow_worker_command=True).serve)
             async with aid.connect(paths) as client:
                 spec = py_spec(tmp_path, "agents:echo").model_copy(update={"worker_command": command})
                 session = await client.create("sub", spec)
                 assert (await session.run("hi")).output == "turn 1: echo hi"
                 assert (await session.status()).pid is not None
                 await session.stop()
+            tg.cancel_scope.cancel()
+
+
+@pytest.mark.usefixtures("empty_agents_path")
+async def test_per_session_worker_command_needs_permission(paths: Paths, tmp_path: Path) -> None:
+    """Without --allow-worker-command the daemon refuses the session's command before starting anything."""
+    command = [sys.executable, "-m", "aid", "worker"]
+    with anyio.fail_after(TIMEOUT):
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, ForkserverLauncher()).serve)
+            async with aid.connect(paths) as client:
+                spec = py_spec(tmp_path, "agents:echo").model_copy(update={"worker_command": command})
+                with pytest.raises(aid.AidError, match="forbidden"):
+                    await client.create("sub", spec)
             tg.cancel_scope.cancel()
 
 

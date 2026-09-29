@@ -58,6 +58,15 @@ in
       '';
     };
 
+    allowWorkerCommand = lib.mkOption {
+      type = lib.types.bool;
+      default = false;
+      description = ''
+        Let sessions name their own worker command (`aid daemon --allow-worker-command`). A command runs as the
+        daemon with the session's worker credentials: allow it only where session creators are trusted.
+      '';
+    };
+
     web = {
       enable = lib.mkEnableOption "the aid web UI, behind OIDC login";
 
@@ -136,7 +145,7 @@ in
       // cfg.environment;
     serviceConfig = {
       Type = "exec";
-      ExecStart = "${lib.getExe cfg.package} daemon";
+      ExecStart = "${lib.getExe cfg.package} daemon" + lib.optionalString cfg.allowWorkerCommand " --allow-worker-command";
       Restart = "on-failure";
       RestartSec = "2s";
       # SIGTERM reaches only the daemon, which stops its workers; stragglers get SIGKILL after the timeout.
