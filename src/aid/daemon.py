@@ -19,7 +19,7 @@ from pydantic import ValidationError
 
 from aid import events, plugins, zap
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
-from aid.launcher import WorkerArgs
+from aid.launcher import CommandLauncher, WorkerArgs
 from aid.plugins import PLUGIN_FILE, PluginSpec
 from aid.protocol import (
     Activity,
@@ -630,6 +630,12 @@ class Daemon:
         if session.inbox and not session.uses_channel and self._tg is not None:
             self._tg.start_soon(self._deliver, session)
 
+    def _launcher_for(self, session: _Session) -> Launcher:
+        """Who starts this session's worker: its own command wins, else the daemon's launcher."""
+        if (command := session.spec.worker_command) is not None:
+            return CommandLauncher(command, session.spec.worker_endpoint or self._paths.workers)
+        return self._launcher
+
     async def _ensure_running(self, session: _Session) -> None:
         async with session.lock:
             if session.running:
@@ -655,7 +661,7 @@ class Daemon:
                 daemon_runtime_dir=str(self._paths.runtime_dir),
                 daemon_state_dir=str(self._paths.state_dir),
             )
-            handle = await self._launcher.launch(args)
+            handle = await self._launcher_for(session).launch(args)
             session.handle = handle
             self._tg.start_soon(self._watch, session, handle)
             try:

@@ -3,9 +3,15 @@ from __future__ import annotations
 import multiprocessing
 from typing import TYPE_CHECKING
 
+import pytest
+from pydantic import ValidationError
+
 from aid.launcher import PRELOAD, ForkserverLauncher
+from aid.spec import PydanticAISpec
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from pytest import MonkeyPatch
 
 
@@ -15,6 +21,18 @@ def test_preload_keeps_worker_code_fresh() -> None:
     assert PRELOAD == ("zmq.asyncio",)
     assert not any(name == "aid" or name.startswith("aid.") for name in PRELOAD)
     assert not {"pydantic_ai", "acp"} & set(PRELOAD)
+
+
+def test_worker_endpoint_needs_command(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="worker_endpoint needs worker_command"):
+        PydanticAISpec(cwd=str(tmp_path), target="agents:echo", worker_endpoint="ipc://x")
+    spec = PydanticAISpec(
+        cwd=str(tmp_path),
+        target="agents:echo",
+        worker_command=["aid", "worker"],
+        worker_endpoint="ipc://x",
+    )
+    assert spec.worker_command == ["aid", "worker"]
 
 
 class _FakeContext:

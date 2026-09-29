@@ -13,7 +13,7 @@ from aid.cli import (
     _split_agent_command,  # pyright: ignore[reportPrivateUsage]
 )
 from aid.launcher import PRELOAD
-from aid.spec import ClaudeTtySpec, McpHttp, McpStdio
+from aid.spec import ClaudeTtySpec, McpHttp, McpStdio, PydanticAISpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -46,6 +46,23 @@ def test_split_agent_command(argv: list[str], head: list[str], tail: list[str]) 
 )
 def test_daemon_preload(argv: list[str], expected: list[str]) -> None:
     assert _preload(_parser().parse_args(argv)) == expected
+
+
+def test_new_py_worker_command(tmp_path: Path) -> None:
+    argv = ["new-py", "s", "agents:echo", "--worker-command", "aid worker", "--worker-endpoint", "ipc://x"]
+    args = _parser().parse_args(argv)
+    args.agent_command = []
+    spec = _spec(args)
+    assert isinstance(spec, PydanticAISpec)
+    assert spec.worker_command == ["aid", "worker"]
+    assert spec.worker_endpoint == "ipc://x"
+
+
+def test_new_py_worker_endpoint_needs_command() -> None:
+    args = _parser().parse_args(["new-py", "s", "agents:echo", "--worker-endpoint", "ipc://x"])
+    args.agent_command = []
+    with pytest.raises(SystemExit, match="--worker-endpoint needs --worker-command"):
+        _spec(args)
 
 
 def test_mcp_config_files(tmp_path: Path) -> None:

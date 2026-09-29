@@ -115,6 +115,8 @@ export interface AcpSpec {
   mcp_servers?: McpServers;
   permission?: PermissionMode;
   permission_timeout?: number;
+  worker_command?: [string, ...string[]] | null;
+  worker_endpoint?: string | null;
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -201,6 +203,8 @@ export interface PydanticAISpec {
   permission_timeout?: number;
   python_path?: string[];
   target?: string | null;
+  worker_command?: [string, ...string[]] | null;
+  worker_endpoint?: string | null;
 }
 /**
  * Interactive Claude Code in a pymux window: prompts are pasted in, events come from its transcript.
@@ -230,6 +234,8 @@ export interface ClaudeTtySpec {
   pymux_command?: [string, ...string[]];
   pymux_socket?: string | null;
   trust_cwd?: boolean;
+  worker_command?: [string, ...string[]] | null;
+  worker_endpoint?: string | null;
 }
 /**
  * A person's answer to a pending PermissionRequest: one of its options, or None to cancel it.

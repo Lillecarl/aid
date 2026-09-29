@@ -141,6 +141,17 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("name")
         p.add_argument("--cwd", default=".")
         p.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
+        p.add_argument(
+            "--worker-command",
+            metavar="COMMAND",
+            help="start this session's worker by running COMMAND (split like a shell), which must run `aid worker`; "
+            "by default the daemon forks it",
+        )
+        p.add_argument(
+            "--worker-endpoint",
+            metavar="ENDPOINT",
+            help="with --worker-command: the workers socket as the worker reaches it (default: the daemon's own)",
+        )
         return p
 
     def with_mcp(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -258,6 +269,10 @@ def _mcp_servers(files: Sequence[str]) -> list[McpServer]:
 def _spec(args: argparse.Namespace) -> AgentSpec:
     cwd = str(Path(args.cwd).resolve())
     env = _env(args.env)
+    worker_command = shlex.split(args.worker_command) if args.worker_command else None
+    worker_endpoint: str | None = args.worker_endpoint
+    if worker_command is None and worker_endpoint is not None:
+        raise SystemExit("new: --worker-endpoint needs --worker-command")
     if args.command == "new-acp":
         command: list[str] = args.agent_command
         if not command:
@@ -269,6 +284,8 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             inherit_env=not args.no_inherit_env,
             permission=args.permission,
             mcp_servers=_mcp_servers(args.mcp_config),
+            worker_command=worker_command,
+            worker_endpoint=worker_endpoint,
         )
     if args.command == "new-claude":
         return ClaudeTtySpec(
@@ -279,10 +296,20 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             trust_cwd=args.trust,
             pymux_socket=args.pymux_socket,
             mcp_servers=_mcp_servers(args.mcp_config),
+            worker_command=worker_command,
+            worker_endpoint=worker_endpoint,
         )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
     source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
-    return PydanticAISpec(cwd=cwd, env=env, python_path=python_path, permission=args.permission, **source)
+    return PydanticAISpec(
+        cwd=cwd,
+        env=env,
+        python_path=python_path,
+        permission=args.permission,
+        worker_command=worker_command,
+        worker_endpoint=worker_endpoint,
+        **source,
+    )
 
 
 def _history_line(entry: HistoryEntry) -> str:

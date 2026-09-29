@@ -31,6 +31,19 @@ class _Spec(BaseModel):
     aid_tools: bool = True
     """Offer the `@aid.mcptool` functions on the agents path: as the MCP server `aid`, or in-process to a
     pydantic-ai agent."""
+    worker_command: Annotated[list[str], Field(min_length=1)] | None = None
+    """Start this session's worker by running this command instead of forking it. It must run `aid worker`,
+    which reads its arguments as JSON from stdin. A command runs with the daemon's environment and working
+    directory; point it at another checkout or closure to try new worker code while other sessions keep theirs."""
+    worker_endpoint: str | None = None
+    """The workers socket the command reaches. None means the daemon's own; set it for a command on another
+    host, with the daemon listening there (`aid daemon --workers-listen`)."""
+
+    @model_validator(mode="after")
+    def _endpoint_needs_command(self) -> Self:
+        if self.worker_command is None and self.worker_endpoint is not None:
+            raise ValueError("worker_endpoint needs worker_command")
+        return self
 
 
 BUILTIN_MCP_SERVER: Final = "aid"
