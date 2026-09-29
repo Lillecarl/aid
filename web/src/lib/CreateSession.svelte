@@ -27,7 +27,7 @@
       case "acp":
         return { kind, cwd, command: words(command), permission };
       case "pydantic-ai":
-        return { kind, cwd, agent };
+        return { kind, cwd, agent, permission };
       case "claude-tty":
         return { kind, cwd, args: words(args), trust_cwd: trust };
     }
@@ -77,8 +77,8 @@
     </select>
   </label>
   <label>Working directory <input bind:value={cwd} required placeholder="/home/me/project" /></label>
-  {#if kind === "acp"}
-    <label>Command <input bind:value={command} required /></label>
+  {#if kind !== "claude-tty"}
+    <!-- ACP: the agent's own requests. pydantic-ai: aid.coding's commands and applied edits. -->
     <label>
       Tool permissions
       <select bind:value={permission}>
@@ -87,6 +87,9 @@
         <option value="deny">Deny all</option>
       </select>
     </label>
+  {/if}
+  {#if kind === "acp"}
+    <label>Command <input bind:value={command} required /></label>
   {:else if kind === "pydantic-ai"}
     <label>
       Agent

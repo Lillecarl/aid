@@ -240,7 +240,7 @@ export type PermissionMode = "ask" | "allow" | "deny";
 
 export type AgentSpec =
   | { kind: "acp"; cwd: string; command: string[]; permission: PermissionMode }
-  | { kind: "pydantic-ai"; cwd: string; agent: string }
+  | { kind: "pydantic-ai"; cwd: string; agent: string; permission: PermissionMode }
   | { kind: "claude-tty"; cwd: string; args: string[]; trust_cwd: boolean };
 
 export interface AgentInfo {
