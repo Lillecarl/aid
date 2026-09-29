@@ -139,17 +139,20 @@ def _parser() -> argparse.ArgumentParser:
         )
         return p
 
-    acp = with_mcp(new("new-acp", "create a session running an ACP agent command, given after --"))
-    acp.add_argument(
-        "--permission",
-        type=PermissionMode,
-        choices=list(PermissionMode),
-        default=PermissionMode.DENY,
-        help="answer the agent's permission requests: allow, deny, or ask a person (`aid answer`, the web UI)",
-    )
-    acp.add_argument(
-        "--allow", dest="permission", action="store_const", const=PermissionMode.ALLOW, help="--permission allow"
-    )
+    def with_permission(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
+        p.add_argument(
+            "--permission",
+            type=PermissionMode,
+            choices=list(PermissionMode),
+            default=PermissionMode.DENY,
+            help="answer what the agent asks permission for: allow, deny, or ask a person (`aid answer`, the web UI)",
+        )
+        p.add_argument(
+            "--allow", dest="permission", action="store_const", const=PermissionMode.ALLOW, help="--permission allow"
+        )
+        return p
+
+    acp = with_permission(with_mcp(new("new-acp", "create a session running an ACP agent command, given after --")))
     acp.add_argument("--no-inherit-env", action="store_true", help="start the agent with only --env")
 
     claude = with_mcp(
@@ -159,7 +162,7 @@ def _parser() -> argparse.ArgumentParser:
     claude.add_argument("--pymux-socket", help="the pymux server to run in (default: aid's own)")
     claude.add_argument("--claude", default="claude", help="the claude executable")
 
-    py = new("new-py", "create a session running a pydantic-ai agent")
+    py = with_permission(new("new-py", "create a session running a pydantic-ai agent"))
     py.add_argument("agent", help="an agent `aid agents` lists, or module:attribute of a pydantic_ai agent")
     py.add_argument("--python-path", action="append", default=[], help="prepend to the worker's sys.path")
 
@@ -242,7 +245,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
     source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
-    return PydanticAISpec(cwd=cwd, env=env, python_path=python_path, **source)
+    return PydanticAISpec(cwd=cwd, env=env, python_path=python_path, permission=args.permission, **source)
 
 
 def _history_line(entry: HistoryEntry) -> str:

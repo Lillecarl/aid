@@ -15,7 +15,7 @@ class AgentKind(StrEnum):
 
 
 class PermissionMode(StrEnum):
-    """How aid answers an ACP agent's permission requests."""
+    """How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands."""
 
     ALLOW = "allow"
     DENY = "deny"
@@ -96,6 +96,9 @@ class PydanticAISpec(_Spec):
     agent: Annotated[str, Field(pattern=r"^[\w.-]+$")] | None = None
     target: Annotated[str, Field(pattern=r"^[\w.]+:[\w.]+$")] | None = None
     python_path: list[str] = Field(default_factory=list[str])
+    permission: PermissionMode = PermissionMode.DENY
+    """How aid answers what `aid.coding` tools ask: each command a `python` script starts, each edit applied."""
+    permission_timeout: Annotated[float, Field(gt=0)] = 1800
 
     @model_validator(mode="after")
     def _one_source(self) -> Self:

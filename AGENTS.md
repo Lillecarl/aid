@@ -47,6 +47,11 @@ API and a CLI.
 - `src/aid/web/` — `aid web`: Starlette on hypercorn, OIDC login (`auth.py`), JSON API + SSE (`app.py`).
 - `web/` — the Svelte 5 UI (runes, TypeScript, Vite). `web/default.nix` builds it; `aid web` serves the result
   from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.
+- `src/aid/coding.py` — `aid.coding_tools`, a toolset pydantic-ai agents opt into: read, pyedit edits through its
+  library (`EditSession`, staged until `apply_edits`; no agent code runs in the worker), and `python` (pyrun
+  `run_script` in a child, each command asked of `PydanticAISpec.permission`). One `Coding` per session, set per
+  turn in the `CODING` contextvar; tool errors go back to the model as `ModelRetry`. pyedit is built into the
+  set from Lillecarl/pyedit (`nix/pyedit.nix`); its grammars come from `tree-sitter-grammars` (`grammarsByName`).
 - `pyrun/` — async process library, a project of its own (own pyproject, `pyrun/default.nix`, tests) to be
   extractable; contract in `pyrun/README.md`. Kills by the PYRUN_SCOPE/PYRUN_ID env marks found in /proc (no
   subreaper, no process-wide state). Check: `cd pyrun && ruff check src tests && pyright && python -m pytest`;

@@ -6,6 +6,7 @@ import importlib
 import logging
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import anyio
@@ -31,6 +32,8 @@ from pydantic_ai.run import AgentRunResultEvent
 from pydantic_core import to_jsonable_python
 
 from aid.agents import ENV_AGENTS_PATH, Catalog, agents_path, discover
+from aid.backends.permissions import PermissionWaits
+from aid.coding import CODING, Coding
 from aid.protocol import Output, SessionEvent, Started, TextDelta, ThoughtDelta, ToolCall, Usage, clip, to_json
 
 if TYPE_CHECKING:
@@ -46,6 +49,8 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 HISTORY_FILE = "history.json"
+RUNS_DIR = "runs"
+"""pyrun's store for what the session's `python` tool runs."""
 
 
 def load_target(target: str) -> AbstractAgent[Any, Any]:
@@ -123,6 +128,7 @@ class PydanticAIBackend:
         history: list[ModelMessage],
         toolsets: list[AbstractToolset[Any]],
         started: Started,
+        coding: Coding,
     ) -> None:
         self._agent = agent
         self._history_file = history_file
@@ -130,11 +136,26 @@ class PydanticAIBackend:
         self._toolsets = toolsets
         self._started = started
         self._run: AgentRunEvents[Any] | None = None
+        self._coding = coding
 
     def started(self) -> Started:
         return self._started
 
+    def answer_permission(self, request_id: str, option_id: str | None) -> bool:
+        return self._coding.waits.answer(request_id, option_id)
+
     async def prompt(self, text: str, emit: Emit) -> Output:
+        # The tools pydantic-ai runs are tasks it starts inside the run below: they see this context.
+        self._coding.emit = emit
+        token = CODING.set(self._coding)
+        try:
+            return await self._prompt(text, emit)
+        finally:
+            CODING.reset(token)
+            self._coding.waits.cancel_all()
+            self._coding.emit = None
+
+    async def _prompt(self, text: str, emit: Emit) -> Output:
         async with self._agent.run_stream_events(text, message_history=self._history, toolsets=self._toolsets) as run:
             self._run = run
             try:
@@ -156,6 +177,7 @@ class PydanticAIBackend:
         return Output(output=to_jsonable_python(result.output), stop_reason="end_turn")
 
     async def cancel(self) -> None:
+        self._coding.waits.cancel_all()
         if self._run is not None:
             self._run.cancel()
 
@@ -183,4 +205,11 @@ async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> Async
     )
     log.info("loaded %s with %d history messages", spec.agent or spec.target, len(history))
     started = Started(pid=os.getpid(), resumed=bool(history), agent=spec.agent or spec.target, model=model_name(agent))
-    yield PydanticAIBackend(agent, history_file, history, toolsets, started)
+    coding = Coding(
+        cwd=Path(spec.cwd),
+        store=Path(state_dir) / RUNS_DIR,
+        mode=spec.permission,
+        timeout=spec.permission_timeout,
+        waits=PermissionWaits(),
+    )
+    yield PydanticAIBackend(agent, history_file, history, toolsets, started, coding)

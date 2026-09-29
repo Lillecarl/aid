@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import os
 import stat
-from pathlib import Path
 from typing import Final
 
 import anyio.to_thread
 from pydantic import BaseModel
 
+from aid.confine import inside
 from aid.protocol import AidError
 
 MAX_FILE: Final = 1024 * 1024
@@ -37,15 +37,6 @@ class FileView(BaseModel):
     truncated: bool
     highlights: list[tuple[int, int, str]] | None = None
     """UTF-16 start, end and Pygments class (`web.highlight`); None when no grammar knows the file."""
-
-
-def inside(root: str, rel: str) -> Path:
-    """`rel` under `root`, resolved. AidError `outside` if it resolves anywhere else."""
-    base = Path(root).resolve()
-    target = (base / rel.lstrip("/")).resolve()
-    if target != base and not target.is_relative_to(base):
-        raise AidError("outside", f"{rel!r} is outside the session's directory")
-    return target
 
 
 def _list(root: str, rel: str) -> list[Entry]:

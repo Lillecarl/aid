@@ -81,8 +81,8 @@ def acp_spec(
     )
 
 
-def py_spec(cwd: Path, target: str, **env: str) -> PydanticAISpec:
-    return PydanticAISpec(cwd=str(cwd), target=target, python_path=[str(TESTS)], env=env)
+def py_spec(cwd: Path, target: str, permission: PermissionMode = PermissionMode.DENY, **env: str) -> PydanticAISpec:
+    return PydanticAISpec(cwd=str(cwd), target=target, python_path=[str(TESTS)], env=env, permission=permission)
 
 
 needs_pymux = pytest.mark.skipif(shutil.which("pymux") is None, reason="pymux is not on PATH")
