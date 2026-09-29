@@ -4,9 +4,9 @@
   import type {
     HistoryEntry,
     HistoryItem,
-    LifecycleEntry,
-    PermissionDecisionEvent,
-    PermissionRequestEvent,
+    Lifecycle,
+    PermissionDecision,
+    PermissionRequest,
     SessionEvent,
   } from "./api";
   import { Dictation } from "./dictation";
@@ -23,12 +23,12 @@
   }
 
   type Kind = "user" | "message" | "assistant" | "thought" | "summary" | "tool" | "permission" | "meta" | "error";
-  const LIFECYCLE: Record<LifecycleEntry["event"], string> = {
+  const LIFECYCLE: Record<Lifecycle["event"], string> = {
     compacted: "Context compacted",
     cleared: "Context cleared: a new session follows",
     ended: "Claude exited",
   };
-  type Permission = { request: PermissionRequestEvent; decision: PermissionDecisionEvent | null };
+  type Permission = { request: PermissionRequest; decision: PermissionDecision | null };
   /** One entry of the log. `seq` is set for rows read from history; rows of a turn still streaming lack it. A
    * tool call is one row, which later updates of the same call change; so is a permission request and its
    * decision. */

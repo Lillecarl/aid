@@ -26,7 +26,7 @@ buildNpmPackage {
   };
 
   # Changes with package-lock.json: set lib.fakeHash, build, and take the hash the error prints.
-  npmDepsHash = "sha256-Z3RPE79mWXF54ZDL53ALQJUuwL1qV9B/GkZmtYDWGh0=";
+  npmDepsHash = "sha256-N0OIbXPs3lzYBe+uFTZBWcB8vvrtP0aXMrNNQRiFwAg=";
 
   # After npm's own install, which would drop a package the lock does not name.
   preBuild = ''
@@ -36,6 +36,8 @@ buildNpmPackage {
   doCheck = true;
   checkPhase = ''
     runHook preCheck
+    # protocol.ts is generated from protocol.schema.json: a hand edit, or a schema not regenerated from, fails here.
+    npm run types:check
     npm run check
     runHook postCheck
   '';

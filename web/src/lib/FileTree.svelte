@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import { SvelteMap, SvelteSet } from "svelte/reactivity";
   import * as api from "./api";
-  import type { FileEntry } from "./api";
+  import type { Entry } from "./api";
 
   interface Props {
     name: string;
@@ -10,7 +10,7 @@
     onopen: (path: string) => void;
   }
 
-  type Listing = FileEntry[] | { error: string } | "loading";
+  type Listing = Entry[] | { error: string } | "loading";
 
   let { name, selected, onopen }: Props = $props();
 

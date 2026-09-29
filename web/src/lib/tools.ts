@@ -1,4 +1,4 @@
-import type { ToolCallEvent, ToolDiff } from "./api";
+import type { ToolCall, ToolDiff } from "./api";
 
 /** A tool call as the log shows it: its first event, with the later ones merged in. */
 export interface Tool {
@@ -12,7 +12,7 @@ export interface Tool {
   paths: string[];
 }
 
-export const toolOf = (e: ToolCallEvent): Tool => ({
+export const toolOf = (e: ToolCall): Tool => ({
   id: e.tool_call_id,
   title: e.title,
   kind: e.kind,
@@ -24,7 +24,7 @@ export const toolOf = (e: ToolCallEvent): Tool => ({
 });
 
 /** Apply an update of the call to what the log holds. */
-export function merge(tool: Tool, e: ToolCallEvent): void {
+export function merge(tool: Tool, e: ToolCall): void {
   tool.title = e.title ?? tool.title;
   tool.kind = e.kind ?? tool.kind;
   tool.status = e.status ?? tool.status;

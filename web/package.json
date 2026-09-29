@@ -6,12 +6,16 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "check": "svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
+    "types:print": "json2ts --no-additionalProperties --unknownAny --unreachableDefinitions --bannerComment \"// Generated from protocol.schema.json (python -m aid.schema) by npm run types. Do not edit.\" < src/lib/protocol.schema.json",
+    "types": "npm run -s types:print > src/lib/protocol.ts",
+    "types:check": "npm run -s types:print | cmp - src/lib/protocol.ts",
+    "check":"svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.1",
     "@tsconfig/svelte": "^5.0.8",
     "@types/node": "^24.19.0",
+    "json-schema-to-typescript": "^16.0.0",
     "svelte": "^5.57.1",
     "svelte-check": "^4.7.6",
     "typescript": "~6.0.3",

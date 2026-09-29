@@ -1,4 +1,4 @@
-import type { StartedEntry, UsageEvent } from "./api";
+import type { Started, Usage } from "./api";
 
 export const tokens = (n: number): string =>
   n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(1)}k` : `${(n / 1_000_000).toFixed(2)}M`;
@@ -6,7 +6,7 @@ export const tokens = (n: number): string =>
 const part = (n: number | null, label: string): string | null => (n ? `${tokens(n)} ${label}` : null);
 
 /** One line: the models, then only the counts the agent reported. */
-export function usageLine(u: UsageEvent): string {
+export function usageLine(u: Usage): string {
   const context =
     u.context_used !== null && u.context_size
       ? `context ${Math.round((100 * u.context_used) / u.context_size)}% of ${tokens(u.context_size)}`
@@ -27,7 +27,7 @@ export function usageLine(u: UsageEvent): string {
     .join(" · ");
 }
 
-export function startedLine(s: StartedEntry): string {
+export function startedLine(s: Started): string {
   return [
     s.resumed ? "Resumed" : "Started",
     s.agent,

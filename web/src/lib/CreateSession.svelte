@@ -24,8 +24,11 @@
 
   function spec(): AgentSpec {
     switch (kind) {
-      case "acp":
-        return { kind, cwd, command: words(command), permission };
+      case "acp": {
+        const [program, ...rest] = words(command);
+        if (program === undefined) throw new Error("the command is empty");
+        return { kind, cwd, command: [program, ...rest], permission };
+      }
       case "pydantic-ai":
         return { kind, cwd, agent, permission };
       case "claude-tty":

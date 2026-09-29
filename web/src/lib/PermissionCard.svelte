@@ -1,15 +1,15 @@
 <script lang="ts">
   import * as api from "./api";
-  import type { PermissionDecisionEvent, PermissionRequestEvent } from "./api";
+  import type { PermissionDecision, PermissionRequest } from "./api";
   import { command, hasInput } from "./tools";
 
   interface Props {
     session: string;
-    request: PermissionRequestEvent;
-    decision: PermissionDecisionEvent | null;
+    request: PermissionRequest;
+    decision: PermissionDecision | null;
   }
 
-  const BY: Record<PermissionDecisionEvent["by"], string> = {
+  const BY: Record<PermissionDecision["by"], string> = {
     person: "",
     policy: " by the session's policy",
     timeout: ": nobody answered in time",
