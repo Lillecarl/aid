@@ -262,6 +262,8 @@ async def discard_edits() -> str:
 async def apply_edits(ctx: RunContext[Any]) -> str:
     """Write everything staged to disk. The session's permission mode decides; a person may be asked."""
     coding = _coding()
+    # pyedit caches every file read among the staged ones; only the changed ones are edits.
+    await coding.edit(lambda s: s.prune_unchanged())
     diff = coding.diff()
     if not diff:
         return "nothing is staged"

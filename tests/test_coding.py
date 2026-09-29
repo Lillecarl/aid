@@ -59,6 +59,28 @@ async def test_edits_stage_until_applied(daemon: Paths, tmp_path: Path) -> None:
     assert (work / "app.py").read_text() == 'def greet():\n    print("Hello")\n'
 
 
+async def test_apply_writes_only_what_changed(daemon: Paths, tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("A = 1\n")
+    (tmp_path / "b.py").write_text("B = 1\n")
+    read_only = (tmp_path / "a.py").stat().st_mtime_ns
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(
+                    ("read", {"path": "a.py"}),
+                    ("show_edits", {}),
+                    ("edit", {"path": "b.py", "old": "B = 1", "new": "B = 2"}),
+                    ("apply_edits", {}),
+                )
+            )
+    _read, shown, _edited, applied = str(result.output).split("\n=====\n")
+    assert shown == "nothing is staged"
+    assert applied == "wrote b.py"
+    assert (tmp_path / "a.py").stat().st_mtime_ns == read_only
+    assert (tmp_path / "b.py").read_text() == "B = 2\n"
+
+
 async def test_python_asks_for_each_program(daemon: Paths, tmp_path: Path) -> None:
     script = 'a = await run("echo", "one")\nb = await run("echo", "two")\nprint(a.text + b.text, end="")\n'
     with anyio.fail_after(TIMEOUT):
