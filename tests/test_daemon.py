@@ -4,12 +4,15 @@ from typing import TYPE_CHECKING
 
 import anyio
 import pytest
+import zmq
+import zmq.asyncio
 
 import aid
 from aid.daemon import Daemon
 from aid.protocol import (
     AidError,
     Cost,
+    Failure,
     Output,
     PermissionDecider,
     PermissionDecision,
@@ -17,6 +20,7 @@ from aid.protocol import (
     Started,
     TextDelta,
     Usage,
+    decode_reply,
 )
 from aid.spec import PermissionMode
 from tests.agents import Review
@@ -205,6 +209,23 @@ async def test_error_leaves_connect_unwrapped(daemon: Paths) -> None:
         async with aid.connect(daemon) as client:
             await client.session("missing").run("x")
     assert error.value.code == "not_found"
+
+
+async def test_a_request_of_several_frames_is_refused(daemon: Paths) -> None:
+    ctx = zmq.asyncio.Context()
+    sock = ctx.socket(zmq.DEALER)
+    sock.connect(daemon.control)
+    try:
+        with anyio.fail_after(TIMEOUT):
+            await sock.send_multipart([b"{}", b"{}"])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
+            refused = decode_reply(await sock.recv())
+            async with aid.connect(daemon) as client:
+                assert await client.sessions() == []  # The daemon still serves.
+    finally:
+        sock.close(linger=0)
+        ctx.term()
+    assert isinstance(refused, Failure)
+    assert refused.code == "invalid_request"
 
 
 async def test_pydantic_ai_typed_output(daemon: Paths, tmp_path: Path) -> None:

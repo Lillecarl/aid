@@ -318,7 +318,13 @@ class Daemon:
         if self._tg is None:
             raise RuntimeError("daemon is not serving")
         while True:
-            client, payload = await self._clients.recv_multipart()
+            frames = await self._clients.recv_multipart()
+            if len(frames) != 2:  # A DEALER's request is one frame; anything else would end this loop.
+                await self._send_client(
+                    frames[0], encode(Failure(id="", code="invalid_request", message="a request is one frame"))
+                )
+                continue
+            client, payload = frames
             try:
                 request = decode_request(payload)
             except ValidationError as error:
