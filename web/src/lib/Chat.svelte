@@ -3,6 +3,7 @@
   import * as api from "./api";
   import type { HistoryEntry, HistoryItem, SessionEvent } from "./api";
   import { Dictation } from "./dictation";
+  import Markdown from "./Markdown.svelte";
 
   interface Props {
     name: string;
@@ -11,9 +12,17 @@
   }
 
   type Kind = "user" | "message" | "assistant" | "thought" | "tool" | "meta" | "error";
-  /** One line of the log. `seq` is set for rows read from history; rows of a turn still streaming lack it. */
-  type Row = { key: string; seq?: number; kind: Kind; text: string };
+  interface Tool {
+    id: string;
+    title: string | null;
+    kind: string | null;
+    status: string | null;
+  }
+  /** One entry of the log. `seq` is set for rows read from history; rows of a turn still streaming lack it. A
+   * tool call is one row, which later updates of the same call change. */
+  type Row = { key: string; seq?: number; kind: Kind; text: string; tool?: Tool };
 
+  const STATUS_ICON: Record<string, string> = { pending: "○", in_progress: "◐", completed: "✓", failed: "✗" };
   const PAGE = 100;
   const EDGE_PX = 200;
   const WINDOW_KEY = "aid.historyWindow";
@@ -45,7 +54,12 @@
       case "thought":
         return [row("thought", item.text)];
       case "tool_call":
-        return [row("tool", `${item.title ?? item.tool_call_id} ${item.status ?? ""}`.trim())];
+        return [
+          {
+            ...row("tool", ""),
+            tool: { id: item.tool_call_id, title: item.title, kind: item.kind, status: item.status },
+          },
+        ];
       case "output": {
         const typed = item.output !== null && typeof item.output !== "string";
         const meta = row("meta", `[${item.stop_reason}]`);
@@ -56,8 +70,34 @@
     }
   }
 
-  const fromHistory = (entries: HistoryEntry[]): Row[] =>
-    entries.flatMap((e) => rowsOf(e.item, `h${e.seq}`, e.seq));
+  /** Add an item's rows to `into`: text and thought deltas join the row before them, and a tool call's update
+   * changes the row of its call. */
+  function append(into: Row[], item: HistoryItem, key: string, seq?: number): void {
+    const last = into.at(-1);
+    if ((item.type === "text" || item.type === "thought") && seq === undefined && last?.seq === undefined) {
+      const kind = item.type === "text" ? "assistant" : "thought";
+      if (last?.kind === kind) {
+        last.text += item.text;
+        return;
+      }
+    }
+    if (item.type === "tool_call") {
+      const call = into.findLast((r) => r.tool?.id === item.tool_call_id)?.tool;
+      if (call) {
+        call.title = item.title ?? call.title;
+        call.kind = item.kind ?? call.kind;
+        call.status = item.status ?? call.status;
+        return;
+      }
+    }
+    into.push(...rowsOf(item, key, seq));
+  }
+
+  function fromHistory(entries: HistoryEntry[]): Row[] {
+    const out: Row[] = [];
+    for (const e of entries) append(out, e.item, `h${e.seq}`, e.seq);
+    return out;
+  }
 
   const firstSeq = (): number | undefined => rows.find((r) => r.seq !== undefined)?.seq;
   const lastSeq = (): number | undefined => rows.findLast((r) => r.seq !== undefined)?.seq;
@@ -137,13 +177,8 @@
 
   function apply(event: SessionEvent): void {
     const follow = nearBottom();
-    const last = rows.at(-1);
-    if (event.type === "text" && last?.kind === "assistant" && last.seq === undefined) {
-      last.text += event.text;
-    } else {
-      rows.push(...rowsOf(event, `l${liveCount++}`));
-      trimTop();
-    }
+    append(rows, event, `l${liveCount++}`);
+    trimTop();
     if (follow) void toBottom();
   }
 
@@ -247,7 +282,23 @@
 <div class="log" bind:this={log} {onscroll}>
   {#if hasOlder}<div class="more">{loading ? "Loading…" : "Scroll up for older entries"}</div>{/if}
   {#each rows as row (row.key)}
-    <div class={row.kind}>{row.text}</div>
+    {#if row.kind === "assistant"}
+      <div class="assistant"><Markdown text={row.text} /></div>
+    {:else if row.kind === "thought"}
+      <details class="thought">
+        <summary>Thinking <span class="gist">{row.text.trim().split("\n", 1)[0]}</span></summary>
+        <Markdown text={row.text} />
+      </details>
+    {:else if row.tool}
+      {@const status = row.tool.status ?? "pending"}
+      <div class="tool {status}" title={row.tool.id}>
+        <span class="icon" aria-label={status}>{STATUS_ICON[status] ?? "•"}</span>
+        {#if row.tool.kind}<span class="kind">{row.tool.kind}</span>{/if}
+        <span class="title">{row.tool.title ?? row.tool.id}</span>
+      </div>
+    {:else}
+      <div class={row.kind}>{row.text}</div>
+    {/if}
   {:else}
     {#if !loading}<div class="more">No history yet.</div>{/if}
   {/each}
@@ -299,34 +350,93 @@
     padding: 0.5rem;
     margin-bottom: 0.5rem;
   }
-  .log div {
-    white-space: pre-wrap;
-    margin: 0.25rem 0;
+  .log > * {
+    margin: 0.4rem 0;
   }
   .more {
     text-align: center;
     color: var(--muted);
     font-size: 0.85em;
   }
-  .user {
-    font-weight: 600;
+  .user,
+  .message {
+    white-space: pre-wrap;
+    background: var(--code-bg);
+    border-left: 3px solid var(--accent);
+    padding: 0.4rem 0.6rem;
+    border-radius: 0 0.3rem 0.3rem 0;
+    margin-top: 1rem;
   }
   .message {
-    font-weight: 600;
-    border-left: 3px solid var(--line);
-    padding-left: 0.5rem;
+    border-left-color: var(--muted);
   }
-  .thought,
-  .meta,
-  .tool {
+  .thought {
     color: var(--muted);
     font-size: 0.9em;
   }
+  .thought summary {
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .thought[open] .gist {
+    display: none;
+  }
+  .gist {
+    font-style: italic;
+    margin-left: 0.4em;
+  }
+  .thought[open] {
+    border-left: 2px solid var(--line);
+    padding-left: 0.6rem;
+  }
   .tool {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    font-size: 0.85em;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    padding: 0.15rem 0.5rem;
+    width: fit-content;
+    max-width: 100%;
+  }
+  .tool .title {
     font-family: ui-monospace, monospace;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tool .kind {
+    color: var(--muted);
+    text-transform: lowercase;
+  }
+  .tool .icon {
+    width: 1em;
+    text-align: center;
+  }
+  .tool.completed .icon {
+    color: var(--ok);
+  }
+  .tool.failed {
+    border-color: var(--bad);
+  }
+  .tool.failed .icon {
+    color: var(--bad);
+  }
+  .tool.in_progress .icon,
+  .tool.pending .icon {
+    color: var(--accent);
+  }
+  .meta {
+    color: var(--muted);
+    font-size: 0.8em;
+    text-align: right;
   }
   .error {
-    color: #d33;
+    white-space: pre-wrap;
+    color: var(--bad);
   }
   .listening {
     color: #d33;

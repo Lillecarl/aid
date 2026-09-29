@@ -3,6 +3,9 @@
   --muted: #888;
   --line: #8884;
   --accent: #6c8cff;
+  --code-bg: #8881;
+  --ok: #3a9b5b;
+  --bad: #d33;
   font: 15px/1.45 system-ui, sans-serif;
 }
 * {
