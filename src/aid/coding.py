@@ -152,6 +152,19 @@ def numbered(text: str, offset: int, limit: int) -> str:
     return body + (f"\n… {rest} more lines; read with offset={offset + len(shown)}" if rest > 0 else "")
 
 
+async def ls(path: str = ".") -> str:
+    """List a directory's entries, directories first with a trailing `/`: find your way before you read."""
+    coding = _coding()
+    target = coding.resolve(path)
+    if not target.is_dir():
+        raise AidError("not_dir", f"{path} is a file; read it with read")
+    entries = [(entry.name, await entry.is_dir()) async for entry in anyio.Path(target).iterdir()]
+    entries.sort(key=lambda entry: (not entry[1], entry[0]))
+    if not entries:
+        return f"{path} is empty"
+    return "\n".join(name + "/" if is_dir else name for name, is_dir in entries)
+
+
 async def read(path: str, offset: int = 1, limit: int = READ_LIMIT) -> str:
     """Read a text file with line numbers, as it will be once your staged edits apply.
 
@@ -336,6 +349,7 @@ def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[
 
 coding_tools: FunctionToolset[Any] = FunctionToolset[Any](
     [
+        _retrying(ls),
         _retrying(read),
         _retrying(edit),
         _retrying(write),

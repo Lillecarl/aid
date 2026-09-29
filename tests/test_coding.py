@@ -59,6 +59,21 @@ async def test_edits_stage_until_applied(daemon: Paths, tmp_path: Path) -> None:
     assert (work / "app.py").read_text() == 'def greet():\n    print("Hello")\n'
 
 
+async def test_ls_lists_directories_first(daemon: Paths, tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    (work / "pkg").mkdir(parents=True)
+    (work / "pkg" / "b.py").write_text("B = 1\n")
+    (work / "a.py").write_text("A = 1\n")
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(work, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(plan(("ls", {}), ("ls", {"path": "pkg"}), ("ls", {"path": "a.py"})))
+    root, pkg, not_dir = str(result.output).split("\n=====\n")
+    assert root == "pkg/\na.py"
+    assert pkg == "b.py"
+    assert "a.py is a file; read it with read" in not_dir
+
+
 async def test_outline_names_a_directory(daemon: Paths, tmp_path: Path) -> None:
     (tmp_path / "pkg").mkdir()
     with anyio.fail_after(TIMEOUT):

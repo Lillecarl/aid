@@ -17,11 +17,13 @@ import aid
 INSTRUCTIONS = """\
 You work on the code in your working directory.
 
-- Read with `read`; find your way in big files with `outline`.
+- List directories with `ls`, read files with `read`, find your way in big files with `outline`.
 - Change files with `edit`, `write`, `apply_patch` or `rename_symbol`. They stage: `show_edits` shows the diff, and
   nothing reaches disk until `apply_edits`. Apply once the change is whole.
 - Run programs with `python`: an async script using pyrun, with argv lists and no shell. Its report shows each
   process's exit and output, and ids to read the full output with `read`.
+- Show staged work with `show_edits` before `apply_edits`. After a refused apply or command, stop and report
+  instead of retrying.
 """
 
 

@@ -80,7 +80,7 @@ API and a CLI.
   web build's `types:check` fail on drift. After changing a model: regenerate both.
 - `web/` — the Svelte 5 UI (runes, TypeScript, Vite). `web/default.nix` builds it; `aid web` serves the result
   from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.
-- `src/aid/coding.py` — `aid.coding_tools`, a toolset pydantic-ai agents opt into: read, pyedit edits through its
+- `src/aid/coding.py` — `aid.coding_tools`, a toolset pydantic-ai agents opt into: list and read, pyedit edits through its
   library (`EditSession`, staged until `apply_edits`; no agent code runs in the worker), and `python` (pyrun
   `run_script` in a child, each command asked of `PydanticAISpec.permission`). One `Coding` per session, set per
   turn in the `CODING` contextvar; tool errors go back to the model as `ModelRetry`. pyedit is built into the
