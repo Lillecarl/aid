@@ -110,6 +110,13 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 
 ## Rules
 
+- Architecture beats velocity. When the quick fix and the right fix diverge, build the right one: a shortcut
+  taken once becomes permanent tax at the scale of every session on the daemon, and scale is the whole point.
+  Precedents, all slower than the alternative: per-session worker commands ship behind `--allow-worker-command`
+  because the command receives worker credentials; history filtering is store-full plus a deterministic send
+  policy (monotonic sends keep the prefix cache) instead of mutating stored history or sliding windows; user
+  compaction is one daemon op behind CLI, page and tool instead of a web-only hack; schema and web types
+  regenerate through the project's own commands, never by hand.
 - anyio only. ruff bans `asyncio` and `subprocess` (TID251). The asyncio seam lives inside the `acp` library.
 - Worker isolation is a process per session, forked from a forkserver that preloads only the transport
   (`launcher.PRELOAD`, default `zmq.asyncio`). Everything else — aid itself, `pydantic_ai`, `acp` — imports fresh
