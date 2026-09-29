@@ -21,14 +21,23 @@
   const dark = matchMedia("(prefers-color-scheme: dark)");
   const themeFor = () => (dark.matches ? oneDark : []);
 
-  // CodeMirror styles through constructed stylesheets (style-mod's adoptedStyleSheets), which the CSP allows.
+  // CodeMirror styles through style-mod, which adds a style element to a document, and the CSP blocks that; in a
+  // shadow root it uses a constructed stylesheet (adoptedStyleSheets), which the CSP allows.
+  const layout = EditorView.theme({
+    "&": { height: "100%", fontSize: "0.85em" },
+    ".cm-scroller": { fontFamily: "ui-monospace, monospace" },
+  });
+
   onMount(() => {
+    const root = host.attachShadow({ mode: "open" });
     view = new EditorView({
-      parent: host,
+      parent: root,
+      root,
       state: EditorState.create({
         doc: text,
         extensions: [
           basicSetup,
+          layout,
           EditorState.readOnly.of(true),
           EditorView.editable.of(false),
           language.of([]),
@@ -75,12 +84,5 @@
     border: 1px solid var(--line);
     border-radius: 0.3rem;
     overflow: hidden;
-  }
-  .code :global(.cm-editor) {
-    height: 100%;
-    font-size: 0.85em;
-  }
-  .code :global(.cm-scroller) {
-    font-family: ui-monospace, monospace;
   }
 </style>
