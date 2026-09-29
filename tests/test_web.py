@@ -8,6 +8,7 @@ import re
 import secrets
 import shutil
 import socket
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO, cast
@@ -338,6 +339,7 @@ async def test_session_list_streams_changes(web: Web, tmp_path: Path) -> None:
             csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
             spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
             seen: list[list[dict[str, Any]]] = []
+            stopped = arrived = 0.0
             async with client.stream("GET", f"{web.url}/api/sessions/events") as response:
                 async for line in response.aiter_lines():
                     if line.startswith("data: "):
@@ -350,13 +352,16 @@ async def test_session_list_streams_changes(web: Web, tmp_path: Path) -> None:
                             )
                         elif len(seen) == 2:
                             await client.post(f"{web.url}/api/sessions/echo/stop", headers={"X-CSRF-Token": csrf})
+                            stopped = time.monotonic()
                         else:
+                            arrived = time.monotonic() - stopped
                             break
     assert seen == [
         [],
         [{"name": "echo", "kind": "pydantic-ai", "running": True, **IDLE}],
         [{"name": "echo", "kind": "pydantic-ai", "running": False, **IDLE}],
     ]
+    assert arrived < 0.25  # Pushed as it happens: polling took up to a second.
 
 
 async def test_history_streams_turns_from_other_clients(web: Web, tmp_path: Path, daemon: Paths) -> None:

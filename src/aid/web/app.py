@@ -20,7 +20,7 @@ from hypercorn.asyncio import (
 )
 from hypercorn.config import Config as HypercornConfig
 from libpymux.streams import PaneStream, StreamRefused
-from pydantic import BaseModel, ConfigDict, Field, RootModel, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -37,8 +37,7 @@ from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect
 
 from aid.client import connect
-from aid.history import MAX_PAGE
-from aid.protocol import AidError, CreateSession, SessionInfo
+from aid.protocol import AidError, CreateSession, SessionInfosAdapter
 from aid.speech import Transcription
 from aid.web import auth, files, theme
 
@@ -64,7 +63,6 @@ SECURITY_HEADERS: Final = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "same-origin",
 }
-STATUS_POLL: Final = 1.0
 KEEPALIVE: Final = 15.0
 WS_POLICY_VIOLATION: Final = 1008
 WS_NO_SPEECH: Final = 4404
@@ -176,23 +174,8 @@ async def history_events(request: Request) -> Response:
     await session.status()  # A missing session is a 404 here, not an error inside the stream.
     resumed = request.headers.get("last-event-id", "")
     after = max(query.after, int(resumed)) if resumed.isdecimal() else query.after
-
-    async def events() -> AsyncIterator[str]:
-        nonlocal after
-        while True:
-            try:
-                page = await session.history(after=after, limit=MAX_PAGE, wait=KEEPALIVE)
-            except AidError as error:
-                yield f"event: error\ndata: {json.dumps({'error': error.message, 'code': error.code})}\n\n"
-                return
-            if not page.entries:
-                # A comment: it tells a dead connection apart from a quiet one.
-                yield ": still here\n\n"
-            for entry in page.entries:
-                after = entry.seq
-                yield f"id: {entry.seq}\ndata: {entry.model_dump_json()}\n\n"
-
-    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
+    entries = session.follow_history(after, idle=KEEPALIVE)
+    return _follow(entries, lambda e: e.model_dump_json(), event_id=lambda e: e.seq, still_there=session.status)
 
 
 @api()
@@ -249,51 +232,49 @@ async def status(request: Request) -> Response:
     return JSONResponse(found.model_dump(mode="json"))
 
 
-def _changes(fetch: Callable[[], Awaitable[BaseModel]], poll: float) -> StreamingResponse:
-    """Server-Sent Events of `fetch()` each time its value changes, for as long as the page holds the stream open.
-    A page opens one only while its tab is on screen, so nobody polls the daemon for what nobody sees."""
+def _follow[T](
+    values: AsyncGenerator[T | None],
+    dump: Callable[[T], str],
+    *,
+    event_id: Callable[[T], int] | None = None,
+    still_there: Callable[[], Awaitable[object]] | None = None,
+) -> StreamingResponse:
+    """Server-Sent Events of what the daemon publishes (a `follow_*` with `idle=KEEPALIVE`), for as long as the page
+    holds the stream open. A page opens one only while its tab is on screen, so nothing streams that nobody sees.
+
+    `still_there` runs on each quiet spell: a deleted session's topic just goes quiet, and its AidError ends the
+    stream as the page expects."""
 
     async def events() -> AsyncIterator[str]:
-        last: str | None = None
-        quiet = 0.0
-        while True:
-            try:
-                current = (await fetch()).model_dump_json()
-            except AidError as error:
-                yield f"event: error\ndata: {json.dumps({'error': error.message, 'code': error.code})}\n\n"
-                return
-            if current != last:
-                last, quiet = current, 0.0
-                yield f"data: {current}\n\n"
-            elif quiet >= KEEPALIVE:
-                # A comment: it tells a dead connection apart from a quiet one.
-                quiet = 0.0
-                yield ": still here\n\n"
-            await anyio.sleep(poll)
-            quiet += poll
+        try:
+            async for value in values:
+                if value is None:
+                    if still_there is not None:
+                        await still_there()
+                    # A comment: it tells a dead connection apart from a quiet one.
+                    yield ": still here\n\n"
+                    continue
+                prefix = f"id: {event_id(value)}\n" if event_id is not None else ""
+                yield f"{prefix}data: {dump(value)}\n\n"
+        except AidError as error:
+            yield f"event: error\ndata: {json.dumps({'error': error.message, 'code': error.code})}\n\n"
+        finally:
+            await values.aclose()
 
     return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
 
 
-class _Sessions(RootModel[list[SessionInfo]]):
-    pass
-
-
 @api()
 async def sessions_events(request: Request) -> Response:
-    client = _client(request)
-
-    async def fetch() -> _Sessions:
-        return _Sessions(await client.sessions())
-
-    return _changes(fetch, STATUS_POLL)
+    listed = _client(request).follow_sessions(idle=KEEPALIVE)
+    return _follow(listed, lambda infos: SessionInfosAdapter.dump_json(infos).decode())
 
 
 @api()
 async def status_events(request: Request) -> Response:
     session = _client(request).session(request.path_params["name"])
     await session.status()  # A missing session is a 404 here, not an error inside the stream.
-    return _changes(session.status, STATUS_POLL)
+    return _follow(session.follow_status(idle=KEEPALIVE), lambda s: s.model_dump_json(), still_there=session.status)
 
 
 @api(mutating=True)

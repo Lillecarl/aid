@@ -44,6 +44,12 @@ API and a CLI.
   in the daemon itself.
 - `src/aid/env.py` — agent environments, minus the markers of the Claude session that started us.
 - `src/aid/client.py` — public API: `aid.connect()`, `Client`, `Session.run/stream`.
+- `src/aid/events.py` — the daemon's PUB socket (`Paths.events`): `[topic, JSON]` for the session list, each
+  status, each history entry. The daemon compares state with what it last published after every request,
+  worker reply and worker exit (`_publish_changes`); history publishes from `HistoryLog.on_append`. Readers use
+  `Client.follow_sessions` / `Session.follow_status` / `Session.follow_history`: subscribe, then fetch the
+  baseline, then follow; a jump in seq is fetched. `idle=` yields None on quiet spells (never cancel the
+  generator's receive). One SUB socket per follower, closed with it.
 - `src/aid/web/` — `aid web`: Starlette on hypercorn, OIDC login (`auth.py`), JSON API + SSE (`app.py`).
 - `web/` — the Svelte 5 UI (runes, TypeScript, Vite). `web/default.nix` builds it; `aid web` serves the result
   from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.

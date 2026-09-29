@@ -113,8 +113,11 @@ class Client:
         self.subscriptions: set[zmq.asyncio.Socket] = set()
 
     @asynccontextmanager
-    async def subscribed(self, *prefixes: bytes) -> AsyncGenerator[AsyncIterator[tuple[bytes, bytes]]]:
-        """The daemon's published `[topic, payload]` messages under `prefixes` (`aid.events`), while the block runs.
+    async def subscribed(
+        self, *prefixes: bytes, idle: float | None = None
+    ) -> AsyncGenerator[AsyncIterator[tuple[bytes, bytes] | None]]:
+        """The daemon's published `[topic, payload]` messages under `prefixes` (`aid.events`), while the block runs;
+        with `idle`, a None after each `idle` seconds with no message.
 
         A subscription reaches the daemon a moment after this returns, and what is published before then is
         missed: fetch a baseline after subscribing, as the `follow_*` methods do."""
@@ -124,8 +127,12 @@ class Client:
             sock.setsockopt(zmq.SUBSCRIBE, prefix)
         self.subscriptions.add(sock)
 
-        async def messages() -> AsyncIterator[tuple[bytes, bytes]]:
+        async def messages() -> AsyncIterator[tuple[bytes, bytes] | None]:
             while True:
+                # A poll with a timeout, not a cancelled receive: cancelling inside an async generator ends it.
+                if idle is not None and not await sock.poll(int(idle * 1000)):
+                    yield None
+                    continue
                 topic, payload = await sock.recv_multipart()
                 yield topic, payload
 
@@ -135,12 +142,16 @@ class Client:
             self.subscriptions.discard(sock)
             sock.close(linger=0)
 
-    async def follow_sessions(self) -> AsyncGenerator[list[SessionInfo]]:
-        """The session list now, then each time it changes."""
-        async with self.subscribed(events.SESSIONS) as published:
+    @overload
+    def follow_sessions(self, *, idle: None = None) -> AsyncGenerator[list[SessionInfo]]: ...
+    @overload
+    def follow_sessions(self, *, idle: float) -> AsyncGenerator[list[SessionInfo] | None]: ...
+    async def follow_sessions(self, *, idle: float | None = None) -> AsyncGenerator[list[SessionInfo] | None]:
+        """The session list now, then each time it changes; with `idle`, None after each quiet `idle` seconds."""
+        async with self.subscribed(events.SESSIONS, idle=idle) as published:
             yield await self.sessions()
-            async for _topic, payload in published:
-                yield SessionInfosAdapter.validate_json(payload)
+            async for message in published:
+                yield None if message is None else SessionInfosAdapter.validate_json(message[1])
 
     async def read_replies(self) -> None:
         while True:
@@ -267,23 +278,38 @@ class Session:
     async def status(self) -> SessionStatus:
         return SessionStatus.model_validate(await self._client.call(GetStatus(session=self.name)))
 
-    async def follow_status(self) -> AsyncGenerator[SessionStatus]:
-        """The status now, then each time it changes. A missing session raises, as `status` does."""
-        async with self._client.subscribed(events.status_topic(self.name)) as published:
+    @overload
+    def follow_status(self, *, idle: None = None) -> AsyncGenerator[SessionStatus]: ...
+    @overload
+    def follow_status(self, *, idle: float) -> AsyncGenerator[SessionStatus | None]: ...
+    async def follow_status(self, *, idle: float | None = None) -> AsyncGenerator[SessionStatus | None]:
+        """The status now, then each time it changes; with `idle`, None after each quiet `idle` seconds. A missing
+        session raises, as `status` does."""
+        async with self._client.subscribed(events.status_topic(self.name), idle=idle) as published:
             yield await self.status()
-            async for _topic, payload in published:
-                yield SessionStatus.model_validate_json(payload)
+            async for message in published:
+                yield None if message is None else SessionStatus.model_validate_json(message[1])
 
-    async def follow_history(self, after: int = -1) -> AsyncGenerator[HistoryEntry]:
+    @overload
+    def follow_history(self, after: int = -1, *, idle: None = None) -> AsyncGenerator[HistoryEntry]: ...
+    @overload
+    def follow_history(self, after: int = -1, *, idle: float) -> AsyncGenerator[HistoryEntry | None]: ...
+    async def follow_history(
+        self, after: int = -1, *, idle: float | None = None
+    ) -> AsyncGenerator[HistoryEntry | None]:
         """Every entry after seq `after`, in order and once each: what is recorded now, then each as it is
-        recorded. An entry the subscription dropped shows as a jump in seq, and is fetched."""
-        async with self._client.subscribed(events.history_topic(self.name)) as published:
+        recorded; with `idle`, None after each quiet `idle` seconds. An entry the subscription dropped shows as a
+        jump in seq, and is fetched."""
+        async with self._client.subscribed(events.history_topic(self.name), idle=idle) as published:
             last = after
             async for entry in self._entries_after(last):
                 last = entry.seq
                 yield entry
-            async for _topic, payload in published:
-                entry = HistoryEntry.model_validate_json(payload)
+            async for message in published:
+                if message is None:
+                    yield None
+                    continue
+                entry = HistoryEntry.model_validate_json(message[1])
                 if entry.seq > last + 1:
                     async for missed in self._entries_after(last):
                         last = missed.seq
