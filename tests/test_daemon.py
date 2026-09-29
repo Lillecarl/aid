@@ -13,6 +13,8 @@ from aid.protocol import (
     AidError,
     Cost,
     Failure,
+    GetHistory,
+    GetStatus,
     Output,
     PermissionDecider,
     PermissionDecision,
@@ -21,6 +23,7 @@ from aid.protocol import (
     TextDelta,
     Usage,
     decode_reply,
+    encode,
 )
 from aid.spec import PermissionMode
 from tests.agents import Review
@@ -226,6 +229,29 @@ async def test_a_request_of_several_frames_is_refused(daemon: Paths) -> None:
         ctx.term()
     assert isinstance(refused, Failure)
     assert refused.code == "invalid_request"
+
+
+async def test_a_request_id_in_flight_is_refused(daemon: Paths, tmp_path: Path) -> None:
+    ctx = zmq.asyncio.Context()
+    first, second = ctx.socket(zmq.DEALER), ctx.socket(zmq.DEALER)
+    first.connect(daemon.control)
+    second.connect(daemon.control)
+    try:
+        with anyio.fail_after(TIMEOUT):
+            async with aid.connect(daemon) as client:
+                await client.create("echo", py_spec(tmp_path, "agents:echo"))
+            # Waits for an entry that never comes, so its id stays in flight.
+            waiting = GetHistory(id="same", session="echo", after=1000, wait=5)
+            await first.send(encode(waiting))
+            await anyio.sleep(0.2)
+            await second.send(encode(GetStatus(id="same", session="echo")))
+            refused = decode_reply(await second.recv())
+    finally:
+        first.close(linger=0)
+        second.close(linger=0)
+        ctx.term()
+    assert isinstance(refused, Failure)
+    assert refused.code == "duplicate_id"
 
 
 async def test_pydantic_ai_typed_output(daemon: Paths, tmp_path: Path) -> None:

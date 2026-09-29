@@ -211,6 +211,8 @@ class Daemon:
         self._workers_listen = list(workers_listen)
         self._sessions: dict[str, _Session] = {}
         self._routes: dict[str, _Route] = {}
+        self._handling: set[str] = set()
+        """Ids of requests still in `_dispatch`, which a route does not name yet."""
         self._ctx = zmq.asyncio.Context()
         self._clients = self._ctx.socket(zmq.ROUTER)
         self._workers = self._ctx.socket(zmq.ROUTER)
@@ -334,7 +336,15 @@ class Daemon:
 
     async def _handle(self, client: bytes, request: Request) -> None:
         try:
-            reply = await self._dispatch(client, request)
+            # Replies route by request id, whichever client sent it: a second request under an id in flight would
+            # take the first one's replies.
+            if request.id in self._routes or request.id in self._handling:
+                raise AidError("duplicate_id", f"a request {request.id!r} is in flight")
+            self._handling.add(request.id)
+            try:
+                reply = await self._dispatch(client, request)
+            finally:
+                self._handling.discard(request.id)
         except AidError as error:
             reply = Failure(id=request.id, code=error.code, message=error.message)
         except Exception as error:
