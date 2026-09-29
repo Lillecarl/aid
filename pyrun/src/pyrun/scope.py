@@ -1,7 +1,7 @@
 """Scopes: where processes start, what they are recorded as, and what kills them.
 
 A scope marks every process it starts, and every descendant that keeps its environment, with PYRUN_SCOPE and
-PYRUN_ID. Killing finds them by that mark in /proc, so a descendant that left its process group (`setsid`, a
+PYRUN_ID, each a chain of the enclosing ids. Killing finds them by that mark in /proc, so a descendant that left its process group (`setsid`, a
 double fork) is found too; only one that clears its environment escapes. No process-wide state is touched: no
 subreaper, no signal handlers.
 """
@@ -67,24 +67,34 @@ class Marked:
     id: str | None
 
 
+def _chain(environ: list[bytes], key: str) -> list[str]:
+    prefix = f"{key}=".encode()
+    return next((v.removeprefix(prefix).decode().split(":") for v in environ if v.startswith(prefix)), list[str]())
+
+
 def marked(key: str, value: str) -> list[Marked]:
-    """Live processes of this user whose environment holds `key=value`, from /proc. Zombies have no environment."""
-    needle = f"{key}={value}".encode()
+    """Live processes of this user whose `key` chain holds `value`, from /proc. Zombies have no environment.
+
+    The marks are chains, `outer:inner`, because scopes nest: a script's scope runs inside its host's, and the host
+    must find the script's processes too."""
     found: list[Marked] = []
     for entry in os.scandir("/proc"):
         if not entry.name.isdigit():
             continue
         try:
             environ = Path(f"/proc/{entry.name}/environ").read_bytes().split(b"\0")
-            if needle not in environ:
+            if value not in _chain(environ, key):
                 continue
             argv = Path(f"/proc/{entry.name}/cmdline").read_bytes().split(b"\0")[:-1]
         except OSError:  # Gone, or not ours.
             continue
-        id_prefix = f"{ID_MARK}=".encode()
-        ids = [v.removeprefix(id_prefix).decode() for v in environ if v.startswith(id_prefix)]
-        found.append(Marked(int(entry.name), [a.decode(errors="replace") for a in argv], ids[0] if ids else None))
+        ids = _chain(environ, ID_MARK)
+        found.append(Marked(int(entry.name), [a.decode(errors="replace") for a in argv], ids[-1] if ids else None))
     return found
+
+
+def _extend(chain: str | None, link: str) -> str:
+    return f"{chain}:{link}" if chain else link
 
 
 def _signal(pid: int, sig: int) -> None:
@@ -213,7 +223,8 @@ class Scope:
                 env.pop(key, None)
             else:
                 env[key] = value
-        env[SCOPE_MARK], env[ID_MARK] = self.id, id
+        env[SCOPE_MARK] = _extend(os.environ.get(SCOPE_MARK), self.id)
+        env[ID_MARK] = _extend(os.environ.get(ID_MARK), id)
         return env
 
     async def check(self, command: Command) -> None:
