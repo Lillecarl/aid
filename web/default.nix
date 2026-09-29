@@ -25,7 +25,7 @@ buildNpmPackage {
   };
 
   # Changes with package-lock.json: set lib.fakeHash, build, and take the hash the error prints.
-  npmDepsHash = "sha256-LriB1D98uCOArCi/V54R5RuFEWhCDybP4n6uiplQRrI=";
+  npmDepsHash = "sha256-Z3RPE79mWXF54ZDL53ALQJUuwL1qV9B/GkZmtYDWGh0=";
 
   # After npm's own install, which would drop a package the lock does not name.
   preBuild = ''

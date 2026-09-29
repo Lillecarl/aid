@@ -207,6 +207,9 @@ export interface FileView {
   /** null for a binary file. */
   text: string | null;
   truncated: boolean;
+  /** tree-sitter spans: UTF-16 start and end, and a Pygments class that /theme.css colours. null when aid web
+   * has no grammar for the file. */
+  highlights?: [number, number, string][] | null;
 }
 
 const fileUrl = (name: string, what: "files" | "file", path: string): string =>

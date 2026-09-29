@@ -63,7 +63,7 @@
           {#await import("./CodeView.svelte")}
             <p class="muted">Loading the viewer…</p>
           {:then { default: CodeView }}
-            <CodeView path={file.path} text={file.text} />
+            <CodeView path={file.path} text={file.text} highlights={file.highlights ?? null} />
           {/await}
         </div>
       {/if}
