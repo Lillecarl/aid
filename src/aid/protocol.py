@@ -361,6 +361,18 @@ class Started(_Message):
     """The model when the session started, where the agent reports one. A turn's Usage names what it used."""
 
 
+class Lifecycle(_Message):
+    """Something happened to the agent's session outside a turn: interactive Claude compacted its context,
+    cleared it (a new agent session follows, with a Started), or ended."""
+
+    type: Literal["lifecycle"] = "lifecycle"
+    event: Literal["compacted", "cleared", "ended"]
+    detail: str | None = None
+    """Why: `manual` or `auto` for a compaction; Claude's exit reason for an end."""
+    summary: str | None = None
+    """A compaction's summary: what the agent keeps of the conversation before it."""
+
+
 class PromptEntry(_Message):
     type: Literal["prompt"] = "prompt"
     text: str
@@ -386,6 +398,7 @@ type HistoryItem = Annotated[
     PromptEntry
     | MessageEntry
     | Started
+    | Lifecycle
     | TextDelta
     | ThoughtDelta
     | ToolCall

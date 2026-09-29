@@ -58,6 +58,7 @@ from aid.mcp import AID_TOOLS_RULE, claude_config, session_servers
 from aid.paths import default_paths
 from aid.protocol import (
     Activity,
+    Lifecycle,
     Output,
     PaneAddress,
     PaneView,
@@ -69,6 +70,7 @@ from aid.protocol import (
     Started,
     TextDelta,
     ToolCall,
+    clip,
 )
 from aid.spec import BUILTIN_MCP_SERVER
 from aid.transcript import (
@@ -88,7 +90,7 @@ if TYPE_CHECKING:
     from libpymux import Pane
 
     from aid.backends.base import Emit, Record, Report
-    from aid.protocol import SessionEvent
+    from aid.protocol import HistoryItem, SessionEvent
     from aid.spec import ClaudeTtySpec
 
 log = logging.getLogger(__name__)
@@ -112,7 +114,16 @@ PASTE_SETTLE: Final = 0.4
 PANE_CHECK: Final = 2.0
 HOOKS_FILE: Final = "settings.json"
 HOOK_SCRIPT: Final = str(Path(hook_command.__file__))
-HOOK_EVENTS: Final = ("UserPromptSubmit", "Stop", "StopFailure", "Notification", "PermissionRequest")
+HOOK_EVENTS: Final = (
+    "SessionStart",
+    "SessionEnd",
+    "UserPromptSubmit",
+    "Stop",
+    "StopFailure",
+    "Notification",
+    "PermissionRequest",
+    "PostCompact",
+)
 # Claude kills a hook at its timeout; the pane's own dialog still asks. aid gives up a little before, to record it.
 WAITING_HOOK_TIMEOUT: Final = 3600
 HOOK_MARGIN: Final = 5
@@ -276,12 +287,23 @@ class ClaudeTtyBackend:
     """
 
     def __init__(
-        self, server: Server, pane: Pane, transcripts: Path, session_id: str, started: Started, offset: int
+        self,
+        server: Server,
+        pane: Pane,
+        transcripts: Path,
+        id_file: anyio.Path,
+        session_id: str,
+        started: Started,
+        offset: int,
     ) -> None:
         self._server = server
         self._pane = pane
         self._transcripts = transcripts
+        self._id_file = id_file
         self._session_id = session_id
+        self._following: anyio.CancelScope | None = None
+        self._gone = anyio.Event()
+        """Claude ended: the worker ends with it."""
         self._started = started
         # Where the transcript ended before Claude started: earlier turns are in history already, or predate aid.
         self._offset = offset
@@ -298,7 +320,27 @@ class ClaudeTtyBackend:
 
     async def hook(self, event: str, payload: JsonValue) -> JsonValue:
         fields = cast("dict[str, JsonValue]", payload) if isinstance(payload, dict) else {}
+        session_id = fields.get("session_id")
+        if event != "SessionEnd" and isinstance(session_id, str) and session_id != self._session_id:
+            await self._switch(session_id, fields.get("model"))
         match event:
+            case "SessionEnd":
+                reason = fields.get("reason")
+                reason = reason if isinstance(reason, str) else None
+                if reason == "clear":
+                    await self._record_alone(Lifecycle(event="cleared"))
+                else:
+                    await self._record_alone(Lifecycle(event="ended", detail=reason))
+                    self._gone.set()
+            case "PostCompact":
+                trigger, summary = fields.get("trigger"), fields.get("compact_summary")
+                await self._record_alone(
+                    Lifecycle(
+                        event="compacted",
+                        detail=trigger if isinstance(trigger, str) else None,
+                        summary=clip(summary) if isinstance(summary, str) else None,
+                    )
+                )
             case "UserPromptSubmit":
                 await self._activity(working=True, attention=None)
             case "Stop" | "StopFailure":
@@ -368,10 +410,44 @@ class ClaudeTtyBackend:
     async def follow(self, record: Record, report: Report) -> None:
         self._record = record
         self._report = report
-        while (path := await self._find_transcript()) is None:  # noqa: ASYNC110 -- Claude creates the file; nothing signals it
-            await anyio.sleep(POLL)
-        async for entry in TranscriptFollower(path, self._offset).follow():
-            await self._take(entry)
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(self._follow_transcripts)
+            await self._gone.wait()
+            tg.cancel_scope.cancel()
+
+    async def _follow_transcripts(self) -> None:
+        """The session's transcript, then the next one's after a switch (`/clear`)."""
+        while True:
+            with anyio.CancelScope() as scope:
+                self._following = scope
+                while (path := await self._find_transcript()) is None:  # noqa: ASYNC110 -- Claude creates the file; nothing signals it
+                    await anyio.sleep(POLL)
+                async for entry in TranscriptFollower(path, self._offset).follow():
+                    await self._take(entry)
+
+    async def _switch(self, session_id: str, model: JsonValue) -> None:
+        """Claude started another session in the same pane: follow its transcript from the start."""
+        log.info("claude session %s follows %s", session_id, self._session_id)
+        self._session_id, self._offset = session_id, 0
+        await self._id_file.write_text(session_id)
+        if self._turn is not None:
+            turn, self._turn = self._turn, None
+            await self._end(turn, "cancelled")
+        self._started = self._started.model_copy(
+            update={
+                "agent_session": session_id,
+                "resumed": False,
+                "model": model if isinstance(model, str) else None,
+            }
+        )
+        await self._record_alone(self._started)
+        if self._following is not None:
+            self._following.cancel()
+
+    async def _record_alone(self, item: HistoryItem) -> None:
+        """An entry of no turn: it gets a turn id of its own."""
+        if self._record is not None:
+            await self._record(uuid.uuid4().hex, item)
 
     async def _take(self, entry: dict[str, Any]) -> None:
         prompt = human_prompt(entry)
@@ -577,7 +653,7 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
         await _wait_ready(pane, spec.trust_cwd)
         agent = f"Claude Code {version}" if version else None
         started = Started(pid=os.getpid(), agent_session=session_id, resumed=resume, agent=agent)
-        yield ClaudeTtyBackend(server, pane, transcripts, session_id, started, offset)
+        yield ClaudeTtyBackend(server, pane, transcripts, id_file, session_id, started, offset)
     finally:
         with anyio.CancelScope(shield=True):
             await anyio.to_thread.run_sync(lambda: server.cmd(["kill-window", "-t", pane.window_id], check=False))

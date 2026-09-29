@@ -21,6 +21,7 @@ from aid.mcp import from_claude_config
 from aid.paths import default_paths
 from aid.protocol import (
     AidError,
+    Lifecycle,
     MessageEntry,
     Output,
     PermissionDecision,
@@ -271,6 +272,8 @@ def _history_line(entry: HistoryEntry) -> str:
             body = " ".join([f"[usage] {item.input_tokens} in, {item.output_tokens} out", *item.models])
         case PermissionRequest() | PermissionDecision():
             body = _permission_line(item)
+        case Lifecycle():
+            body = " ".join(p for p in (f"[{item.event}]", item.detail) if p)
     return f"{entry.seq:>6}  {body}"
 
 

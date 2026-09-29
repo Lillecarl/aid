@@ -28,6 +28,7 @@ from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR
 from aid.protocol import (
     AidError,
     HistoryItem,
+    Lifecycle,
     MessageEntry,
     Output,
     PaneView,
@@ -42,7 +43,7 @@ from aid.protocol import (
 )
 from aid.spec import ClaudeTtySpec, McpHttp
 from tests.conftest import acp_spec, fake_spec, needs_pymux
-from tests.fake_claude import COUNT, MODEL, NOTICE, PERMISSION_INPUT
+from tests.fake_claude import COMPACT_SUMMARY, COUNT, MODEL, NOTICE, PERMISSION_INPUT
 from tests.test_tools import Rpc
 
 if TYPE_CHECKING:
@@ -257,6 +258,57 @@ async def test_a_turn_typed_into_the_pane_is_recorded(daemon: Paths, tmp_path: P
     assert usage.models == [MODEL]
     # aid's prompts still get their own turns, and the typed one is not taken for aid's.
     assert after.text == "echo: after"
+
+
+async def type_command(session: aid.Session, command: str) -> None:
+    address = await session.pane()
+    pane = next(p for p in Server(address.socket).panes if p.id == address.pane)
+    await anyio.to_thread.run_sync(pane.send_keys, command, False)
+    await anyio.to_thread.run_sync(pane.send_key, "Enter")
+
+
+async def recorded(session: aid.Session, kind: type[HistoryItem], after: int = -1) -> HistoryItem:
+    while True:
+        for entry in (await session.history(after=after, limit=1000)).entries:
+            if isinstance(entry.item, kind):
+                return entry.item
+        await anyio.sleep(0.1)
+
+
+@needs_pymux
+async def test_clear_compact_and_exit(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            await session.run("hello")
+            first = (await session.status()).agent_session
+            mark = (await session.history()).entries[-1].seq
+
+            await type_command(session, "/clear")
+            cleared = await recorded(session, Lifecycle, mark)
+            restarted = await recorded(session, Started, mark)
+            after = await session.run("after the clear")
+            status = await session.status()
+
+            mark = (await session.history()).entries[-1].seq
+            await type_command(session, "/compact")
+            compacted = await recorded(session, Lifecycle, mark)
+
+            mark = (await session.history()).entries[-1].seq
+            await type_command(session, "/exit")
+            ended = await recorded(session, Lifecycle, mark)
+            while (await session.status()).running:  # noqa: ASYNC110 -- the worker ends after Claude
+                await anyio.sleep(0.1)
+    assert cleared == Lifecycle(event="cleared")
+    assert isinstance(restarted, Started)
+    assert restarted.agent_session not in (None, first)
+    assert (restarted.resumed, restarted.model) == (False, MODEL)
+    assert after.text == "echo: after the clear"
+    assert status.agent_session == restarted.agent_session
+    session_dir = daemon.session_dir("tty")
+    assert (session_dir / "claude-session-id").read_text() == restarted.agent_session
+    assert compacted == Lifecycle(event="compacted", detail="manual", summary=COMPACT_SUMMARY)
+    assert ended == Lifecycle(event="ended", detail="prompt_input_exit")
 
 
 @needs_pymux

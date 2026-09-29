@@ -3,7 +3,7 @@
 Prompts: "slow" waits for Escape; "count" writes one text block per number; "tool" makes a tool call;
 "mcp" says the --mcp-config file; "term" says TERM; "notify" runs the Notification hook; "permission" asks through the PermissionRequest hook and obeys it;
 "permission-pane" asks, then answers yes in the pane while the hook still waits; anything else is echoed.
-Each turn runs the UserPromptSubmit and Stop hooks from --settings. FAKE_CLAUDE_TRUST=1 shows the trust dialog until a `.fake-trusted` file exists.
+Each turn runs the UserPromptSubmit and Stop hooks from --settings. Typed /clear, /compact and /exit run theirs. FAKE_CLAUDE_TRUST=1 shows the trust dialog until a `.fake-trusted` file exists.
 FAKE_CLAUDE_CHANNELS=1 shows the development channels warning, when the flag is given, until Enter.
 """
 
@@ -27,6 +27,7 @@ DOWN = b"\x1b[B"
 COUNT = 20
 MODEL = "claude-fake-1"
 NOTICE = "Claude has a question for you"
+COMPACT_SUMMARY = "The person asked for a greeting."
 PERMISSION_INPUT = {"command": "rm -rf build", "description": "Remove the build directory"}
 USAGE = {
     "input_tokens": 3,
@@ -230,8 +231,21 @@ class Fake:
             if kind == "paste":
                 pending += text
             elif kind == "enter" and pending:
-                self.turn(pending)
+                self.command(pending) if pending.startswith("/") else self.turn(pending)
                 pending = ""
+
+    def command(self, text: str) -> None:
+        """/clear starts a new session; /compact compacts this one; /exit ends Claude. Each runs its hooks."""
+        if text == "/clear":
+            self.hook("SessionEnd", reason="clear")
+            self.session_id = str(uuid.uuid4())
+            self.hook("SessionStart", source="clear", model=MODEL)
+        elif text == "/compact":
+            self.hook("PreCompact", trigger="manual", custom_instructions=None)
+            self.hook("PostCompact", trigger="manual", compact_summary=COMPACT_SUMMARY)
+        elif text == "/exit":
+            self.hook("SessionEnd", reason="prompt_input_exit")
+            sys.exit(0)
 
 
 def main() -> None:
