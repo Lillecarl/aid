@@ -487,18 +487,22 @@ async def test_zws_control_relays_what_the_page_may_ask(web: Web, tmp_path: Path
             await ws.send(b"\x02\x04PING\x00\x0ahello")
             ponged = await ws.recv()
             listed = await zws_call(ws, {"op": "list", "id": "l"})
+            [page] = await zws_call(ws, {"op": "history", "id": "hi", "session": "echo"})
             await ws.send(b"\x01{}")
             await ws.send(b"\x00{}")
             with pytest.raises(ConnectionClosed) as closed:
                 await ws.recv()
     assert created == [{"reply": "done", "id": "c", "data": {"name": "echo"}}]
     assert [r["reply"] for r in prompted][-1] == "done"
+    assert {r["id"] for r in prompted} == {"p"}
     assert {"type": "output", "output": "turn 1: echo hi", "stop_reason": "end_turn"} in [
         r["event"] for r in prompted if r["reply"] == "event"
     ]
     # Never reaches the daemon: a page may not speak for a claude-tty worker.
     assert (hook[0]["reply"], hook[0]["id"], hook[0]["code"]) == ("failure", "h", "invalid_request")
     assert "does not match any of the expected tags" in hook[0]["message"]
+    # The daemon names a turn by its request id: the relay's, never one the page chose.
+    assert {e["turn"] for e in page["data"]["entries"] if e["item"]["type"] == "output"} - {"p"}
     assert ponged == b"\x02\x04PONGhello"
     assert listed[0]["data"] == [{"name": "echo", "kind": "pydantic-ai", "running": True, **IDLE}]
     assert closed.value.rcvd is not None

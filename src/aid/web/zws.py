@@ -6,7 +6,8 @@ Origin check here are the security. libzmq's own ws listener and jszmq are not u
 Origin, and runs no ZAP on bare ZWS2.0 (4.3.5, ws_engine.cpp).
 
 - `/api/zws/control`: a DEALER on the daemon's control socket. Each request must be a `PageRequest`, which names
-  what the page may ask; any other gets a Failure and never reaches the daemon.
+  what the page may ask; any other gets a Failure and never reaches the daemon. The relay gives each request an id of
+  its own and puts the page's back on the replies.
 - `/api/zws/events`: a SUB on the daemon's events (`aid.events`). A frame `\\x01topic` subscribes, `\\x00topic`
   unsubscribes, as in ZMTP 3.0.
 
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import uuid
 from typing import TYPE_CHECKING, Annotated, Final
 
 import anyio
@@ -42,6 +44,7 @@ from aid.protocol import (
     Prompt,
     StartSession,
     StopSession,
+    decode_reply,
     encode,
 )
 from aid.web import auth
@@ -172,15 +175,22 @@ async def _accept(websocket: WebSocket) -> _Link | None:
     return _Link(websocket)
 
 
-async def _relay(link: _Link, sock: zmq.asyncio.Socket, handle: Callable[[list[bytes]], Awaitable[None]]) -> None:
-    """The daemon's messages to the page, and the page's through `handle`, until either side ends."""
+async def _relay(
+    link: _Link,
+    sock: zmq.asyncio.Socket,
+    handle: Callable[[list[bytes]], Awaitable[None]],
+    forward: Callable[[list[bytes]], list[bytes] | None] = lambda parts: parts,
+) -> None:
+    """The daemon's messages to the page through `forward` (None drops one), and the page's through `handle`, until
+    either side ends."""
     problem: str | None = None
     try:
         async with anyio.create_task_group() as tg:
 
             async def to_page() -> None:
                 while True:
-                    await link.send(*await sock.recv_multipart())
+                    if (parts := forward(await sock.recv_multipart())) is not None:
+                        await link.send(*parts)
 
             tg.start_soon(to_page)
             try:
@@ -202,6 +212,9 @@ async def control(websocket: WebSocket) -> None:
     if (link := await _accept(websocket)) is None:
         return
     client: Client = websocket.app.state.client
+    # The daemon's request id for each of the page's. The daemon routes replies and names turns by request id,
+    # whichever client sent it, so a page that chose one could take another client's replies.
+    page_ids: dict[str, str] = {}
     async with client.open_socket(zmq.DEALER) as sock:
 
         async def handle(parts: list[bytes]) -> None:
@@ -212,9 +225,18 @@ async def control(websocket: WebSocket) -> None:
             except ValidationError as error:
                 await link.send(refusal(parts[0], str(error)))
                 return
-            await sock.send(encode(request))
+            ours = uuid.uuid4().hex
+            page_ids[ours] = request.id
+            await sock.send(encode(request.model_copy(update={"id": ours})))
 
-        await _relay(link, sock, handle)
+        def forward(parts: list[bytes]) -> list[bytes] | None:
+            reply = decode_reply(parts[0])
+            if not isinstance(reply, Event | Done | Failure) or reply.id not in page_ids:
+                return None
+            page_id = page_ids[reply.id] if isinstance(reply, Event) else page_ids.pop(reply.id)
+            return [encode(reply.model_copy(update={"id": page_id}))]
+
+        await _relay(link, sock, handle, forward)
 
 
 async def events(websocket: WebSocket) -> None:
