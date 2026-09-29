@@ -31,6 +31,7 @@ from aid.protocol import (
     GetPane,
     GetScreen,
     GetStatus,
+    GetSummary,
     HistoryPage,
     ListAgents,
     ListSessions,
@@ -44,6 +45,7 @@ from aid.protocol import (
     SendMessage,
     SessionInfo,
     SessionStatus,
+    SessionSummary,
     StartSession,
     StopSession,
     TextDelta,
@@ -196,6 +198,10 @@ class Session:
             return RunResult(output.output, "".join(chunks), output.stop_reason)
         typed = TypeAdapter(output_type).validate_python(output.output)
         return RunResult(typed, "".join(chunks), output.stop_reason)
+
+    async def summary(self) -> SessionSummary:
+        """The whole history totalled: tokens, models, agent sessions, cost, and the files tool calls touched."""
+        return SessionSummary.model_validate(await self._client.call(GetSummary(session=self.name)))
 
     async def history(self, *, before: int | None = None, after: int | None = None, limit: int = 100) -> HistoryPage:
         """A page of this session's history: the newest entries before `before`, the oldest after `after`, or

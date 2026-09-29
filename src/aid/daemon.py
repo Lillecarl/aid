@@ -32,6 +32,7 @@ from aid.protocol import (
     GetPane,
     GetScreen,
     GetStatus,
+    GetSummary,
     Hello,
     ListAgents,
     ListSessions,
@@ -50,6 +51,7 @@ from aid.protocol import (
     encode,
 )
 from aid.spec import BUILTIN_MCP_SERVER, AcpSpec, AgentKind, AgentSpecAdapter, ClaudeTtySpec, PydanticAISpec
+from aid.summary import summarize
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -330,6 +332,10 @@ class Daemon:
                 del self._sessions[session.name]
                 await anyio.to_thread.run_sync(shutil.rmtree, self._paths.session_dir(session.name), True)
                 return Done(id=request.id)
+            case GetSummary():
+                entries = await self._session(request.session).history.entries()
+                summary = await anyio.to_thread.run_sync(summarize, entries)
+                return Done(id=request.id, data=summary.model_dump(mode="json"))
             case GetHistory():
                 session = self._session(request.session)
                 page = await session.history.page(before=request.before, after=request.after, limit=request.limit)

@@ -154,6 +154,10 @@ def _parser() -> argparse.ArgumentParser:
         "agents", help="list the aid.PydanticAgent classes and @aid.mcptool functions on the daemon's agents path"
     )
 
+    sub.add_parser(
+        "summary", help="a session's totals as JSON: tokens, models, agent sessions, cost, files touched"
+    ).add_argument("name")
+
     hist = sub.add_parser("history", help="print a session's history, newest last")
     hist.add_argument("name")
     hist.add_argument("--limit", type=int, default=50)
@@ -261,6 +265,8 @@ async def _client_command(args: argparse.Namespace) -> None:
             case "list":
                 for info in await client.sessions():
                     print(f"{info.name}\t{info.kind}\t{'running' if info.running else 'stopped'}")
+            case "summary":
+                print((await client.session(args.name).summary()).model_dump_json(indent=2))
             case "history":
                 page = await client.session(args.name).history(before=args.before, limit=args.limit)
                 if page.has_older and not args.json:

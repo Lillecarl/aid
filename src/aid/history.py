@@ -15,6 +15,7 @@ import time
 from typing import TYPE_CHECKING, Final
 
 import anyio
+import anyio.to_thread
 from pydantic import ValidationError
 
 from aid.protocol import HistoryEntry, HistoryPage, PromptEntry, TextDelta, ThoughtDelta, TurnError
@@ -66,6 +67,22 @@ class HistoryLog:
                 offsets.append(offsets[-1] + len(line))
             return entry
 
+    async def entries(self) -> list[HistoryEntry]:
+        """Every entry. Reads the whole file: for totals, not for display."""
+        async with self._lock:
+            offsets = await self._index()
+            data = await self._path.read_bytes() if offsets[-1] else b""
+        return await anyio.to_thread.run_sync(self._parse, data[: offsets[-1]])
+
+    def _parse(self, data: bytes) -> list[HistoryEntry]:
+        entries: list[HistoryEntry] = []
+        for line in data.splitlines():
+            try:
+                entries.append(HistoryEntry.model_validate_json(line))
+            except ValidationError:
+                log.exception("%s: skipping an unreadable entry", self._path)
+        return entries
+
     async def page(self, *, before: int | None = None, after: int | None = None, limit: int = 100) -> HistoryPage:
         """Up to `limit` entries: the newest before `before`, the oldest after `after`, or the newest of all."""
         if before is not None and after is not None:
@@ -85,11 +102,7 @@ class HistoryLog:
                 async with await anyio.open_file(self._path, "rb") as f:
                     await f.seek(offsets[start])
                     data = await f.read(offsets[end] - offsets[start])
-                for line in data.splitlines():
-                    try:
-                        entries.append(HistoryEntry.model_validate_json(line))
-                    except ValidationError:
-                        log.exception("%s: skipping an unreadable entry", self._path)
+                entries = self._parse(data)
         return HistoryPage(entries=entries, has_older=start > 0, has_newer=end < total, total=total)
 
 

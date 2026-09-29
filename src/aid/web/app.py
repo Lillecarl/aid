@@ -159,6 +159,12 @@ async def history(request: Request) -> Response:
     return JSONResponse(page.model_dump(mode="json"))
 
 
+@api()
+async def summary(request: Request) -> Response:
+    totals = await _client(request).session(request.path_params["name"]).summary()
+    return JSONResponse(totals.model_dump(mode="json"))
+
+
 @api(mutating=True)
 async def prompt(request: Request) -> Response:
     body = PromptBody.model_validate(await request.json())
@@ -436,6 +442,7 @@ def create_app(
             Route("/api/sessions", create_session, methods=["POST"]),
             Route("/api/sessions/{name}", delete, methods=["DELETE"]),
             Route("/api/sessions/{name}/history", history, methods=["GET"]),
+            Route("/api/sessions/{name}/summary", summary, methods=["GET"]),
             Route("/api/sessions/{name}/status", status, methods=["GET"]),
             Route("/api/sessions/{name}/files", list_files, methods=["GET"]),
             Route("/api/sessions/{name}/file", read_file, methods=["GET"]),

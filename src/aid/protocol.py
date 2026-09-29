@@ -152,6 +152,7 @@ type Request = Annotated[
     | DeleteSession
     | ListAgents
     | GetHistory
+    | GetSummary
     | SendMessage
     | ReceiveMessages,
     Field(discriminator="op"),
@@ -333,6 +334,42 @@ class HistoryPage(_Message):
     has_older: bool
     has_newer: bool
     total: int
+
+
+class FileActivity(_Message):
+    path: str
+    """As the agent named it: absolute, or relative to the session's directory."""
+    reads: int = 0
+    writes: int = 0
+    last_seq: int
+    """The history entry of its latest tool call."""
+
+
+class SessionSummary(_Message):
+    """A session's whole history, totalled. Token counts sum each turn's Usage, so they cover what the agents
+    reported and nothing more (see Usage)."""
+
+    turns: int = 0
+    starts: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    thought_tokens: int = 0
+    requests: int = 0
+    models: dict[str, int] = Field(default_factory=dict[str, int])
+    """Turns per model."""
+    cost: dict[str, float] = Field(default_factory=dict[str, float])
+    """Per currency: the last cost each agent session reported, summed over the agent sessions."""
+    agent_sessions: list[str] = Field(default_factory=list[str])
+    """Oldest first."""
+    files: list[FileActivity] = Field(default_factory=list[FileActivity])
+    """Most recently touched first."""
+
+
+class GetSummary(_Request):
+    op: Literal["summary"] = "summary"
+    session: str
 
 
 class SessionInfo(_Message):
