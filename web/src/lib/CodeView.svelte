@@ -111,6 +111,8 @@
         doc: text,
         extensions: [
           basicSetup,
+          // Lines split on \n alone, so \r stays in the doc and the server's offsets into the raw text hold.
+          EditorState.lineSeparator.of("\n"),
           layout,
           syntaxHighlighting(pygments),
           EditorView.contentAttributes.of({ class: "hl" }),
