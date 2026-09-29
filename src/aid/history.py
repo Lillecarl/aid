@@ -58,10 +58,12 @@ class HistoryLog:
             offsets = await self._index()
             entry = HistoryEntry(seq=len(offsets) - 1, at=time.time(), turn=turn, item=item)
             line = entry.model_dump_json().encode() + b"\n"
-            await self._path.parent.mkdir(parents=True, exist_ok=True)
-            async with await anyio.open_file(self._path, "ab") as f:
-                await f.write(line)
-            offsets.append(offsets[-1] + len(line))
+            # Shielded: a cancel mid-write would leave half a line, and skip closing the file.
+            with anyio.CancelScope(shield=True):
+                await self._path.parent.mkdir(parents=True, exist_ok=True)
+                async with await anyio.open_file(self._path, "ab") as f:
+                    await f.write(line)
+                offsets.append(offsets[-1] + len(line))
             return entry
 
     async def page(self, *, before: int | None = None, after: int | None = None, limit: int = 100) -> HistoryPage:
