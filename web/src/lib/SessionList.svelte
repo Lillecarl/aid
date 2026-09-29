@@ -15,7 +15,10 @@
     <li>
       <button type="button" class:current={session.name === current} onclick={() => onselect(session.name)}>
         <span class="name">{session.name}</span>
-        <span class="meta">{session.kind} · {session.running ? "running" : "stopped"}</span>
+        <span class="meta"
+          >{session.kind} · {session.working ? "working" : session.running ? "running" : "stopped"}</span
+        >
+        {#if session.attention}<span class="asks">{session.attention}</span>{/if}
         {#if session.permissions > 0}
           <span class="asks">waits on {session.permissions === 1 ? "an approval" : `${session.permissions} approvals`}</span>
         {/if}

@@ -8,6 +8,10 @@ export interface SessionInfo {
   running: boolean;
   /** Permission requests the agent waits on an answer to. */
   permissions: number;
+  /** In a turn: aid's, or one typed into the pane. */
+  working: boolean;
+  /** What the agent asks a person to look at, in its own words. */
+  attention: string | null;
 }
 
 export interface SessionStatus {
@@ -27,6 +31,8 @@ export interface SessionStatus {
   model: string | null;
   /** Requests the agent waits on an answer to. */
   permissions: PermissionRequestEvent[];
+  working: boolean;
+  attention: string | null;
 }
 
 export const statusEventsUrl = (name: string): string => `/api/sessions/${encodeURIComponent(name)}/status/events`;

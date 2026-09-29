@@ -24,9 +24,9 @@
     api.watch<SessionStatus>(
       api.statusEventsUrl(name),
       (data) => {
-        const changed = !status || status.busy !== data.busy || status.running !== data.running;
+        const changed = !status || status.working !== data.working || status.running !== data.running;
         status = data;
-        if (changed && !data.busy) void total();
+        if (changed && !data.working) void total();
       },
       (text) => (problem = text),
     ),
@@ -45,9 +45,13 @@
   <dl>
     <dt>State</dt>
     <dd>
-      {status.running ? (status.busy ? "running a turn" : "idle") : "stopped"}
+      {status.running ? (status.working ? "running a turn" : "idle") : "stopped"}
       {#if status.pid !== null}<span class="muted">(pid {status.pid})</span>{/if}
     </dd>
+    {#if status.attention}
+      <dt>Asks for you</dt>
+      <dd>{status.attention}</dd>
+    {/if}
     <dt>Waiting messages</dt>
     <dd>{status.pending}</dd>
     <dt>Kind</dt>
