@@ -8,10 +8,12 @@ one JSON-encoded model as its last frame.
 
 from __future__ import annotations
 
+import json
 import uuid
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from pydantic_core import to_jsonable_python
 
 from aid.spec import AgentKind, AgentSpec
 
@@ -176,12 +178,48 @@ class ThoughtDelta(_Message):
     text: str
 
 
+TOOL_TEXT_LIMIT: Final = 20_000
+"""Characters of a tool's output, or of a side of a diff, that an event carries; history keeps every event."""
+
+
+def clip(text: str) -> str:
+    if len(text) <= TOOL_TEXT_LIMIT:
+        return text
+    return f"{text[:TOOL_TEXT_LIMIT]}\n… {len(text) - TOOL_TEXT_LIMIT} more characters"
+
+
+def to_json(value: object) -> JsonValue:
+    """A tool's arguments as JSON; what JSON cannot hold becomes its `str`."""
+    return cast("JsonValue", to_jsonable_python(value, fallback=str))
+
+
+def tool_text(value: object) -> str | None:
+    """A tool's result as text: a string as it is, anything else as indented JSON."""
+    if value is None or isinstance(value, str):
+        return value
+    return json.dumps(to_json(value), indent=2)
+
+
+class ToolDiff(_Message):
+    path: str
+    old: str | None = None
+    """None for a new file."""
+    new: str
+
+
 class ToolCall(_Message):
+    """A tool call starting, or an update to it: fields left empty keep what an earlier event of the call said."""
+
     type: Literal["tool_call"] = "tool_call"
     tool_call_id: str
     title: str | None = None
     kind: str | None = None
     status: str | None = None
+    input: JsonValue = None
+    output: str | None = None
+    diffs: list[ToolDiff] = Field(default_factory=list[ToolDiff])
+    paths: list[str] = Field(default_factory=list[str])
+    """Files the call touches, `path` or `path:line`."""
 
 
 class Output(_Message):

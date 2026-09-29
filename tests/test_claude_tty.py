@@ -92,8 +92,8 @@ async def test_prompt_round_trip(daemon: Paths, tmp_path: Path, pymux_socket: st
     assert multi.output == "echo: one\ntwo; three"
     assert counted.text == "".join(f"{i} " for i in range(COUNT))
     assert events == [
-        ToolCall(tool_call_id="toolu_fake", title="Bash", status="in_progress"),
-        ToolCall(tool_call_id="toolu_fake", status="completed"),
+        ToolCall(tool_call_id="toolu_fake", title="Bash", status="in_progress", input={"command": "true"}),
+        ToolCall(tool_call_id="toolu_fake", status="completed", output="ok"),
         TextDelta(text="ran it"),
         Output(output="ran it", stop_reason="end_turn"),
     ]

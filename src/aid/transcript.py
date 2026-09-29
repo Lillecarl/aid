@@ -27,7 +27,7 @@ from watchfiles import (
     awatch,  # pyright: ignore[reportUnknownVariableType] -- its stop_event type names trio, which is not installed
 )
 
-from aid.protocol import TextDelta, ThoughtDelta, ToolCall
+from aid.protocol import TextDelta, ThoughtDelta, ToolCall, clip, to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -60,6 +60,11 @@ class _Lenient(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
 
+class _ResultBlock(_Lenient):
+    type: str = ""
+    text: str = ""
+
+
 class _Block(_Lenient):
     type: str = ""
     text: str = ""
@@ -68,6 +73,15 @@ class _Block(_Lenient):
     name: str | None = None
     tool_use_id: str = ""
     is_error: bool = False
+    input: Any = None
+    """A `tool_use` block's arguments."""
+    content: str | list[_ResultBlock] | None = None
+    """A `tool_result` block's result."""
+
+    def result_text(self) -> str | None:
+        if isinstance(self.content, list):
+            return "\n".join(b.text for b in self.content if b.type == "text" and b.text) or None
+        return self.content
 
 
 class _Message(_Lenient):
@@ -99,11 +113,19 @@ def items_from_entry(raw: dict[str, Any]) -> list[TranscriptItem]:
                 elif block.type == "thinking" and block.thinking:
                     items.append(ThoughtDelta(text=block.thinking))
                 elif block.type == "tool_use":
-                    items.append(ToolCall(tool_call_id=block.id, title=block.name, status="in_progress"))
+                    items.append(
+                        ToolCall(
+                            tool_call_id=block.id, title=block.name, status="in_progress", input=to_json(block.input)
+                        )
+                    )
             return items
         case "user" if "tool_use_result" in entry.model_fields_set:
             return [
-                ToolCall(tool_call_id=b.tool_use_id, status="failed" if b.is_error else "completed")
+                ToolCall(
+                    tool_call_id=b.tool_use_id,
+                    status="failed" if b.is_error else "completed",
+                    output=clip(text) if (text := b.result_text()) else None,
+                )
                 for b in blocks
                 if b.type == "tool_result"
             ]

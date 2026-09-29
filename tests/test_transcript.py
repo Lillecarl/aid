@@ -25,8 +25,8 @@ def assistant(block: dict[str, Any], stop_reason: str = "tool_use") -> dict[str,
         (assistant({"type": "text", "text": "hi"}, "end_turn"), [TextDelta(text="hi")]),
         (assistant({"type": "thinking", "thinking": "hmm"}), [ThoughtDelta(text="hmm")]),
         (
-            assistant({"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}),
-            [ToolCall(tool_call_id="toolu_1", title="Bash", status="in_progress")],
+            assistant({"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}),
+            [ToolCall(tool_call_id="toolu_1", title="Bash", status="in_progress", input={"command": "ls"})],
         ),
         (
             {
@@ -34,7 +34,27 @@ def assistant(block: dict[str, Any], stop_reason: str = "tool_use") -> dict[str,
                 "toolUseResult": {},
                 "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]},
             },
-            [ToolCall(tool_call_id="toolu_1", status="completed")],
+            [ToolCall(tool_call_id="toolu_1", status="completed", output="ok")],
+        ),
+        (
+            {
+                "type": "user",
+                "toolUseResult": {},
+                "message": {
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_3",
+                            "content": [
+                                {"type": "text", "text": "a"},
+                                {"type": "image"},
+                                {"type": "text", "text": "b"},
+                            ],
+                        }
+                    ]
+                },
+            },
+            [ToolCall(tool_call_id="toolu_3", status="completed", output="a\nb")],
         ),
         (
             {

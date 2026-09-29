@@ -16,7 +16,9 @@ from acp.schema import (
     AgentThoughtChunk,
     AllowedOutcome,
     ClientCapabilities,
+    ContentToolCallContent,
     DeniedOutcome,
+    FileEditToolCallContent,
     Implementation,
     RequestPermissionResponse,
     SessionNotification,
@@ -28,7 +30,17 @@ from pydantic import BaseModel, Field, ValidationError
 
 from aid.env import agent_environment
 from aid.mcp import AID_TOOL_PREFIX, session_servers, to_acp
-from aid.protocol import Output, SessionEvent, TextDelta, ThoughtDelta, ToolCall
+from aid.protocol import (
+    Output,
+    SessionEvent,
+    TextDelta,
+    ThoughtDelta,
+    ToolCall,
+    ToolDiff,
+    clip,
+    to_json,
+    tool_text,
+)
 from aid.spec import PermissionMode
 
 if TYPE_CHECKING:
@@ -76,11 +88,27 @@ def to_event(update: object) -> SessionEvent | None:
         case AgentThoughtChunk(content=TextContentBlock(text=text)):
             return ThoughtDelta(text=text)
         case ToolCallStart() | ToolCallProgress():
+            content = update.content or []
+            texts = [
+                c.content.text
+                for c in content
+                if isinstance(c, ContentToolCallContent) and isinstance(c.content, TextContentBlock)
+            ]
+            diffs = [
+                ToolDiff(path=c.path, old=clip(c.old_text) if c.old_text is not None else None, new=clip(c.new_text))
+                for c in content
+                if isinstance(c, FileEditToolCallContent)
+            ]
+            output = "\n".join(texts) if texts else tool_text(update.raw_output)
             return ToolCall(
                 tool_call_id=update.tool_call_id,
                 title=update.title,
                 kind=update.kind,
                 status=update.status,
+                input=to_json(update.raw_input),
+                output=clip(output) if output else None,
+                diffs=diffs,
+                paths=[f"{loc.path}:{loc.line}" if loc.line else loc.path for loc in update.locations or []],
             )
         case _:
             return None

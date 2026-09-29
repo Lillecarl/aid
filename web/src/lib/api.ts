@@ -70,10 +70,32 @@ export function watch<T>(url: string, ondata: (data: T) => void, onproblem: (pro
   };
 }
 
+export interface ToolDiff {
+  path: string;
+  /** null for a new file. */
+  old: string | null;
+  new: string;
+}
+
+/** A tool call starting, or an update to it: empty fields keep what an earlier event of the call said. */
+export interface ToolCallEvent {
+  type: "tool_call";
+  tool_call_id: string;
+  title: string | null;
+  kind: string | null;
+  status: string | null;
+  // Absent in history written before aid recorded them.
+  input?: unknown;
+  output?: string | null;
+  diffs?: ToolDiff[];
+  /** `path` or `path:line`. */
+  paths?: string[];
+}
+
 export type SessionEvent =
   | { type: "text"; text: string }
   | { type: "thought"; text: string }
-  | { type: "tool_call"; tool_call_id: string; title: string | null; kind: string | null; status: string | null }
+  | ToolCallEvent
   | { type: "output"; output: unknown; stop_reason: string };
 
 export type HistoryItem =

@@ -18,16 +18,18 @@ from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     PartDeltaEvent,
     PartStartEvent,
+    RetryPromptPart,
     TextPart,
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
+    ToolReturnPart,
 )
 from pydantic_ai.run import AgentRunResultEvent
 from pydantic_core import to_jsonable_python
 
 from aid.agents import ENV_AGENTS_PATH, Catalog, agents_path, discover
-from aid.protocol import Output, SessionEvent, TextDelta, ThoughtDelta, ToolCall
+from aid.protocol import Output, SessionEvent, TextDelta, ThoughtDelta, ToolCall, clip, to_json
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -75,9 +77,16 @@ def to_event(event: object) -> SessionEvent | None:
         case PartDeltaEvent(delta=ThinkingPartDelta(content_delta=text)):
             return ThoughtDelta(text=text) if text else None
         case FunctionToolCallEvent(part=part):
-            return ToolCall(tool_call_id=part.tool_call_id, title=part.tool_name, status="in_progress")
-        case FunctionToolResultEvent():
-            return ToolCall(tool_call_id=event.tool_call_id, status="completed")
+            return ToolCall(
+                tool_call_id=part.tool_call_id,
+                title=part.tool_name,
+                status="in_progress",
+                input=to_json(part.args_as_dict()),
+            )
+        case FunctionToolResultEvent(part=ToolReturnPart() as part):
+            return ToolCall(tool_call_id=part.tool_call_id, status="completed", output=clip(part.model_response_str()))
+        case FunctionToolResultEvent(part=RetryPromptPart() as part):
+            return ToolCall(tool_call_id=part.tool_call_id, status="failed", output=clip(part.model_response()))
         case _:
             return None
 

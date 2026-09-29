@@ -4,6 +4,8 @@
   import type { HistoryEntry, HistoryItem, SessionEvent } from "./api";
   import { Dictation } from "./dictation";
   import Markdown from "./Markdown.svelte";
+  import ToolCard from "./ToolCard.svelte";
+  import { merge, type Tool, toolOf } from "./tools";
 
   interface Props {
     name: string;
@@ -12,17 +14,10 @@
   }
 
   type Kind = "user" | "message" | "assistant" | "thought" | "tool" | "meta" | "error";
-  interface Tool {
-    id: string;
-    title: string | null;
-    kind: string | null;
-    status: string | null;
-  }
   /** One entry of the log. `seq` is set for rows read from history; rows of a turn still streaming lack it. A
    * tool call is one row, which later updates of the same call change. */
   type Row = { key: string; seq?: number; kind: Kind; text: string; tool?: Tool };
 
-  const STATUS_ICON: Record<string, string> = { pending: "○", in_progress: "◐", completed: "✓", failed: "✗" };
   const PAGE = 100;
   const EDGE_PX = 200;
   const WINDOW_KEY = "aid.historyWindow";
@@ -54,12 +49,7 @@
       case "thought":
         return [row("thought", item.text)];
       case "tool_call":
-        return [
-          {
-            ...row("tool", ""),
-            tool: { id: item.tool_call_id, title: item.title, kind: item.kind, status: item.status },
-          },
-        ];
+        return [{ ...row("tool", ""), tool: toolOf(item) }];
       case "output": {
         const typed = item.output !== null && typeof item.output !== "string";
         const meta = row("meta", `[${item.stop_reason}]`);
@@ -84,9 +74,7 @@
     if (item.type === "tool_call") {
       const call = into.findLast((r) => r.tool?.id === item.tool_call_id)?.tool;
       if (call) {
-        call.title = item.title ?? call.title;
-        call.kind = item.kind ?? call.kind;
-        call.status = item.status ?? call.status;
+        merge(call, item);
         return;
       }
     }
@@ -290,12 +278,7 @@
         <Markdown text={row.text} />
       </details>
     {:else if row.tool}
-      {@const status = row.tool.status ?? "pending"}
-      <div class="tool {status}" title={row.tool.id}>
-        <span class="icon" aria-label={status}>{STATUS_ICON[status] ?? "•"}</span>
-        {#if row.tool.kind}<span class="kind">{row.tool.kind}</span>{/if}
-        <span class="title">{row.tool.title ?? row.tool.id}</span>
-      </div>
+      <ToolCard tool={row.tool} />
     {:else}
       <div class={row.kind}>{row.text}</div>
     {/if}
@@ -390,44 +373,6 @@
   .thought[open] {
     border-left: 2px solid var(--line);
     padding-left: 0.6rem;
-  }
-  .tool {
-    display: flex;
-    align-items: baseline;
-    gap: 0.5rem;
-    font-size: 0.85em;
-    border: 1px solid var(--line);
-    border-radius: 0.3rem;
-    padding: 0.15rem 0.5rem;
-    width: fit-content;
-    max-width: 100%;
-  }
-  .tool .title {
-    font-family: ui-monospace, monospace;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .tool .kind {
-    color: var(--muted);
-    text-transform: lowercase;
-  }
-  .tool .icon {
-    width: 1em;
-    text-align: center;
-  }
-  .tool.completed .icon {
-    color: var(--ok);
-  }
-  .tool.failed {
-    border-color: var(--bad);
-  }
-  .tool.failed .icon {
-    color: var(--bad);
-  }
-  .tool.in_progress .icon,
-  .tool.pending .icon {
-    color: var(--accent);
   }
   .meta {
     color: var(--muted);
