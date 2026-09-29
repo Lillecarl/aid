@@ -163,6 +163,7 @@
   let newest = -1;
   /** An entry arrived while the rows could not take it: fetch it once they can. */
   let behind = false;
+  let catchingUp = false;
 
   const loadLatest = () =>
     guard(async () => {
@@ -201,9 +202,11 @@
   /** An entry the history stream sent: a turn this page did not send, such as one typed into the pane. */
   function arrived(entry: HistoryEntry): void {
     if (entry.seq <= newest || hasNewer) return; // Seen already, or the rows end before it: scrolling fetches it.
-    if (busy || loading) {
-      // This page's own turn is streaming, or a page is loading; either one fetches what it missed once done.
+    if (busy || loading || catchingUp || entry.seq !== newest + 1) {
+      // This page's own turn is streaming, a page is loading, or entries before this one are not here yet: fetch
+      // what is missing in order, never skip ahead of it.
       behind = true;
+      if (!busy && !loading) void reconcile().catch(() => undefined);
       return;
     }
     newest = entry.seq;
@@ -226,14 +229,25 @@
     if (follow) void toBottom();
   }
 
-  /** Swap the streamed rows for the entries history recorded, which carry their seq. */
+  /** Swap the streamed rows for the entries history recorded, which carry their seq, and fetch any the history
+   * stream sent while the rows could not take them. One runs at a time; `arrived` waits for it. */
   async function reconcile(): Promise<void> {
-    behind = false;
-    const page = await api.history(name, { after: newest, limit: 1000 });
-    // The history stream can add entries while the page loads; `newest` covers those by now.
-    const fresh = page.entries.filter((e) => e.seq > newest);
-    rows = [...rows.filter((r) => r.seq !== undefined), ...fromHistory(fresh)];
-    newest = fresh.at(-1)?.seq ?? newest;
+    if (catchingUp) {
+      behind = true;
+      return;
+    }
+    catchingUp = true;
+    try {
+      do {
+        behind = false;
+        const page = await api.history(name, { after: newest, limit: 1000 });
+        rows = [...rows.filter((r) => r.seq !== undefined), ...fromHistory(page.entries)];
+        newest = page.entries.at(-1)?.seq ?? newest;
+        behind ||= page.has_newer;
+      } while (behind);
+    } finally {
+      catchingUp = false;
+    }
     await keepingPosition(trimTop);
     await toBottom();
   }
