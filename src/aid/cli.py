@@ -23,6 +23,8 @@ from aid.protocol import (
     AidError,
     MessageEntry,
     Output,
+    PermissionDecision,
+    PermissionRequest,
     PromptEntry,
     Started,
     TextDelta,
@@ -136,7 +138,16 @@ def _parser() -> argparse.ArgumentParser:
         return p
 
     acp = with_mcp(new("new-acp", "create a session running an ACP agent command, given after --"))
-    acp.add_argument("--allow", action="store_true", help="grant every permission request (default: deny)")
+    acp.add_argument(
+        "--permission",
+        type=PermissionMode,
+        choices=list(PermissionMode),
+        default=PermissionMode.DENY,
+        help="answer the agent's permission requests: allow, deny, or ask a person (`aid answer`, the web UI)",
+    )
+    acp.add_argument(
+        "--allow", dest="permission", action="store_const", const=PermissionMode.ALLOW, help="--permission allow"
+    )
     acp.add_argument("--no-inherit-env", action="store_true", help="start the agent with only --env")
 
     claude = with_mcp(
@@ -172,6 +183,11 @@ def _parser() -> argparse.ArgumentParser:
     message.add_argument("name")
     message.add_argument("text", help="message text, or - to read stdin")
     message.add_argument("--from", dest="sender", help="the session it is from (default: a person)")
+
+    answer = sub.add_parser("answer", help="answer a permission request the session waits on")
+    answer.add_argument("name")
+    answer.add_argument("request", help="the request id, as `aid prompt` and `aid history` print it")
+    answer.add_argument("option", nargs="?", help="the option id to choose; none cancels the request")
 
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
@@ -209,7 +225,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             env=env,
             command=command,
             inherit_env=not args.no_inherit_env,
-            permission=PermissionMode.ALLOW if args.allow else PermissionMode.DENY,
+            permission=args.permission,
             mcp_servers=_mcp_servers(args.mcp_config),
         )
     if args.command == "new-claude":
@@ -253,7 +269,18 @@ def _history_line(entry: HistoryEntry) -> str:
             body = " ".join(p for p in (how, f"pid {item.pid}", item.agent, item.model, item.agent_session) if p)
         case Usage():
             body = " ".join([f"[usage] {item.input_tokens} in, {item.output_tokens} out", *item.models])
+        case PermissionRequest() | PermissionDecision():
+            body = _permission_line(item)
     return f"{entry.seq:>6}  {body}"
+
+
+def _permission_line(item: PermissionRequest | PermissionDecision) -> str:
+    match item:
+        case PermissionRequest():
+            options = ", ".join(f"{o.option_id} ({o.name})" for o in item.options)
+            return f"[permission {item.request_id}] {item.tool_name or ''} {item.title or ''}: {options}"
+        case PermissionDecision():
+            return f"[permission {item.request_id}] {item.option_id or 'cancelled'} by {item.by}"
 
 
 async def _client_command(args: argparse.Namespace) -> None:
@@ -286,6 +313,8 @@ async def _client_command(args: argparse.Namespace) -> None:
                 async for event in client.session(args.name).stream(text):
                     if isinstance(event, TextDelta):
                         print(event.text, end="", flush=True)
+                    elif isinstance(event, PermissionRequest | PermissionDecision):
+                        print(f"\n{_permission_line(event)}", file=sys.stderr, flush=True)
                     elif isinstance(event, Output):
                         if not isinstance(event.output, str) and event.output is not None:
                             print(json.dumps(event.output, indent=2))
@@ -297,6 +326,8 @@ async def _client_command(args: argparse.Namespace) -> None:
                 await client.session(args.name).start()
             case "cancel":
                 await client.session(args.name).cancel()
+            case "answer":
+                await client.session(args.name).answer(args.request, args.option)
             case "stop":
                 await client.session(args.name).stop()
             case "delete":

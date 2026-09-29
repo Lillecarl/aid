@@ -15,10 +15,12 @@ class AgentKind(StrEnum):
 
 
 class PermissionMode(StrEnum):
-    """Answer the daemon gives an ACP agent's permission requests. Nobody is watching to ask."""
+    """How aid answers an ACP agent's permission requests."""
 
     ALLOW = "allow"
     DENY = "deny"
+    ASK = "ask"
+    """A person answers, from the web UI or `aid answer`; the request is refused after `permission_timeout`."""
 
 
 class _Spec(BaseModel):
@@ -81,6 +83,8 @@ class AcpSpec(_Spec):
     command: Annotated[list[str], Field(min_length=1)]
     inherit_env: bool = True
     permission: PermissionMode = PermissionMode.DENY
+    permission_timeout: Annotated[float, Field(gt=0)] = 1800
+    """Seconds an `ask` request waits for a person before it is refused."""
     mcp_servers: McpServers = Field(default_factory=list[McpServer])
 
 

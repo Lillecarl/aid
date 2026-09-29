@@ -69,12 +69,15 @@ async def daemon(paths: Paths, launcher: ForkserverLauncher) -> AsyncIterator[Pa
         tg.cancel_scope.cancel()
 
 
-def acp_spec(cwd: Path, permission: PermissionMode = PermissionMode.DENY, **env: str) -> AcpSpec:
+def acp_spec(
+    cwd: Path, permission: PermissionMode = PermissionMode.DENY, *, permission_timeout: float = 1800, **env: str
+) -> AcpSpec:
     return AcpSpec(
         cwd=str(cwd),
         command=[sys.executable, str(TESTS / "fake_acp_agent.py")],
         env=env,
         permission=permission,
+        permission_timeout=permission_timeout,
     )
 
 

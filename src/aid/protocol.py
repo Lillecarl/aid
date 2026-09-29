@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from enum import StrEnum
 from typing import Annotated, Final, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
@@ -142,6 +143,15 @@ class GetPane(_Request):
     session: str
 
 
+class AnswerPermission(_Request):
+    """A person's answer to a pending PermissionRequest: one of its options, or None to cancel it."""
+
+    op: Literal["answer_permission"] = "answer_permission"
+    session: str
+    request_id: str
+    option_id: str | None
+
+
 type Request = Annotated[
     GetStatus
     | GetScreen
@@ -157,7 +167,8 @@ type Request = Annotated[
     | GetHistory
     | GetSummary
     | SendMessage
-    | ReceiveMessages,
+    | ReceiveMessages
+    | AnswerPermission,
     Field(discriminator="op"),
 ]
 
@@ -277,7 +288,49 @@ class Output(_Message):
     stop_reason: str
 
 
-type SessionEvent = Annotated[TextDelta | ThoughtDelta | ToolCall | Usage | Output, Field(discriminator="type")]
+class PermissionChoice(_Message):
+    option_id: str
+    name: str
+    kind: str
+    """ACP's option kind: allow_once, allow_always, reject_once, reject_always."""
+
+
+class PermissionRequest(_Message):
+    """The agent asks before a tool call, and waits for a PermissionDecision. A session whose permission mode is
+    `ask` waits for a person to answer it (`AnswerPermission`)."""
+
+    type: Literal["permission_request"] = "permission_request"
+    request_id: str
+    tool_call_id: str
+    tool_name: str | None = None
+    title: str | None = None
+    kind: str | None = None
+    input: JsonValue = None
+    options: list[PermissionChoice]
+
+
+class PermissionDecider(StrEnum):
+    PERSON = "person"
+    POLICY = "policy"
+    """The session's permission mode answered, with no one asked."""
+    TIMEOUT = "timeout"
+    """Nobody answered in time; the request was refused."""
+    CANCEL = "cancel"
+    """The turn ended first."""
+
+
+class PermissionDecision(_Message):
+    type: Literal["permission_decision"] = "permission_decision"
+    request_id: str
+    option_id: str | None
+    """The chosen option; None when the request was cancelled."""
+    by: PermissionDecider
+
+
+type SessionEvent = Annotated[
+    TextDelta | ThoughtDelta | ToolCall | PermissionRequest | PermissionDecision | Usage | Output,
+    Field(discriminator="type"),
+]
 
 
 class Started(_Message):
@@ -317,7 +370,17 @@ class MessageEntry(_Message):
 
 
 type HistoryItem = Annotated[
-    PromptEntry | MessageEntry | Started | TextDelta | ThoughtDelta | ToolCall | Usage | Output | TurnError,
+    PromptEntry
+    | MessageEntry
+    | Started
+    | TextDelta
+    | ThoughtDelta
+    | ToolCall
+    | PermissionRequest
+    | PermissionDecision
+    | Usage
+    | Output
+    | TurnError,
     Field(discriminator="type"),
 ]
 
@@ -379,6 +442,8 @@ class SessionInfo(_Message):
     name: str
     kind: AgentKind
     running: bool
+    permissions: int = 0
+    """Permission requests the agent waits on an answer to."""
 
 
 class SessionStatus(_Message):
@@ -402,6 +467,8 @@ class SessionStatus(_Message):
     agent: str | None = None
     model: str | None = None
     """What the latest turn used, since this daemon started; else the model at the last start."""
+    permissions: list[PermissionRequest] = Field(default_factory=list[PermissionRequest])
+    """Requests the agent waits on an answer to."""
 
 
 class PaneAddress(_Message):

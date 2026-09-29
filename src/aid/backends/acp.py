@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import math
 import os
+import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from importlib.metadata import version
 from typing import TYPE_CHECKING, Any, cast
 
@@ -37,6 +40,10 @@ from aid.mcp import AID_TOOL_PREFIX, session_servers, to_acp
 from aid.protocol import (
     Cost,
     Output,
+    PermissionChoice,
+    PermissionDecider,
+    PermissionDecision,
+    PermissionRequest,
     SessionEvent,
     Started,
     TextDelta,
@@ -81,13 +88,20 @@ _ALLOW_KINDS = ("allow_once", "allow_always")
 _REJECT_KINDS = ("reject_once", "reject_always")
 
 
-def choose_permission(mode: PermissionMode, options: list[PermissionOption]) -> RequestPermissionResponse:
+def choose_permission(mode: PermissionMode, options: list[PermissionChoice]) -> str | None:
+    """The option a policy picks; None cancels the request. `ask` refuses: it is the answer when nobody does."""
     kinds = _ALLOW_KINDS if mode is PermissionMode.ALLOW else _REJECT_KINDS
     for kind in kinds:
         for option in options:
             if option.kind == kind:
-                return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=option.option_id))
-    return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
+                return option.option_id
+    return None
+
+
+def permission_response(option_id: str | None) -> RequestPermissionResponse:
+    if option_id is None:
+        return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
+    return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=option_id))
 
 
 def to_event(update: object) -> SessionEvent | None:
@@ -201,12 +215,23 @@ class _PermissionParams(BaseModel):
     tool_call: _NamedToolCall = Field(alias="toolCall")
 
 
+@dataclass
+class _Waiting:
+    request: PermissionRequest
+    answered: anyio.Event = field(default_factory=anyio.Event)
+    option_id: str | None = None
+    by: PermissionDecider = PermissionDecider.CANCEL
+
+
 class _Client:
     """The `acp.Client` side. Session updates arrive through `AcpBackend.observe`, not here."""
 
     def __init__(self, spec: AcpSpec) -> None:
         self._spec = spec
         self._tool_names: dict[str, str] = {}
+        self._waiting: dict[str, _Waiting] = {}
+        self.events: MemoryObjectSendStream[SessionEvent] | None = None
+        """The running prompt's events; permission requests only come during one."""
 
     def observe(self, event: StreamEvent) -> None:
         """Runs in the receive loop, before the library dispatches the request to `request_permission`."""
@@ -218,9 +243,52 @@ class _Client:
     ) -> RequestPermissionResponse:
         tool_name = self._tool_names.pop(tool_call.tool_call_id, None)
         mode = permission_for(self._spec, tool_name)
-        response = choose_permission(mode, options)
-        log.info("permission %s for %s %r: %s", mode, tool_name, tool_call.title, response.outcome)
-        return response
+        request = PermissionRequest(
+            request_id=uuid.uuid4().hex,
+            tool_call_id=tool_call.tool_call_id,
+            tool_name=tool_name,
+            title=tool_call.title,
+            kind=tool_call.kind,
+            input=to_json(tool_call.raw_input),
+            options=[PermissionChoice(option_id=o.option_id, name=o.name, kind=o.kind) for o in options],
+        )
+        events = self.events
+        if events is not None:
+            events.send_nowait(request)
+        if mode is PermissionMode.ASK and events is not None:
+            option_id, by = await self._ask(request)
+        else:
+            option_id, by = choose_permission(mode, request.options), PermissionDecider.POLICY
+        log.info("permission for %s %r: %s by %s", tool_name, tool_call.title, option_id, by)
+        if events is not None:
+            with contextlib.suppress(anyio.ClosedResourceError):  # The prompt ended while the request waited.
+                events.send_nowait(PermissionDecision(request_id=request.request_id, option_id=option_id, by=by))
+        return permission_response(option_id)
+
+    async def _ask(self, request: PermissionRequest) -> tuple[str | None, PermissionDecider]:
+        waiting = self._waiting[request.request_id] = _Waiting(request)
+        try:
+            with anyio.move_on_after(self._spec.permission_timeout):
+                await waiting.answered.wait()
+                return waiting.option_id, waiting.by
+            return choose_permission(PermissionMode.DENY, request.options), PermissionDecider.TIMEOUT
+        finally:
+            del self._waiting[request.request_id]
+
+    def answer(self, request_id: str, option_id: str | None) -> bool:
+        waiting = self._waiting.get(request_id)
+        if waiting is None or waiting.answered.is_set():
+            return False
+        if option_id is not None and option_id not in {o.option_id for o in waiting.request.options}:
+            return False
+        waiting.option_id, waiting.by = option_id, PermissionDecider.PERSON
+        waiting.answered.set()
+        return True
+
+    def cancel_waiting(self) -> None:
+        """ACP: a client that cancels a turn answers its pending permission requests `cancelled`."""
+        for waiting in self._waiting.values():
+            waiting.answered.set()
 
     async def session_update(self, session_id: str, update: object, **kwargs: Any) -> None:
         return None
@@ -230,8 +298,9 @@ class _Client:
 
 
 class AcpBackend:
-    def __init__(self, conn: ClientSideConnection, session_id: str, started: Started) -> None:
+    def __init__(self, conn: ClientSideConnection, client: _Client, session_id: str, started: Started) -> None:
         self._conn = conn
+        self._client = client
         self._session_id = session_id
         self._started = started
         self._model = started.model
@@ -288,15 +357,20 @@ class AcpBackend:
         return Output(output="".join(chunks), stop_reason=response.stop_reason)
 
     async def _send_prompt(self, text: str, events: MemoryObjectSendStream[SessionEvent]) -> PromptResponse:
-        self._events = events
+        self._events = self._client.events = events
         try:
             return await self._conn.prompt(session_id=self._session_id, prompt=[acp.text_block(text)])
         finally:
-            self._events = None
+            self._client.cancel_waiting()
+            self._events = self._client.events = None
             events.close()
 
     async def cancel(self) -> None:
+        self._client.cancel_waiting()
         await self._conn.cancel(session_id=self._session_id)
+
+    def answer_permission(self, request_id: str, option_id: str | None) -> bool:
+        return self._client.answer(request_id, option_id)
 
 
 @asynccontextmanager
@@ -338,7 +412,7 @@ async def open_acp(spec: AcpSpec, state_dir: anyio.Path) -> AsyncGenerator[AcpBa
         started = Started(
             pid=os.getpid(), agent_session=session_id, resumed=resumed, agent=agent_name(init), model=model_of(options)
         )
-        backend = AcpBackend(conn, session_id, started)
+        backend = AcpBackend(conn, client, session_id, started)
         yield backend
 
 

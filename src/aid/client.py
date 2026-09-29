@@ -21,6 +21,7 @@ from aid.paths import default_paths
 from aid.protocol import (
     AgentCatalog,
     AidError,
+    AnswerPermission,
     Cancel,
     CreateSession,
     DeleteSession,
@@ -230,6 +231,10 @@ class Session:
 
     async def cancel(self) -> None:
         await self._client.call(Cancel(session=self.name))
+
+    async def answer(self, request_id: str, option_id: str | None) -> None:
+        """Answer a PermissionRequest the session waits on: one of its options, or None to cancel it."""
+        await self._client.call(AnswerPermission(session=self.name, request_id=request_id, option_id=option_id))
 
     async def start(self) -> None:
         """Start the worker if it is stopped, with no turn. A prompt or a message starts it too."""

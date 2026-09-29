@@ -82,6 +82,8 @@ _STATUS: Final = {
     "outside": 403,
     "not_a_directory": 400,
     "not_a_file": 400,
+    "no_pending": 409,
+    "no_option": 422,
 }
 
 
@@ -300,6 +302,20 @@ async def cancel(request: Request) -> Response:
     return JSONResponse({})
 
 
+class _Answer(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    option_id: str | None
+
+
+@api(mutating=True)
+async def answer_permission(request: Request) -> Response:
+    answer = _Answer.model_validate(await request.json())
+    session = _client(request).session(request.path_params["name"])
+    await session.answer(request.path_params["request_id"], answer.option_id)
+    return JSONResponse({})
+
+
 @api(mutating=True)
 async def start(request: Request) -> Response:
     await _client(request).session(request.path_params["name"]).start()
@@ -499,6 +515,7 @@ def create_app(
             Route("/api/sessions/{name}/status/events", status_events, methods=["GET"]),
             Route("/api/sessions/{name}/prompt", prompt, methods=["POST"]),
             Route("/api/sessions/{name}/cancel", cancel, methods=["POST"]),
+            Route("/api/sessions/{name}/permissions/{request_id}", answer_permission, methods=["POST"]),
             Route("/api/sessions/{name}/start", start, methods=["POST"]),
             Route("/api/sessions/{name}/stop", stop, methods=["POST"]),
             Route("/api/speech", speech, methods=["GET"]),

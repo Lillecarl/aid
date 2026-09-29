@@ -7,7 +7,17 @@ import pytest
 
 import aid
 from aid.daemon import Daemon
-from aid.protocol import AidError, Cost, Output, Started, TextDelta, Usage
+from aid.protocol import (
+    AidError,
+    Cost,
+    Output,
+    PermissionDecider,
+    PermissionDecision,
+    PermissionRequest,
+    Started,
+    TextDelta,
+    Usage,
+)
 from aid.spec import PermissionMode
 from tests.agents import Review
 from tests.conftest import acp_spec, py_spec
@@ -41,7 +51,63 @@ async def test_acp_permission_policy(daemon: Paths, tmp_path: Path, mode: Permis
         async with aid.connect(daemon) as client:
             session = await client.create("perm", acp_spec(tmp_path, mode))
             result = await session.run("permission")
+            history = await session.history()
     assert result.text == answer
+    decision = next(e.item for e in history.entries if isinstance(e.item, PermissionDecision))
+    assert (decision.option_id, decision.by) == (answer, PermissionDecider.POLICY)
+
+
+async def test_acp_permission_waits_for_a_person(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("ask", acp_spec(tmp_path, PermissionMode.ASK))
+            events: list[aid.SessionEvent] = []
+            waiting: list[PermissionRequest] = []
+            async for event in session.stream("permission"):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    waiting = (await session.status()).permissions
+                    with pytest.raises(AidError, match="no option"):
+                        await session.answer(event.request_id, "maybe")
+                    await session.answer(event.request_id, "yes")
+            after = (await session.status()).permissions
+            with pytest.raises(AidError, match="waits on no permission request"):
+                await session.answer(waiting[0].request_id, "no")
+            recorded = [e.item for e in (await session.history()).entries]
+    request = next(e for e in events if isinstance(e, PermissionRequest))
+    assert (request.tool_call_id, request.title, [o.option_id for o in request.options]) == (
+        "t1",
+        "rm -rf /",
+        ["yes", "no"],
+    )
+    assert waiting == [request]
+    assert after == []
+    assert PermissionDecision(request_id=request.request_id, option_id="yes", by=PermissionDecider.PERSON) in events
+    assert "".join(e.text for e in events if isinstance(e, TextDelta)) == "yes"
+    assert request in recorded
+
+
+async def test_acp_permission_cancelled_with_the_turn(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("ask", acp_spec(tmp_path, PermissionMode.ASK))
+            events: list[aid.SessionEvent] = []
+            async for event in session.stream("permission"):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    await session.cancel()
+    decision = next(e for e in events if isinstance(e, PermissionDecision))
+    assert (decision.option_id, decision.by) == (None, PermissionDecider.CANCEL)
+    assert "".join(e.text for e in events if isinstance(e, TextDelta)) == "cancelled"
+
+
+async def test_acp_permission_refused_when_nobody_answers(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("ask", acp_spec(tmp_path, PermissionMode.ASK, permission_timeout=0.2))
+            events = [event async for event in session.stream("permission")]
+    decision = next(e for e in events if isinstance(e, PermissionDecision))
+    assert (decision.option_id, decision.by) == ("no", PermissionDecider.TIMEOUT)
 
 
 async def test_acp_agent_gets_spec_env_and_cwd(daemon: Paths, tmp_path: Path) -> None:

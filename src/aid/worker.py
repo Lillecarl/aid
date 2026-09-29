@@ -17,8 +17,9 @@ import zmq
 import zmq.asyncio
 
 from aid.backends import open_backend
-from aid.backends.base import FollowingBackend, ScreenBackend
+from aid.backends.base import FollowingBackend, PermissionBackend, ScreenBackend
 from aid.protocol import (
+    AnswerPermission,
     Cancel,
     Done,
     Event,
@@ -127,6 +128,15 @@ class _Worker:
                     else:
                         await self.send(
                             Failure(id=request.id, code="no_screen", message="this session has no terminal")
+                        )
+                case AnswerPermission():
+                    if isinstance(self._backend, PermissionBackend) and self._backend.answer_permission(
+                        request.request_id, request.option_id
+                    ):
+                        await self.send(Done(id=request.id))
+                    else:
+                        await self.send(
+                            Failure(id=request.id, code="no_pending", message="no such permission request waits")
                         )
                 case StopSession():
                     await self._backend.cancel()

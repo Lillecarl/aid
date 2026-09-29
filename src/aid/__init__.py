@@ -11,6 +11,8 @@ from aid.protocol import AidError as AidError
 from aid.protocol import HistoryEntry as HistoryEntry
 from aid.protocol import HistoryPage as HistoryPage
 from aid.protocol import Output as Output
+from aid.protocol import PermissionDecision as PermissionDecision
+from aid.protocol import PermissionRequest as PermissionRequest
 from aid.protocol import SessionEvent as SessionEvent
 from aid.protocol import SessionInfo as SessionInfo
 from aid.protocol import TextDelta as TextDelta

@@ -206,6 +206,9 @@ async def test_session_round_trip(web: Web, tmp_path: Path) -> None:
             history = (await client.get(f"{web.url}/api/sessions/echo/history?limit=3")).json()
             totals = (await client.get(f"{web.url}/api/sessions/echo/summary")).json()
             bad_query = await client.get(f"{web.url}/api/sessions/echo/history?limit=many")
+            answer_url = f"{web.url}/api/sessions/echo/permissions/nope"
+            unasked = await client.post(answer_url, json={"option_id": None})
+            unknown = await client.post(answer_url, json={"option_id": "yes"}, headers=headers)
             listed = (await client.get(f"{web.url}/api/sessions")).json()
             deleted = await client.delete(f"{web.url}/api/sessions/echo", headers=headers)
             after = (await client.get(f"{web.url}/api/sessions")).json()
@@ -216,7 +219,9 @@ async def test_session_round_trip(web: Web, tmp_path: Path) -> None:
     assert (totals["turns"], totals["starts"], totals["requests"]) == (1, 1, 1)
     assert history["has_older"] is True
     assert bad_query.status_code == 422
-    assert listed == [{"name": "echo", "kind": "pydantic-ai", "running": True}]
+    assert unasked.status_code == 403
+    assert unknown.status_code == 409
+    assert listed == [{"name": "echo", "kind": "pydantic-ai", "running": True, "permissions": 0}]
     assert deleted.status_code == 200
     assert after == []
 
@@ -327,8 +332,8 @@ async def test_session_list_streams_changes(web: Web, tmp_path: Path) -> None:
                             break
     assert seen == [
         [],
-        [{"name": "echo", "kind": "pydantic-ai", "running": True}],
-        [{"name": "echo", "kind": "pydantic-ai", "running": False}],
+        [{"name": "echo", "kind": "pydantic-ai", "running": True, "permissions": 0}],
+        [{"name": "echo", "kind": "pydantic-ai", "running": False, "permissions": 0}],
     ]
 
 

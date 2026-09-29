@@ -35,6 +35,15 @@ class FollowingBackend(Backend, Protocol):
 
 
 @runtime_checkable
+class PermissionBackend(Backend, Protocol):
+    """A backend whose agent can wait on a person's answer to a PermissionRequest."""
+
+    def answer_permission(self, request_id: str, option_id: str | None) -> bool:
+        """False when no such request waits, or the option is not one of its own."""
+        ...
+
+
+@runtime_checkable
 class ScreenBackend(Backend, Protocol):
     """A backend with a terminal a person can look at."""
 

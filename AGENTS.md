@@ -78,7 +78,11 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 - multiprocessing re-imports the parent's `__main__` in each worker: every entry script needs a
   `if __name__ == "__main__":` guard.
 - Daemon shutdown: `_stop_all` runs inside the task group; worker watchers are shielded and must see every exit.
-- ACP permission requests are answered by `AcpSpec.permission`; nobody is attached to ask.
+- ACP permission requests: `AcpSpec.permission` allow/deny answers at once; `ask` waits for `AnswerPermission` (web
+  card, `aid answer`), refused after `permission_timeout`. The worker's `_Client` emits `PermissionRequest` and
+  `PermissionDecision` into the running prompt's events, whatever the mode; the daemon keeps the pending ones in
+  `SessionStatus.permissions`. Turn cancel/end answers pending ones `cancelled` (ACP requires it). Requests only
+  come mid-prompt; outside one, `ask` falls back to deny. claude-tty asks in its own pane, not here.
 - claude-tty depends on Claude Code's screen and transcript, neither an API. `claude_tty.py` and
   `transcript.py` say what was measured, on which version; re-measure before changing them.
 - libpymux and the `pymux` binary come from one pyterm pin (`default.nix`): the wire protocol still moves.
