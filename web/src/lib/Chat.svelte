@@ -235,8 +235,34 @@
     }
   }
 
+  // A touch keyboard has no Shift+Enter, so there Enter is a newline and the button sends.
+  const touchOnly = matchMedia("(pointer: coarse) and (not (any-pointer: fine))").matches;
+
+  function newline(area: HTMLTextAreaElement): void {
+    area.setRangeText("\n", area.selectionStart, area.selectionEnd, "end");
+    area.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
   function keydown(event: KeyboardEvent): void {
-    if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) void send();
+    // keyCode 229: Safari ends an IME composition with an Enter whose isComposing is already false.
+    if (event.isComposing || event.keyCode === 229) return;
+    const area = event.currentTarget as HTMLTextAreaElement;
+    if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "j") {
+      event.preventDefault(); // Chromium opens its downloads page otherwise.
+      newline(area);
+      return;
+    }
+    if (event.key !== "Enter") return;
+    if (event.ctrlKey || event.metaKey) {
+      event.preventDefault();
+      void send();
+    } else if (event.altKey) {
+      event.preventDefault();
+      newline(area);
+    } else if (!event.shiftKey && !touchOnly) {
+      event.preventDefault();
+      void send();
+    }
   }
 
   // Speech to text: what is heard goes into the prompt box, to edit before sending.
@@ -323,7 +349,7 @@
   {#if hasNewer}<div class="more">{loading ? "Loading…" : "Scroll down for newer entries"}</div>{/if}
 </div>
 <form onsubmit={send}>
-  <textarea bind:value={text} onkeydown={keydown} rows="4" placeholder="Prompt (Ctrl+Enter sends)"></textarea>
+  <textarea bind:value={text} onkeydown={keydown} rows="4" placeholder={touchOnly ? "Prompt" : "Prompt (Enter sends, Shift+Enter or Ctrl+J for a new line)"}></textarea>
   <div class="buttons">
     <button type="submit" disabled={busy}>{busy ? "Working…" : "Send"}</button>
     {#if canDictate}
