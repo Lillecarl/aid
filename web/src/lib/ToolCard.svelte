@@ -91,7 +91,8 @@
   }
   .title {
     flex-shrink: 0;
-    max-width: 50%;
+    /* Not a percentage: the card is fit-content, so a percentage resolves against the shrunk width. */
+    max-width: 40ch;
   }
   .hint {
     color: var(--muted);
