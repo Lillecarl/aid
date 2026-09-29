@@ -17,6 +17,9 @@ against 2.1.283. What this module relies on:
   `type` create|update, `filePath`, `content`, `originalFile`; for Read:
   `file.filePath`. Checked against 2.1.283.
 - Subagents write `<session>/subagents/agent-<id>.jsonl`, not this file.
+- A prompt a person typed, and one aid pasted, is a `user` entry with
+  `origin.kind == "human"`. Other turns open on other origins: `channel`,
+  `task-notification`. Slash commands and their output carry no origin.
 """
 
 from __future__ import annotations
@@ -132,12 +135,27 @@ class _Message(_Lenient):
         return self.content if isinstance(self.content, str) else "".join(b.text for b in self.content)
 
 
+class _Origin(_Lenient):
+    kind: str = ""
+
+
 class _Entry(_Lenient):
     type: str = ""
     subtype: str | None = None
     is_sidechain: bool = Field(False, alias="isSidechain")
+    is_meta: bool = Field(False, alias="isMeta")
+    origin: _Origin | None = None
     message: _Message = Field(default_factory=_Message)
     tool_use_result: Any = Field(None, alias="toolUseResult")
+
+
+def human_prompt(raw: dict[str, Any]) -> str | None:
+    """The text of a prompt a person gave: typed, or pasted as aid pastes. None for anything else, such as a
+    channel event, a task notification, a slash command's output or a tool result."""
+    entry = _Entry.model_validate(raw)
+    if entry.type != "user" or entry.is_meta or entry.origin is None or entry.origin.kind != "human":
+        return None
+    return entry.message.text()
 
 
 class _ToolResult(_Lenient):

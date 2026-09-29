@@ -12,6 +12,7 @@ from aid.transcript import (
     TurnEnded,
     TurnUsage,
     find_transcript,
+    human_prompt,
     items_from_entry,
     last_version,
 )
@@ -164,6 +165,25 @@ def test_find_transcript(tmp_path: Path) -> None:
     (project / "abc.jsonl").write_text("")
     assert find_transcript(tmp_path, "abc") == project / "abc.jsonl"
     assert find_transcript(tmp_path, "nope") is None
+
+
+@pytest.mark.parametrize(
+    ("entry", "text"),
+    [
+        ({"type": "user", "origin": {"kind": "human"}, "message": {"content": "typed"}}, "typed"),
+        (
+            {"type": "user", "origin": {"kind": "human"}, "message": {"content": [{"type": "text", "text": "pasted"}]}},
+            "pasted",
+        ),
+        ({"type": "user", "isMeta": True, "origin": {"kind": "channel"}, "message": {"content": "<channel>"}}, None),
+        ({"type": "user", "origin": {"kind": "task-notification"}, "message": {"content": "<task-notif>"}}, None),
+        ({"type": "user", "message": {"content": "<command-name>/compact</command-name>"}}, None),
+        ({"type": "user", "isMeta": True, "origin": {"kind": "human"}, "message": {"content": "hook feedback"}}, None),
+        (assistant({"type": "text", "text": "hi"}), None),
+    ],
+)
+def test_human_prompt(entry: dict[str, Any], text: str | None) -> None:
+    assert human_prompt(entry) == text
 
 
 def test_last_version(tmp_path: Path) -> None:

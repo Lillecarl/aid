@@ -14,8 +14,8 @@ And on 2.1.284, with `--dangerously-load-development-channels server:aid`:
 
 - After the trust dialog comes "WARNING: Loading development channels", whose default is to go on.
 - A channel event wakes an idle Claude. Its turn is in the transcript as a `user` entry with `isMeta` and
-  `origin.kind == "channel"`, ended by turn_duration as usual. aid follows the transcript only during its own
-  prompts, so such a turn is not in the session's history.
+  `origin.kind == "channel"`, ended by turn_duration as usual. It is recorded like a typed turn, without a
+  prompt: the daemon recorded the message when it arrived.
 """
 
 from __future__ import annotations
@@ -27,8 +27,9 @@ import re
 import shlex
 import uuid
 from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 import anyio
 import anyio.to_thread
@@ -37,7 +38,7 @@ from libpymux import Server
 from aid.env import agent_environment
 from aid.mcp import AID_TOOLS_RULE, claude_config, session_servers
 from aid.paths import default_paths
-from aid.protocol import Output, PaneAddress, PaneView, Started, TextDelta
+from aid.protocol import Output, PaneAddress, PaneView, PromptEntry, Started, TextDelta
 from aid.spec import BUILTIN_MCP_SERVER
 from aid.transcript import (
     TranscriptFollower,
@@ -45,6 +46,7 @@ from aid.transcript import (
     TurnUsage,
     config_dir,
     find_transcript,
+    human_prompt,
     items_from_entry,
     last_version,
 )
@@ -55,7 +57,8 @@ if TYPE_CHECKING:
 
     from libpymux import Pane
 
-    from aid.backends.base import Emit
+    from aid.backends.base import Emit, Record
+    from aid.protocol import SessionEvent
     from aid.spec import ClaudeTtySpec
 
 log = logging.getLogger(__name__)
@@ -71,7 +74,8 @@ PANE_COLUMNS: Final = 200
 PANE_ROWS: Final = 50
 PYMUX_SESSION: Final = "aid"
 START_TIMEOUT: Final = 60.0
-TRANSCRIPT_TIMEOUT: Final = 60.0
+# From aid's paste to the transcript's first entry of the turn. A new session's transcript appears then too.
+TURN_START_TIMEOUT: Final = 60.0
 POLL: Final = 0.2
 # 0.4 s between the paste and Enter worked every time; nothing shorter was tried.
 PASTE_SETTLE: Final = 0.4
@@ -126,16 +130,101 @@ def claude_argv(spec: ClaudeTtySpec, session_id: str, *, resume: bool, mcp_confi
     return [*spec.command, *mcp, *aid, "--resume" if resume else "--session-id", session_id, *spec.args]
 
 
+@dataclass
+class _Claim:
+    """aid's prompt, waiting for the turn it starts."""
+
+    emit: Emit
+    opened: anyio.Event = field(default_factory=anyio.Event)
+    ended: anyio.Event = field(default_factory=anyio.Event)
+    output: Output | None = None
+
+
+@dataclass
+class _Turn:
+    claim: _Claim | None
+    """None for a turn nobody sent through aid: its entries are recorded under `id`."""
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    chunks: list[str] = field(default_factory=list[str])
+    usage: TurnUsage = field(default_factory=TurnUsage)
+
+
 class ClaudeTtyBackend:
-    def __init__(self, server: Server, pane: Pane, transcripts: Path, session_id: str, started: Started) -> None:
+    """Follows the transcript for the worker's life, so turns typed into the pane are recorded too.
+
+    A turn that opens while aid's prompt waits is aid's; any other is recorded as its own. Claude Code marks a
+    pasted prompt as it marks a typed one, so one typed in the moment between aid's paste and Claude taking it
+    counts as aid's.
+    """
+
+    def __init__(
+        self, server: Server, pane: Pane, transcripts: Path, session_id: str, started: Started, offset: int
+    ) -> None:
         self._server = server
         self._pane = pane
         self._transcripts = transcripts
         self._session_id = session_id
         self._started = started
+        # Where the transcript ended before Claude started: earlier turns are in history already, or predate aid.
+        self._offset = offset
+        self._record: Record | None = None
+        self._claim: _Claim | None = None
+        self._turn: _Turn | None = None
 
     def started(self) -> Started:
         return self._started
+
+    async def follow(self, record: Record) -> None:
+        self._record = record
+        while (path := await self._find_transcript()) is None:  # noqa: ASYNC110 -- Claude creates the file; nothing signals it
+            await anyio.sleep(POLL)
+        async for entry in TranscriptFollower(path, self._offset).follow():
+            await self._take(entry)
+
+    async def _take(self, entry: dict[str, Any]) -> None:
+        prompt = human_prompt(entry)
+        items = items_from_entry(entry)
+        if self._turn is None:
+            if prompt is None and all(isinstance(item, TurnEnded) for item in items):
+                return
+            self._turn = _Turn(claim=self._claim)
+            if self._claim is not None:
+                self._claim.opened.set()
+            elif prompt is not None:
+                await self._send(self._turn, PromptEntry(text=prompt))
+        elif prompt is not None:
+            # Claude takes a prompt given mid-turn into the running turn. aid's paste makes the rest of it aid's.
+            if self._turn.claim is None and self._claim is not None:
+                self._turn.claim = self._claim
+                self._claim.opened.set()
+            elif self._turn.claim is None:
+                await self._send(self._turn, PromptEntry(text=prompt))
+        turn = self._turn
+        turn.usage.add(entry)
+        for item in items:
+            if isinstance(item, TurnEnded):
+                self._turn = None
+                await self._end(turn, "cancelled" if item.interrupted else "end_turn")
+                return
+            if isinstance(item, TextDelta):
+                turn.chunks.append(item.text)
+            await self._send(turn, item)
+
+    async def _send(self, turn: _Turn, item: SessionEvent | PromptEntry) -> None:
+        if turn.claim is not None:
+            if not isinstance(item, PromptEntry):  # aid recorded its own prompt
+                await turn.claim.emit(item)
+        elif self._record is not None:
+            await self._record(turn.id, item)
+
+    async def _end(self, turn: _Turn, reason: str) -> None:
+        output = Output(output="".join(turn.chunks), stop_reason=reason)
+        await self._send(turn, turn.usage.usage())
+        if turn.claim is None:
+            await self._send(turn, output)
+        else:
+            turn.claim.output = output
+            turn.claim.ended.set()
 
     async def _pane_alive(self) -> bool:
         def alive() -> bool:
@@ -146,48 +235,35 @@ class ClaudeTtyBackend:
     async def _find_transcript(self) -> Path | None:
         return await anyio.to_thread.run_sync(find_transcript, self._transcripts, self._session_id)
 
-    async def _transcript(self) -> Path:
-        with anyio.fail_after(TRANSCRIPT_TIMEOUT):
-            while (path := await self._find_transcript()) is None:  # noqa: ASYNC110 -- Claude creates the file; nothing signals it
-                await anyio.sleep(POLL)
-        return path
-
     async def prompt(self, text: str, emit: Emit) -> Output:
-        existing = await self._find_transcript()
-        offset = (await anyio.Path(existing).stat()).st_size if existing else 0
-        await anyio.to_thread.run_sync(self._pane.send_keys, f"\x1b[200~{text}\x1b[201~", False)
-        await anyio.sleep(PASTE_SETTLE)
-        await anyio.to_thread.run_sync(self._pane.send_key, "Enter")
-        follower = TranscriptFollower(await self._transcript(), offset)
+        if self._record is None:
+            raise RuntimeError("the transcript is not being followed")
+        claim = _Claim(emit)
+        self._claim = claim
+        try:
+            await anyio.to_thread.run_sync(self._pane.send_keys, f"\x1b[200~{text}\x1b[201~", False)
+            await anyio.sleep(PASTE_SETTLE)
+            await anyio.to_thread.run_sync(self._pane.send_key, "Enter")
+            async with anyio.create_task_group() as tg:
 
-        result: Output | None = None
-        chunks: list[str] = []
-        usage = TurnUsage()
-        async with anyio.create_task_group() as tg:
+                async def watch_pane() -> None:
+                    while await self._pane_alive():  # noqa: ASYNC110 -- libpymux has no event stream
+                        await anyio.sleep(PANE_CHECK)
+                    raise RuntimeError("Claude exited during the turn")
 
-            async def watch_pane() -> None:
-                while await self._pane_alive():  # noqa: ASYNC110 -- libpymux has no event stream
-                    await anyio.sleep(PANE_CHECK)
-                raise RuntimeError("Claude exited during the turn")
-
-            tg.start_soon(watch_pane)
-            async for entry in follower.follow():
-                usage.add(entry)
-                for item in items_from_entry(entry):
-                    if isinstance(item, TurnEnded):
-                        reason = "cancelled" if item.interrupted else "end_turn"
-                        result = Output(output="".join(chunks), stop_reason=reason)
-                        await emit(usage.usage())
-                        break
-                    if isinstance(item, TextDelta):
-                        chunks.append(item.text)
-                    await emit(item)
-                if result is not None:
-                    break
-            tg.cancel_scope.cancel()
-        if result is None:
-            raise RuntimeError("the transcript ended without a turn end")
-        return result
+                tg.start_soon(watch_pane)
+                with anyio.fail_after(TURN_START_TIMEOUT):
+                    await claim.opened.wait()
+                await claim.ended.wait()
+                tg.cancel_scope.cancel()
+        finally:
+            self._claim = None
+            if self._turn is not None and self._turn.claim is claim:
+                # aid stopped waiting: whatever the turn still writes is recorded as a turn of its own.
+                self._turn.claim = None
+        if claim.output is None:
+            raise RuntimeError("the turn ended without an output")
+        return claim.output
 
     async def cancel(self) -> None:
         await anyio.to_thread.run_sync(self._pane.send_key, "Escape")
@@ -265,6 +341,7 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
     await id_file.write_text(session_id)
     transcript = await anyio.to_thread.run_sync(find_transcript, transcripts, session_id)
     resume = transcript is not None
+    offset = (await anyio.Path(transcript).stat()).st_size if transcript else 0
     # Known only from a transcript: a new session has none until its first turn.
     version = await anyio.to_thread.run_sync(last_version, transcript) if transcript else None
     mcp_config: str | None = None
@@ -294,7 +371,7 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
         await _wait_ready(pane, spec.trust_cwd)
         agent = f"Claude Code {version}" if version else None
         started = Started(pid=os.getpid(), agent_session=session_id, resumed=resume, agent=agent)
-        yield ClaudeTtyBackend(server, pane, transcripts, session_id, started)
+        yield ClaudeTtyBackend(server, pane, transcripts, session_id, started, offset)
     finally:
         with anyio.CancelScope(shield=True):
             await anyio.to_thread.run_sync(lambda: server.cmd(["kill-window", "-t", pane.window_id], check=False))

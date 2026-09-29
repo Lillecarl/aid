@@ -121,7 +121,7 @@ class Fake:
             pass
 
     def turn(self, text: str) -> None:
-        self.write({"type": "user", "message": {"role": "user", "content": text}})
+        self.write({"type": "user", "origin": {"kind": "human"}, "message": {"role": "user", "content": text}})
         if text == "slow":
             self.say("waiting")
             while self.next_event()[0] != "escape":

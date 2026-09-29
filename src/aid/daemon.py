@@ -37,6 +37,7 @@ from aid.protocol import (
     ListAgents,
     ListSessions,
     MessageEntry,
+    Observed,
     Prompt,
     ReceiveMessages,
     SendMessage,
@@ -550,6 +551,14 @@ class Daemon:
                         session.start_error = reply.message
                         session.start_failed.set()
                         session.ready.set()
+                case Observed():
+                    if (session := self._sessions.get(name)) is not None:
+                        if isinstance(reply.item, Usage) and reply.item.models:
+                            session.models = reply.item.models
+                        try:
+                            await session.history.append(reply.item, reply.turn)
+                        except OSError:
+                            log.exception("could not record %s's turn %s", name, reply.turn)
                 case Event():
                     if (route := self._routes.get(reply.id)) is not None:
                         if route.client is not None:

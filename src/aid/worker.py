@@ -17,7 +17,7 @@ import zmq
 import zmq.asyncio
 
 from aid.backends import open_backend
-from aid.backends.base import ScreenBackend
+from aid.backends.base import FollowingBackend, ScreenBackend
 from aid.protocol import (
     Cancel,
     Done,
@@ -26,6 +26,7 @@ from aid.protocol import (
     GetPane,
     GetScreen,
     Hello,
+    Observed,
     Prompt,
     StartFailed,
     StopSession,
@@ -39,7 +40,7 @@ if TYPE_CHECKING:
     from anyio.abc import TaskGroup
 
     from aid.backends.base import Backend
-    from aid.protocol import SessionEvent
+    from aid.protocol import HistoryItem, SessionEvent
     from aid.spec import AgentSpec
 
 log = logging.getLogger(__name__)
@@ -74,6 +75,8 @@ async def serve(
             tg = await stack.enter_async_context(anyio.create_task_group())
             worker = _Worker(sock, backend, tg)
             await worker.send(Hello(started=backend.started()))
+            if isinstance(backend, FollowingBackend):
+                tg.start_soon(backend.follow, worker.record)
             await worker.serve()
     finally:
         sock.close()
@@ -96,9 +99,12 @@ class _Worker:
         self._send_lock = anyio.Lock()
         self._busy = False
 
-    async def send(self, reply: Hello | Event | Done | Failure) -> None:
+    async def send(self, reply: Hello | Event | Done | Failure | Observed) -> None:
         async with self._send_lock:
             await self._sock.send(encode(reply))
+
+    async def record(self, turn: str, item: HistoryItem) -> None:
+        await self.send(Observed(turn=turn, item=item))
 
     async def serve(self) -> None:
         while True:

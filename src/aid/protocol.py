@@ -452,7 +452,16 @@ class StartFailed(_Message):
     message: str
 
 
-type Reply = Annotated[Event | Done | Failure | Hello | StartFailed, Field(discriminator="reply")]
+class Observed(_Message):
+    """From a worker, unasked: an entry of a turn nobody sent through aid, such as a prompt typed into interactive
+    Claude's pane. The worker names the turn; the daemon records the entry under it."""
+
+    reply: Literal["observed"] = "observed"
+    turn: str
+    item: HistoryItem
+
+
+type Reply = Annotated[Event | Done | Failure | Hello | StartFailed | Observed, Field(discriminator="reply")]
 
 RequestAdapter: TypeAdapter[Request] = TypeAdapter(Request)
 ReplyAdapter: TypeAdapter[Reply] = TypeAdapter(Reply)

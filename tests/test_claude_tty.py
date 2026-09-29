@@ -6,13 +6,26 @@ import sys
 from typing import TYPE_CHECKING
 
 import anyio
+import anyio.to_thread
 import pytest
+from libpymux import Server
 
 import aid
 from aid.backends.claude_tty import Screen, classify, claude_argv, launcher_script
 from aid.mcp import claude_config
 from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR
-from aid.protocol import AidError, MessageEntry, Output, PaneView, Started, TextDelta, ToolCall, Usage
+from aid.protocol import (
+    AidError,
+    HistoryItem,
+    MessageEntry,
+    Output,
+    PaneView,
+    PromptEntry,
+    Started,
+    TextDelta,
+    ToolCall,
+    Usage,
+)
 from aid.spec import ClaudeTtySpec, McpHttp
 from tests.conftest import acp_spec, fake_spec, needs_pymux
 from tests.fake_claude import COUNT, MODEL
@@ -109,6 +122,41 @@ async def test_prompt_round_trip(daemon: Paths, tmp_path: Path, pymux_socket: st
         ),
         Output(output="ran it", stop_reason="end_turn"),
     ]
+
+
+async def typed_items(session: aid.Session) -> list[HistoryItem]:
+    """History after the typed prompt, once its turn has ended."""
+    while True:
+        items = [e.item for e in (await session.history(limit=1000)).entries]
+        typed = next((i for i, item in enumerate(items) if item == PromptEntry(text="typed")), None)
+        if typed is not None and any(isinstance(item, Output) for item in items[typed:]):
+            return items[typed:]
+        await anyio.sleep(0.1)
+
+
+@needs_pymux
+async def test_a_turn_typed_into_the_pane_is_recorded(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            first = await session.run("hello")
+            address = await session.pane()
+            pane = next(p for p in Server(address.socket).panes if p.id == address.pane)
+            await anyio.to_thread.run_sync(pane.send_keys, "typed", False)
+            await anyio.to_thread.run_sync(pane.send_key, "Enter")
+            typed = await typed_items(session)
+            after = await session.run("after")
+    assert first.text == "echo: hello"
+    prompt, text, usage, output = typed
+    assert (prompt, text, output) == (
+        PromptEntry(text="typed"),
+        TextDelta(text="echo: typed"),
+        Output(output="echo: typed", stop_reason="end_turn"),
+    )
+    assert isinstance(usage, Usage)
+    assert usage.models == [MODEL]
+    # aid's prompts still get their own turns, and the typed one is not taken for aid's.
+    assert after.text == "echo: after"
 
 
 @needs_pymux

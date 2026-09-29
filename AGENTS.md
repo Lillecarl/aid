@@ -33,6 +33,9 @@ API and a CLI.
   worker start records `Started` (agent session id, agent, model) under a turn id of its own. What a turn's tokens
   cover differs per agent: `Usage`'s docstring says how, measured. The web UI must render every `HistoryItem` type:
   an unknown one breaks Chat.
+- claude-tty follows its transcript for the worker's life (`FollowingBackend.follow`): a turn aid's `prompt()` waits
+  for is aid's; any other (typed into the pane, woken by a channel event) goes to the daemon as `Observed` entries
+  under a turn id of its own.
 - `src/aid/agents.py` — `aid.PydanticAgent`, the interface agent modules implement, and discovery on
   AID_AGENTS_PATH. `catalog.py` runs discovery in a subprocess for the daemon; never import agent modules
   in the daemon itself.

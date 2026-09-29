@@ -4,9 +4,11 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    from aid.protocol import Output, PaneAddress, PaneView, SessionEvent, Started
+    from aid.protocol import HistoryItem, Output, PaneAddress, PaneView, SessionEvent, Started
 
 type Emit = Callable[[SessionEvent], Awaitable[None]]
+type Record = Callable[[str, HistoryItem], Awaitable[None]]
+"""Records an entry of a turn nobody sent through aid, under the turn id the backend chose."""
 
 
 class Backend(Protocol):
@@ -19,6 +21,17 @@ class Backend(Protocol):
     async def prompt(self, text: str, emit: Emit) -> Output: ...
 
     async def cancel(self) -> None: ...
+
+
+@runtime_checkable
+class FollowingBackend(Backend, Protocol):
+    """A backend whose agent also takes turns that do not come through aid.
+
+    `runtime_checkable` matches by method name alone: keep `follow` unique among backends."""
+
+    async def follow(self, record: Record) -> None:
+        """Runs for the worker's life, recording those turns."""
+        ...
 
 
 @runtime_checkable
