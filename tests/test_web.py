@@ -149,17 +149,9 @@ async def login(client: httpx.AsyncClient, web: Web, email: str) -> httpx.Respon
     raise AssertionError(f"dex did not send the browser back: {response.status_code} {response.text[:300]}")
 
 
-async def events(response: httpx.Response) -> list[dict[str, Any]]:
-    found: list[dict[str, Any]] = []
-    async for line in response.aiter_lines():
-        if line.startswith("data: "):
-            found.append(json.loads(line.removeprefix("data: ")))
-    return found
-
-
 async def test_login_is_required(web: Web) -> None:
     async with httpx.AsyncClient() as client:
-        assert (await client.get(f"{web.url}/api/sessions")).status_code == 401
+        assert (await client.get(f"{web.url}/api/me")).status_code == 401
         index = await client.get(f"{web.url}/")
         health = await client.get(f"{web.url}/healthz")
     assert index.status_code == 303
@@ -207,59 +199,15 @@ async def test_the_app_manifest_needs_no_login(web: Web) -> None:
     assert '<link rel="manifest" href="/manifest.webmanifest"' in index.text
 
 
-async def test_session_round_trip(web: Web, tmp_path: Path) -> None:
-    with anyio.fail_after(TIMEOUT):
-        async with httpx.AsyncClient() as client:
-            callback = await login(client, web, ALLOWED)
-            assert callback.status_code == 303
-            me = (await client.get(f"{web.url}/api/me")).json()
-            assert me["email"] == ALLOWED
-            headers = {"X-CSRF-Token": me["csrf"]}
-            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
-
-            refused = await client.post(f"{web.url}/api/sessions", json={"name": "echo", "spec": spec})
-            assert refused.status_code == 403
-
-            created = await client.post(f"{web.url}/api/sessions", json={"name": "echo", "spec": spec}, headers=headers)
-            assert created.status_code == 201, created.text
-            async with client.stream(
-                "POST", f"{web.url}/api/sessions/echo/prompt", json={"text": "hi"}, headers=headers
-            ) as response:
-                assert response.headers["content-type"].startswith("text/event-stream")
-                streamed = await events(response)
-            history = (await client.get(f"{web.url}/api/sessions/echo/history?limit=3")).json()
-            totals = (await client.get(f"{web.url}/api/sessions/echo/summary")).json()
-            bad_query = await client.get(f"{web.url}/api/sessions/echo/history?limit=many")
-            answer_url = f"{web.url}/api/sessions/echo/permissions/nope"
-            unasked = await client.post(answer_url, json={"option_id": None})
-            unknown = await client.post(answer_url, json={"option_id": "yes"}, headers=headers)
-            listed = (await client.get(f"{web.url}/api/sessions")).json()
-            deleted = await client.delete(f"{web.url}/api/sessions/echo", headers=headers)
-            after = (await client.get(f"{web.url}/api/sessions")).json()
-
-    assert streamed[-1] == {"type": "output", "output": "turn 1: echo hi", "stop_reason": "end_turn"}
-    assert {"type": "text", "text": "echo hi"} in streamed
-    assert [e["item"]["type"] for e in history["entries"]] == ["text", "usage", "output"]
-    assert (totals["turns"], totals["starts"], totals["requests"]) == (1, 1, 1)
-    assert history["has_older"] is True
-    assert bad_query.status_code == 422
-    assert unasked.status_code == 403
-    assert unknown.status_code == 409
-    assert listed == [{"name": "echo", "kind": "pydantic-ai", "running": True, **IDLE}]
-    assert deleted.status_code == 200
-    assert after == []
-
-
-async def test_session_files(web: Web, tmp_path: Path) -> None:
+async def test_session_files(web: Web, tmp_path: Path, daemon: Paths) -> None:
     (tmp_path / "notes.md").write_text("# hi\n")
     (tmp_path / "code.py").write_text("def f(): pass\n")
     with anyio.fail_after(TIMEOUT):
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient() as client, aid.connect(daemon) as other:
             anonymous = await client.get(f"{web.url}/api/sessions/files/files")
             await login(client, web, ALLOWED)
-            headers = {"X-CSRF-Token": (await client.get(f"{web.url}/api/me")).json()["csrf"]}
-            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
-            await client.post(f"{web.url}/api/sessions", json={"name": "files", "spec": spec}, headers=headers)
+            await other.create("files", py_spec(tmp_path, "agents:echo"))
+            missing = await client.get(f"{web.url}/api/sessions/nope/files")
             listed = (await client.get(f"{web.url}/api/sessions/files/files")).json()
             read = (await client.get(f"{web.url}/api/sessions/files/file", params={"path": "notes.md"})).json()
             code = (await client.get(f"{web.url}/api/sessions/files/file", params={"path": "code.py"})).json()
@@ -270,15 +218,7 @@ async def test_session_files(web: Web, tmp_path: Path) -> None:
     if GRAMMARS is not None:
         assert code["highlights"][:2] == [[0, 3, "k"], [4, 5, "nf"]]
     assert escape.status_code == 403
-
-
-async def test_unknown_session_is_404(web: Web) -> None:
-    with anyio.fail_after(TIMEOUT):
-        async with httpx.AsyncClient() as client:
-            await login(client, web, ALLOWED)
-            csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
-            response = await client.post(f"{web.url}/api/sessions/nope/stop", headers={"X-CSRF-Token": csrf})
-    assert response.status_code == 404
+    assert missing.status_code == 404
 
 
 async def test_account_off_the_allowlist_is_refused(web: Web) -> None:
@@ -299,108 +239,6 @@ async def test_logout(web: Web) -> None:
             assert (await client.post(f"{web.url}/logout", headers={"X-CSRF-Token": csrf})).status_code == 200
             me = await client.get(f"{web.url}/api/me")
     assert me.status_code == 401
-
-
-async def test_status_streams_changes(web: Web, tmp_path: Path) -> None:
-    with anyio.fail_after(TIMEOUT):
-        async with httpx.AsyncClient() as client:
-            await login(client, web, ALLOWED)
-            csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
-            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
-            await client.post(
-                f"{web.url}/api/sessions", json={"name": "echo", "spec": spec}, headers={"X-CSRF-Token": csrf}
-            )
-            snapshot = (await client.get(f"{web.url}/api/sessions/echo/status")).json()
-            missing = await client.get(f"{web.url}/api/sessions/nope/status/events")
-            seen: list[dict[str, Any]] = []
-            no_csrf: httpx.Response | None = None
-            async with client.stream("GET", f"{web.url}/api/sessions/echo/status/events") as response:
-                lines = response.aiter_lines()
-                async for line in lines:
-                    if line.startswith("data: "):
-                        seen.append(json.loads(line.removeprefix("data: ")))
-                        if len(seen) == 1:
-                            await client.post(f"{web.url}/api/sessions/echo/stop", headers={"X-CSRF-Token": csrf})
-                        elif len(seen) == 2:
-                            no_csrf = await client.post(f"{web.url}/api/sessions/echo/start")
-                            await client.post(f"{web.url}/api/sessions/echo/start", headers={"X-CSRF-Token": csrf})
-                        else:
-                            break
-    assert snapshot["running"] is True
-    assert missing.status_code == 404
-    assert no_csrf is not None
-    assert no_csrf.status_code == 403
-    assert [s["running"] for s in seen] == [True, False, True]
-
-
-async def test_session_list_streams_changes(web: Web, tmp_path: Path) -> None:
-    with anyio.fail_after(TIMEOUT):
-        async with httpx.AsyncClient() as client:
-            await login(client, web, ALLOWED)
-            csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
-            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
-            seen: list[list[dict[str, Any]]] = []
-            stopped = arrived = 0.0
-            async with client.stream("GET", f"{web.url}/api/sessions/events") as response:
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        seen.append(json.loads(line.removeprefix("data: ")))
-                        if len(seen) == 1:
-                            await client.post(
-                                f"{web.url}/api/sessions",
-                                json={"name": "echo", "spec": spec},
-                                headers={"X-CSRF-Token": csrf},
-                            )
-                        elif len(seen) == 2:
-                            await client.post(f"{web.url}/api/sessions/echo/stop", headers={"X-CSRF-Token": csrf})
-                            stopped = time.monotonic()
-                        else:
-                            arrived = time.monotonic() - stopped
-                            break
-    assert seen == [
-        [],
-        [{"name": "echo", "kind": "pydantic-ai", "running": True, **IDLE}],
-        [{"name": "echo", "kind": "pydantic-ai", "running": False, **IDLE}],
-    ]
-    assert arrived < 0.25  # Pushed as it happens: polling took up to a second.
-
-
-async def test_history_streams_turns_from_other_clients(web: Web, tmp_path: Path, daemon: Paths) -> None:
-    url = f"{web.url}/api/sessions/echo/history/events"
-    with anyio.fail_after(TIMEOUT):
-        async with httpx.AsyncClient() as client, aid.connect(daemon) as other:
-            await login(client, web, ALLOWED)
-            csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
-            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
-            await client.post(
-                f"{web.url}/api/sessions", json={"name": "echo", "spec": spec}, headers={"X-CSRF-Token": csrf}
-            )
-            start = (await client.get(f"{web.url}/api/sessions/echo/history")).json()["total"] - 1
-            seen: list[tuple[int, str]] = []
-            async with client.stream("GET", url, params={"after": start}) as response:
-                # The turn comes from another client, not from this page.
-                await other.session("echo").run("elsewhere")
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        entry = json.loads(line.removeprefix("data: "))
-                        seen.append((entry["seq"], entry["item"]["type"]))
-                        if entry["item"]["type"] == "output":
-                            break
-            last = seen[-1][0]
-            headers = {"Last-Event-ID": str(last - 1)}
-            async with client.stream("GET", url, params={"after": -1}, headers=headers) as resumed:
-                first = next_event_id = None
-                async for line in resumed.aiter_lines():
-                    if line.startswith("id: "):
-                        next_event_id = int(line.removeprefix("id: "))
-                    if line.startswith("data: "):
-                        first = json.loads(line.removeprefix("data: "))
-                        break
-    assert [kind for _seq, kind in seen] == ["prompt", "text", "usage", "output"]
-    assert [seq for seq, _kind in seen] == list(range(start + 1, start + 5))
-    # A reconnecting EventSource's Last-Event-ID wins over the page's `after`.
-    assert first is not None
-    assert (first["seq"], next_event_id) == (last, last)
 
 
 async def speak(web: Web, cookie: str, *, origin: str | None = None) -> list[dict[str, Any]]:
@@ -488,6 +326,13 @@ async def test_zws_control_relays_what_the_page_may_ask(web: Web, tmp_path: Path
             ponged = await ws.recv()
             listed = await zws_call(ws, {"op": "list", "id": "l"})
             [page] = await zws_call(ws, {"op": "history", "id": "hi", "session": "echo"})
+            [totals] = await zws_call(ws, {"op": "summary", "id": "t", "session": "echo"})
+            [unasked] = await zws_call(
+                ws, {"op": "answer_permission", "id": "a", "session": "echo", "request_id": "x", "option_id": "yes"}
+            )
+            [missing] = await zws_call(ws, {"op": "stop", "id": "m", "session": "nope"})
+            await zws_call(ws, {"op": "delete", "id": "d", "session": "echo"})
+            [after] = await zws_call(ws, {"op": "list", "id": "l2"})
             await ws.send(b"\x01{}")
             await ws.send(b"\x00{}")
             with pytest.raises(ConnectionClosed) as closed:
@@ -505,6 +350,11 @@ async def test_zws_control_relays_what_the_page_may_ask(web: Web, tmp_path: Path
     assert {e["turn"] for e in page["data"]["entries"] if e["item"]["type"] == "output"} - {"p"}
     assert ponged == b"\x02\x04PONGhello"
     assert listed[0]["data"] == [{"name": "echo", "kind": "pydantic-ai", "running": True, **IDLE}]
+    assert [e["item"]["type"] for e in page["data"]["entries"]][-3:] == ["text", "usage", "output"]
+    assert (totals["data"]["turns"], totals["data"]["starts"]) == (1, 1)
+    assert (unasked["reply"], unasked["code"]) == ("failure", "no_pending")
+    assert (missing["reply"], missing["code"]) == ("failure", "not_found")
+    assert after["data"] == []
     assert closed.value.rcvd is not None
     assert closed.value.rcvd.code == 1008  # A request of two frames.
 
@@ -525,11 +375,33 @@ async def test_zws_events_follow_subscriptions(web: Web, tmp_path: Path) -> None
             await events_ws.send(b"\x00\x01session/echo/status/")
             await anyio.sleep(0.1)
             await zws_call(control, {"op": "stop", "id": "s", "session": "echo"})
+            stopped = time.monotonic()
             status_topic, status = await zws_recv(events_ws)
+            arrived = time.monotonic() - stopped
     assert topic == b"sessions/"
     assert [s["name"] for s in json.loads(payload)] == ["echo"]
     assert status_topic == b"session/echo/status/"
     assert json.loads(status)["running"] is False
+    assert arrived < 0.25  # Pushed as it happens.
+
+
+async def test_zws_events_carry_turns_from_other_clients(web: Web, tmp_path: Path, daemon: Paths) -> None:
+    with anyio.fail_after(TIMEOUT):
+        headers = await zws_cookie(web)
+        async with aid.connect(daemon) as other, zws_connect(web, "/api/zws/events", headers) as events_ws:
+            session = await other.create("echo", py_spec(tmp_path, "agents:echo"))
+            await events_ws.send(b"\x00\x01session/echo/history/")
+            await anyio.sleep(0.1)  # A subscription reaches the daemon a moment after it is sent.
+            await session.run("elsewhere")
+            seen: list[tuple[int, str]] = []
+            while not seen or seen[-1][1] != "output":
+                topic, payload = await zws_recv(events_ws)
+                entry = json.loads(payload)
+                assert topic == b"session/echo/history/"
+                seen.append((entry["seq"], entry["item"]["type"]))
+    # The worker's start comes first, under a turn of its own.
+    assert [kind for _seq, kind in seen] == ["started", "prompt", "text", "usage", "output"]
+    assert [seq for seq, _kind in seen] == list(range(seen[0][0], seen[0][0] + 5))
 
 
 async def test_zws_needs_the_login_the_origin_and_the_subprotocol(web: Web) -> None:
@@ -552,21 +424,13 @@ async def test_zws_needs_the_login_the_origin_and_the_subprotocol(web: Web) -> N
 
 
 @needs_pymux
-async def test_pane_relay(web: Web, tmp_path: Path, pymux_socket: str) -> None:
+async def test_pane_relay(web: Web, tmp_path: Path, pymux_socket: str, daemon: Paths) -> None:
     url = web.url.replace("http://", "ws://")
     with anyio.fail_after(TIMEOUT):
-        async with httpx.AsyncClient() as client:
-            await login(client, web, ALLOWED)
-            csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
-            spec = fake_spec(tmp_path, pymux_socket).model_dump(mode="json")
-            await client.post(
-                f"{web.url}/api/sessions", json={"name": "tty", "spec": spec}, headers={"X-CSRF-Token": csrf}
-            )
-            spec = py_spec(tmp_path, "agents:echo").model_dump(mode="json")
-            await client.post(
-                f"{web.url}/api/sessions", json={"name": "py", "spec": spec}, headers={"X-CSRF-Token": csrf}
-            )
-            headers = {"Cookie": f"aid_session={client.cookies['aid_session']}"}
+        async with aid.connect(daemon) as other:
+            await other.create("tty", fake_spec(tmp_path, pymux_socket))
+            await other.create("py", py_spec(tmp_path, "agents:echo"))
+        headers = await zws_cookie(web)
         origin = cast("Origin", web.url)
         async with ws_connect(f"{url}/api/sessions/tty/pane", origin=origin, additional_headers=headers) as ws:
             welcome = json.loads(await ws.recv())

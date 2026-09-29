@@ -1,7 +1,7 @@
 """The web UI: a Starlette app in front of the daemon, reached through the same client as any other program.
 
-Prompts stream back as Server-Sent Events on the POST that sends them, which a page reads with fetch. That keeps
-everything on plain HTTP, where the session cookie and the CSRF header already apply.
+What the daemon answers reaches the page over the ZWS relays (`zws`). What aid web answers itself (the login, the
+session's files, speech to text, the pane) is plain HTTP and WebSockets here.
 """
 
 from __future__ import annotations
@@ -30,19 +30,18 @@ from starlette.responses import (
     PlainTextResponse,
     RedirectResponse,
     Response,
-    StreamingResponse,
 )
 from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect
 
 from aid.client import connect
-from aid.protocol import AidError, CreateSession, SessionInfosAdapter
+from aid.protocol import AidError
 from aid.speech import Transcription
 from aid.web import auth, files, theme, zws
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, Awaitable, Callable
     from pathlib import Path
 
     from starlette.requests import Request
@@ -63,7 +62,6 @@ SECURITY_HEADERS: Final = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "same-origin",
 }
-KEEPALIVE: Final = 15.0
 WS_POLICY_VIOLATION: Final = 1008
 WS_NO_SPEECH: Final = 4404
 # RFC 6455 allows 123 bytes of close reason.
@@ -72,22 +70,10 @@ WS_REASON_MAX: Final = 120
 MAX_AUDIO_FRAME: Final = 192000 * 4
 _STATUS: Final = {
     "not_found": 404,
-    "exists": 409,
-    "invalid_request": 422,
-    "busy": 409,
-    "no_screen": 404,
-    "not_running": 409,
     "outside": 403,
     "not_a_directory": 400,
     "not_a_file": 400,
-    "no_pending": 409,
-    "no_option": 422,
 }
-
-
-class PromptBody(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    text: str
 
 
 type Endpoint = Callable[[Request], Awaitable[Response]]
@@ -97,106 +83,26 @@ def _client(request: Request) -> Client:
     return request.app.state.client
 
 
-def api(*, mutating: bool = False) -> Callable[[Endpoint], Endpoint]:
-    """Require a logged-in user; for requests that change something, the CSRF header too. Map AidError."""
+def api(endpoint: Endpoint) -> Endpoint:
+    """Require a logged-in user; map AidError. None of these changes anything, so none needs the CSRF header."""
 
-    def wrap(endpoint: Endpoint) -> Endpoint:
-        async def handler(request: Request) -> Response:
-            if auth.current_user(request) is None:
-                return auth.unauthorized()
-            if mutating and not auth.csrf_ok(request):
-                return JSONResponse({"error": "bad CSRF token"}, status_code=403)
-            try:
-                return await endpoint(request)
-            except AidError as error:
-                return JSONResponse(
-                    {"error": error.message, "code": error.code}, status_code=_STATUS.get(error.code, 502)
-                )
-            except ValidationError as error:
-                return JSONResponse({"error": error.errors(include_url=False)}, status_code=422)
-            except json.JSONDecodeError:
-                return JSONResponse({"error": "the body is not JSON"}, status_code=400)
+    async def handler(request: Request) -> Response:
+        if auth.current_user(request) is None:
+            return auth.unauthorized()
+        try:
+            return await endpoint(request)
+        except AidError as error:
+            return JSONResponse({"error": error.message, "code": error.code}, status_code=_STATUS.get(error.code, 502))
+        except ValidationError as error:
+            return JSONResponse({"error": error.errors(include_url=False)}, status_code=422)
 
-        return handler
-
-    return wrap
+    return handler
 
 
-@api()
+@api
 async def me(request: Request) -> Response:
     user = auth.current_user(request)
     return JSONResponse({"email": user.email if user else None, "csrf": request.session.get(auth.CSRF_KEY)})
-
-
-@api()
-async def list_sessions(request: Request) -> Response:
-    return JSONResponse([info.model_dump(mode="json") for info in await _client(request).sessions()])
-
-
-@api()
-async def list_agents(request: Request) -> Response:
-    return JSONResponse((await _client(request).agents()).model_dump(mode="json"))
-
-
-@api(mutating=True)
-async def create_session(request: Request) -> Response:
-    create = CreateSession.model_validate(await request.json())
-    await _client(request).call(create)
-    return JSONResponse({"name": create.name}, status_code=201)
-
-
-class HistoryQuery(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    before: int | None = None
-    after: int | None = None
-    limit: int = 100
-
-
-@api()
-async def history(request: Request) -> Response:
-    query = HistoryQuery.model_validate(dict(request.query_params))
-    session = _client(request).session(request.path_params["name"])
-    page = await session.history(before=query.before, after=query.after, limit=query.limit)
-    return JSONResponse(page.model_dump(mode="json"))
-
-
-class HistoryEventsQuery(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    after: int = Field(-1, ge=-1)
-
-
-@api()
-async def history_events(request: Request) -> Response:
-    """Server-Sent Events: each history entry after `after` as the daemon records it, whoever started its turn.
-    Each event's id is the entry's seq; a reconnecting EventSource sends it back as Last-Event-ID."""
-    query = HistoryEventsQuery.model_validate(dict(request.query_params))
-    session = _client(request).session(request.path_params["name"])
-    await session.status()  # A missing session is a 404 here, not an error inside the stream.
-    resumed = request.headers.get("last-event-id", "")
-    after = max(query.after, int(resumed)) if resumed.isdecimal() else query.after
-    entries = session.follow_history(after, idle=KEEPALIVE)
-    return _follow(entries, lambda e: e.model_dump_json(), event_id=lambda e: e.seq, still_there=session.status)
-
-
-@api()
-async def summary(request: Request) -> Response:
-    totals = await _client(request).session(request.path_params["name"]).summary()
-    return JSONResponse(totals.model_dump(mode="json"))
-
-
-@api(mutating=True)
-async def prompt(request: Request) -> Response:
-    body = PromptBody.model_validate(await request.json())
-    session = _client(request).session(request.path_params["name"])
-
-    async def events() -> AsyncIterator[str]:
-        try:
-            async for event in session.stream(body.text):
-                yield f"data: {event.model_dump_json()}\n\n"
-        except AidError as error:
-            yield f"event: error\ndata: {json.dumps({'error': error.message, 'code': error.code})}\n\n"
-
-    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
 
 
 class PathQuery(BaseModel):
@@ -209,14 +115,14 @@ async def _cwd(request: Request) -> str:
     return (await _client(request).session(request.path_params["name"]).status()).cwd
 
 
-@api()
+@api
 async def list_files(request: Request) -> Response:
     query = PathQuery.model_validate(dict(request.query_params))
     entries = await files.list_dir(await _cwd(request), query.path)
     return JSONResponse([e.model_dump(mode="json") for e in entries])
 
 
-@api()
+@api
 async def read_file(request: Request) -> Response:
     query = PathQuery.model_validate(dict(request.query_params))
     view = await files.read_file(await _cwd(request), query.path)
@@ -226,96 +132,7 @@ async def read_file(request: Request) -> Response:
     return JSONResponse(view.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
 
 
-@api()
-async def status(request: Request) -> Response:
-    found = await _client(request).session(request.path_params["name"]).status()
-    return JSONResponse(found.model_dump(mode="json"))
-
-
-def _follow[T](
-    values: AsyncGenerator[T | None],
-    dump: Callable[[T], str],
-    *,
-    event_id: Callable[[T], int] | None = None,
-    still_there: Callable[[], Awaitable[object]] | None = None,
-) -> StreamingResponse:
-    """Server-Sent Events of what the daemon publishes (a `follow_*` with `idle=KEEPALIVE`), for as long as the page
-    holds the stream open. A page opens one only while its tab is on screen, so nothing streams that nobody sees.
-
-    `still_there` runs on each quiet spell: a deleted session's topic just goes quiet, and its AidError ends the
-    stream as the page expects."""
-
-    async def events() -> AsyncIterator[str]:
-        try:
-            async for value in values:
-                if value is None:
-                    if still_there is not None:
-                        await still_there()
-                    # A comment: it tells a dead connection apart from a quiet one.
-                    yield ": still here\n\n"
-                    continue
-                prefix = f"id: {event_id(value)}\n" if event_id is not None else ""
-                yield f"{prefix}data: {dump(value)}\n\n"
-        except AidError as error:
-            yield f"event: error\ndata: {json.dumps({'error': error.message, 'code': error.code})}\n\n"
-        finally:
-            await values.aclose()
-
-    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
-
-
-@api()
-async def sessions_events(request: Request) -> Response:
-    listed = _client(request).follow_sessions(idle=KEEPALIVE)
-    return _follow(listed, lambda infos: SessionInfosAdapter.dump_json(infos).decode())
-
-
-@api()
-async def status_events(request: Request) -> Response:
-    session = _client(request).session(request.path_params["name"])
-    await session.status()  # A missing session is a 404 here, not an error inside the stream.
-    return _follow(session.follow_status(idle=KEEPALIVE), lambda s: s.model_dump_json(), still_there=session.status)
-
-
-@api(mutating=True)
-async def cancel(request: Request) -> Response:
-    await _client(request).session(request.path_params["name"]).cancel()
-    return JSONResponse({})
-
-
-class _Answer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    option_id: str | None
-
-
-@api(mutating=True)
-async def answer_permission(request: Request) -> Response:
-    answer = _Answer.model_validate(await request.json())
-    session = _client(request).session(request.path_params["name"])
-    await session.answer(request.path_params["request_id"], answer.option_id)
-    return JSONResponse({})
-
-
-@api(mutating=True)
-async def start(request: Request) -> Response:
-    await _client(request).session(request.path_params["name"]).start()
-    return JSONResponse({})
-
-
-@api(mutating=True)
-async def stop(request: Request) -> Response:
-    await _client(request).session(request.path_params["name"]).stop()
-    return JSONResponse({})
-
-
-@api(mutating=True)
-async def delete(request: Request) -> Response:
-    await _client(request).session(request.path_params["name"]).delete()
-    return JSONResponse({})
-
-
-@api()
+@api
 async def speech(request: Request) -> Response:
     return JSONResponse({"enabled": request.app.state.recognizer is not None})
 
@@ -501,23 +318,8 @@ def create_app(
             Route(auth.CALLBACK_PATH, auth.callback),
             Route("/logout", auth.logout, methods=["POST"]),
             Route("/api/me", me),
-            Route("/api/agents", list_agents, methods=["GET"]),
-            Route("/api/sessions", list_sessions, methods=["GET"]),
-            Route("/api/sessions", create_session, methods=["POST"]),
-            Route("/api/sessions/events", sessions_events, methods=["GET"]),
-            Route("/api/sessions/{name}", delete, methods=["DELETE"]),
-            Route("/api/sessions/{name}/history", history, methods=["GET"]),
-            Route("/api/sessions/{name}/summary", summary, methods=["GET"]),
-            Route("/api/sessions/{name}/history/events", history_events, methods=["GET"]),
-            Route("/api/sessions/{name}/status", status, methods=["GET"]),
             Route("/api/sessions/{name}/files", list_files, methods=["GET"]),
             Route("/api/sessions/{name}/file", read_file, methods=["GET"]),
-            Route("/api/sessions/{name}/status/events", status_events, methods=["GET"]),
-            Route("/api/sessions/{name}/prompt", prompt, methods=["POST"]),
-            Route("/api/sessions/{name}/cancel", cancel, methods=["POST"]),
-            Route("/api/sessions/{name}/permissions/{request_id}", answer_permission, methods=["POST"]),
-            Route("/api/sessions/{name}/start", start, methods=["POST"]),
-            Route("/api/sessions/{name}/stop", stop, methods=["POST"]),
             Route("/api/speech", speech, methods=["GET"]),
             WebSocketRoute("/api/transcribe", transcribe),
             WebSocketRoute("/api/sessions/{name}/pane", pane),

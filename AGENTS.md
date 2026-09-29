@@ -50,7 +50,14 @@ API and a CLI.
   `Client.follow_sessions` / `Session.follow_status` / `Session.follow_history`: subscribe, then fetch the
   baseline, then follow; a jump in seq is fetched. `idle=` yields None on quiet spells (never cancel the
   generator's receive). One SUB socket per follower, closed with it.
-- `src/aid/web/` — `aid web`: Starlette on hypercorn, OIDC login (`auth.py`), JSON API + SSE (`app.py`).
+- `src/aid/web/` — `aid web`: Starlette on hypercorn, OIDC login (`auth.py`), HTTP for what aid web answers itself
+  (`app.py`: files, speech, pane).
+- `src/aid/web/zws.py` — the daemon for the page, as ZWS 2.0 (flags byte + body per WebSocket message; bare
+  `ZWS2.0`, no mechanism): `/api/zws/control` a DEALER per WebSocket, `/api/zws/events` a SUB (`\x01`/`\x00` + topic).
+  Login + Origin gate both. Control admits only `PageRequest` (the allowlist; never `Hook`, `SendMessage`,
+  `ReceiveMessages`, pane requests) and swaps in its own request ids: the daemon routes and names turns by id across
+  clients. Page side: `web/src/lib/zws.ts` (socket, PING heartbeat, backoff) and `api.ts` (`call`, `follow*`:
+  subscribe, then fetch the baseline, changes that beat it applied after; a dropped request fails, never resent).
 - `src/aid/schema.py` — `python -m aid.schema`: JSON Schema of what the page reads (serialization mode: defaults
   required) and sends (validation mode). Committed as `web/src/lib/protocol.schema.json`; `npm run types` in web/
   generates `protocol.ts` from it, which `api.ts` re-exports. Never hand-edit either: `tests/test_schema.py` and the
@@ -108,12 +115,12 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 - claude-tty depends on Claude Code's screen and transcript, neither an API. `claude_tty.py` and
   `transcript.py` say what was measured, on which version; re-measure before changing them.
 - libpymux and the `pymux` binary come from one pyterm pin (`default.nix`): the wire protocol still moves.
-- Web live views stream only while their tab is mounted and the browser tab is visible: Status by SSE
-  (`api.watch`), Terminal by `<pymux-pane>` (pyterm's `pymux-element`, linked in as `node_modules/pymux-pane`)
+- Web live views stream only while their tab is mounted and the browser tab is visible: status, list and history by
+  `api.follow*` (the events WebSocket closes on a hidden tab), Terminal by `<pymux-pane>` (pyterm's `pymux-element`, linked in as `node_modules/pymux-pane`)
   over `/api/sessions/{name}/pane`, which relays `libpymux.PaneStream` without reading it. The element styles
   through the CSSOM, so the CSP stays `default-src 'self'`: do not add inline allowances.
-- Web: a session runs commands on the host, so login needs a verified email on the allowlist, and every
-  mutating request needs the CSRF header. The CSP forbids inline script; agent output is text, never HTML.
+- Web: a session runs commands on the host, so login needs a verified email on the allowlist; every WebSocket checks
+  the Origin (it carries no CSRF header), and a mutating HTTP request (logout) needs the CSRF header. The CSP forbids inline script; agent output is text, never HTML.
   Markdown goes through marked's lexer into Svelte elements (`Markdown.svelte`), never `{@html}`.
 - CodeMirror (`CodeView.svelte`) must live in a shadow root: on a document style-mod adds a style element,
   which the CSP refuses; in a shadow root it adopts a constructed stylesheet.
