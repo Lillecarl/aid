@@ -17,6 +17,9 @@
     rev = "0910a2436bcbbbef6889be7c10d96520593e9578";
     narHash = "sha256-AO0LvZeEB/kUNxym2tgpXOU2FpEq3kUWNTnUP8rHBus=";
   },
+  # Vivarium, the NixOS integration tests aid boots in UML guests. A local path, not a pin: one-man
+  # project, and the checkout beside this one is what the tests run against.
+  vivariumSrc ? ../nixidae/vivarium,
 }:
 let
   inherit (pkgs) lib;
@@ -122,6 +125,12 @@ in
 
   inherit (set.aid) tests;
   pyrun-tests = set.pyrun.tests;
+
+  # One UML guest running dex, the daemon and the web UI as the NixOS module ships them. The UML
+  # backend needs no KVM and no root, so this runs in the Nix sandbox like `tests` does.
+  vivarium-smoke = pkgs.callPackage ./nix/vivarium-smoke.nix {
+    vivarium = import (vivariumSrc + "/lib.nix") { inherit pkgs; };
+  };
 
   # From the same pyterm pin as libpymux: aid starts its own server with it, and the wire protocol still moves.
   inherit (p) pymux;
