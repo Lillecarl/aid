@@ -185,30 +185,34 @@ async def _relay(
     forward: Callable[[list[bytes]], list[bytes] | None] = lambda parts: parts,
 ) -> None:
     """The daemon's messages to the page through `forward` (None drops one), and the page's through `handle`, until
-    either side ends."""
-    problem: str | None = None
+    either side ends. The socket stays in `app.state.open_sockets` throughout, so shutdown can close it."""
+    link.websocket.app.state.open_sockets.add(link.websocket)
     try:
-        async with anyio.create_task_group() as tg:
+        problem: str | None = None
+        try:
+            async with anyio.create_task_group() as tg:
 
-            async def to_page() -> None:
-                while True:
-                    if (parts := forward(await sock.recv_multipart())) is not None:
-                        await link.send(*parts)
+                async def to_page() -> None:
+                    while True:
+                        if (parts := forward(await sock.recv_multipart())) is not None:
+                            await link.send(*parts)
 
-            tg.start_soon(to_page)
-            try:
-                async for parts in link.messages():
-                    await handle(parts)
-            except ProtocolError as error:
-                problem = str(error)
-            tg.cancel_scope.cancel()
-    except* WebSocketDisconnect:
-        problem = None
-    with contextlib.suppress(RuntimeError):  # Already closed by the page.
-        if problem is None:
-            await link.websocket.close()
-        else:
-            await link.websocket.close(code=WS_POLICY_VIOLATION, reason=problem)
+                tg.start_soon(to_page)
+                try:
+                    async for parts in link.messages():
+                        await handle(parts)
+                except ProtocolError as error:
+                    problem = str(error)
+                tg.cancel_scope.cancel()
+        except* WebSocketDisconnect:
+            problem = None
+        with contextlib.suppress(RuntimeError):  # Already closed by the page.
+            if problem is None:
+                await link.websocket.close()
+            else:
+                await link.websocket.close(code=WS_POLICY_VIOLATION, reason=problem)
+    finally:
+        link.websocket.app.state.open_sockets.discard(link.websocket)
 
 
 async def control(websocket: WebSocket) -> None:

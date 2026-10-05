@@ -12,6 +12,7 @@ import re
 import secrets
 import shutil
 import socket
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, BinaryIO
@@ -24,12 +25,11 @@ from aid.web import OidcConfig, create_app, serve
 from aid.web.app import ENV_ASSETS
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator
 
     from aid.paths import Paths
     from aid.speech import Recognizer
     from aid.web.highlight import Grammars
-
 # The built Svelte UI. The Nix test run and the dev shell set it; without it the API tests still run.
 ASSETS = Path(os.environ[ENV_ASSETS]) if os.environ.get(ENV_ASSETS) else None
 
@@ -87,45 +87,58 @@ async def wait_for(url: str) -> None:
             await anyio.sleep(0.1)
 
 
-@pytest.fixture
-async def web(
-    daemon: Paths, tmp_path: Path, speech_recognizer: Recognizer | None, grammars: Grammars | None
-) -> AsyncIterator[Web]:
-    dex_port, web_port = free_port(), free_port()
-    web_url = f"http://127.0.0.1:{web_port}"
+@dataclass(frozen=True)
+class Dex:
+    issuer: str
+
+
+@asynccontextmanager
+async def running_dex(tmp_path: Path, web_url: str) -> AsyncGenerator[Dex]:
+    """Dex as the web fixture boots it, for a test that owns its own app and server."""
+    port = free_port()
     config = tmp_path / "dex.json"
-    config.write_text(json.dumps(dex_config(dex_port, web_url)))
-    issuer = f"http://127.0.0.1:{dex_port}/dex"
+    config.write_text(json.dumps(dex_config(port, web_url)))
+    issuer = f"http://127.0.0.1:{port}/dex"
     log = open_log(tmp_path / "dex.log")
-    oidc = OidcConfig(
-        issuer=issuer,
-        client_id="aid",
-        client_secret="aid-secret",
-        base_url=web_url,
-        allowed_emails=frozenset({ALLOWED}),
-    )
-    shutdown = anyio.Event()
     async with await anyio.open_process(["dex", "serve", str(config)], stdout=log, stderr=log) as dex:
         try:
             with anyio.fail_after(TIMEOUT):
                 await wait_for(f"{issuer}/.well-known/openid-configuration")
-            async with anyio.create_task_group() as tg:
-                app = create_app(
-                    oidc,
-                    secrets.token_hex(32),
-                    daemon,
-                    assets=ASSETS,
-                    recognizer=speech_recognizer,
-                    grammars=grammars,
-                )
-                tg.start_soon(lambda: serve(app, f"127.0.0.1:{web_port}", shutdown=shutdown))
-                with anyio.fail_after(TIMEOUT):
-                    await wait_for(f"{web_url}/healthz")
-                yield Web(web_url)
-                shutdown.set()
+            yield Dex(issuer)
         finally:
             dex.terminate()
             log.close()
+
+
+@pytest.fixture
+async def web(
+    daemon: Paths, tmp_path: Path, speech_recognizer: Recognizer | None, grammars: Grammars | None
+) -> AsyncIterator[Web]:
+    web_port = free_port()
+    web_url = f"http://127.0.0.1:{web_port}"
+    async with running_dex(tmp_path, web_url) as dex_server:
+        oidc = OidcConfig(
+            issuer=dex_server.issuer,
+            client_id="aid",
+            client_secret="aid-secret",
+            base_url=web_url,
+            allowed_emails=frozenset({ALLOWED}),
+        )
+        shutdown = anyio.Event()
+        async with anyio.create_task_group() as tg:
+            app = create_app(
+                oidc,
+                secrets.token_hex(32),
+                daemon,
+                assets=ASSETS,
+                recognizer=speech_recognizer,
+                grammars=grammars,
+            )
+            tg.start_soon(lambda: serve(app, f"127.0.0.1:{web_port}", shutdown=shutdown))
+            with anyio.fail_after(TIMEOUT):
+                await wait_for(f"{web_url}/healthz")
+            yield Web(web_url)
+            shutdown.set()
 
 
 async def login(client: httpx.AsyncClient, web: Web, email: str) -> httpx.Response:

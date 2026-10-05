@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import secrets
 import time
 from typing import TYPE_CHECKING, Any, cast
 
@@ -15,10 +16,23 @@ from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
 
 import aid
+from aid.web import OidcConfig, create_app, serve
 from aid.web.app import ENV_ASSETS
 from tests.conftest import GRAMMARS, SPEECH_MODEL, fake_spec, needs_pymux, py_spec
 from tests.test_speech import SAID, speech
-from tests.web_harness import ALLOWED, ASSETS, IDLE, REFUSED, TIMEOUT, Web, login, needs_dex
+from tests.web_harness import (
+    ALLOWED,
+    ASSETS,
+    IDLE,
+    REFUSED,
+    TIMEOUT,
+    Web,
+    free_port,
+    login,
+    needs_dex,
+    running_dex,
+    wait_for,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -336,3 +350,39 @@ async def test_pane_relay(web: Web, tmp_path: Path, pymux_socket: str, daemon: P
     assert "background-color" in welcome["css"]
     assert first["type"] == "frame"
     assert first.get("whole") is True
+
+
+async def test_shutdown_closes_open_websockets(daemon: Paths, tmp_path: Path) -> None:
+    """serve() returns after shutdown with browser-style websockets held open: hypercorn waits for
+    dropped connections, so the app closes what its relays hold."""
+    web_port = free_port()
+    web_url = f"http://127.0.0.1:{web_port}"
+    web = Web(web_url)
+    async with running_dex(tmp_path, web_url) as dex_server:
+        oidc = OidcConfig(
+            issuer=dex_server.issuer,
+            client_id="aid",
+            client_secret="aid-secret",
+            base_url=web_url,
+            allowed_emails=frozenset({ALLOWED}),
+        )
+        app = create_app(oidc, secrets.token_hex(32), daemon, assets=None)
+        shutdown = anyio.Event()
+        done = anyio.Event()
+
+        async def serve_and_signal() -> None:
+            await serve(app, f"127.0.0.1:{web_port}", shutdown=shutdown)
+            done.set()
+
+        with anyio.fail_after(TIMEOUT):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(serve_and_signal)
+                await wait_for(f"{web_url}/healthz")
+                headers = await zws_cookie(web)
+                async with (
+                    zws_connect(web, "/api/zws/events", headers),
+                    zws_connect(web, "/api/zws/control", headers),
+                ):
+                    shutdown.set()
+                    await done.wait()
+                tg.cancel_scope.cancel()

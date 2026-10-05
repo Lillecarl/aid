@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import json
 from contextlib import asynccontextmanager
+from functools import wraps
 from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
 import anyio
@@ -139,6 +140,22 @@ class SpeechStart(BaseModel):
     rate: Annotated[int, Field(ge=8000, le=192000)]
 
 
+def tracked(handler: Callable[[WebSocket], Awaitable[None]]) -> Callable[[WebSocket], Awaitable[None]]:
+    """An accepted socket, dropped from `app.state.open_sockets` when its handler ends: shutdown closes
+    what is left, because hypercorn waits for dropped connections and a browser tab stays open."""
+
+    @wraps(handler)
+    async def run(websocket: WebSocket) -> None:
+        websocket.app.state.open_sockets.add(websocket)
+        try:
+            await handler(websocket)
+        finally:
+            websocket.app.state.open_sockets.discard(websocket)
+
+    return run
+
+
+@tracked
 async def transcribe(websocket: WebSocket) -> None:
     """Speech to text, streamed: `{"rate": N}`, then binary frames of little-endian float32 mono samples at that
     rate, then `{"end": true}`. Each change comes back as `{"text": ..., "final": ...}`; `{"done": true}` last.
@@ -179,6 +196,7 @@ async def transcribe(websocket: WebSocket) -> None:
             return
 
 
+@tracked
 async def pane(websocket: WebSocket) -> None:
     """Interactive Claude's pane for `<pymux-pane>`: pymux's frames out, the viewer's keys in (Lillecarl/pymux#461).
 
@@ -342,6 +360,7 @@ def create_app(
     app.state.recognizer = recognizer
     app.state.theme_css = theme.css(colors)
     app.state.grammars = grammars
+    app.state.open_sockets = set()
     return app
 
 
@@ -350,4 +369,13 @@ async def serve(app: Starlette, bind: str, *, shutdown: anyio.Event | None = Non
     config.bind = [bind]
     config.accesslog = "-"
     stop_event = shutdown or anyio.Event()
-    await hypercorn_serve(app, config, shutdown_trigger=stop_event.wait)  # pyright: ignore[reportArgumentType] -- Starlette is an ASGI app; hypercorn's Framework union does not name it
+
+    async def _shutdown() -> None:
+        """What hypercorn waits on: close the open websockets first, because its wait for dropped
+        connections never ends while a browser tab stays open."""
+        await stop_event.wait()
+        for websocket in list(app.state.open_sockets):
+            with contextlib.suppress(RuntimeError, WebSocketDisconnect):
+                await websocket.close()
+
+    await hypercorn_serve(app, config, shutdown_trigger=_shutdown)  # pyright: ignore[reportArgumentType] -- Starlette is an ASGI app; hypercorn's Framework union does not name it
