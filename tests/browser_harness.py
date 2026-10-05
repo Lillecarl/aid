@@ -12,7 +12,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import anyio
 import pytest
@@ -35,10 +35,10 @@ except ImportError:
     expect = None
 
 
-async def seed_session(daemon: Paths, cwd: Path, name: str, target: str) -> None:
+async def seed_session(daemon: Paths, cwd: Path, name: str, target: str, **env: str) -> None:
     """A session on a mock agent, ready before the page loads: the UI under test never waits on a model."""
     async with aid.connect(daemon) as client:
-        await client.create(name, py_spec(cwd, target))
+        await client.create(name, py_spec(cwd, target, **cast("dict[str, Any]", env)))
 
 
 async def login_ui(page: Page, web: Web) -> None:
@@ -69,7 +69,7 @@ async def send_chat(page: Page, text: str) -> None:
     a test driving the menu presses its own keys."""
     if expect is None:
         pytest.skip("playwright is not installed")
-    await expect(page.get_by_test_id("chat-send")).to_be_enabled(timeout=TIMEOUT * 1000)
+    await wait_for_idle(page)
     box = page.get_by_test_id("chat-input")
     await box.fill(text)
     if re.fullmatch(r"/[A-Za-z]*", text) is not None:
@@ -78,6 +78,14 @@ async def send_chat(page: Page, text: str) -> None:
         await box.press("Escape")
         await menu.wait_for(state="hidden")
     await box.press("Enter")
+
+
+async def wait_for_idle(page: Page) -> None:
+    """Wait for the running turn to end: the Send button enables when the page is no longer busy. Asserts
+    through the button's state, never page JavaScript: the CSP forbids eval."""
+    if expect is None:
+        pytest.skip("playwright is not installed")
+    await expect(page.get_by_test_id("chat-send")).to_be_enabled(timeout=TIMEOUT * 1000)
 
 
 async def expect_chat_text(page: Page, text: str) -> None:

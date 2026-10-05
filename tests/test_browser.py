@@ -17,7 +17,14 @@ from typing import TYPE_CHECKING, cast
 import anyio
 import pytest
 
-from tests.browser_harness import expect_chat_text, open_session, seed_session, send_chat
+from tests.browser_harness import (
+    expect_chat_text,
+    open_session,
+    seed_session,
+    send_chat,
+    wait_for_idle,
+)
+from tests.test_agents import AGENT_DIR
 from tests.web_harness import ALLOWED, ASSETS, TIMEOUT, needs_dex
 
 if TYPE_CHECKING:
@@ -184,3 +191,25 @@ async def test_prompt_ctrl_a_stays_select_all(page: Page, session_daemon: Paths,
     await box.press("Control+a")
     await box.press("x")
     assert await box.input_value() == "x"
+
+
+async def test_tool_calls_share_a_row(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "tooling", "agents:tool_caller", AID_AGENTS_PATH=str(AGENT_DIR))
+    await open_session(page, "tooling")
+    await send_chat(page, "go")
+    boxes = page.get_by_test_id("tool-box")
+    await boxes.nth(1).wait_for()
+    await wait_for_idle(page)
+    flows = page.get_by_test_id("flow-row")
+    await flows.first.wait_for()
+    assert await flows.first.get_by_test_id("tool-box").count() >= 2
+    first = await boxes.nth(0).bounding_box()
+    second = await boxes.nth(1).bounding_box()
+    assert first is not None and second is not None
+    # One flex row: the vertical ranges overlap.
+    assert first["y"] < second["y"] + second["height"] and second["y"] < first["y"] + first["height"]
+    rows = page.get_by_test_id("chat-row")
+    last = await rows.last.bounding_box()
+    assert last is not None
+    # An agent message breaks the flow: the last row starts below the tool row.
+    assert last["y"] >= max(first["y"] + first["height"], second["y"] + second["height"])

@@ -20,7 +20,7 @@
   let open = $state(false);
 </script>
 
-<details class="tool {status}" bind:open>
+<details class="tool {status}" data-testid="tool-box" bind:open>
   <summary title={tool.id} class:plain={!hasDetails}>
     <span class="icon" aria-label={status}>{STATUS_ICON[status] ?? "•"}</span>
     {#if tool.kind}<span class="kind">{tool.kind}</span>{/if}

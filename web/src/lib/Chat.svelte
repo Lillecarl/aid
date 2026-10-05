@@ -136,6 +136,28 @@
   const firstSeq = (): number | undefined => rows.find((r) => r.seq !== undefined)?.seq;
   const nearBottom = (): boolean => !log || log.scrollHeight - log.scrollTop - log.clientHeight < EDGE_PX;
 
+  /** Box rows share a flex row: tool cards, thoughts, summaries and permission cards. Text rows break the
+   * run, so an agent message always starts a fresh row. */
+  function flows(row: Row): boolean {
+    return (
+      row.tool !== undefined || row.permission !== undefined || row.kind === "thought" || row.kind === "summary"
+    );
+  }
+
+  type FlowGroup = { flow: true; rows: Row[] } | { flow: false; row: Row };
+
+  /** Consecutive box rows grouped for one flex row each; every text row stands alone and breaks the run. */
+  const groups = $derived.by((): FlowGroup[] => {
+    const out: FlowGroup[] = [];
+    for (const row of rows) {
+      const last = out.at(-1);
+      if (flows(row) && last?.flow === true) last.rows.push(row);
+      else if (flows(row)) out.push({ flow: true, rows: [row] });
+      else out.push({ flow: false, row });
+    }
+    return out;
+  });
+
   /** Keep the view where it is while rows are added or removed above it. */
   async function keepingPosition(change: () => void): Promise<void> {
     const before = log ? log.scrollHeight - log.scrollTop : 0;
@@ -488,27 +510,37 @@
     Keep <input type="number" min="50" max="5000" step="50" bind:value={windowSize} /> entries
   </label>
 </div>
+{#snippet rowview(row: Row)}
+  {#if row.kind === "assistant"}
+    <div class="assistant" data-testid="chat-row"><Markdown text={row.text} /></div>
+  {:else if row.kind === "thought"}
+    <details class="thought" data-testid="chat-row">
+      <summary>Thinking <span class="gist">{row.text.trim().split("\n", 1)[0]}</span></summary>
+      <Markdown text={row.text} />
+    </details>
+  {:else if row.kind === "summary"}
+    <details class="thought" data-testid="chat-row">
+      <summary>What Claude kept of the conversation</summary>
+      <Markdown text={row.text} />
+    </details>
+  {:else if row.tool}
+    <ToolCard tool={row.tool} />
+  {:else if row.permission}
+    <PermissionCard session={name} request={row.permission.request} decision={row.permission.decision} />
+  {:else}
+    <div class={row.kind} data-testid="chat-row">{row.text}</div>
+  {/if}
+{/snippet}
+
 <div class="log" data-testid="chat-log" bind:this={log} {onscroll}>
   {#if hasOlder}<div class="more">{loading ? "Loading…" : "Scroll up for older entries"}</div>{/if}
-  {#each rows as row (row.key)}
-    {#if row.kind === "assistant"}
-      <div class="assistant" data-testid="chat-row"><Markdown text={row.text} /></div>
-    {:else if row.kind === "thought"}
-      <details class="thought" data-testid="chat-row">
-        <summary>Thinking <span class="gist">{row.text.trim().split("\n", 1)[0]}</span></summary>
-        <Markdown text={row.text} />
-      </details>
-    {:else if row.kind === "summary"}
-      <details class="thought" data-testid="chat-row">
-        <summary>What Claude kept of the conversation</summary>
-        <Markdown text={row.text} />
-      </details>
-    {:else if row.tool}
-      <ToolCard tool={row.tool} />
-    {:else if row.permission}
-      <PermissionCard session={name} request={row.permission.request} decision={row.permission.decision} />
+  {#each groups as group (group.flow ? group.rows[0]?.key : group.row.key)}
+    {#if group.flow}
+      <div class="flow" data-testid="flow-row">
+        {#each group.rows as row (row.key)}{@render rowview(row)}{/each}
+      </div>
     {:else}
-      <div class={row.kind} data-testid="chat-row">{row.text}</div>
+      {@render rowview(group.row)}
     {/if}
   {:else}
     {#if !loading}<div class="more">No history yet.</div>{/if}
@@ -581,6 +613,16 @@
   }
   .log > * {
     margin: 0.4rem 0;
+  }
+  /* Consecutive box rows share one row and wrap by width; a text row always stands alone. */
+  .flow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .flow > * {
+    flex: 1 1 16rem;
+    min-width: 0;
   }
   .more {
     text-align: center;

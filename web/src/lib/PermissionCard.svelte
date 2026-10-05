@@ -46,7 +46,7 @@
   }
 </script>
 
-<div class="permission" class:open={decision === null}>
+<div class="permission" data-testid="permission-box" class:open={decision === null}>
   <div class="head">
     <span class="label">Permission</span>
     {#if request.tool_name}<span class="tool">{request.tool_name}</span>{/if}
