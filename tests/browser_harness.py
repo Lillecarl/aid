@@ -10,6 +10,7 @@ text to assert on.
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -63,13 +64,19 @@ async def open_session(page: Page, name: str) -> None:
 
 async def send_chat(page: Page, text: str) -> None:
     """Fill the prompt box and press Enter, the path a keyboard person takes. Waits for the previous turn
-    first: the page drops a send into a busy box, so a test driving mid-turn behaviour uses the Stop button
-    directly instead. Asserts through the button's state, never page JavaScript: the CSP forbids eval."""
+    first: the page drops a send into a busy box, and dismisses the slash menu when the text opens one, so
+    Enter sends what was filled. A test driving mid-turn behaviour uses the Stop button directly instead, and
+    a test driving the menu presses its own keys."""
     if expect is None:
         pytest.skip("playwright is not installed")
     await expect(page.get_by_test_id("chat-send")).to_be_enabled(timeout=TIMEOUT * 1000)
     box = page.get_by_test_id("chat-input")
     await box.fill(text)
+    if re.fullmatch(r"/[A-Za-z]*", text) is not None:
+        menu = page.get_by_test_id("slash-menu")
+        await menu.wait_for()
+        await box.press("Escape")
+        await menu.wait_for(state="hidden")
     await box.press("Enter")
 
 

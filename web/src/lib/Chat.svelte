@@ -344,6 +344,24 @@
     }
   }
 
+  // Slash completion: a prompt box holding only "/prefix" offers the commands it starts, from the same array
+  // /help lists. Enter or Tab completes the selected one; Escape closes until the text changes again.
+  let slashSel = $state(0);
+  let slashOff = $state(false);
+  const slashQuery = $derived(/^\s*\/([A-Za-z]*)$/.exec(text)?.[1] ?? null);
+  const slashMatches = $derived(slashes.filter((s) => slashQuery !== null && s.name.startsWith(slashQuery)));
+  const slashOpen = $derived(slashQuery !== null && slashMatches.length > 0 && !slashOff);
+  $effect(() => {
+    slashQuery;
+    slashSel = 0;
+    slashOff = false;
+  });
+
+  function slashAccept(command: Slash): void {
+    text = `/${command.name} `;
+    slashOff = true;
+  }
+
   // A touch keyboard has no Shift+Enter, so there Enter is a newline and the button sends.
   const touchOnly = matchMedia("(pointer: coarse) and (not (any-pointer: fine))").matches;
 
@@ -356,6 +374,31 @@
     // keyCode 229: Safari ends an IME composition with an Enter whose isComposing is already false.
     if (event.isComposing || event.keyCode === 229) return;
     const area = event.currentTarget as HTMLTextAreaElement;
+    if (slashOpen) {
+      const selected = slashMatches[Math.min(slashSel, slashMatches.length - 1)];
+      if (selected === undefined) return;
+      if (event.key === "Escape") {
+        event.preventDefault();
+        slashOff = true;
+        return;
+      }
+      if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+        event.preventDefault();
+        const n = slashMatches.length;
+        slashSel = (slashSel + (event.key === "ArrowDown" ? 1 : n - 1)) % n;
+        return;
+      }
+      if (event.key === "Tab") {
+        event.preventDefault();
+        slashAccept(selected);
+        return;
+      }
+      if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
+        event.preventDefault();
+        slashAccept(selected);
+        return;
+      }
+    }
     if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "j") {
       event.preventDefault(); // Chromium opens its downloads page otherwise.
       newline(area);
@@ -471,6 +514,24 @@
   {#if hasNewer}<div class="more">{loading ? "Loading…" : "Scroll down for newer entries"}</div>{/if}
 </div>
 <form onsubmit={send}>
+  {#if slashOpen}
+    <div class="slashmenu" role="listbox" aria-label="Slash commands" data-testid="slash-menu">
+      {#each slashMatches as s, i}
+        <button
+          type="button"
+          role="option"
+          aria-selected={i === slashSel}
+          class:selected={i === slashSel}
+          data-testid="slash-item"
+          onmousedown={(e) => e.preventDefault()}
+          onmouseover={() => (slashSel = i)}
+          onfocus={() => (slashSel = i)}
+          onclick={() => slashAccept(s)}
+          ><b>{s.usage}</b><span>{s.description}</span></button
+        >
+      {/each}
+    </div>
+  {/if}
   <textarea data-testid="chat-input" bind:value={text} onkeydown={keydown} rows="4" placeholder={touchOnly ? "Prompt" : "Prompt (Enter sends, Shift+Enter or Ctrl+J for a new line, /help for commands)"}></textarea>
   <div class="buttons">
     <button type="submit" data-testid="chat-send" disabled={busy}>{busy ? "Working…" : "Send"}</button>
@@ -578,5 +639,34 @@
   form {
     display: flex;
     flex-direction: column;
+    position: relative;
+  }
+  .slashmenu {
+    position: absolute;
+    bottom: 100%;
+    left: 0;
+    margin-bottom: 0.25rem;
+    min-width: 22rem;
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    padding: 0.25rem;
+  }
+  .slashmenu button {
+    display: flex;
+    gap: 0.75rem;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    border-radius: 0.2rem;
+    padding: 0.3rem 0.5rem;
+    cursor: pointer;
+  }
+  .slashmenu button.selected {
+    background: var(--accent);
+  }
+  .slashmenu button span {
+    color: var(--muted);
   }
 </style>

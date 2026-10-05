@@ -47,6 +47,52 @@ async def test_prompt_echo_roundtrip(page: Page, session_daemon: Paths, tmp_path
     await expect_chat_text(page, "turn 1: echo hello browser")
 
 
+async def test_slash_menu_lists_commands(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "menu", "agents:echo")
+    await open_session(page, "menu")
+    box = page.get_by_test_id("chat-input")
+    await box.fill("/")
+    menu = page.get_by_test_id("slash-menu")
+    await menu.wait_for()
+    items = menu.get_by_test_id("slash-item")
+    assert await items.count() == 2
+    rendered = [await items.nth(i).text_content() for i in range(2)]
+    assert any("/help" in (t or "") and "List these commands" in (t or "") for t in rendered)
+    assert any("/compact" in (t or "") for t in rendered)
+    await box.press("Escape")
+    await menu.wait_for(state="hidden")
+    assert await box.input_value() == "/"
+
+
+async def test_slash_menu_completes_keyboard(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "complete", "agents:echo")
+    await open_session(page, "complete")
+    box = page.get_by_test_id("chat-input")
+    await box.fill("/c")
+    menu = page.get_by_test_id("slash-menu")
+    await menu.wait_for()
+    assert await menu.get_by_test_id("slash-item").count() == 1
+    await box.press("ArrowDown")
+    await box.press("ArrowUp")
+    await box.press("Enter")
+    await menu.wait_for(state="hidden")
+    assert await box.input_value() == "/compact "
+
+
+async def test_slash_menu_completes_click(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "pick", "agents:echo")
+    await open_session(page, "pick")
+    box = page.get_by_test_id("chat-input")
+    await box.fill("/")
+    menu = page.get_by_test_id("slash-menu")
+    await menu.wait_for()
+    await menu.get_by_test_id("slash-item").filter(has_text="/compact").click()
+    await menu.wait_for(state="hidden")
+    assert await box.input_value() == "/compact "
+    await send_chat(page, "/compact ")
+    await expect_chat_text(page, "Context compacted")
+
+
 async def test_slash_help_lists_commands(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     await seed_session(session_daemon, tmp_path, "help", "agents:echo")
     await open_session(page, "help")
