@@ -35,7 +35,9 @@ ASSETS = Path(os.environ[ENV_ASSETS]) if os.environ.get(ENV_ASSETS) else None
 
 needs_dex = pytest.mark.skipif(shutil.which("dex") is None, reason="dex is not on PATH")
 
-TIMEOUT = 30
+TIMEOUT = int(os.environ.get("AID_TEST_TIMEOUT", "30"))
+"""Seconds a wait may take: the default assumes host speed, and a slow runner such as a UML guest
+sets AID_TEST_TIMEOUT higher."""
 ALLOWED = "admin@example.com"
 IDLE = {"permissions": 0, "working": False, "attention": None}
 REFUSED = "other@example.com"

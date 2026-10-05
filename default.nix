@@ -108,6 +108,9 @@ in
 {
   inherit set ui speechModel grammars;
 
+  # The browsers the browser tests drive, here so the vivarium guest takes the same ones as the shell.
+  inherit browsers;
+
   # Only `bin/aid`: a profile that installs this next to another virtualenv, such as pymux's, would otherwise
   # get two `bin/python` and `bin/activate` and refuse to build. The wrapper points `aid web` at the built UI
   # and the highlighter's grammars.
