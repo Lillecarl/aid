@@ -1,4 +1,5 @@
-"""The web UI through a real browser: login, a chat roundtrip, slash commands and prompt-box editing.
+"""The web UI through a real browser: login, a chat roundtrip, slash commands, prompt-box editing and PWA
+installability.
 
 The agents are mocks (`agents:echo` answers with the prompt, `agents:summarizer` compacts to a fixed
 digest), so every assertion is deterministic. Every test runs once per browser: `--browser both` is the
@@ -11,7 +12,7 @@ isolated tab from its cookies. Tests seed their sessions on the shared session d
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import anyio
 import pytest
@@ -31,6 +32,16 @@ pytestmark = [
     needs_dex,
     pytest.mark.skipif(ASSETS is None, reason="AID_WEB_ASSETS is not set"),
 ]
+
+
+async def test_pwa_is_installable(page: Page, browser_name: str) -> None:
+    if browser_name != "chromium":
+        pytest.skip("installability is a chromium concept")
+    assert await page.locator('link[rel="manifest"]').count() >= 1
+    cdp = await page.context.new_cdp_session(page)
+    # The CDP bridge is untyped; the verdict below is a plain JSON object.
+    result = cast("dict[str, object]", await cdp.send("Page.getInstallabilityErrors"))  # pyright: ignore[reportUnknownMemberType]
+    assert result.get("installabilityErrors", []) == []
 
 
 async def test_login_shows_the_user(page: Page) -> None:
