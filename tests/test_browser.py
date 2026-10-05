@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, cast
 import anyio
 import pytest
 
+import aid
 from tests.browser_harness import (
     expect_chat_text,
     open_session,
@@ -28,6 +29,7 @@ from tests.test_agents import AGENT_DIR
 from tests.web_harness import ALLOWED, ASSETS, TIMEOUT, needs_dex
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
     from playwright.async_api import Page
@@ -39,6 +41,16 @@ pytestmark = [
     needs_dex,
     pytest.mark.skipif(ASSETS is None, reason="AID_WEB_ASSETS is not set"),
 ]
+
+
+@pytest.fixture(autouse=True)
+async def clean_sessions(session_daemon: Paths) -> AsyncIterator[None]:
+    """Each test deletes its sessions when done: their workers exit, so the next test starts near-empty
+    instead of accumulating a worker per session until the guest falls over."""
+    yield
+    async with aid.connect(session_daemon) as client:
+        for session in await client.sessions():
+            await client.session(session.name).delete()
 
 
 async def test_pwa_is_installable(page: Page, browser_name: str) -> None:
