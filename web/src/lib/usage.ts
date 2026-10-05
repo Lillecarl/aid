@@ -5,6 +5,14 @@ export const tokens = (n: number): string =>
 
 const part = (n: number | null, label: string): string | null => (n ? `${tokens(n)} ${label}` : null);
 
+/** Accumulated cost across turns, per currency, highest amount first; empty when nothing reported. */
+export function costLine(record: Record<string, number>): string {
+  return Object.entries(record)
+    .sort(([, a], [, b]) => b - a)
+    .map(([currency, amount]) => `${amount.toFixed(2)} ${currency}`)
+    .join(", ");
+}
+
 /** One line: the models, then only the counts the agent reported. */
 export function usageLine(u: Usage): string {
   const context =

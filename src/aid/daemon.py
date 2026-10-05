@@ -117,6 +117,10 @@ class _Session:
     """What the last worker said about its agent. Kept after it exits: the agent session carries on."""
     models: list[str] = field(default_factory=list[str])
     """What the latest turn's Usage named."""
+    cost: dict[str, float] = field(default_factory=dict[str, float])
+    """Banked cost per currency: each closed agent session's last reported figure, as SessionSummary.cost."""
+    latest: dict[str, float] = field(default_factory=dict[str, float])
+    """The running agent session's latest cost per currency: folded into `cost` when the next session starts."""
     permissions: dict[str, PermissionRequest] = field(default_factory=dict[str, PermissionRequest])
     """Requests the agent waits on, by request id."""
     working: bool = False
@@ -138,8 +142,14 @@ class _Session:
                 self.permissions.pop(item.request_id, None)
             case Started():
                 self.started = item
+                self.cost.update(self.latest)
+                self.latest.clear()
             case _:
                 pass
+        # Apart from the match: every Usage counts toward cost, like SessionSummary.cost, whether or not it
+        # named models.
+        if isinstance(item, Usage) and item.session_cost is not None:
+            self.latest[item.session_cost.currency] = item.session_cost.amount
 
     def info(self) -> SessionInfo:
         return SessionInfo(
@@ -183,6 +193,7 @@ class _Session:
             permissions=list(self.permissions.values()),
             working=self.working or self.turn is not None,
             attention=self.attention,
+            cost={**self.cost, **self.latest},
         )
 
 

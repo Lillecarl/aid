@@ -2,7 +2,7 @@
   import { onMount } from "svelte";
   import * as api from "./api";
   import type { SessionStatus, SessionSummary } from "./api";
-  import { tokens } from "./usage";
+  import { costLine, tokens } from "./usage";
 
   let { name }: { name: string } = $props();
 
@@ -52,6 +52,8 @@
       <dt>Asks for you</dt>
       <dd>{status.attention}</dd>
     {/if}
+    <dt>Cost</dt>
+    <dd data-testid="status-cost">{costLine(status.cost) || "none reported"}</dd>
     <dt>Waiting messages</dt>
     <dd>{status.pending}</dd>
     <dt>Kind</dt>
@@ -91,10 +93,7 @@
         <span class="muted">({plural(turns, "turn")})</span>{:else}none reported{/each}
     </dd>
     <dt>Cost</dt>
-    <dd>
-      {#each entries(summary.cost) as [currency, amount], i (currency)}{i ? ", " : ""}{amount.toFixed(2)}
-        {currency}{:else}none reported{/each}
-    </dd>
+    <dd>{costLine(summary.cost) || "none reported"}</dd>
     <dt>Agent sessions</dt>
     <dd>
       {#each summary.agent_sessions as id (id)}<code>{id}</code><br />{:else}none{/each}

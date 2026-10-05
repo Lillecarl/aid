@@ -18,7 +18,7 @@ import anyio
 import pytest
 
 import aid
-from tests.conftest import BROWSERS, py_spec, test_failed
+from tests.conftest import BROWSERS, acp_spec, py_spec, test_failed
 from tests.web_harness import ALLOWED, TIMEOUT, Web
 
 if TYPE_CHECKING:
@@ -39,6 +39,12 @@ async def seed_session(daemon: Paths, cwd: Path, name: str, target: str, **env: 
     """A session on a mock agent, ready before the page loads: the UI under test never waits on a model."""
     async with aid.connect(daemon) as client:
         await client.create(name, py_spec(cwd, target, **cast("dict[str, Any]", env)))
+
+
+async def seed_acp_session(daemon: Paths, cwd: Path, name: str, **env: str) -> None:
+    """A session on the fake ACP agent: the only mock that reports cost."""
+    async with aid.connect(daemon) as client:
+        await client.create(name, acp_spec(cwd, **cast("dict[str, Any]", env)))
 
 
 async def login_ui(page: Page, web: Web) -> None:

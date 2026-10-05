@@ -1707,6 +1707,12 @@
         "busy": {
           "type": "boolean"
         },
+        "cost": {
+          "additionalProperties": {
+            "type": "number"
+          },
+          "type": "object"
+        },
         "cwd": {
           "type": "string"
         },
@@ -1779,7 +1785,8 @@
         "model",
         "permissions",
         "working",
-        "attention"
+        "attention",
+        "cost"
       ],
       "title": "SessionStatus",
       "type": "object"

@@ -690,6 +690,9 @@ export interface SessionStatus {
   aid_tools: boolean;
   attention: string | null;
   busy: boolean;
+  cost: {
+    [k: string]: number;
+  };
   cwd: string;
   kind: AgentKind;
   mcp_servers: string[];
