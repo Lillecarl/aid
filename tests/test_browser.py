@@ -55,7 +55,7 @@ async def test_login_shows_the_user(page: Page) -> None:
     # A fresh tab selects nothing, whatever other tests seeded: the empty prompt is a placeholder paragraph,
     # not a chat row, because no session has spoken yet.
     with anyio.fail_after(TIMEOUT):
-        await page.get_by_text("Select or create a session.").wait_for()
+        await page.get_by_text("Select or create a session.").wait_for(timeout=TIMEOUT * 1000)
     assert (await page.get_by_test_id("user-email").text_content()) == ALLOWED
 
 
@@ -72,14 +72,14 @@ async def test_slash_menu_lists_commands(page: Page, session_daemon: Paths, tmp_
     box = page.get_by_test_id("chat-input")
     await box.fill("/")
     menu = page.get_by_test_id("slash-menu")
-    await menu.wait_for()
+    await menu.wait_for(timeout=TIMEOUT * 1000)
     items = menu.get_by_test_id("slash-item")
     assert await items.count() == 2
     rendered = [await items.nth(i).text_content() for i in range(2)]
     assert any("/help" in (t or "") and "List these commands" in (t or "") for t in rendered)
     assert any("/compact" in (t or "") for t in rendered)
     await box.press("Escape")
-    await menu.wait_for(state="hidden")
+    await menu.wait_for(state="hidden", timeout=TIMEOUT * 1000)
     assert await box.input_value() == "/"
 
 
@@ -89,12 +89,12 @@ async def test_slash_menu_completes_keyboard(page: Page, session_daemon: Paths, 
     box = page.get_by_test_id("chat-input")
     await box.fill("/c")
     menu = page.get_by_test_id("slash-menu")
-    await menu.wait_for()
+    await menu.wait_for(timeout=TIMEOUT * 1000)
     assert await menu.get_by_test_id("slash-item").count() == 1
     await box.press("ArrowDown")
     await box.press("ArrowUp")
     await box.press("Enter")
-    await menu.wait_for(state="hidden")
+    await menu.wait_for(state="hidden", timeout=TIMEOUT * 1000)
     assert await box.input_value() == "/compact "
 
 
@@ -104,9 +104,9 @@ async def test_slash_menu_completes_click(page: Page, session_daemon: Paths, tmp
     box = page.get_by_test_id("chat-input")
     await box.fill("/")
     menu = page.get_by_test_id("slash-menu")
-    await menu.wait_for()
+    await menu.wait_for(timeout=TIMEOUT * 1000)
     await menu.get_by_test_id("slash-item").filter(has_text="/compact").click()
-    await menu.wait_for(state="hidden")
+    await menu.wait_for(state="hidden", timeout=TIMEOUT * 1000)
     assert await box.input_value() == "/compact "
     await send_chat(page, "/compact ")
     await expect_chat_text(page, "Context compacted")
@@ -198,10 +198,10 @@ async def test_tool_calls_share_a_row(page: Page, session_daemon: Paths, tmp_pat
     await open_session(page, "tooling")
     await send_chat(page, "go")
     boxes = page.get_by_test_id("tool-box")
-    await boxes.nth(1).wait_for()
+    await boxes.nth(1).wait_for(timeout=TIMEOUT * 1000)
     await wait_for_idle(page)
     flows = page.get_by_test_id("flow-row")
-    await flows.first.wait_for()
+    await flows.first.wait_for(timeout=TIMEOUT * 1000)
     assert await flows.first.get_by_test_id("tool-box").count() >= 2
     first = await boxes.nth(0).bounding_box()
     second = await boxes.nth(1).bounding_box()

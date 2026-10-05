@@ -49,7 +49,7 @@ async def login_ui(page: Page, web: Web) -> None:
         await page.locator('input[name="password"]').fill("password")
         await page.locator('input[name="password"]').press("Enter")
         # The session list mounting means the login round-tripped and the app rendered.
-        await page.get_by_test_id("session-list").wait_for()
+        await page.get_by_test_id("session-list").wait_for(timeout=TIMEOUT * 1000)
 
 
 async def open_session(page: Page, name: str) -> None:
@@ -57,9 +57,9 @@ async def open_session(page: Page, name: str) -> None:
     over the events socket, so the button may arrive after the seed call returns."""
     with anyio.fail_after(TIMEOUT):
         button = page.get_by_test_id("session-list").get_by_role("button").filter(has_text=name)
-        await button.wait_for()
+        await button.wait_for(timeout=TIMEOUT * 1000)
         await button.click()
-        await page.get_by_test_id("chat-input").wait_for()
+        await page.get_by_test_id("chat-input").wait_for(timeout=TIMEOUT * 1000)
 
 
 async def send_chat(page: Page, text: str) -> None:
@@ -74,7 +74,7 @@ async def send_chat(page: Page, text: str) -> None:
     await box.fill(text)
     if re.fullmatch(r"/[A-Za-z]*", text) is not None:
         menu = page.get_by_test_id("slash-menu")
-        await menu.wait_for()
+        await menu.wait_for(timeout=TIMEOUT * 1000)
         await box.press("Escape")
         await menu.wait_for(state="hidden")
     await box.press("Enter")
@@ -91,7 +91,11 @@ async def wait_for_idle(page: Page) -> None:
 async def expect_chat_text(page: Page, text: str) -> None:
     """Wait for a chat row carrying the text: the agent answered, or the command printed."""
     with anyio.fail_after(TIMEOUT):
-        await page.get_by_test_id("chat-row").filter(has_text=text).first.wait_for(state="visible")
+        await (
+            page.get_by_test_id("chat-row")
+            .filter(has_text=text)
+            .first.wait_for(state="visible", timeout=TIMEOUT * 1000)
+        )
 
 
 #: How the fixture finds the browser the Nix shell provides in the requested browser's directory.
@@ -177,7 +181,7 @@ async def page(
     with anyio.fail_after(TIMEOUT):
         await chat.goto(f"{session_web.url}/")
         # The session list mounting means the saved login still holds and the app rendered.
-        await chat.get_by_test_id("session-list").wait_for()
+        await chat.get_by_test_id("session-list").wait_for(timeout=TIMEOUT * 1000)
     yield chat
     if test_failed(request):
         shot = tmp_path / "browser-failure.png"
