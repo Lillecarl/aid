@@ -54,6 +54,7 @@ from aid.protocol import (
     clip,
     to_json,
 )
+from aid.tools import tool_paths
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -160,11 +161,13 @@ def to_event(event: object) -> SessionEvent | None:
         case PartDeltaEvent(delta=ThinkingPartDelta(content_delta=text)):
             return ThoughtDelta(text=text) if text else None
         case FunctionToolCallEvent(part=part):
+            args = part.args_as_dict()
             return ToolCall(
                 tool_call_id=part.tool_call_id,
                 title=part.tool_name,
                 status="in_progress",
-                input=to_json(part.args_as_dict()),
+                input=to_json(args),
+                paths=tool_paths(args),
             )
         case FunctionToolResultEvent(part=ToolReturnPart() as part):
             return ToolCall(tool_call_id=part.tool_call_id, status="completed", output=clip(part.model_response_str()))

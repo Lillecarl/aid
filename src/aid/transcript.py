@@ -38,6 +38,7 @@ from watchfiles import (
 )
 
 from aid.protocol import TextDelta, ThoughtDelta, ToolCall, ToolDiff, Usage, clip, to_json
+from aid.tools import tool_paths
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -184,13 +185,6 @@ TOOL_KINDS: Final = {
     "Task": "think",
     "Agent": "think",
 }
-
-
-def tool_paths(input: Any) -> list[str]:
-    if not isinstance(input, dict):
-        return []
-    arguments = cast("dict[str, Any]", input)
-    return [p for key in ("file_path", "notebook_path") if isinstance(p := arguments.get(key), str)]
 
 
 def tool_diffs(result: Any) -> list[ToolDiff]:

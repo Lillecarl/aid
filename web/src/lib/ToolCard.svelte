@@ -10,7 +10,7 @@
 
   let { tool }: Props = $props();
   const status = $derived(tool.status ?? "pending");
-  const hint = $derived(gist(tool.input));
+  const hint = $derived(gist(tool.input) ?? tool.paths[0] ?? null);
   const shell = $derived(command(tool.input));
   const showInput = $derived(shell === null && hasInput(tool.input) && !tool.diffs.length);
   const hasDetails = $derived(
@@ -29,11 +29,11 @@
   </summary>
   {#if open && hasDetails}
     <div class="body">
-      {#if tool.paths.length}
-        <ul class="paths">
-          {#each tool.paths as path (path)}<li>{path}</li>{/each}
-        </ul>
-      {/if}
+    {#if tool.paths.length}
+      <ul class="paths" data-testid="tool-paths">
+        {#each tool.paths as path (path)}<li>{path}</li>{/each}
+      </ul>
+    {/if}
       {#if shell !== null}
         <pre class="input">$ {shell}</pre>
       {:else if showInput}

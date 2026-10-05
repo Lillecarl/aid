@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, overload
+from typing import TYPE_CHECKING, Any, Final, cast, overload
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -55,3 +55,16 @@ def mcptool[F: Callable[..., Any]](
 def tool_of(obj: object) -> McpTool | None:
     tool = getattr(obj, _MARKER, None)
     return tool if isinstance(tool, McpTool) else None
+
+
+#: Argument names that carry a file a call touches, across Claude Code's tools, common MCP servers and
+#: aid.coding: the web UI's gist() in web/src/lib/tools.ts reads the same names.
+PATH_KEYS: Final = ("file_path", "path", "notebook_path")
+
+
+def tool_paths(input: object) -> list[str]:
+    """Files a call touches, from its arguments."""
+    if not isinstance(input, dict):
+        return []
+    arguments = cast("dict[str, Any]", input)
+    return [p for key in PATH_KEYS if isinstance(p := arguments.get(key), str)]

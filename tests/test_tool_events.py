@@ -79,3 +79,16 @@ def test_pydantic_ai_tool_events() -> None:
     failed = pydantic_ai.to_event(retry)
     assert isinstance(failed, ToolCall)
     assert (failed.status, "a must be even" in (failed.output or "")) == ("failed", True)
+
+
+def test_pydantic_ai_tool_call_carries_paths() -> None:
+    call = FunctionToolCallEvent(
+        part=ToolCallPart(tool_name="read", args='{"path": "a.py", "offset": 1}', tool_call_id="c1")
+    )
+    assert pydantic_ai.to_event(call) == ToolCall(
+        tool_call_id="c1",
+        title="read",
+        status="in_progress",
+        input={"path": "a.py", "offset": 1},
+        paths=["a.py"],
+    )

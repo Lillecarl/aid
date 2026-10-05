@@ -18,6 +18,7 @@ import anyio
 import pytest
 
 import aid
+from aid.spec import PermissionMode
 from tests.browser_harness import (
     expect_chat_text,
     open_session,
@@ -248,6 +249,19 @@ async def test_tool_calls_share_a_row(page: Page, session_daemon: Paths, tmp_pat
     assert last is not None
     # An agent message breaks the flow: the last row starts below the tool row.
     assert last["y"] >= max(first["y"] + first["height"], second["y"] + second["height"])
+
+
+async def test_tool_card_names_its_file(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await anyio.Path(tmp_path / "notes.txt").write_text("remember this\n")
+    await seed_session(session_daemon, tmp_path, "reader", "agents:coder", PermissionMode.ALLOW)
+    await open_session(page, "reader")
+    await send_chat(page, '[["read", {"path": "notes.txt"}]]')
+    await expect_chat_text(page, "remember this")
+    box = page.get_by_test_id("tool-box").filter(has_text="notes.txt")
+    await box.wait_for(timeout=TIMEOUT * 1000)
+    await box.locator("summary").click()
+    await box.get_by_test_id("tool-paths").wait_for(timeout=TIMEOUT * 1000)
+    assert "notes.txt" in (await box.get_by_test_id("tool-paths").text_content() or "")
 
 
 async def test_status_shows_accumulated_cost(page: Page, session_daemon: Paths, tmp_path: Path) -> None:

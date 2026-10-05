@@ -18,6 +18,7 @@ import anyio
 import pytest
 
 import aid
+from aid.spec import PermissionMode
 from tests.conftest import BROWSERS, acp_spec, py_spec, test_failed
 from tests.web_harness import ALLOWED, TIMEOUT, Web
 
@@ -35,10 +36,17 @@ except ImportError:
     expect = None
 
 
-async def seed_session(daemon: Paths, cwd: Path, name: str, target: str, **env: str) -> None:
+async def seed_session(
+    daemon: Paths,
+    cwd: Path,
+    name: str,
+    target: str,
+    permission: PermissionMode = PermissionMode.DENY,
+    **env: str,
+) -> None:
     """A session on a mock agent, ready before the page loads: the UI under test never waits on a model."""
     async with aid.connect(daemon) as client:
-        await client.create(name, py_spec(cwd, target, **cast("dict[str, Any]", env)))
+        await client.create(name, py_spec(cwd, target, permission, **cast("dict[str, Any]", env)))
 
 
 async def seed_acp_session(daemon: Paths, cwd: Path, name: str, **env: str) -> None:
