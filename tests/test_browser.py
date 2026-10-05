@@ -1,4 +1,4 @@
-"""The web UI through a real browser: login, a chat roundtrip, and slash commands.
+"""The web UI through a real browser: login, a chat roundtrip, slash commands and prompt-box editing.
 
 The agents are mocks (`agents:echo` answers with the prompt, `agents:summarizer` compacts to a fixed
 digest), so every assertion is deterministic. Every test runs once per browser: `--browser both` is the
@@ -111,3 +111,65 @@ async def test_slash_compact_replaces_history(page: Page, session_daemon: Paths,
     await send_chat(page, "/compact")
     await expect_chat_text(page, "Context compacted")
     await expect_chat_text(page, "kept decisions")
+
+
+async def test_prompt_ctrl_u_clears_to_line_start(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "undo", "agents:echo")
+    await open_session(page, "undo")
+    box = page.get_by_test_id("chat-input")
+    await box.fill("hello world")
+    for _ in range(5):
+        await box.press("ArrowLeft")
+    await box.press("Control+u")
+    assert await box.input_value() == "world"
+
+
+async def test_prompt_ctrl_u_clears_second_line(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "multiline", "agents:echo")
+    await open_session(page, "multiline")
+    box = page.get_by_test_id("chat-input")
+    await box.fill("ab\ncd")
+    await box.press("Control+u")
+    assert await box.input_value() == "ab\n"
+
+
+async def test_prompt_ctrl_k_clears_to_line_end(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "kill", "agents:echo")
+    await open_session(page, "kill")
+    box = page.get_by_test_id("chat-input")
+    await box.fill("hello world")
+    await box.press("Home")
+    for _ in range(6):
+        await box.press("ArrowRight")
+    await box.press("Control+k")
+    assert await box.input_value() == "hello "
+
+
+async def test_prompt_ctrl_w_deletes_word_before(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "word", "agents:echo")
+    await open_session(page, "word")
+    box = page.get_by_test_id("chat-input")
+    await box.fill("hello world")
+    await box.press("Control+w")
+    assert await box.input_value() == "hello "
+
+
+async def test_prompt_ctrl_e_moves_to_line_end(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "end", "agents:echo")
+    await open_session(page, "end")
+    box = page.get_by_test_id("chat-input")
+    await box.fill("hello")
+    await box.press("Home")
+    await box.press("Control+e")
+    await box.press("x")
+    assert await box.input_value() == "hellox"
+
+
+async def test_prompt_ctrl_a_stays_select_all(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "all", "agents:echo")
+    await open_session(page, "all")
+    box = page.get_by_test_id("chat-input")
+    await box.fill("hello")
+    await box.press("Control+a")
+    await box.press("x")
+    assert await box.input_value() == "x"

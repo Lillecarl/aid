@@ -10,6 +10,7 @@
     SessionEvent,
   } from "./api";
   import { Dictation } from "./dictation";
+  import { editLine } from "./lineedit";
   import Markdown from "./Markdown.svelte";
   import PermissionCard from "./PermissionCard.svelte";
   import ToolCard from "./ToolCard.svelte";
@@ -374,6 +375,7 @@
     // keyCode 229: Safari ends an IME composition with an Enter whose isComposing is already false.
     if (event.isComposing || event.keyCode === 229) return;
     const area = event.currentTarget as HTMLTextAreaElement;
+    if (editLine(event, area)) return;
     if (slashOpen) {
       const selected = slashMatches[Math.min(slashSel, slashMatches.length - 1)];
       if (selected === undefined) return;
