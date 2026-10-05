@@ -23,7 +23,7 @@
     ondeleted: () => void | Promise<void>;
   }
 
-  type Kind = "user" | "message" | "assistant" | "thought" | "summary" | "tool" | "permission" | "meta" | "error";
+  type Kind = "user" | "message" | "assistant" | "thought" | "summary" | "tool" | "permission" | "meta" | "error" | "help";
   const LIFECYCLE: Record<Lifecycle["event"], string> = {
     compacted: "Context compacted",
     cleared: "Context cleared: a new session follows",
@@ -338,8 +338,14 @@
       usage: "/help",
       description: "List these commands",
       run: async () => {
-        for (const s of slashes)
-          rows.push({ key: `l${liveCount++}`, kind: "meta", local: true, text: `${s.usage} — ${s.description}` });
+        // One open box, never history: the command answers from this array and calls nothing, so the agent
+        // session never sees it.
+        rows.push({
+          key: `l${liveCount++}`,
+          kind: "help",
+          local: true,
+          text: slashes.map((s) => `${s.usage} — ${s.description}`).join("\n"),
+        });
       },
     },
     {
@@ -536,10 +542,15 @@
         <Markdown text={row.text} />
       </details>
   {:else if row.kind === "summary"}
-    <details class="thought" data-testid="chat-row">
-      <summary>What Claude kept of the conversation</summary>
-      <Markdown text={row.text} />
-    </details>
+      <details class="thought" data-testid="chat-row">
+        <summary>What Claude kept of the conversation</summary>
+        <Markdown text={row.text} />
+      </details>
+    {:else if row.kind === "help"}
+      <details class="help" data-testid="chat-row" open>
+        <summary>Slash commands</summary>
+        <Markdown text={row.text} />
+      </details>
   {:else if row.tool}
     <ToolCard tool={row.tool} />
   {:else if row.permission}
@@ -640,6 +651,16 @@
   .flow > * {
     flex: 1 1 16rem;
     min-width: 0;
+  }
+  /* The help readout: a tool-like card, open, outside the flow and outside history. */
+  .help {
+    font-size: 0.85em;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+  }
+  .help summary {
+    padding: 0.15rem 0.5rem;
+    cursor: pointer;
   }
   .more {
     text-align: center;

@@ -141,6 +141,17 @@ async def test_slash_help_lists_commands(page: Page, session_daemon: Paths, tmp_
     await send_chat(page, "/help")
     await expect_chat_text(page, "/help — List these commands")
     await expect_chat_text(page, "/compact [focus]")
+    await page.locator("details.help[open]").wait_for(timeout=TIMEOUT * 1000)
+
+
+async def test_slash_help_stays_out_of_history(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "untainted", "agents:echo")
+    await open_session(page, "untainted")
+    await send_chat(page, "/help")
+    await expect_chat_text(page, "/help — List these commands")
+    async with aid.connect(session_daemon) as client:
+        entries = (await client.session("untainted").history()).entries
+    assert all("List these commands" not in str(entry) for entry in entries)
 
 
 async def test_slash_compact_replaces_history(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
