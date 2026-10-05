@@ -9,10 +9,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import anyio
 import pytest
 
 from tests.browser_harness import expect_chat_text, login_ui, open_session, seed_session, send_chat
-from tests.web_harness import ALLOWED, ASSETS, needs_dex
+from tests.web_harness import ALLOWED, ASSETS, TIMEOUT, needs_dex
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -31,7 +32,9 @@ pytestmark = [
 
 async def test_login_shows_the_user(page: Page, web: Web) -> None:
     await login_ui(page, web)
-    await expect_chat_text(page, "Select or create a session.")
+    # The empty prompt is a placeholder, not a chat row: no session has spoken yet.
+    with anyio.fail_after(TIMEOUT):
+        await page.get_by_text("Select or create a session.").wait_for()
     assert (await page.get_by_test_id("user-email").text_content()) == ALLOWED
 
 
