@@ -535,6 +535,15 @@ class Daemon:
                     )
                 if request.option_id is not None and request.option_id not in {o.option_id for o in pending.options}:
                     raise AidError("no_option", f"the request has no option {request.option_id!r}")
+                if (
+                    request.option_id is None
+                    and request.text is not None
+                    and (session.spec.kind is not AgentKind.PYDANTIC_AI or pending.tool_name != "ask_user")
+                ):
+                    # Text with no pick is the whole answer, and only the ask_user tool reads answer text: a
+                    # permission gate answers allow or deny, and anywhere else the text alone would read as a
+                    # cancel while its words went nowhere.
+                    raise AidError("no_text", f"{session.name!r} takes an option, not free text; pick one or cancel")
                 self._routes[request.id] = _Route(client, session.name)
                 await self._send_worker(session, request.model_copy(update={"plugin": client.plugin}))
                 return None

@@ -415,9 +415,13 @@ class Session:
             raise AidError("compact_failed", f"compaction returned {result!r}")
         return result
 
-    async def answer(self, request_id: str, option_id: str | None) -> None:
-        """Answer a PermissionRequest the session waits on: one of its options, or None to cancel it."""
-        await self._client.call(AnswerPermission(session=self.name, request_id=request_id, option_id=option_id))
+    async def answer(self, request_id: str, option_id: str | None, text: str | None = None) -> None:
+        """Answer a PermissionRequest the session waits on: one of its options, or None to cancel it. `text`
+        is your own words: with an option, alongside the pick; alone, the whole answer to an `ask_user`
+        question."""
+        await self._client.call(
+            AnswerPermission(session=self.name, request_id=request_id, option_id=option_id, text=text)
+        )
 
     async def start(self) -> None:
         """Start the worker if it is stopped, with no turn. A prompt or a message starts it too."""

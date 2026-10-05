@@ -155,12 +155,15 @@ class GetPane(_Request):
 
 
 class AnswerPermission(_Request):
-    """A person's answer to a pending PermissionRequest: one of its options, or None to cancel it."""
+    """A person's answer to a pending PermissionRequest: one of its options, or None to cancel it. `text`
+    is the person's own words: with an option, alongside the pick; alone, the whole answer, which only a
+    session whose agent reads answer text (the `ask_user` tool) takes."""
 
     op: Literal["answer_permission"] = "answer_permission"
     session: str
     request_id: str
     option_id: str | None
+    text: str | None = None
     plugin: str | None = None
     """The plugin answering. The daemon sets it from the connection's key, whatever the sender put here."""
 
@@ -341,12 +344,14 @@ class PermissionChoice(_Message):
     option_id: str
     name: str
     kind: str
-    """ACP's option kind: allow_once, allow_always, reject_once, reject_always."""
+    """ACP's option kind (allow_once, allow_always, reject_once, reject_always), or `ask_once` for an
+    `ask_user` alternative, which is neither an approval nor a refusal."""
 
 
 class PermissionRequest(_Message):
     """The agent asks before a tool call, and waits for a PermissionDecision. A session whose permission mode is
-    `ask` waits for a person to answer it (`AnswerPermission`)."""
+    `ask` waits for a person to answer it (`AnswerPermission`). A question from the `ask_user` tool is the
+    same shape: `tool_name` is the tool, `title` the question, `options` its alternatives (possibly none)."""
 
     type: Literal["permission_request"] = "permission_request"
     request_id: str
@@ -377,6 +382,8 @@ class PermissionDecision(_Message):
     request_id: str
     option_id: str | None
     """The chosen option; None when the request was cancelled."""
+    text: str | None = None
+    """The person's own words, with the pick or alone."""
     by: PermissionDecider
     plugin: str | None = None
     """The plugin that answered, when `by` is plugin."""

@@ -243,7 +243,9 @@ export interface ClaudeTtySpec {
   worker_endpoint?: string | null;
 }
 /**
- * A person's answer to a pending PermissionRequest: one of its options, or None to cancel it.
+ * A person's answer to a pending PermissionRequest: one of its options, or None to cancel it. `text`
+ * is the person's own words: with an option, alongside the pick; alone, the whole answer, which only a
+ * session whose agent reads answer text (the `ask_user` tool) takes.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "AnswerPermission".
@@ -255,6 +257,7 @@ export interface AnswerPermission {
   plugin?: string | null;
   request_id: string;
   session: string;
+  text?: string | null;
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -379,7 +382,8 @@ export interface ToolDiff {
 }
 /**
  * The agent asks before a tool call, and waits for a PermissionDecision. A session whose permission mode is
- * `ask` waits for a person to answer it (`AnswerPermission`).
+ * `ask` waits for a person to answer it (`AnswerPermission`). A question from the `ask_user` tool is the
+ * same shape: `tool_name` is the tool, `title` the question, `options` its alternatives (possibly none).
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "PermissionRequest".
@@ -414,6 +418,7 @@ export interface PermissionDecision {
   option_id: string | null;
   plugin: string | null;
   request_id: string;
+  text: string | null;
   type: "permission_decision";
 }
 /**

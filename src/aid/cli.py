@@ -237,6 +237,7 @@ def _parser() -> argparse.ArgumentParser:
     answer.add_argument("name")
     answer.add_argument("request", help="the request id, as `aid prompt` and `aid history` print it")
     answer.add_argument("option", nargs="?", help="the option id to choose; none cancels the request")
+    answer.add_argument("--text", help="your own words: with an option, alongside the pick; alone, the whole answer")
 
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
@@ -387,7 +388,9 @@ def _permission_line(item: PermissionRequest | PermissionDecision) -> str:
             return f"[permission {item.request_id}] answered in the terminal"
         case PermissionDecision():
             by = f"plugin {item.plugin}" if item.plugin else item.by
-            return f"[permission {item.request_id}] {item.option_id or 'cancelled'} by {by}"
+            picked = item.option_id or "cancelled"
+            text = f": {item.text}" if item.text else ""
+            return f"[permission {item.request_id}] {picked} by {by}{text}"
 
 
 async def _client_command(args: argparse.Namespace) -> None:
@@ -436,7 +439,7 @@ async def _client_command(args: argparse.Namespace) -> None:
             case "cancel":
                 await client.session(args.name).cancel()
             case "answer":
-                await client.session(args.name).answer(args.request, args.option)
+                await client.session(args.name).answer(args.request, args.option, args.text)
             case "stop":
                 await client.session(args.name).stop()
             case "delete":

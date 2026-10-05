@@ -35,21 +35,30 @@ class PermissionWaits:
         finally:
             del self._waits[request.request_id]
 
-    def settle(self, request_id: str, option_id: str | None, by: PermissionDecider, plugin: str | None = None) -> bool:
+    def settle(
+        self,
+        request_id: str,
+        option_id: str | None,
+        by: PermissionDecider,
+        plugin: str | None = None,
+        text: str | None = None,
+    ) -> bool:
         """False when no such request waits, or the option is not one of its own."""
         wait = self._waits.get(request_id)
         if wait is None or wait.answered.is_set():
             return False
         if option_id is not None and option_id not in {o.option_id for o in wait.request.options}:
             return False
-        wait.decision = PermissionDecision(request_id=request_id, option_id=option_id, by=by, plugin=plugin)
+        wait.decision = PermissionDecision(request_id=request_id, option_id=option_id, by=by, plugin=plugin, text=text)
         wait.answered.set()
         return True
 
-    def answer(self, request_id: str, option_id: str | None, plugin: str | None = None) -> bool:
+    def answer(
+        self, request_id: str, option_id: str | None, plugin: str | None = None, text: str | None = None
+    ) -> bool:
         """A person's answer, or with `plugin`, that plugin's."""
         return self.settle(
-            request_id, option_id, PermissionDecider.PLUGIN if plugin else PermissionDecider.PERSON, plugin
+            request_id, option_id, PermissionDecider.PLUGIN if plugin else PermissionDecider.PERSON, plugin, text
         )
 
     def cancel_all(self) -> None:

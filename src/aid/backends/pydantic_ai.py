@@ -222,8 +222,10 @@ class PydanticAIBackend:
     def started(self) -> Started:
         return self._started
 
-    def answer_permission(self, request_id: str, option_id: str | None, plugin: str | None = None) -> bool:
-        return self._coding.waits.answer(request_id, option_id, plugin)
+    def answer_permission(
+        self, request_id: str, option_id: str | None, plugin: str | None = None, text: str | None = None
+    ) -> bool:
+        return self._coding.waits.answer(request_id, option_id, plugin, text)
 
     async def prompt(self, text: str, emit: Emit) -> Output:
         # The tools pydantic-ai runs are tasks it starts inside the run below: they see this context.

@@ -118,6 +118,38 @@ async def test_acp_permission_refused_when_nobody_answers(daemon: Paths, tmp_pat
     assert (decision.option_id, decision.by) == ("no", PermissionDecider.TIMEOUT)
 
 
+async def test_acp_answer_carries_words_with_the_pick(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("ask", acp_spec(tmp_path, PermissionMode.ASK))
+            events: list[aid.SessionEvent] = []
+            async for event in session.stream("permission"):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    await session.answer(event.request_id, "yes", "only the one directory")
+    assert (
+        PermissionDecision(
+            request_id=next(e for e in events if isinstance(e, PermissionRequest)).request_id,
+            option_id="yes",
+            by=PermissionDecider.PERSON,
+            text="only the one directory",
+        )
+        in events
+    )
+    assert "".join(e.text for e in events if isinstance(e, TextDelta)) == "yes"
+
+
+async def test_acp_answer_refuses_words_without_a_pick(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("ask", acp_spec(tmp_path, PermissionMode.ASK))
+            async for event in session.stream("permission"):
+                if isinstance(event, PermissionRequest):
+                    with pytest.raises(AidError, match="takes an option"):
+                        await session.answer(event.request_id, None, "just wipe tmp")
+                    await session.answer(event.request_id, "no")
+
+
 async def test_acp_agent_gets_spec_env_and_cwd(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:

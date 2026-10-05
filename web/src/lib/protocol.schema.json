@@ -174,7 +174,7 @@
     },
     "AnswerPermission": {
       "additionalProperties": false,
-      "description": "A person's answer to a pending PermissionRequest: one of its options, or None to cancel it.",
+      "description": "A person's answer to a pending PermissionRequest: one of its options, or None to cancel it. `text`\nis the person's own words: with an option, alongside the pick; alone, the whole answer, which only a\nsession whose agent reads answer text (the `ask_user` tool) takes.",
       "properties": {
         "id": {
           "type": "string"
@@ -210,6 +210,17 @@
         },
         "session": {
           "type": "string"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -1253,6 +1264,17 @@
         "request_id": {
           "type": "string"
         },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "type": {
           "const": "permission_decision",
           "default": "permission_decision",
@@ -1263,6 +1285,7 @@
         "type",
         "request_id",
         "option_id",
+        "text",
         "by",
         "plugin"
       ],
@@ -1281,7 +1304,7 @@
     },
     "PermissionRequest": {
       "additionalProperties": false,
-      "description": "The agent asks before a tool call, and waits for a PermissionDecision. A session whose permission mode is\n`ask` waits for a person to answer it (`AnswerPermission`).",
+      "description": "The agent asks before a tool call, and waits for a PermissionDecision. A session whose permission mode is\n`ask` waits for a person to answer it (`AnswerPermission`). A question from the `ask_user` tool is the\nsame shape: `tool_name` is the tool, `title` the question, `options` its alternatives (possibly none).",
       "properties": {
         "input": {
           "$ref": "#/$defs/JsonValue",

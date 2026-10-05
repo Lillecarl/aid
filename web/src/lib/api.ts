@@ -295,17 +295,20 @@ export async function control(
   await call({ op: verb, session: name });
 }
 
-/** Answer a permission request the session waits on: one of its options, or null to cancel it. */
+/** Answer a permission request the session waits on: one of its options, or null to cancel it. `text` is
+ * your own words: with an option, alongside the pick; alone, the whole answer to an `ask_user` question. */
 export async function answerPermission(
   name: string,
   requestId: string,
   optionId: string | null,
+  text?: string | null,
 ): Promise<void> {
   await call({
     op: "answer_permission",
     session: name,
     request_id: requestId,
     option_id: optionId,
+    ...(text == null ? {} : { text }),
   });
 }
 

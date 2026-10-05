@@ -252,6 +252,19 @@ async def test_tool_calls_share_a_row(page: Page, session_daemon: Paths, tmp_pat
     assert last["y"] >= max(first["y"] + first["height"], second["y"] + second["height"])
 
 
+async def test_ask_user_answers_from_the_card(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "asker", "agents:coder", PermissionMode.ASK)
+    await open_session(page, "asker")
+    await send_chat(page, '[["ask_user", {"question": "Which database?", "options": ["postgres", "sqlite"]}]]')
+    box = page.get_by_test_id("permission-box").filter(has_text="Which database?")
+    await box.wait_for(timeout=TIMEOUT * 1000)
+    await box.get_by_test_id("permission-text").fill("it must embed")
+    await box.get_by_role("button", name="sqlite").click()
+    await expect_chat_text(page, 'picked "sqlite" and added: it must embed')
+    await wait_for_idle(page)
+    await box.get_by_text("sqlite: it must embed").wait_for(timeout=TIMEOUT * 1000)
+
+
 async def test_tool_card_names_its_file(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     await anyio.Path(tmp_path / "notes.txt").write_text("remember this\n")
     await seed_session(session_daemon, tmp_path, "reader", "agents:coder", PermissionMode.ALLOW)

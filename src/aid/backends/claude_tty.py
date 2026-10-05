@@ -362,8 +362,10 @@ class ClaudeTtyBackend:
                 pass
         return None
 
-    def answer_permission(self, request_id: str, option_id: str | None, plugin: str | None = None) -> bool:
-        return self._waits.answer(request_id, option_id, plugin)
+    def answer_permission(
+        self, request_id: str, option_id: str | None, plugin: str | None = None, text: str | None = None
+    ) -> bool:
+        return self._waits.answer(request_id, option_id, plugin, text)
 
     async def _permission(self, fields: dict[str, JsonValue]) -> JsonValue:
         """Ask aid's people while the pane asks too. Whoever answers first decides; the hook answers Claude only for

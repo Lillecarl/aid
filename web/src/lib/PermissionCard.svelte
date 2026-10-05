@@ -21,6 +21,7 @@
   let { session, request, decision }: Props = $props();
   let sending = $state(false);
   let error = $state("");
+  let words = $state("");
 
   const shell = $derived(command(request.input));
   const chosen = $derived(
@@ -29,15 +30,16 @@
       : decision.by === "terminal"
         ? "Answered in the terminal"
         : decision.option_id === null
-        ? "Cancelled"
-        : (request.options.find((o) => o.option_id === decision.option_id)?.name ?? decision.option_id),
+          ? (decision.text ?? "Cancelled")
+          : (request.options.find((o) => o.option_id === decision.option_id)?.name ?? decision.option_id) +
+            (decision.text ? `: ${decision.text}` : ""),
   );
 
-  async function answer(optionId: string | null): Promise<void> {
+  async function answer(optionId: string | null, text: string | null): Promise<void> {
     sending = true;
     error = "";
     try {
-      await api.answerPermission(session, request.request_id, optionId);
+      await api.answerPermission(session, request.request_id, optionId, text);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -62,12 +64,33 @@
       {#each request.options as option (option.option_id)}
         <button
           type="button"
-          class={option.kind.startsWith("allow") ? "allow" : "reject"}
+          class={option.kind.startsWith("allow")
+            ? "allow"
+            : option.kind.startsWith("reject")
+              ? "reject"
+              : ""}
           disabled={sending}
-          onclick={() => answer(option.option_id)}>{option.name}</button
+          onclick={() => answer(option.option_id, words || null)}>{option.name}</button
         >
       {/each}
-      <button type="button" disabled={sending} onclick={() => answer(null)} title="Cancel the request">Cancel</button>
+      <button type="button" disabled={sending} onclick={() => answer(null, null)} title="Cancel the request">
+        Cancel
+      </button>
+    </div>
+    <div class="words">
+      <input
+        type="text"
+        data-testid="permission-text"
+        placeholder="Your own words, with a pick or instead of one…"
+        bind:value={words}
+        disabled={sending}
+      />
+      <button
+        type="button"
+        data-testid="permission-send"
+        disabled={sending || words === ""}
+        onclick={() => answer(null, words)}>Send</button
+      >
     </div>
   {:else}
     <div class="decided">{chosen}{decision.plugin ? ` by plugin ${decision.plugin}` : BY[decision.by]}</div>
@@ -118,6 +141,20 @@
     display: flex;
     flex-wrap: wrap;
     gap: 0.4rem;
+  }
+  .words {
+    display: flex;
+    gap: 0.4rem;
+  }
+  .words input {
+    flex: 1;
+    min-width: 0;
+    font: inherit;
+    color: inherit;
+    background: var(--code-bg);
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    padding: 0.2rem 0.5rem;
   }
   .allow {
     border-color: var(--ok);

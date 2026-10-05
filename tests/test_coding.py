@@ -253,3 +253,81 @@ async def test_a_reports_records_are_readable(daemon: Paths, tmp_path: Path) -> 
             second = await session.run(plan(("read", {"path": record, "offset": 50, "limit": 2})))
     assert record.endswith(".1/stdout")
     assert str(second.output).startswith("    50\t50\n    51\t51\n… 49 more lines")
+
+
+async def test_ask_user_returns_the_persons_pick_and_words(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ASK))
+            events: list[aid.SessionEvent] = []
+            async for event in session.stream(
+                plan(("ask_user", {"question": "Which database?", "options": ["postgres", "sqlite"]}))
+            ):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    await session.answer(event.request_id, "1", "it must embed")
+            history = [e.item for e in (await session.history()).entries]
+    [request] = [e for e in events if isinstance(e, PermissionRequest)]
+    assert (request.tool_name, request.title, [o.name for o in request.options]) == (
+        "ask_user",
+        "Which database?",
+        ["postgres", "sqlite"],
+    )
+    assert (
+        PermissionDecision(
+            request_id=request.request_id, option_id="1", by=PermissionDecider.PERSON, text="it must embed"
+        )
+        in events
+    )
+    assert [request, next(e for e in events if isinstance(e, PermissionDecision))] == [
+        e for e in history if isinstance(e, PermissionRequest | PermissionDecision)
+    ]
+    last = events[-1]
+    assert isinstance(last, Output)
+    assert str(last.output) == 'The person picked "sqlite" and added: it must embed'
+
+
+async def test_ask_user_takes_words_alone(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ASK))
+            events: list[aid.SessionEvent] = []
+            async for event in session.stream(plan(("ask_user", {"question": "What is the password?", "options": []}))):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    assert event.options == []
+                    await session.answer(event.request_id, None, "hunter2")
+    last = events[-1]
+    assert isinstance(last, Output)
+    assert str(last.output) == "The person answered: hunter2"
+
+
+async def test_ask_user_without_a_watcher_proceeds(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(plan(("ask_user", {"question": "Which database?", "options": ["postgres"]})))
+            history = [e.item for e in (await session.history()).entries]
+    assert str(result.output) == "No one is watching; proceed with your best judgment."
+    assert not [e for e in history if isinstance(e, PermissionRequest | PermissionDecision)]
+
+
+async def test_ask_user_declined_in_deny_mode(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder"))
+            result = await session.run(plan(("ask_user", {"question": "Which database?", "options": ["postgres"]})))
+    assert "declines questions" in str(result.output)
+
+
+async def test_ask_user_unanswered_in_time(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create(
+                "coder", py_spec(tmp_path, "agents:coder", PermissionMode.ASK, permission_timeout=0.2)
+            )
+            result = await session.run(plan(("ask_user", {"question": "Which database?", "options": ["postgres"]})))
+            history = [e.item for e in (await session.history()).entries]
+    assert str(result.output) == "Nobody answered; proceed with your best judgment."
+    decision = next(e for e in history if isinstance(e, PermissionDecision))
+    assert (decision.option_id, decision.by) == (None, PermissionDecider.TIMEOUT)

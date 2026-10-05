@@ -336,6 +336,38 @@ async def apply_edits(ctx: RunContext[Any]) -> str:
     return f"wrote {', '.join(files)}"
 
 
+async def ask_user(ctx: RunContext[Any], question: str, options: list[str] | None = None) -> str:
+    """Ask the person watching the session one question, and wait for their answer. `options` names the
+    alternatives; empty asks open-ended. The answer names their pick, their own words, or both; when nobody
+    answers in time, it says so, and you proceed with your best judgment."""
+    coding = _coding()
+    if coding.mode is PermissionMode.DENY:
+        raise AidError("questions_declined", "this session declines questions; proceed with your best judgment")
+    names = options or []
+    if coding.mode is not PermissionMode.ASK or coding.emit is None:
+        return "No one is watching; proceed with your best judgment."
+    request = PermissionRequest(
+        request_id=uuid.uuid4().hex,
+        tool_call_id=ctx.tool_call_id or "",
+        tool_name="ask_user",
+        title=question,
+        options=[PermissionChoice(option_id=str(i), name=name, kind="ask_once") for i, name in enumerate(names)],
+    )
+    await coding.emit(request)
+    decision = PermissionDecision(request_id=request.request_id, option_id=None, by=PermissionDecider.TIMEOUT)
+    with anyio.move_on_after(coding.timeout):
+        decision = await coding.waits.wait(request)
+    await coding.emit(decision)
+    picked = names[int(decision.option_id)] if decision.option_id is not None else None
+    if picked is not None and decision.text:
+        return f'The person picked "{picked}" and added: {decision.text}'
+    if picked is not None:
+        return f'The person picked "{picked}".'
+    if decision.text:
+        return f"The person answered: {decision.text}"
+    return "Nobody answered; proceed with your best judgment."
+
+
 async def python(ctx: RunContext[Any], script: str, time_limit: float = SCRIPT_TIME_LIMIT) -> str:
     """Run an async Python script that starts processes through pyrun, in your working directory. Returns a report
     of every process it ran (argv, exit, time, output clipped to head and tail, a record id) and what it printed.
@@ -405,6 +437,7 @@ coding_tools: FunctionToolset[Any] = FunctionToolset[Any](
         _retrying(discard_edits),
         _retrying(compact),
         _retrying(apply_edits),
+        _retrying(ask_user),
         _retrying(python),
     ]
 )

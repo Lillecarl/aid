@@ -61,9 +61,12 @@ class CompactionBackend(Backend, Protocol):
 class PermissionBackend(Backend, Protocol):
     """A backend whose agent can wait on a person's answer to a PermissionRequest."""
 
-    def answer_permission(self, request_id: str, option_id: str | None, plugin: str | None = None) -> bool:
+    def answer_permission(
+        self, request_id: str, option_id: str | None, plugin: str | None = None, text: str | None = None
+    ) -> bool:
         """False when no such request waits, or the option is not one of its own. `plugin` names the plugin
-        answering; None is a person."""
+        answering; None is a person. `text` is the person's own words; only a waiter that reads answer text
+        (the `ask_user` tool) hands it to its agent."""
         ...
 
 
