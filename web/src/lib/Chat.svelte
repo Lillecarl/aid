@@ -31,8 +31,17 @@
   type Permission = { request: PermissionRequest; decision: PermissionDecision | null };
   /** One entry of the log. `seq` is set for rows read from history; rows of a turn still streaming lack it. A
    * tool call is one row, which later updates of the same call change; so is a permission request and its
-   * decision. */
-  type Row = { key: string; seq?: number; kind: Kind; text: string; tool?: Tool; permission?: Permission };
+   * decision. `local` marks rows the page synthesized that history will never contain (slash output, errors):
+   * reconcile keeps those and swaps the rest for what history recorded. */
+  type Row = {
+    key: string;
+    seq?: number;
+    kind: Kind;
+    text: string;
+    tool?: Tool;
+    permission?: Permission;
+    local?: boolean;
+  };
 
   const PAGE = 100;
   const EDGE_PX = 200;
@@ -152,7 +161,7 @@
     try {
       await load();
     } catch (e) {
-      rows.push({ key: `e${Date.now()}`, kind: "error", text: e instanceof Error ? e.message : String(e) });
+      rows.push({ key: `e${Date.now()}`, kind: "error", local: true, text: e instanceof Error ? e.message : String(e) });
     } finally {
       loading = false;
     }
@@ -230,7 +239,8 @@
   }
 
   /** Swap the streamed rows for the entries history recorded, which carry their seq, and fetch any the history
-   * stream sent while the rows could not take them. One runs at a time; `arrived` waits for it. */
+   * stream sent while the rows could not take them. Rows the page synthesized stay: history will never contain
+   * them. One runs at a time; `arrived` waits for it. */
   async function reconcile(): Promise<void> {
     if (catchingUp) {
       behind = true;
@@ -241,7 +251,7 @@
       do {
         behind = false;
         const page = await api.history(name, { after: newest, limit: 1000 });
-        rows = [...rows.filter((r) => r.seq !== undefined), ...fromHistory(page.entries)];
+        rows = [...rows.filter((r) => r.seq !== undefined || r.local), ...fromHistory(page.entries)];
         newest = page.entries.at(-1)?.seq ?? newest;
         behind ||= page.has_newer;
       } while (behind);
@@ -268,7 +278,7 @@
     try {
       await api.prompt(name, prompt, apply);
     } catch (e) {
-      rows.push({ key: `l${liveCount++}`, kind: "error", text: e instanceof Error ? e.message : String(e) });
+      rows.push({ key: `l${liveCount++}`, kind: "error", local: true, text: e instanceof Error ? e.message : String(e) });
     } finally {
       busy = false;
       await reconcile().catch(() => undefined);
@@ -282,7 +292,7 @@
       if (verb === "delete") await ondeleted();
       else await onchange();
     } catch (e) {
-      rows.push({ key: `l${liveCount++}`, kind: "error", text: e instanceof Error ? e.message : String(e) });
+      rows.push({ key: `l${liveCount++}`, kind: "error", local: true, text: e instanceof Error ? e.message : String(e) });
     }
   }
 
@@ -300,7 +310,7 @@
       description: "List these commands",
       run: async () => {
         for (const s of slashes)
-          rows.push({ key: `l${liveCount++}`, kind: "meta", text: `${s.usage} — ${s.description}` });
+          rows.push({ key: `l${liveCount++}`, kind: "meta", local: true, text: `${s.usage} — ${s.description}` });
       },
     },
     {
@@ -319,14 +329,14 @@
     rows.push({ key: `l${liveCount++}`, kind: "user", text: line });
     await toBottom();
     if (command === undefined) {
-      rows.push({ key: `l${liveCount++}`, kind: "error", text: `unknown slash command ${head} (try /help)` });
+      rows.push({ key: `l${liveCount++}`, kind: "error", local: true, text: `unknown slash command ${head} (try /help)` });
       return;
     }
     busy = true;
     try {
       await command.run(rest.join(" "));
     } catch (e) {
-      rows.push({ key: `l${liveCount++}`, kind: "error", text: e instanceof Error ? e.message : String(e) });
+      rows.push({ key: `l${liveCount++}`, kind: "error", local: true, text: e instanceof Error ? e.message : String(e) });
     } finally {
       busy = false;
       await reconcile().catch(() => undefined);
@@ -398,7 +408,7 @@
       await started.start();
       dictation = started;
     } catch (e) {
-      rows.push({ key: `l${liveCount++}`, kind: "error", text: e instanceof Error ? e.message : String(e) });
+      rows.push({ key: `l${liveCount++}`, kind: "error", local: true, text: e instanceof Error ? e.message : String(e) });
       await started.stop().catch(() => undefined);
     }
   }
