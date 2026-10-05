@@ -22,7 +22,11 @@ let
         base = toString aidSrc;
         rel = lib.removePrefix (base + "/") (toString path);
       in
-      toString path == base || rel == "tests" || lib.hasPrefix "tests/" rel || rel == "pyproject.toml";
+      # Bytecode the suite writes beside itself must not enter the store: it churns the hash and rebuilds
+      # the guest on every run.
+      builtins.baseNameOf path != "__pycache__"
+      && !lib.hasSuffix ".pyc" (toString path)
+      && (toString path == base || rel == "tests" || lib.hasPrefix "tests/" rel || rel == "pyproject.toml");
   };
   runBrowserTests = pkgs.writeShellScriptBin "aid-browser-tests" ''
     set -eu
