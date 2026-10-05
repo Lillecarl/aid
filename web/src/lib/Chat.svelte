@@ -47,12 +47,18 @@
   const PAGE = 100;
   const EDGE_PX = 200;
   const WINDOW_KEY = "aid.historyWindow";
+  const THINKING_KEY = "aid.thinking";
 
   let { name, onchange, ondeleted }: Props = $props();
 
   // How many rows the page keeps; the rest stay on the server and come back on scroll.
   let windowSize = $state(Number(localStorage.getItem(WINDOW_KEY)) || 300);
   $effect(() => localStorage.setItem(WINDOW_KEY, String(windowSize)));
+
+  // Thinking visibility: live stays open while a thought streams and collapses when the turn records it;
+  // collapsed keeps every thought shut.
+  let thinking = $state(localStorage.getItem(THINKING_KEY) ?? "live");
+  $effect(() => localStorage.setItem(THINKING_KEY, thinking));
 
   let rows: Row[] = $state([]);
   let hasOlder = $state(false);
@@ -513,15 +519,22 @@
   <label title="How many entries this page keeps; older ones load again when you scroll up.">
     Keep <input type="number" min="50" max="5000" step="50" bind:value={windowSize} /> entries
   </label>
+  <label title="Thinking boxes stay open while a thought streams, then collapse; collapsed keeps them shut.">
+    Thinking
+    <select bind:value={thinking}>
+      <option value="live">Live</option>
+      <option value="collapsed">Collapsed</option>
+    </select>
+  </label>
 </div>
 {#snippet rowview(row: Row)}
   {#if row.kind === "assistant"}
     <div class="assistant" data-testid="chat-row"><Markdown text={row.text} /></div>
-  {:else if row.kind === "thought"}
-    <details class="thought" data-testid="chat-row">
-      <summary>Thinking <span class="gist">{row.text.trim().split("\n", 1)[0]}</span></summary>
-      <Markdown text={row.text} />
-    </details>
+    {:else if row.kind === "thought"}
+      <details class="thought" data-testid="chat-row" open={thinking === "live" && row.seq === undefined}>
+        <summary>Thinking <span class="gist">{row.text.trim().split("\n", 1)[0]}</span></summary>
+        <Markdown text={row.text} />
+      </details>
   {:else if row.kind === "summary"}
     <details class="thought" data-testid="chat-row">
       <summary>What Claude kept of the conversation</summary>

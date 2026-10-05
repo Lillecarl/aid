@@ -1,5 +1,5 @@
-"""The web UI through a real browser: login, a chat roundtrip, slash commands, prompt-box editing and PWA
-installability.
+"""The web UI through a real browser: login, a chat roundtrip, slash commands, prompt-box editing, PWA
+installability and thinking visibility.
 
 The agents are mocks (`agents:echo` answers with the prompt, `agents:summarizer` compacts to a fixed
 digest), so every assertion is deterministic. Every test runs once per browser: `--browser both` is the
@@ -236,3 +236,32 @@ async def test_tool_calls_share_a_row(page: Page, session_daemon: Paths, tmp_pat
     assert last is not None
     # An agent message breaks the flow: the last row starts below the tool row.
     assert last["y"] >= max(first["y"] + first["height"], second["y"] + second["height"])
+
+
+async def test_thinking_visible_until_done(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    gate = tmp_path / "think-gate"
+    await seed_session(session_daemon, tmp_path, "ponder", "agents:thinker", AID_THINK_GATE=str(gate))
+    await open_session(page, "ponder")
+    await send_chat(page, "think")
+    # The turn cannot finish before the gate file exists: the open thought stays put for the assertion.
+    streaming = page.locator("details.thought[open]")
+    await streaming.wait_for(timeout=TIMEOUT * 1000)
+    assert "hmm" in (await streaming.text_content() or "")
+    await anyio.Path(gate).write_text("go")
+    await wait_for_idle(page)
+    await page.locator("details.thought:not([open])").wait_for(timeout=TIMEOUT * 1000)
+    assert await page.locator("details.thought[open]").count() == 0
+    assert await page.locator("details.thought").count() >= 1
+
+
+async def test_thinking_collapsed_mode(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    gate = tmp_path / "think-gate"
+    await seed_session(session_daemon, tmp_path, "quiesce", "agents:thinker", AID_THINK_GATE=str(gate))
+    await open_session(page, "quiesce")
+    await page.get_by_label("Thinking").select_option("collapsed")
+    await send_chat(page, "think")
+    await page.locator("details.thought").wait_for(timeout=TIMEOUT * 1000)
+    await anyio.Path(gate).write_text("go")
+    await wait_for_idle(page)
+    assert await page.locator("details.thought").count() >= 1
+    assert await page.locator("details.thought[open]").count() == 0

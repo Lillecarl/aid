@@ -10,8 +10,22 @@ from typing import TYPE_CHECKING, cast
 import anyio
 from pydantic import BaseModel
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelResponse, RetryPromptPart, TextPart, ToolCallPart, ToolReturnPart, UserPromptPart
-from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
+from pydantic_ai.messages import (
+    ModelResponse,
+    RetryPromptPart,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
+from pydantic_ai.models.function import (
+    AgentInfo,
+    DeltaThinkingCalls,
+    DeltaThinkingPart,
+    DeltaToolCall,
+    DeltaToolCalls,
+    FunctionModel,
+)
 from pydantic_ai.models.test import TestModel
 
 import aid
@@ -71,6 +85,18 @@ async def _summarize_stream(messages: list[ModelMessage], info: AgentInfo) -> As
 
 
 summarizer = Agent(FunctionModel(_summarize, stream_function=_summarize_stream))
+
+
+async def _think(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaThinkingCalls]:
+    """A thinker for the visibility tests: one thought, then the test's gate file, then the answer."""
+    yield {0: DeltaThinkingPart(content="hmm, let me think")}
+    gate = anyio.Path(os.environ["AID_THINK_GATE"])
+    while not await gate.exists():  # noqa: ASYNC110 -- the gate is a file the test drops; no event crosses the worker boundary
+        await anyio.sleep(0.1)
+    yield "thought through"
+
+
+thinker = Agent(FunctionModel(stream_function=_think))
 
 
 class Review(BaseModel):
