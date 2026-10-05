@@ -112,6 +112,17 @@ async def test_slash_menu_completes_click(page: Page, session_daemon: Paths, tmp
     await expect_chat_text(page, "Context compacted")
 
 
+async def test_slash_enter_runs_complete_command(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "exact", "agents:echo")
+    await open_session(page, "exact")
+    box = page.get_by_test_id("chat-input")
+    # Whether or not the menu opened before Enter arrived, a complete command sends: it never completes.
+    await box.fill("/help")
+    await box.press("Enter")
+    await expect_chat_text(page, "/help — List these commands")
+    await expect_chat_text(page, "/compact [focus]")
+
+
 async def test_slash_help_lists_commands(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     await seed_session(session_daemon, tmp_path, "help", "agents:echo")
     await open_session(page, "help")

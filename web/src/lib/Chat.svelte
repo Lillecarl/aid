@@ -368,7 +368,8 @@
   }
 
   // Slash completion: a prompt box holding only "/prefix" offers the commands it starts, from the same array
-  // /help lists. Enter or Tab completes the selected one; Escape closes until the text changes again.
+  // /help lists. Tab completes the selected one; Enter completes a prefix, but a complete command runs at
+  // once, or fast typing would only ever complete and never send. Escape closes until the text changes again.
   let slashSel = $state(0);
   let slashOff = $state(false);
   const slashQuery = $derived(/^\s*\/([A-Za-z]*)$/.exec(text)?.[1] ?? null);
@@ -418,9 +419,12 @@
         return;
       }
       if (event.key === "Enter" && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey) {
-        event.preventDefault();
-        slashAccept(selected);
-        return;
+        // A complete command runs: completing it would only add a space and swallow the send.
+        if (!slashMatches.some((s) => `/${s.name}` === text)) {
+          event.preventDefault();
+          slashAccept(selected);
+          return;
+        }
       }
     }
     if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLowerCase() === "j") {
