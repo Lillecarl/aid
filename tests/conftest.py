@@ -20,11 +20,101 @@ from aid.speech import load as load_speech
 from aid.web.highlight import ENV_GRAMMARS, Grammars
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Iterator
+    from collections.abc import AsyncIterator, Generator, Iterator
+    from typing import Any
+
+    from playwright.async_api import Browser, Page
 
     from aid.speech import Recognizer
 
 TESTS = Path(__file__).parent
+
+# The dex/app stack both the HTTP tests and the browser tests boot; its fixtures come from there.
+pytest_plugins = ["tests.web_harness"]
+
+try:
+    from playwright.async_api import async_playwright
+except ImportError:
+    async_playwright = None
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    parser.addoption(
+        "--browser",
+        action="store",
+        default="chromium",
+        choices=("chromium", "firefox"),
+        help="which real browser tests/test_browser.py drives (the sandbox runs chromium)",
+    )
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]) -> Generator[Any, Any, Any]:
+    """Keep each phase's report on the node: the browser page fixture screenshots on failure."""
+    outcome = yield
+    setattr(item, f"rep_{call.when}", outcome.get_result())
+    return outcome
+
+
+def test_failed(request: pytest.FixtureRequest) -> bool:
+    """Whether the test's call phase failed: the hook above records it; the browser fixture asks."""
+    node = getattr(request, "node", None)
+    report: Any = getattr(node, "rep_call", None)
+    return report is not None and bool(report.failed)
+
+
+#: What `--browser` accepts: full chromium is never needed, its headless shell runs the suite.
+BROWSERS = ("chromium", "firefox")
+#: How the fixture finds the browser the Nix shell provides in the requested browser's directory.
+NEEDLES = {"chromium": "chromium_headless_shell", "firefox": "firefox"}
+#: The sandbox forbids the namespaces chromium's sandbox needs, and its /dev/shm is tiny.
+CHROMIUM_ARGS = ["--no-sandbox", "--disable-dev-shm-usage"]
+
+
+@pytest.fixture(scope="session")
+def browser_name(request: pytest.FixtureRequest) -> str:
+    name = request.config.getoption("--browser")
+    assert name in BROWSERS, f"--browser={name} is not one of {BROWSERS}"
+    return name
+
+
+def browsers_root() -> Path | None:
+    value = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
+    if value is None:
+        return None
+    root = Path(value)
+    return root if root.is_dir() else None
+
+
+@pytest.fixture
+async def browser(browser_name: str) -> AsyncIterator[Browser]:
+    """A real browser for the test: function-scoped, because async fixtures run on the function-scoped
+    loop anyio provides. Skips when the Nix shell provides no browser."""
+    if async_playwright is None:
+        pytest.skip("playwright is not installed")
+    root = browsers_root()
+    needle = NEEDLES[browser_name]
+    if root is None or not list(root.glob(f"{needle}-*")):
+        pytest.skip(f"no {browser_name} under PLAYWRIGHT_BROWSERS_PATH={root}")
+    async with async_playwright() as p:
+        launched = await {"chromium": p.chromium, "firefox": p.firefox}[browser_name].launch(
+            headless=True, args=CHROMIUM_ARGS if browser_name == "chromium" else []
+        )
+        yield launched
+        await launched.close()
+
+
+@pytest.fixture
+async def page(browser: Browser, tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator[Page]:
+    """A fresh browser tab: screenshots on failure, into the test's directory."""
+    context = await browser.new_context(viewport={"width": 1280, "height": 900})
+    chat = await context.new_page()
+    yield chat
+    if test_failed(request):
+        shot = tmp_path / "browser-failure.png"
+        await chat.screenshot(path=str(shot))
+        print(f"\nbrowser failure screenshot: {shot}")
+    await context.close()
 
 
 @pytest.fixture

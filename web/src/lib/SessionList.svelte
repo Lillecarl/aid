@@ -10,7 +10,7 @@
   let { sessions, current, onselect }: Props = $props();
 </script>
 
-<ul>
+<ul data-testid="session-list">
   {#each sessions as session (session.name)}
     <li>
       <button type="button" class:current={session.name === current} onclick={() => onselect(session.name)}>

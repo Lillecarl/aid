@@ -433,18 +433,18 @@
     Keep <input type="number" min="50" max="5000" step="50" bind:value={windowSize} /> entries
   </label>
 </div>
-<div class="log" bind:this={log} {onscroll}>
+<div class="log" data-testid="chat-log" bind:this={log} {onscroll}>
   {#if hasOlder}<div class="more">{loading ? "Loading…" : "Scroll up for older entries"}</div>{/if}
   {#each rows as row (row.key)}
     {#if row.kind === "assistant"}
-      <div class="assistant"><Markdown text={row.text} /></div>
+      <div class="assistant" data-testid="chat-row"><Markdown text={row.text} /></div>
     {:else if row.kind === "thought"}
-      <details class="thought">
+      <details class="thought" data-testid="chat-row">
         <summary>Thinking <span class="gist">{row.text.trim().split("\n", 1)[0]}</span></summary>
         <Markdown text={row.text} />
       </details>
     {:else if row.kind === "summary"}
-      <details class="thought">
+      <details class="thought" data-testid="chat-row">
         <summary>What Claude kept of the conversation</summary>
         <Markdown text={row.text} />
       </details>
@@ -453,7 +453,7 @@
     {:else if row.permission}
       <PermissionCard session={name} request={row.permission.request} decision={row.permission.decision} />
     {:else}
-      <div class={row.kind}>{row.text}</div>
+      <div class={row.kind} data-testid="chat-row">{row.text}</div>
     {/if}
   {:else}
     {#if !loading}<div class="more">No history yet.</div>{/if}
@@ -461,9 +461,9 @@
   {#if hasNewer}<div class="more">{loading ? "Loading…" : "Scroll down for newer entries"}</div>{/if}
 </div>
 <form onsubmit={send}>
-  <textarea bind:value={text} onkeydown={keydown} rows="4" placeholder={touchOnly ? "Prompt" : "Prompt (Enter sends, Shift+Enter or Ctrl+J for a new line, /help for commands)"}></textarea>
+  <textarea data-testid="chat-input" bind:value={text} onkeydown={keydown} rows="4" placeholder={touchOnly ? "Prompt" : "Prompt (Enter sends, Shift+Enter or Ctrl+J for a new line, /help for commands)"}></textarea>
   <div class="buttons">
-    <button type="submit" disabled={busy}>{busy ? "Working…" : "Send"}</button>
+    <button type="submit" data-testid="chat-send" disabled={busy}>{busy ? "Working…" : "Send"}</button>
     {#if canDictate}
       <button
         type="button"

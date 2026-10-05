@@ -37,7 +37,7 @@
 
 <header>
   <strong>aid</strong>
-  <span class="who">{email}</span>
+  <span class="who" data-testid="user-email">{email}</span>
   <button type="button" onclick={logout}>Log out</button>
 </header>
 <main>

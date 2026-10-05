@@ -25,6 +25,13 @@ let
   ui = pkgs.callPackage ./web { pymuxElement = p.pymux-element; };
   speechModel = pkgs.callPackage ./nix/speech-model.nix { };
   grammars = pkgs.callPackage ./nix/tree-sitter-grammars.nix { };
+  # The browsers the browser tests drive: chromium's headless shell for the sandbox run, firefox for a
+  # developer's `--browser firefox` run. Fixed-output fetches, so the sandbox may use them.
+  browsers = pkgs.playwright-driver.browsers.override {
+    withChromium = false;
+    withWebkit = false;
+    withFfmpeg = false;
+  };
   # Drafts turn on libzmq's ws:// transport (Lillecarl/aid#1): remote workers reach the daemon through an HTTP
   # reverse proxy. GnuTLS adds wss://, for a worker whose proxy speaks only HTTPS.
   # Propagated: libzmq.pc names gnutls in Requires.private, and pyzmq links what pkg-config reports.
@@ -88,7 +95,7 @@ let
           pymuxApp = p.pymux;
           dex = pkgs.dex-oidc;
           webUi = ui;
-          inherit speechModel grammars;
+          inherit speechModel grammars browsers;
           inherit (pkgs) cacert;
         };
       }
@@ -141,6 +148,7 @@ in
       export AID_WEB_ASSETS=${ui}
       export AID_TEST_SPEECH_MODEL=${speechModel}
       export AID_TREE_SITTER_GRAMMARS=${grammars}
+      export PLAYWRIGHT_BROWSERS_PATH=${browsers}
       # The element the web build links in; `npm ci` in web/ removes it, and the next shell puts it back.
       mkdir -p ${lib.escapeShellArg (toString ./web)}/node_modules
       ln -sfn ${p.pymux-element} ${lib.escapeShellArg (toString ./web)}/node_modules/pymux-pane
