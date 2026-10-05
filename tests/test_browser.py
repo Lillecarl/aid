@@ -21,6 +21,7 @@ import aid
 from aid.spec import PermissionMode
 from tests.browser_harness import (
     expect_chat_text,
+    open_details,
     open_session,
     seed_acp_session,
     seed_session,
@@ -257,10 +258,10 @@ async def test_tool_card_names_its_file(page: Page, session_daemon: Paths, tmp_p
     await open_session(page, "reader")
     await send_chat(page, '[["read", {"path": "notes.txt"}]]')
     await expect_chat_text(page, "remember this")
+    await wait_for_idle(page)
     box = page.get_by_test_id("tool-box").filter(has_text="notes.txt")
     await box.wait_for(timeout=TIMEOUT * 1000)
-    await box.locator("summary").click()
-    await box.get_by_test_id("tool-paths").wait_for(timeout=TIMEOUT * 1000)
+    await open_details(box.locator("summary"), box.get_by_test_id("tool-paths"))
     assert "notes.txt" in (await box.get_by_test_id("tool-paths").text_content() or "")
 
 
@@ -319,5 +320,4 @@ async def test_thinking_expands_on_demand(page: Page, session_daemon: Paths, tmp
     await anyio.Path(gate).write_text("go")
     await wait_for_idle(page)
     await page.locator("details.thought:not([open])").wait_for(timeout=TIMEOUT * 1000)
-    await page.locator("details.thought summary").click()
-    await page.locator("details.thought[open]").wait_for(timeout=TIMEOUT * 1000)
+    await open_details(page.locator("details.thought summary"), page.locator("details.thought[open]"))

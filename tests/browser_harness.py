@@ -25,15 +25,16 @@ from tests.web_harness import ALLOWED, TIMEOUT, Web
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from playwright.async_api import Browser, Page
+    from playwright.async_api import Browser, Locator, Page
 
     from aid.paths import Paths
 
 try:
-    from playwright.async_api import async_playwright, expect
+    from playwright.async_api import TimeoutError, async_playwright, expect
 except ImportError:
     async_playwright = None
     expect = None
+    TimeoutError = None
 
 
 async def seed_session(
@@ -100,6 +101,19 @@ async def wait_for_idle(page: Page) -> None:
     if expect is None:
         pytest.skip("playwright is not installed")
     await expect(page.get_by_test_id("chat-send")).to_be_enabled(timeout=TIMEOUT * 1000)
+
+
+async def open_details(summary: Locator, opened: Locator) -> None:
+    """Open a card through its summary, retrying once: the turn's reconcile remounts the rows, which closes
+    a card opened under the click."""
+    if TimeoutError is None:
+        pytest.skip("playwright is not installed")
+    await summary.click()
+    try:
+        await opened.wait_for(timeout=TIMEOUT * 1000)
+    except TimeoutError:
+        await summary.click()
+        await opened.wait_for(timeout=TIMEOUT * 1000)
 
 
 async def expect_chat_text(page: Page, text: str) -> None:
