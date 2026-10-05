@@ -1,8 +1,9 @@
 """The web UI through a real browser: login, a chat roundtrip, and slash commands.
 
 The agents are mocks (`agents:echo` answers with the prompt, `agents:summarizer` compacts to a fixed
-digest), so every assertion is deterministic. One run tests one browser: `--browser chromium` in the Nix
-sandbox, `--browser firefox` for a developer's own run.
+digest), so every assertion is deterministic. Every test runs once per browser: `--browser both` is the
+default (the sandbox and the guest run it); `--browser chromium` or `--browser firefox` runs one, for a
+developer's own iteration.
 
 The `page` fixture arrives logged in: the session login walks dex's form once, and each test gets an
 isolated tab from its cookies. Tests seed their sessions on the shared session daemon under unique names.

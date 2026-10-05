@@ -27,6 +27,9 @@ if TYPE_CHECKING:
 
 TESTS = Path(__file__).parent
 
+#: What `--browser` accepts: full chromium is never needed, its headless shell runs the suite.
+BROWSERS = ("chromium", "firefox")
+
 # The dex/app stack both the HTTP tests and the browser tests boot; its fixtures come from there.
 pytest_plugins = ["tests.web_harness", "tests.browser_harness"]
 
@@ -35,9 +38,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption(
         "--browser",
         action="store",
-        default="chromium",
-        choices=("chromium", "firefox"),
-        help="which real browser tests/test_browser.py drives (the sandbox runs chromium)",
+        default="both",
+        choices=(*BROWSERS, "both"),
+        help="which real browsers tests/test_browser.py drives (the sandbox and the guest run both)",
     )
 
 
@@ -100,7 +103,10 @@ async def daemon(paths: Paths, launcher: ForkserverLauncher) -> AsyncIterator[Pa
 
 
 @pytest.fixture(scope="session")
-def session_paths(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Paths]:
+def session_paths(tmp_path_factory: pytest.TempPathFactory, browser_name: str) -> Iterator[Paths]:
+    """One directory per browser run: daemons read their sessions back from the state dir, so a shared one
+    collides on names."""
+    assert browser_name in BROWSERS, f"--browser={browser_name} is not one of {BROWSERS}"
     # ipc:// paths must fit in sun_path (108 bytes); the factory's numbered directories can be longer.
     runtime = Path(tempfile.mkdtemp(prefix="aid-"))
     yield Paths(runtime_dir=runtime, state_dir=tmp_path_factory.mktemp("state"))
@@ -109,7 +115,7 @@ def session_paths(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Paths]:
 
 @pytest.fixture(scope="session")
 async def session_daemon(session_paths: Paths, launcher: ForkserverLauncher) -> AsyncIterator[Paths]:
-    """One daemon for the whole browser run: its sessions outlive any single test."""
+    """One daemon per browser run: session names would collide on a shared one, and a run owns its stack."""
     async with anyio.create_task_group() as tg:
         await tg.start(Daemon(session_paths, launcher).serve)
         yield session_paths

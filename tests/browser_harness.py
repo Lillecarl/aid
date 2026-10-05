@@ -18,7 +18,7 @@ import anyio
 import pytest
 
 import aid
-from tests.conftest import py_spec, test_failed
+from tests.conftest import BROWSERS, py_spec, test_failed
 from tests.web_harness import ALLOWED, TIMEOUT, Web
 
 if TYPE_CHECKING:
@@ -86,19 +86,25 @@ async def expect_chat_text(page: Page, text: str) -> None:
         await page.get_by_test_id("chat-row").filter(has_text=text).first.wait_for(state="visible")
 
 
-#: What `--browser` accepts: full chromium is never needed, its headless shell runs the suite.
-BROWSERS = ("chromium", "firefox")
 #: How the fixture finds the browser the Nix shell provides in the requested browser's directory.
 NEEDLES = {"chromium": "chromium_headless_shell", "firefox": "firefox"}
 #: The sandbox forbids the namespaces chromium's sandbox needs, and its /dev/shm is tiny.
 CHROMIUM_ARGS = ["--no-sandbox", "--disable-dev-shm-usage"]
 
 
+def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
+    """Run every browser test once per browser: `browser_name` carries the choice at session scope, so each
+    browser gets its own browser, login, daemon and web stack."""
+    if "browser_name" in metafunc.fixturenames:
+        chosen = metafunc.config.getoption("--browser")
+        names = list(BROWSERS) if chosen == "both" else [chosen]
+        metafunc.parametrize("browser_name", names, indirect=True, scope="session")
+
+
 @pytest.fixture(scope="session")
 def browser_name(request: pytest.FixtureRequest) -> str:
-    name = request.config.getoption("--browser")
-    assert name in BROWSERS, f"--browser={name} is not one of {BROWSERS}"
-    return name
+    assert request.param in BROWSERS, f"--browser={request.param} is not one of {BROWSERS}"
+    return request.param
 
 
 def browsers_root() -> Path | None:
