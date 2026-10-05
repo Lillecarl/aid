@@ -25,13 +25,13 @@ against 2.1.283. What this module relies on:
 from __future__ import annotations
 
 import json
-import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import anyio
+import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from watchfiles import (
     awatch,  # pyright: ignore[reportUnknownVariableType] -- its stop_event type names trio, which is not installed
@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 
     from aid.protocol import SessionEvent
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 INTERRUPTED_MARKER: Final = "[Request interrupted by user"
 
@@ -333,7 +333,7 @@ class TranscriptFollower:
             try:
                 entries.append(json.loads(line))
             except json.JSONDecodeError:
-                log.warning("skipping a transcript line that is not JSON: %.120r", line)
+                log.warning("transcript_line_skipped", line=line[:120])
         return entries
 
     async def follow(self) -> AsyncIterator[dict[str, Any]]:

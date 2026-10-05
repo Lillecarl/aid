@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib
 import json
-import logging
 import os
 import time
 from contextlib import asynccontextmanager
@@ -14,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import anyio
 import anyio.to_thread
+import structlog
 from pydantic_ai import FunctionToolset, RunCancelled, Tool
 from pydantic_ai.agent import AbstractAgent
 from pydantic_ai.capabilities import ProcessHistory
@@ -65,7 +65,7 @@ if TYPE_CHECKING:
     from aid.backends.base import Emit
     from aid.spec import PydanticAISpec
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 HISTORY_FILE = "history.json"
 RUNS_DIR = "runs"
@@ -323,7 +323,7 @@ async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> Async
     history = (
         ModelMessagesTypeAdapter.validate_json(await history_file.read_bytes()) if await history_file.exists() else []
     )
-    log.info("loaded %s with %d history messages", spec.agent or spec.target, len(history))
+    log.info("history_loaded", agent=spec.agent or spec.target, messages=len(history))
     started = Started(pid=os.getpid(), resumed=bool(history), agent=spec.agent or spec.target, model=model_name(agent))
     coding = Coding(
         cwd=Path(spec.cwd),

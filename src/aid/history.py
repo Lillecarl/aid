@@ -10,12 +10,12 @@ file. A session can grow long; a page read stays the size of the page.
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import TYPE_CHECKING, Final
 
 import anyio
 import anyio.to_thread
+import structlog
 from pydantic import ValidationError
 
 from aid.protocol import HistoryEntry, HistoryPage, PromptEntry, TextDelta, ThoughtDelta, TurnError
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
     from aid.protocol import HistoryItem, MessageEntry, SessionEvent
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 HISTORY_FILE: Final = "history.jsonl"
 MAX_PAGE: Final = 1000
@@ -54,7 +54,7 @@ class HistoryLog:
                 offsets.append(position)
             if position != len(data):
                 # A line cut short by a crash. Appending after it would glue the next entry onto it.
-                log.warning("%s: dropping %d bytes of an unfinished line", self._path, len(data) - position)
+                log.warning("unfinished_line_dropped", path=str(self._path), bytes=len(data) - position)
                 async with await anyio.open_file(self._path, "r+b") as f:
                     await f.truncate(position)
         self._offsets = offsets
@@ -98,7 +98,7 @@ class HistoryLog:
             try:
                 entries.append(HistoryEntry.model_validate_json(line))
             except ValidationError:
-                log.exception("%s: skipping an unreadable entry", self._path)
+                log.exception("unreadable_entry_skipped", path=str(self._path))
         return entries
 
     async def page(self, *, before: int | None = None, after: int | None = None, limit: int = 100) -> HistoryPage:

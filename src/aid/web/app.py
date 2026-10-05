@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
@@ -52,8 +51,6 @@ if TYPE_CHECKING:
     from aid.paths import Paths
     from aid.speech import Recognizer
     from aid.web.highlight import Grammars
-
-log = logging.getLogger(__name__)
 
 ENV_ASSETS: Final = "AID_WEB_ASSETS"
 SESSION_MAX_AGE: Final = 12 * 3600

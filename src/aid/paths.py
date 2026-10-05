@@ -10,6 +10,8 @@ ENV_STATE_DIR = "AID_STATE_DIR"
 ENV_SESSION = "AID_SESSION"
 # "1" makes `aid.mcp_server` the session's channel: interactive Claude's way to hear its messages.
 ENV_CHANNEL = "AID_CHANNEL"
+# Any value renders logs as JSON; unset renders a console for humans.
+ENV_LOG_JSON = "AID_LOG_JSON"
 
 
 @dataclass(frozen=True)

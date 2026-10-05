@@ -34,7 +34,6 @@ Claude takes only the last `--settings`, so a person's own `--settings` in the a
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 import shlex
@@ -48,6 +47,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import anyio
 import anyio.to_thread
+import structlog
 from libpymux import Server
 from pydantic import JsonValue
 
@@ -94,7 +94,7 @@ if TYPE_CHECKING:
     from aid.protocol import HistoryItem, SessionEvent
     from aid.spec import ClaudeTtySpec
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 SESSION_ID_FILE: Final = "claude-session-id"
 LAUNCHER_FILE: Final = "launch.sh"
@@ -436,7 +436,7 @@ class ClaudeTtyBackend:
 
     async def _switch(self, session_id: str, model: JsonValue) -> None:
         """Claude started another session in the same pane: follow its transcript from the start."""
-        log.info("claude session %s follows %s", session_id, self._session_id)
+        log.info("session_switch", session=session_id, previous=self._session_id)
         self._session_id, self._offset = session_id, 0
         await self._id_file.write_text(session_id)
         if self._turn is not None:
@@ -669,7 +669,7 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
         return window.panes[0]
 
     pane = await anyio.to_thread.run_sync(new_window)
-    log.info("claude %s in pymux pane %s on %s (%s)", session_id, pane.id, socket, "resumed" if resume else "new")
+    log.info("pane_started", session=session_id, pane=pane.id, socket=socket, resumed=resume)
     try:
         await _wait_ready(pane, spec.trust_cwd)
         agent = f"Claude Code {version}" if version else None

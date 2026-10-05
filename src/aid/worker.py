@@ -7,13 +7,13 @@ launcher owns process-wide setup.
 
 from __future__ import annotations
 
-import logging
 import sys
 import uuid
 from contextlib import AsyncExitStack
 from typing import TYPE_CHECKING, cast
 
 import anyio
+import structlog
 import zmq
 import zmq.asyncio
 
@@ -49,7 +49,7 @@ if TYPE_CHECKING:
     from aid.protocol import HistoryItem, SessionEvent
     from aid.spec import AgentSpec
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 
 def main(
@@ -75,7 +75,7 @@ async def serve(
             try:
                 backend = await stack.enter_async_context(open_backend(spec, state_dir))
             except Exception as error:
-                log.exception("the backend did not start")
+                log.exception("backend_start_failed")
                 await sock.send(encode(StartFailed(message=describe(error))))
                 raise
             tg = await stack.enter_async_context(anyio.create_task_group())
@@ -114,7 +114,7 @@ class _Worker:
 
     async def follow(self, backend: FollowingBackend) -> None:
         await backend.follow(self.record, self.send)
-        log.info("the agent has gone; the worker ends")
+        log.info("agent_gone")
         self._tg.cancel_scope.cancel()
 
     async def serve(self) -> None:
@@ -171,7 +171,7 @@ class _Worker:
         try:
             answer = await backend.hook(request.event, request.payload)
         except Exception as error:
-            log.exception("hook %s failed", request.event)
+            log.exception("hook_failed", event=request.event)
             await self.send(Failure(id=request.id, code="hook_failed", message=f"{type(error).__name__}: {error}"))
         else:
             await self.send(Done(id=request.id, data=answer))
@@ -183,7 +183,7 @@ class _Worker:
         try:
             view = await self._backend.screen(stylesheet=request.stylesheet, since=request.since, wait=request.wait)
         except Exception as error:
-            log.exception("screen %s failed", request.id)
+            log.exception("screen_failed", id=request.id)
             await self.send(Failure(id=request.id, code="screen_failed", message=f"{type(error).__name__}: {error}"))
         else:
             await self.send(Done(id=request.id, data=view.model_dump(mode="json")))
@@ -199,7 +199,7 @@ class _Worker:
             await self.record(uuid.uuid4().hex, Lifecycle(event="compacted", detail="manual", summary=digest))
             await self.send(Done(id=request.id, data=digest))
         except Exception as error:
-            log.exception("compact %s failed", request.id)
+            log.exception("compact_failed", id=request.id)
             await self.send(Failure(id=request.id, code="compact_failed", message=f"{type(error).__name__}: {error}"))
         finally:
             self._busy = False
@@ -211,7 +211,7 @@ class _Worker:
         try:
             output = await self._backend.prompt(request.text, emit)
         except Exception as error:
-            log.exception("prompt %s failed", request.id)
+            log.exception("prompt_failed", id=request.id)
             await self.send(Failure(id=request.id, code="agent_error", message=f"{type(error).__name__}: {error}"))
         else:
             await emit(output)

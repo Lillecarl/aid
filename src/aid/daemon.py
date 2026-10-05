@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import logging
 import shlex
 import shutil
 import sys
@@ -14,6 +13,7 @@ from typing import TYPE_CHECKING, Final
 
 import anyio
 import anyio.to_thread
+import structlog
 import zmq
 import zmq.asyncio
 from pydantic import ValidationError
@@ -80,7 +80,7 @@ if TYPE_CHECKING:
     from aid.protocol import HistoryEntry, HistoryItem, Request
     from aid.spec import AgentSpec
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 START_TIMEOUT: Final = 60.0
 START_ERROR_GRACE: Final = 0.5
@@ -287,8 +287,8 @@ class Daemon:
         self._plugin_events.bind(self._paths.plugin_events)
         for endpoint in self._workers_listen:
             self._workers.bind(endpoint)
-            log.info("workers can connect on %s", endpoint)
-        log.info("listening on %s", self._paths.control)
+            log.info("listening", socket=endpoint)
+        log.info("listening", socket=self._paths.control)
         try:
             async with anyio.create_task_group() as tg:
                 self._tg = tg
@@ -324,10 +324,10 @@ class Daemon:
             try:
                 spec = AgentSpecAdapter.validate_json(await spec_file.read_bytes())
             except ValidationError:
-                log.exception("skipping session %s with an invalid spec", session_dir.name)
+                log.exception("invalid_session_spec", session=session_dir.name)
                 continue
             self._sessions[session_dir.name] = self._new_session(session_dir.name, spec)
-        log.info("restored %d sessions", len(self._sessions))
+        log.info("sessions_restored", count=len(self._sessions))
 
     async def _load_plugins(self) -> None:
         plugins_dir = anyio.Path(self._paths.state_dir) / "plugins"
@@ -340,10 +340,10 @@ class Daemon:
             try:
                 spec = PluginSpec.model_validate_json(await spec_file.read_bytes())
             except ValidationError:
-                log.exception("skipping plugin %s with an invalid spec", plugin_dir.name)
+                log.exception("invalid_plugin_spec", plugin=plugin_dir.name)
                 continue
             self._keys.plugins[spec.name] = spec
-        log.info("registered %d plugins", len(self._keys.plugins))
+        log.info("plugins_registered", count=len(self._keys.plugins))
 
     async def _stop_all(self) -> None:
         async with anyio.create_task_group() as tg:
@@ -438,7 +438,7 @@ class Daemon:
         except AidError as error:
             reply = Failure(id=request.id, code=error.code, message=error.message)
         except Exception as error:
-            log.exception("request %s failed", request.id)
+            log.exception("request_failed", id=request.id)
             reply = Failure(id=request.id, code="internal", message=f"{type(error).__name__}: {error}")
         if reply is not None:
             await client.send(encode(reply))
@@ -617,7 +617,7 @@ class Daemon:
         try:
             await self._ensure_running(session)
         except AidError:
-            log.exception("could not start %s for its messages", session.name)
+            log.exception("worker_start_failed", session=session.name)
         await self._publish_changes()
 
     async def _deliver(self, session: _Session) -> None:
@@ -633,7 +633,7 @@ class Daemon:
             self._routes[request.id] = _Route(None, session.name, recorder)
             await self._send_worker(session, request)
         except (AidError, zmq.ZMQError) as error:
-            log.exception("could not deliver %d messages to %s", len(messages), session.name)
+            log.exception("deliver_failed", session=session.name, count=len(messages))
             self._routes.pop(request.id, None)
             session.turn = None
             await self._record(
@@ -718,7 +718,7 @@ class Daemon:
         # `_stop` kills a worker that does not exit, so the wait always ends.
         with anyio.CancelScope(shield=True):
             code = await handle.wait()
-            log.info("worker %s (pid %s) exited with %s", session.name, handle.pid, code)
+            log.info("worker_exited", session=session.name, pid=handle.pid, code=code)
             session.exit_code = code
             if session.handle is handle:
                 session.handle = None
@@ -749,11 +749,11 @@ class Daemon:
         try:
             await self._send_worker(session, StopSession(session=session.name))
         except zmq.ZMQError:
-            log.warning("could not ask worker %s to stop", session.name, exc_info=True)
+            log.warning("worker_stop_failed", session=session.name, exc_info=True)
         with anyio.move_on_after(STOP_TIMEOUT):
             await session.exited.wait()
         if not session.exited.is_set():
-            log.warning("killing worker %s after %ss", session.name, STOP_TIMEOUT)
+            log.warning("worker_kill", session=session.name, after=STOP_TIMEOUT)
             handle.kill()
             await session.exited.wait()
 
@@ -761,7 +761,7 @@ class Daemon:
         while True:
             frames = await self._workers.recv_multipart(copy=False)
             if len(frames) != 2:
-                log.warning("dropped a message of %d frames from a worker", len(frames))
+                log.warning("worker_frames_dropped", frames=len(frames))
                 continue
             peer, frame = frames
             # The session the ZAP handler named for this connection's key.
@@ -772,29 +772,29 @@ class Daemon:
             try:
                 reply = decode_reply(payload)
             except ValidationError:
-                log.exception("invalid reply from worker %s", name)
+                log.exception("invalid_worker_reply", session=name)
                 continue
             if (
                 isinstance(reply, Event | Done | Failure)
                 and (route := self._routes.get(reply.id)) is not None
                 and route.session != name
             ):
-                log.warning("worker %s replied to %s's request %s", name, route.session, reply.id)
+                log.warning("worker_reply_mismatch", worker=name, session=route.session, id=reply.id)
                 continue
             match reply:
                 case Hello():
                     if (session := self._sessions.get(name)) is not None:
-                        log.info("worker %s ready (pid %d)", name, reply.started.pid)
+                        log.info("worker_ready", session=name, pid=reply.started.pid)
                         session.peer = peer.bytes
                         session.started = reply.started
                         session.ready.set()
                         try:
                             await session.history.append(reply.started, uuid.uuid4().hex)
                         except OSError:
-                            log.exception("could not record %s's start", name)
+                            log.exception("record_start_failed", session=name)
                 case StartFailed():
                     if (session := self._sessions.get(name)) is not None:
-                        log.warning("worker %s did not start: %s", name, reply.message)
+                        log.warning("worker_start_failed", session=name, error=reply.message)
                         session.start_error = reply.message
                         session.start_failed.set()
                         session.ready.set()
@@ -804,7 +804,7 @@ class Daemon:
                         try:
                             await session.history.append(reply.item, reply.turn)
                         except OSError:
-                            log.exception("could not record %s's turn %s", name, reply.turn)
+                            log.exception("record_turn_failed", session=name, turn=reply.turn)
                 case Activity():
                     if (session := self._sessions.get(name)) is not None:
                         session.working, session.attention = reply.working, reply.attention
@@ -838,7 +838,7 @@ class Daemon:
                 case Failure():
                     await route.recorder.error(reply.code, reply.message)
         except OSError:
-            log.exception("could not write history for %s", route.session)
+            log.exception("history_write_failed", session=route.session)
 
 
 async def list_agents() -> AgentCatalog:

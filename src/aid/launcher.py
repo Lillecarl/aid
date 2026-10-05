@@ -22,8 +22,10 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 import anyio
 import anyio.to_thread
+import structlog
 
 from aid import worker
+from aid.log import configure_logging
 from aid.paths import ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR
 from aid.spec import AgentSpecAdapter
 
@@ -83,6 +85,8 @@ class Launcher(Protocol):
 
 def process_main(args: WorkerArgs) -> None:
     """A worker process's entry: process-wide setup, then `worker.main`."""
+    configure_logging()
+    structlog.contextvars.bind_contextvars(session=args.name)
     spec = AgentSpecAdapter.validate_json(args.spec_json)
     os.chdir(spec.cwd)
     os.environ.update(spec.env)

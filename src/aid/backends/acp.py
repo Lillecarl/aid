@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import logging
 import math
 import os
 import uuid
@@ -13,6 +12,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 import acp
 import anyio
+import structlog
 from acp.connection import StreamDirection
 from acp.schema import (
     AgentMessageChunk,
@@ -79,7 +79,7 @@ if TYPE_CHECKING:
     from aid.backends.base import Emit
     from aid.spec import AcpSpec
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 SESSION_ID_FILE = "acp-session-id"
 START_TIMEOUT = 60
@@ -257,7 +257,7 @@ class _Client:
         else:
             chosen = choose_permission(mode, request.options)
             decision = PermissionDecision(request_id=request.request_id, option_id=chosen, by=PermissionDecider.POLICY)
-        log.info("permission for %s %r: %s by %s", tool_name, tool_call.title, decision.option_id, decision.by)
+        log.info("permission_decided", tool=tool_name, title=tool_call.title, option=decision.option_id, by=decision.by)
         if events is not None:
             with contextlib.suppress(anyio.ClosedResourceError):  # The prompt ended while the request waited.
                 events.send_nowait(decision)
@@ -294,7 +294,7 @@ class AcpBackend:
         try:
             notification = SessionNotification.model_validate(event.message.get("params"))
         except ValidationError:
-            log.exception("malformed session/update")
+            log.exception("malformed_session_update")
             return
         if notification.session_id != self._session_id:
             return
@@ -417,7 +417,7 @@ async def _resume(
         try:
             loaded = await conn.load_session(cwd=spec.cwd, session_id=previous, mcp_servers=servers)
         except acp.RequestError:
-            log.warning("agent could not load session %s; starting a new one", previous, exc_info=True)
+            log.warning("session_load_failed", session=previous, exc_info=True)
         else:
             return previous, True, loaded.config_options if loaded else None
     session = await conn.new_session(cwd=spec.cwd, mcp_servers=servers)

@@ -10,9 +10,10 @@ request it allows shows in the history as answered by plugin guard.
 
 from __future__ import annotations
 
-import logging
 import shlex
 from typing import TYPE_CHECKING, Final, cast
+
+import structlog
 
 import aid
 from aid.protocol import AidError
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from aid.client import Client
     from aid.protocol import PermissionRequest
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 READERS: Final = frozenset({"ls", "cat", "head", "tail", "wc", "pwd", "rg", "grep", "stat", "file", "du", "df", "tree"})
 """Programs that read and print, whatever their arguments. Not `find` (-delete, -exec), `sed` (-i) or `git`."""
@@ -72,13 +73,13 @@ async def guard(client: Client) -> None:
                     continue
                 judged.add(request.request_id)
                 if (option := verdict(request)) is None:
-                    log.info("%s: left %r for a person", info.name, request.title)
+                    log.info("permission_deferred", plugin=info.name, title=request.title)
                     continue
                 try:
                     await client.session(info.name).answer(request.request_id, option)
-                    log.info("%s: allowed %r", info.name, request.title)
+                    log.info("permission_allowed", plugin=info.name, title=request.title)
                 except AidError as error:
-                    log.info("%s: %r was answered first (%s)", info.name, request.title, error.message)
+                    log.info("permission_raced", plugin=info.name, title=request.title, error=error.message)
 
 
 async def main(plugin: str) -> None:

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import logging
 import os
 import shlex
 import signal
@@ -13,10 +12,12 @@ from typing import TYPE_CHECKING
 
 import anyio
 import anyio.to_thread
+import structlog
 
 from aid import daemon, guard, speech
 from aid.client import connect, register_plugin
 from aid.launcher import PRELOAD, CommandLauncher, ForkserverLauncher, WorkerArgs, process_main
+from aid.log import configure_logging
 from aid.mcp import from_claude_config
 from aid.paths import default_paths
 from aid.plugins import Grant
@@ -53,6 +54,8 @@ if TYPE_CHECKING:
 
 ENV_CLIENT_SECRET = "AID_OIDC_CLIENT_SECRET"
 ENV_SESSION_SECRET = "AID_WEB_SESSION_SECRET"
+
+log = structlog.get_logger(__name__)
 
 
 def _env(values: Sequence[str]) -> dict[str, str]:
@@ -489,7 +492,7 @@ async def _serve(args: argparse.Namespace) -> None:
         )
         with anyio.open_signal_receiver(signal.SIGTERM, signal.SIGINT) as signals:
             async for signum in signals:
-                logging.getLogger("aid").info("%s: stopping workers", signal.Signals(signum).name)
+                log.info("stopping_workers", signal=signal.Signals(signum).name)
                 tg.cancel_scope.cancel()
                 return
 
@@ -541,14 +544,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     args = _parser().parse_args(head)
     args.agent_command = agent_command
     if args.command == "guard":
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+        configure_logging()
         try:
             anyio.run(guard.main, args.plugin)
         except AidError as error:
             raise SystemExit(f"aid guard: {error}") from None
         return
     if args.command in ("daemon", "web", "worker"):
-        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(processName)s %(name)s %(levelname)s %(message)s")
+        configure_logging()
         if args.command == "worker":
             process_main(WorkerArgs.from_json(sys.stdin.read()))
         else:

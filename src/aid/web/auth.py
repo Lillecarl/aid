@@ -6,12 +6,12 @@ allowlist get in; everyone else the provider knows is turned away at the callbac
 
 from __future__ import annotations
 
-import logging
 import secrets
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlsplit
 
+import structlog
 from authlib.integrations.starlette_client import OAuth, OAuthError
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
 
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from starlette.requests import HTTPConnection, Request
     from starlette.responses import Response
 
-log = logging.getLogger(__name__)
+log = structlog.get_logger(__name__)
 
 USER_KEY: Final = "user"
 CSRF_KEY: Final = "csrf"
@@ -100,17 +100,17 @@ async def callback(request: Request) -> Response:
     try:
         token = await request.app.state.oidc.authorize_access_token(request)
     except OAuthError as error:
-        log.warning("OIDC callback failed: %s", error)
+        log.warning("oidc_callback_failed", error=str(error))
         return PlainTextResponse("login failed", status_code=400)
     claims = cast("dict[str, Any]", token.get("userinfo") or {})
     email = allowed(claims, config)
     if email is None:
-        log.warning("refused login for %r", claims.get("email"))
+        log.warning("login_refused", email=claims.get("email"))
         return PlainTextResponse("this account may not use aid", status_code=403)
     request.session.clear()
     request.session[USER_KEY] = {"email": email, "name": str(claims.get("name") or email)}
     request.session[CSRF_KEY] = secrets.token_urlsafe(32)
-    log.info("login: %s", email)
+    log.info("login", email=email)
     return RedirectResponse("/", status_code=303)
 
 
