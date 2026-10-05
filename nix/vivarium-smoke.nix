@@ -37,7 +37,7 @@ let
     cd ${testsTree}/tests
     # Extra arguments replace the default test selection, so a phase can probe one test at a time.
     if [ $# -eq 0 ]; then set -- test_browser.py; fi
-    pytest "$@" -p no:cacheprovider --browser chromium -q --junitxml=/artifacts/junit/browser.xml
+    pytest "$@" -p no:cacheprovider -q --junitxml=/artifacts/junit/browser.xml
   '';
   dexConfig = pkgs.writeText "dex.json" (
     builtins.toJSON {
