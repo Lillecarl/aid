@@ -90,6 +90,8 @@ async def expect_chat_text(page: Page, text: str) -> None:
 NEEDLES = {"chromium": "chromium_headless_shell", "firefox": "firefox"}
 #: The sandbox forbids the namespaces chromium's sandbox needs, and its /dev/shm is tiny.
 CHROMIUM_ARGS = ["--no-sandbox", "--disable-dev-shm-usage"]
+#: The same namespaces forbid firefox's content sandbox: it dies on the first page without this.
+FIREFOX_ENV = {"MOZ_DISABLE_CONTENT_SANDBOX": "1"}
 
 
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
@@ -127,7 +129,9 @@ async def browser(browser_name: str) -> AsyncIterator[Browser]:
         pytest.skip(f"no {browser_name} under PLAYWRIGHT_BROWSERS_PATH={root}")
     async with async_playwright() as p:
         launched = await {"chromium": p.chromium, "firefox": p.firefox}[browser_name].launch(
-            headless=True, args=CHROMIUM_ARGS if browser_name == "chromium" else []
+            headless=True,
+            args=CHROMIUM_ARGS if browser_name == "chromium" else [],
+            env={**os.environ, **FIREFOX_ENV} if browser_name == "firefox" else None,
         )
         yield launched
         await launched.close()
