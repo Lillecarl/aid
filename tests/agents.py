@@ -88,11 +88,12 @@ summarizer = Agent(FunctionModel(_summarize, stream_function=_summarize_stream))
 
 
 async def _think(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaThinkingCalls]:
-    """A thinker for the visibility tests: one thought, then the test's gate file, then the answer."""
-    yield {0: DeltaThinkingPart(content="hmm, let me think")}
+    """A thinker for the visibility tests: a thought, then the test's gate file, then the rest."""
+    yield {0: DeltaThinkingPart(content="hmm, ")}
     gate = anyio.Path(os.environ["AID_THINK_GATE"])
     while not await gate.exists():  # noqa: ASYNC110 -- the gate is a file the test drops; no event crosses the worker boundary
         await anyio.sleep(0.1)
+    yield {0: DeltaThinkingPart(content="let me think")}
     yield "thought through"
 
 

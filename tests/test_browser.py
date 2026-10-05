@@ -258,11 +258,14 @@ async def test_thinking_visible_until_done(page: Page, session_daemon: Paths, tm
     streaming = page.locator("details.thought[open]")
     await streaming.wait_for(timeout=TIMEOUT * 1000)
     assert "hmm" in (await streaming.text_content() or "")
+    # Deltas join one box per turn instead of spawning one each.
+    assert await page.locator("details.thought").count() == 1
     await anyio.Path(gate).write_text("go")
     await wait_for_idle(page)
     await page.locator("details.thought:not([open])").wait_for(timeout=TIMEOUT * 1000)
     assert await page.locator("details.thought[open]").count() == 0
-    assert await page.locator("details.thought").count() >= 1
+    assert await page.locator("details.thought").count() == 1
+    assert "let me think" in (await page.locator("details.thought").text_content() or "")
 
 
 async def test_thinking_collapsed_mode(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
@@ -276,3 +279,16 @@ async def test_thinking_collapsed_mode(page: Page, session_daemon: Paths, tmp_pa
     await wait_for_idle(page)
     assert await page.locator("details.thought").count() >= 1
     assert await page.locator("details.thought[open]").count() == 0
+
+
+async def test_thinking_expands_on_demand(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    gate = tmp_path / "think-gate"
+    await seed_session(session_daemon, tmp_path, "unfold", "agents:thinker", AID_THINK_GATE=str(gate))
+    await open_session(page, "unfold")
+    await send_chat(page, "think")
+    await page.locator("details.thought").wait_for(timeout=TIMEOUT * 1000)
+    await anyio.Path(gate).write_text("go")
+    await wait_for_idle(page)
+    await page.locator("details.thought:not([open])").wait_for(timeout=TIMEOUT * 1000)
+    await page.locator("details.thought summary").click()
+    await page.locator("details.thought[open]").wait_for(timeout=TIMEOUT * 1000)
