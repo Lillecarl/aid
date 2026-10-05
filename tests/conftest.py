@@ -23,19 +23,12 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Generator, Iterator
     from typing import Any
 
-    from playwright.async_api import Browser, Page
-
     from aid.speech import Recognizer
 
 TESTS = Path(__file__).parent
 
 # The dex/app stack both the HTTP tests and the browser tests boot; its fixtures come from there.
-pytest_plugins = ["tests.web_harness"]
-
-try:
-    from playwright.async_api import async_playwright
-except ImportError:
-    async_playwright = None
+pytest_plugins = ["tests.web_harness", "tests.browser_harness"]
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -63,62 +56,9 @@ def test_failed(request: pytest.FixtureRequest) -> bool:
     return report is not None and bool(report.failed)
 
 
-#: What `--browser` accepts: full chromium is never needed, its headless shell runs the suite.
-BROWSERS = ("chromium", "firefox")
-#: How the fixture finds the browser the Nix shell provides in the requested browser's directory.
-NEEDLES = {"chromium": "chromium_headless_shell", "firefox": "firefox"}
-#: The sandbox forbids the namespaces chromium's sandbox needs, and its /dev/shm is tiny.
-CHROMIUM_ARGS = ["--no-sandbox", "--disable-dev-shm-usage"]
-
-
 @pytest.fixture(scope="session")
-def browser_name(request: pytest.FixtureRequest) -> str:
-    name = request.config.getoption("--browser")
-    assert name in BROWSERS, f"--browser={name} is not one of {BROWSERS}"
-    return name
-
-
-def browsers_root() -> Path | None:
-    value = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if value is None:
-        return None
-    root = Path(value)
-    return root if root.is_dir() else None
-
-
-@pytest.fixture
-async def browser(browser_name: str) -> AsyncIterator[Browser]:
-    """A real browser for the test: function-scoped, because async fixtures run on the function-scoped
-    loop anyio provides. Skips when the Nix shell provides no browser."""
-    if async_playwright is None:
-        pytest.skip("playwright is not installed")
-    root = browsers_root()
-    needle = NEEDLES[browser_name]
-    if root is None or not list(root.glob(f"{needle}-*")):
-        pytest.skip(f"no {browser_name} under PLAYWRIGHT_BROWSERS_PATH={root}")
-    async with async_playwright() as p:
-        launched = await {"chromium": p.chromium, "firefox": p.firefox}[browser_name].launch(
-            headless=True, args=CHROMIUM_ARGS if browser_name == "chromium" else []
-        )
-        yield launched
-        await launched.close()
-
-
-@pytest.fixture
-async def page(browser: Browser, tmp_path: Path, request: pytest.FixtureRequest) -> AsyncIterator[Page]:
-    """A fresh browser tab: screenshots on failure, into the test's directory."""
-    context = await browser.new_context(viewport={"width": 1280, "height": 900})
-    chat = await context.new_page()
-    yield chat
-    if test_failed(request):
-        shot = tmp_path / "browser-failure.png"
-        await chat.screenshot(path=str(shot))
-        print(f"\nbrowser failure screenshot: {shot}")
-    await context.close()
-
-
-@pytest.fixture
 def anyio_backend() -> str:
+    # Session scope: the plugin asks for it while setting up session-scoped async fixtures too.
     return "asyncio"
 
 
@@ -156,6 +96,23 @@ async def daemon(paths: Paths, launcher: ForkserverLauncher) -> AsyncIterator[Pa
     async with anyio.create_task_group() as tg:
         await tg.start(Daemon(paths, launcher).serve)
         yield paths
+        tg.cancel_scope.cancel()
+
+
+@pytest.fixture(scope="session")
+def session_paths(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Paths]:
+    # ipc:// paths must fit in sun_path (108 bytes); the factory's numbered directories can be longer.
+    runtime = Path(tempfile.mkdtemp(prefix="aid-"))
+    yield Paths(runtime_dir=runtime, state_dir=tmp_path_factory.mktemp("state"))
+    shutil.rmtree(runtime, ignore_errors=True)
+
+
+@pytest.fixture(scope="session")
+async def session_daemon(session_paths: Paths, launcher: ForkserverLauncher) -> AsyncIterator[Paths]:
+    """One daemon for the whole browser run: its sessions outlive any single test."""
+    async with anyio.create_task_group() as tg:
+        await tg.start(Daemon(session_paths, launcher).serve)
+        yield session_paths
         tg.cancel_scope.cancel()
 
 

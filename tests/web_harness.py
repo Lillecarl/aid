@@ -112,13 +112,14 @@ async def running_dex(tmp_path: Path, web_url: str) -> AsyncGenerator[Dex]:
             log.close()
 
 
-@pytest.fixture
-async def web(
-    daemon: Paths, tmp_path: Path, speech_recognizer: Recognizer | None, grammars: Grammars | None
-) -> AsyncIterator[Web]:
+@asynccontextmanager
+async def running_web(
+    daemon: Paths, home: Path, recognizer: Recognizer | None, grammars: Grammars | None
+) -> AsyncGenerator[Web]:
+    """Dex plus the app on an ephemeral port: one boot path for the per-test and per-session fixtures."""
     web_port = free_port()
     web_url = f"http://127.0.0.1:{web_port}"
-    async with running_dex(tmp_path, web_url) as dex_server:
+    async with running_dex(home, web_url) as dex_server:
         oidc = OidcConfig(
             issuer=dex_server.issuer,
             client_id="aid",
@@ -133,7 +134,7 @@ async def web(
                 secrets.token_hex(32),
                 daemon,
                 assets=ASSETS,
-                recognizer=speech_recognizer,
+                recognizer=recognizer,
                 grammars=grammars,
             )
             tg.start_soon(lambda: serve(app, f"127.0.0.1:{web_port}", shutdown=shutdown))
@@ -141,6 +142,26 @@ async def web(
                 await wait_for(f"{web_url}/healthz")
             yield Web(web_url)
             shutdown.set()
+
+
+@pytest.fixture
+async def web(
+    daemon: Paths, tmp_path: Path, speech_recognizer: Recognizer | None, grammars: Grammars | None
+) -> AsyncIterator[Web]:
+    async with running_web(daemon, tmp_path, speech_recognizer, grammars) as stack:
+        yield stack
+
+
+@pytest.fixture(scope="session")
+async def session_web(
+    session_daemon: Paths,
+    tmp_path_factory: pytest.TempPathFactory,
+    speech_recognizer: Recognizer | None,
+    grammars: Grammars | None,
+) -> AsyncIterator[Web]:
+    """The stack once for the whole browser run: one URL, so one login covers every test."""
+    async with running_web(session_daemon, tmp_path_factory.mktemp("web"), speech_recognizer, grammars) as stack:
+        yield stack
 
 
 async def login(client: httpx.AsyncClient, web: Web, email: str) -> httpx.Response:
