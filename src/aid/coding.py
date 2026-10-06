@@ -10,9 +10,10 @@
             return Agent("deepseek:deepseek-chat", toolsets=[aid.coding_tools])
 
 Each aid session has one `Coding`: its directory, a pyedit session holding edits until `apply_edits`, a pyrun store
-for what `python` runs, and the session's permission mode. The worker sets it for each turn (`CODING`). Edits run
-in aid's own process through pyedit's library, so no code the agent writes runs there; `python` scripts run in a
-child process, and every command they start asks the permission mode first.
+for what `python` runs, a persistent shell for what `shell` runs, and the session's permission mode. The worker
+sets it for each turn (`CODING`). Edits run in aid's own process through pyedit's library, so no code the agent
+writes runs there; `python` scripts run in a child process, and every command they start asks the permission mode
+first. `shell` commands run in one bash held for the session, each asking permission as written.
 """
 
 from __future__ import annotations
@@ -47,6 +48,7 @@ from pyrun.host import run_script
 from pyrun.scope import Scope
 from pyrun.script import FILENAME as SCRIPT_FILENAME
 from pyrun.script import script_frames
+from pyrun.shell import ShellResult, ShellSession
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -59,6 +61,7 @@ if TYPE_CHECKING:
 
 READ_LIMIT: Final = 2000
 SCRIPT_TIME_LIMIT: Final = 600.0
+SHELL_TIME_LIMIT: Final = 600.0
 OUTPUTS_DIR: Final = "outputs"
 SPILL_LIMIT: Final = 32_000
 """Characters of a tool result sent to the model; the rest lives in a content-addressed file under the
@@ -116,6 +119,9 @@ class Coding:
     tasks: dict[str, BackgroundTask] = field(default_factory=dict[str, BackgroundTask])
     """Background tasks started this session, by id. They outlive their turn, and die with the worker."""
     task_seq: int = 0
+    shell: ShellSession | None = None
+    """The session's shell, started by the first `shell` call. `cd` and the environment persist between
+    calls; it dies with the worker, or sooner on a timeout, which the next call reports as a reset."""
     compact: Callable[[str], Awaitable[str]] | None = None
     """Summarize the conversation into a digest; the worker sets it per session, and `compact` calls it."""
     _lock: anyio.Lock = field(default_factory=anyio.Lock)
@@ -176,9 +182,9 @@ class Coding:
             self.always.add(remember)
         return option_id in (YES, ALWAYS)
 
-    async def close_tasks(self) -> None:
-        """Stop every running background task and reap it. The worker is going: shielded, so a shutdown
-        cancelling the close still leaves no process behind."""
+    async def close(self) -> None:
+        """Stop every running background task and the shell, reaping each. The worker is going: shielded, so
+        a shutdown cancelling the close still leaves no process behind."""
         with anyio.CancelScope(shield=True):
             async with anyio.create_task_group() as tg:
                 for task in self.tasks.values():
@@ -186,6 +192,24 @@ class Coding:
                         if task.runner.returncode is None:
                             task.runner.cancel()
                         tg.start_soon(_reap, task)
+                if self.shell is not None:
+                    tg.start_soon(self.shell.aclose)
+                    self.shell = None
+
+    async def shell_run(self, command: str, time_limit: float) -> str:
+        """Run `command` in the session's shell, starting it on first use, and report what it did."""
+        first = self.shell is None
+        if first:
+            self.shell = ShellSession(cwd=self.cwd, store=self.store)
+        assert self.shell is not None
+        return _render_shell(await self.shell.run(command, time_limit=time_limit), time_limit, first)
+
+    async def shell_restart(self) -> str:
+        """Kill the session's shell now; the next `shell` call starts fresh. `cd` and env reset."""
+        if self.shell is None:
+            return "the shell never started; nothing to restart"
+        await self.shell.restart()
+        return "shell restarted; cd and env reset"
 
     def resolve(self, path: str) -> Path:
         """A path the agent names: under the session's directory, a pyrun record in the store, or a spilled
@@ -622,6 +646,44 @@ async def _python_in_loop(coding: Coding, script: str, time_limit: float) -> str
     return f"in-loop finished after {elapsed:.1f}s:\n{body}"
 
 
+def _render_shell(result: ShellResult, time_limit: float, first: bool) -> str:
+    """A shell run as the agent reads it: how it ended, and whether the shell survived. A respawned shell
+    says so up front, since the `cd` and env the agent built are gone."""
+    body = result.output or "(no output)"
+    reset = "the shell restarted fresh (cd and env reset), then: " if result.reset and not first else ""
+    if result.timed_out:
+        return f"{reset}shell timed out after {time_limit}s; the shell was killed, and the next command starts fresh:\n{body}"
+    if result.code is None:
+        return f"{reset}shell ended during the command; the next command starts fresh:\n{body}"
+    return f"{reset}shell finished: exit {result.code} after {result.duration:.1f}s:\n{body}"
+
+
+async def shell(ctx: RunContext[Any], command: str, time_limit: float = SHELL_TIME_LIMIT) -> str:
+    """Run a command in the session's shell, and report what it did. The shell persists: `cd` and exported
+    variables stay for later calls, across turns. It starts in your working directory, without rc files.
+
+    Each call asks the session's permission first, judged as written; there is no remembering, since every
+    command differs. The command's stdin is empty, so anything interactive meets EOF. A timeout kills the
+    shell, and the next call starts fresh and says the state reset; restart it yourself with shell_restart."""
+    coding = _coding()
+    first_line = next((line for line in command.splitlines() if line.strip()), "(empty command)")
+    allowed = await coding.permit(
+        ctx.tool_call_id or "",
+        tool_name="shell",
+        title=first_line[:100],
+        input={"command": command},
+    )
+    if not allowed:
+        return "not allowed: the command stays unrun"
+    return await coding.shell_run(command, time_limit)
+
+
+async def shell_restart() -> str:
+    """Restart the session's shell now: kill it and start fresh. `cd` and env reset. Runs nothing itself,
+    so it asks no permission."""
+    return await _coding().shell_restart()
+
+
 async def background(
     ctx: RunContext[Any],
     argv: list[str],
@@ -750,6 +812,8 @@ coding_tools: FunctionToolset[Any] = FunctionToolset[Any](
         _retrying(apply_edits),
         _retrying(ask_user),
         _retrying(python),
+        _retrying(shell),
+        _retrying(shell_restart),
         _retrying(background),
         _retrying(task_output),
         _retrying(task_stop),

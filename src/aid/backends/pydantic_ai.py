@@ -350,4 +350,4 @@ async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> Async
             desired_max=spec.max_context if spec.max_context is not None else DEFAULT_DESIRED_MAX,
         )
     finally:
-        await coding.close_tasks()
+        await coding.close()

@@ -599,3 +599,28 @@ async def test_python_xonsh_pipes_and_pythons(daemon: Paths, tmp_path: Path) -> 
     output = str(result.output)
     assert output.startswith("xonsh finished: exit 0 after ")
     assert output.endswith("42\n")
+
+
+async def test_shell_persists_state_across_turns_and_restarts(daemon: Paths, tmp_path: Path) -> None:
+    (tmp_path / "sub").mkdir()
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            made = await session.run(plan(("shell", {"command": "cd sub && pwd && export AID_E2E=1"})))
+            kept = await session.run(plan(("shell", {"command": 'echo "in $(basename $(pwd)):$AID_E2E"'})))
+            restarted = await session.run(plan(("shell_restart", {}), ("shell", {"command": "pwd"})))
+    assert "shell finished: exit 0 after " in str(made.output)
+    assert str(tmp_path / "sub") in str(made.output)
+    assert str(kept.output).endswith("in sub:1\n")
+    reset, back = str(restarted.output).split("\n=====\n")
+    assert reset == "shell restarted; cd and env reset"
+    assert back.endswith(f"{tmp_path}\n")
+
+
+async def test_shell_deny_refuses(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder"))
+            result = await session.run(plan(("shell", {"command": "touch made"})))
+    assert str(result.output) == "not allowed: the command stays unrun"
+    assert not (tmp_path / "made").exists()
