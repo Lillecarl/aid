@@ -26,6 +26,8 @@ dependencies = [
   "pyrun",
   # aid.coding: background tasks run through shellous, in the worker.
   "shellous",
+  # aid.coding: the xonsh mode of the python tool runs `python -m xonsh`.
+  "xonsh",
   # aid web's colours: pymux's theme roles, and the catppuccin styles a pymux theme can name.
   "pymux[catppuccin]",
   "pyzmq>=27",

@@ -491,3 +491,111 @@ async def test_background_dies_with_the_worker(daemon: Paths, tmp_path: Path) ->
             # A reaped child leaves /proc; an orphaned one stays. Poll for gone.
             while await anyio.Path(f"/proc/{pid}").exists():  # noqa: ASYNC110 -- no event fires when a foreign pid dies
                 await anyio.sleep(0.2)
+
+
+async def test_python_in_loop_runs_in_the_worker(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(plan(("python", {"script": 'print("hi")', "mode": "in-loop"})))
+    assert str(result.output).startswith("in-loop finished after ")
+    assert str(result.output).endswith("hi\n")
+
+
+async def test_python_in_loop_sees_aid_itself(daemon: Paths, tmp_path: Path) -> None:
+    # The trust model in one assertion: in-loop code shares the worker's imports, so no gate can contain
+    # it. Whole-script permit is review, not containment.
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(("python", {"script": "import aid.coding\nprint(aid.coding.TASK_POLL)", "mode": "in-loop"}))
+            )
+    assert "\n0.2\n" in str(result.output)
+
+
+async def test_python_in_loop_timeout(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(
+                    (
+                        "python",
+                        {
+                            "script": "import asyncio\nawait asyncio.sleep(30)",
+                            "mode": "in-loop",
+                            "time_limit": 0.2,
+                        },
+                    )
+                )
+            )
+    assert str(result.output).startswith("in-loop timed out after 0.2s")
+
+
+async def test_python_in_loop_failure_reports(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(plan(("python", {"script": "1/0", "mode": "in-loop"})))
+    output = str(result.output)
+    assert output.startswith("in-loop failed after ")
+    assert "ZeroDivisionError" in output
+
+
+async def test_python_in_loop_asks_for_the_whole_script(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ASK))
+            events: list[aid.SessionEvent] = []
+            async for event in session.stream(plan(("python", {"script": 'print("hi")', "mode": "in-loop"}))):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    await session.answer(event.request_id, "yes")
+    [request] = [e for e in events if isinstance(e, PermissionRequest)]
+    assert (request.tool_name, request.title, request.input) == (
+        "python",
+        'in-loop: print("hi")',
+        {"mode": "in-loop", "script": 'print("hi")'},
+    )
+    last = events[-1]
+    assert isinstance(last, Output)
+    assert str(last.output).endswith("hi\n")
+
+
+async def test_python_in_loop_deny_refuses(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder"))
+            result = await session.run(plan(("python", {"script": 'print("hi")', "mode": "in-loop"})))
+    assert str(result.output) == "not allowed: the script stays unrun"
+
+
+async def test_python_sync_runs_isolated(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(plan(("python", {"script": 'print("hi")', "mode": "sync"})))
+    output = str(result.output)
+    assert output.startswith("sync finished: exit 0 after ")
+    assert output.endswith("hi\n")
+
+
+async def test_python_sync_nonzero_reports(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(plan(("python", {"script": "raise SystemExit(3)", "mode": "sync"})))
+    assert str(result.output).startswith("sync finished: exit 3 after ")
+
+
+async def test_python_xonsh_pipes_and_pythons(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(("python", {"script": "echo hello | grep hello\necho @(40+2)", "mode": "xonsh"}))
+            )
+    output = str(result.output)
+    assert output.startswith("xonsh finished: exit 0 after ")
+    assert output.endswith("42\n")

@@ -17,8 +17,13 @@ child process, and every command they start asks the permission mode first.
 
 from __future__ import annotations
 
+import ast
+import contextlib
 import functools
 import hashlib
+import inspect
+import io
+import linecache
 import re
 import shlex
 import sys
@@ -26,18 +31,22 @@ import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import anyio
 import anyio.to_thread
 from pydantic_ai import FunctionToolset, ModelRetry, RunContext
 from pyedit.session import EditSession  # pyright: ignore[reportMissingTypeStubs] -- annotated, no py.typed
-from shellous import Runner, sh
+from shellous import ResultError, Runner, sh
 
+import pyrun
 from aid.confine import inside
 from aid.protocol import AidError, PermissionChoice, PermissionDecider, PermissionDecision, PermissionRequest, clip
 from aid.spec import PermissionMode
 from pyrun.host import run_script
+from pyrun.scope import Scope
+from pyrun.script import FILENAME as SCRIPT_FILENAME
+from pyrun.script import script_frames
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -492,11 +501,16 @@ async def ask_user(
     return "Nobody answered; proceed with your best judgment."
 
 
-async def python(ctx: RunContext[Any], script: str, time_limit: float = SCRIPT_TIME_LIMIT) -> str:
-    """Run an async Python script that starts processes through pyrun, in your working directory. Returns a report
-    of every process it ran (argv, exit, time, output clipped to head and tail, a record id) and what it printed.
+async def python(
+    ctx: RunContext[Any],
+    script: str,
+    time_limit: float = SCRIPT_TIME_LIMIT,
+    mode: Literal["async", "sync", "xonsh", "in-loop"] = "async",
+) -> str:
+    """Run a Python script in your working directory, and report what it did.
 
-    Top-level `await` works; `run`, `cmd`, `sh`, `pyrun` and `Path` are in scope. There is no shell: argv only.
+    `async` runs an isolated async script through pyrun: top-level `await` works, and `run`, `cmd`, `sh`,
+    `pyrun` and `Path` are in scope. There is no shell: argv only.
 
         r = await run("git", "status", "--short")      # r.text, r.lines, r.json(), r.code; non-zero raises Failed
         await run("grep", "x", "f", check=False)        # a non-zero exit is a result
@@ -507,10 +521,28 @@ async def python(ctx: RunContext[Any], script: str, time_limit: float = SCRIPT_T
         await sh("echo $HOME")                          # the one way to use a shell
 
     Each command asks the session's permission first; a refused one raises Denied. Everything a script starts
-    dies when it ends or after `time_limit` seconds. Read a record's full output with read("<id>/stdout")."""
+    dies when it ends or after `time_limit` seconds. Read a record's full output with read("<id>/stdout").
+
+    `sync` runs an isolated plain script instead, for code with no `await` in it. `xonsh` runs the script
+    as xonsh, the Python-powered shell: pipelines, globs and `!` subprocesses read shell-like, `@()` holds
+    Python. `in-loop` runs the async script in the worker's own event loop: same scope as `async`, but no
+    isolation. In-loop code shares the process, so it can inspect aid itself yet no gate can contain it; code
+    that never awaits cannot be timed out, and then the worker needs a restart. The other modes ask per
+    command; `sync`, `xonsh` and `in-loop` ask once for the whole script, which the person judges as written."""
     coding = _coding()
     tool_call_id = ctx.tool_call_id or ""
+    if mode == "async":
+        return await _python_async(coding, tool_call_id, script, time_limit)
+    if await _permit_script(coding, tool_call_id, mode, script):
+        if mode == "sync":
+            return await _python_oneshot(coding, [sys.executable, "-c", script], mode, time_limit)
+        if mode == "xonsh":
+            return await _python_oneshot(coding, [sys.executable, "-m", "xonsh", "-c", script], mode, time_limit)
+        return await _python_in_loop(coding, script, time_limit)
+    return "not allowed: the script stays unrun"
 
+
+async def _python_async(coding: Coding, tool_call_id: str, script: str, time_limit: float) -> str:
     async def policy(command: Command) -> bool:
         return await coding.permit(
             tool_call_id,
@@ -524,6 +556,70 @@ async def python(ctx: RunContext[Any], script: str, time_limit: float = SCRIPT_T
         script, policy=policy, cwd=coding.cwd, store=coding.store, time_limit=time_limit, python=sys.executable
     )
     return report.render()
+
+
+async def _permit_script(coding: Coding, tool_call_id: str, mode: str, script: str) -> bool:
+    """One permit for the whole script: modes whose internals no gate can see are judged as written."""
+    first = next((line for line in script.splitlines() if line.strip()), "(empty script)")
+    return await coding.permit(
+        tool_call_id,
+        tool_name="python",
+        title=f"{mode}: {first[:80]}",
+        input={"mode": mode, "script": script},
+    )
+
+
+async def _python_oneshot(coding: Coding, argv: list[str], mode: str, time_limit: float) -> str:
+    """Run argv once as a child and report exit, time and output. Awaited, so shellous's timeout is the
+    same task that waits: it cancels no stranger."""
+    started = anyio.current_time()
+    try:
+        out = await sh(argv[0], *argv[1:]).set(cwd=str(coding.cwd), timeout=time_limit)
+        code: int | None = 0
+    except ResultError as error:
+        out, code = error.result.output, error.result.exit_code
+    except TimeoutError:
+        return f"{mode} timed out after {time_limit}s."
+    body = str(out) or "(no output)"
+    return f"{mode} finished: exit {code} after {anyio.current_time() - started:.1f}s:\n{body}"
+
+
+async def _python_in_loop(coding: Coding, script: str, time_limit: float) -> str:
+    """Eval the script in the worker's loop, in pyrun's namespace and a scope of its own: the scope kills
+    what the script leaves running, and records it under the session's store. Prints are caught; failures
+    carry the script's own frames."""
+    linecache.cache[SCRIPT_FILENAME] = (len(script), None, script.splitlines(keepends=True), SCRIPT_FILENAME)
+    namespace: dict[str, Any] = {
+        "__name__": "__main__",
+        "run": pyrun.run,
+        "cmd": pyrun.cmd,
+        "sh": pyrun.sh,
+        "pyrun": pyrun,
+        "Path": Path,
+    }
+    code = compile(script, SCRIPT_FILENAME, "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
+    printed = io.StringIO()
+    started = anyio.current_time()
+    failure: Exception | None = None
+    finished = False
+    scope = uuid.uuid4().hex[:6]
+    with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
+        async with Scope(id=f"loop-{scope}", store=coding.store, cwd=coding.cwd, policy=None):
+            try:
+                with anyio.move_on_after(time_limit):
+                    outcome = eval(code, namespace)
+                    if inspect.iscoroutine(outcome):
+                        await outcome
+                    finished = True
+            except Exception as error:
+                failure = error
+    elapsed = anyio.current_time() - started
+    body = printed.getvalue() or "(no output)"
+    if failure is not None:
+        return f"in-loop failed after {elapsed:.1f}s:\n{body}\nerror:\n{script_frames(failure)}"
+    if not finished:
+        return f"in-loop timed out after {time_limit}s:\n{body}"
+    return f"in-loop finished after {elapsed:.1f}s:\n{body}"
 
 
 async def background(
