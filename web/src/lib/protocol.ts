@@ -38,7 +38,7 @@ export type SessionEvent =
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "PermissionDecider".
  */
-export type PermissionDecider = "person" | "policy" | "timeout" | "cancel" | "terminal" | "plugin";
+export type PermissionDecider = "person" | "policy" | "timeout" | "auto" | "cancel" | "terminal" | "plugin";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "JsonValue".
@@ -196,6 +196,7 @@ export interface ToolInfo {
 export interface PydanticAISpec {
   agent?: string | null;
   aid_tools?: boolean;
+  ask_autoselect_after?: number;
   cwd: string;
   env?: {
     [k: string]: string;
@@ -408,6 +409,7 @@ export interface PermissionChoice {
   kind: string;
   name: string;
   option_id: string;
+  recommended: boolean;
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema

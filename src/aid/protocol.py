@@ -346,6 +346,8 @@ class PermissionChoice(_Message):
     kind: str
     """ACP's option kind (allow_once, allow_always, reject_once, reject_always), or `ask_once` for an
     `ask_user` alternative, which is neither an approval nor a refusal."""
+    recommended: bool = False
+    """The `ask_user` alternative picked automatically when nobody answers in time."""
 
 
 class PermissionRequest(_Message):
@@ -369,6 +371,8 @@ class PermissionDecider(StrEnum):
     """The session's permission mode answered, with no one asked."""
     TIMEOUT = "timeout"
     """Nobody answered in time; the request was refused."""
+    AUTO = "auto"
+    """Nobody answered in time; the `ask_user` tool picked the recommended option."""
     CANCEL = "cancel"
     """The turn ended first."""
     TERMINAL = "terminal"

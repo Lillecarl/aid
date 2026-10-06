@@ -1212,12 +1212,17 @@
         },
         "option_id": {
           "type": "string"
+        },
+        "recommended": {
+          "default": false,
+          "type": "boolean"
         }
       },
       "required": [
         "option_id",
         "name",
-        "kind"
+        "kind",
+        "recommended"
       ],
       "title": "PermissionChoice",
       "type": "object"
@@ -1227,6 +1232,7 @@
         "person",
         "policy",
         "timeout",
+        "auto",
         "cancel",
         "terminal",
         "plugin"
@@ -1438,6 +1444,11 @@
         "aid_tools": {
           "default": true,
           "type": "boolean"
+        },
+        "ask_autoselect_after": {
+          "default": 240.0,
+          "exclusiveMinimum": 0,
+          "type": "number"
         },
         "cwd": {
           "type": "string"

@@ -69,6 +69,8 @@ class Coding:
     mode: PermissionMode
     timeout: float
     waits: PermissionWaits
+    autoselect_after: float = 240.0
+    """Seconds an `ask_user` question with a recommended option waits for a person before it picks it."""
     edits: EditSession = field(init=False)
     emit: Emit | None = None
     """The running turn's; the worker sets it before each turn."""
@@ -336,29 +338,45 @@ async def apply_edits(ctx: RunContext[Any]) -> str:
     return f"wrote {', '.join(files)}"
 
 
-async def ask_user(ctx: RunContext[Any], question: str, options: list[str] | None = None) -> str:
+async def ask_user(
+    ctx: RunContext[Any], question: str, options: list[str] | None = None, recommended: str | None = None
+) -> str:
     """Ask the person watching the session one question, and wait for their answer. `options` names the
-    alternatives; empty asks open-ended. The answer names their pick, their own words, or both; when nobody
-    answers in time, it says so, and you proceed with your best judgment."""
+    alternatives; empty asks open-ended. `recommended` names the option picked automatically when nobody
+    answers in time; the answer then says it was picked for them. The answer names their pick, their own
+    words, or both; when nobody answers in time with no recommendation, it says so, and you proceed with
+    your best judgment."""
     coding = _coding()
     if coding.mode is PermissionMode.DENY:
         raise AidError("questions_declined", "this session declines questions; proceed with your best judgment")
     names = options or []
+    if recommended is not None and recommended not in names:
+        raise AidError("unknown_option", f"{recommended!r} is not one of the options; name one of them")
     if coding.mode is not PermissionMode.ASK or coding.emit is None:
         return "No one is watching; proceed with your best judgment."
+    picked_id = str(names.index(recommended)) if recommended is not None else None
     request = PermissionRequest(
         request_id=uuid.uuid4().hex,
         tool_call_id=ctx.tool_call_id or "",
         tool_name="ask_user",
         title=question,
-        options=[PermissionChoice(option_id=str(i), name=name, kind="ask_once") for i, name in enumerate(names)],
+        options=[
+            PermissionChoice(option_id=str(i), name=name, kind="ask_once", recommended=name == recommended)
+            for i, name in enumerate(names)
+        ],
     )
     await coding.emit(request)
     decision = PermissionDecision(request_id=request.request_id, option_id=None, by=PermissionDecider.TIMEOUT)
-    with anyio.move_on_after(coding.timeout):
+    # The recommendation fires first; a shorter session timeout refuses instead, with nobody to pick from.
+    autoselect = picked_id is not None and coding.autoselect_after < coding.timeout
+    with anyio.move_on_after(coding.autoselect_after if autoselect else coding.timeout):
         decision = await coding.waits.wait(request)
+    if decision.by is PermissionDecider.TIMEOUT and autoselect:
+        decision = PermissionDecision(request_id=request.request_id, option_id=picked_id, by=PermissionDecider.AUTO)
     await coding.emit(decision)
     picked = names[int(decision.option_id)] if decision.option_id is not None else None
+    if decision.by is PermissionDecider.AUTO and picked is not None:
+        return f'Nobody answered in time; proceeding with the recommended option "{picked}".'
     if picked is not None and decision.text:
         return f'The person picked "{picked}" and added: {decision.text}'
     if picked is not None:

@@ -331,3 +331,72 @@ async def test_ask_user_unanswered_in_time(daemon: Paths, tmp_path: Path) -> Non
     assert str(result.output) == "Nobody answered; proceed with your best judgment."
     decision = next(e for e in history if isinstance(e, PermissionDecision))
     assert (decision.option_id, decision.by) == (None, PermissionDecider.TIMEOUT)
+
+
+async def test_ask_user_autoselects_recommended(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create(
+                "coder",
+                py_spec(tmp_path, "agents:coder", PermissionMode.ASK, ask_autoselect_after=0.2),
+            )
+            events: list[aid.SessionEvent] = []
+            async for event in session.stream(
+                plan(
+                    (
+                        "ask_user",
+                        {
+                            "question": "Which database?",
+                            "options": ["postgres", "sqlite"],
+                            "recommended": "sqlite",
+                        },
+                    )
+                )
+            ):
+                events.append(event)
+    [request] = [e for e in events if isinstance(e, PermissionRequest)]
+    assert [o.recommended for o in request.options] == [False, True]
+    assert PermissionDecision(request_id=request.request_id, option_id="1", by=PermissionDecider.AUTO) in events
+    last = events[-1]
+    assert isinstance(last, Output)
+    assert str(last.output) == 'Nobody answered in time; proceeding with the recommended option "sqlite".'
+
+
+async def test_ask_user_person_beats_autoselect(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ASK))
+            events: list[aid.SessionEvent] = []
+            async for event in session.stream(
+                plan(
+                    (
+                        "ask_user",
+                        {
+                            "question": "Which database?",
+                            "options": ["postgres", "sqlite"],
+                            "recommended": "sqlite",
+                        },
+                    )
+                )
+            ):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    await session.answer(event.request_id, "0")
+    last = events[-1]
+    assert isinstance(last, Output)
+    assert str(last.output) == 'The person picked "postgres".'
+
+
+async def test_ask_user_rejects_unknown_recommended(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(
+                    (
+                        "ask_user",
+                        {"question": "Which database?", "options": ["postgres"], "recommended": "mysql"},
+                    )
+                )
+            )
+    assert "is not one of the options" in str(result.output)

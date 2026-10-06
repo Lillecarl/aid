@@ -118,6 +118,8 @@ class PydanticAISpec(_Spec):
     permission: PermissionMode = PermissionMode.DENY
     """How aid answers what `aid.coding` tools ask: each command a `python` script starts, each edit applied."""
     permission_timeout: Annotated[float, Field(gt=0)] = 1800
+    ask_autoselect_after: Annotated[float, Field(gt=0)] = 240.0
+    """Seconds an `ask_user` question with a recommended option waits for a person before it picks it."""
     max_context: Annotated[int, Field(gt=0)] | None = None
     """Tokens the context gauge calls 100%: rule of thumb half the model's window. None takes a conservative
     backend default."""

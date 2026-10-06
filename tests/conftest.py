@@ -140,6 +140,7 @@ def py_spec(
     permission: PermissionMode = PermissionMode.DENY,
     *,
     permission_timeout: float = 1800,
+    ask_autoselect_after: float = 240.0,
     **env: str,
 ) -> PydanticAISpec:
     return PydanticAISpec(
@@ -149,6 +150,7 @@ def py_spec(
         env=env,
         permission=permission,
         permission_timeout=permission_timeout,
+        ask_autoselect_after=ask_autoselect_after,
     )
 
 

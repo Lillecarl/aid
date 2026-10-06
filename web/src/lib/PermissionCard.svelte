@@ -13,6 +13,7 @@
     person: "",
     policy: " by the session's policy",
     timeout: ": nobody answered in time",
+    auto: ": nobody answered in time, picked automatically",
     cancel: ": the turn ended",
     terminal: "",
     plugin: " by a plugin",
@@ -22,6 +23,8 @@
   let sending = $state(false);
   let error = $state("");
   let words = $state("");
+
+  const recommended = $derived(request.options.find((o) => o.recommended)?.name);
 
   const shell = $derived(command(request.input));
   const chosen = $derived(
@@ -70,13 +73,17 @@
               ? "reject"
               : ""}
           disabled={sending}
-          onclick={() => answer(option.option_id, words || null)}>{option.name}</button
+          onclick={() => answer(option.option_id, words || null)}
+          >{option.name}{#if option.recommended}{" (recommended)"}{/if}</button
         >
       {/each}
       <button type="button" disabled={sending} onclick={() => answer(null, null)} title="Cancel the request">
         Cancel
       </button>
     </div>
+    {#if decision === null && recommended}
+      <div class="note">If nobody answers, {recommended} is picked automatically.</div>
+    {/if}
     <div class="words">
       <input
         type="text"
@@ -164,6 +171,10 @@
   }
   .decided {
     color: var(--muted);
+  }
+  .note {
+    color: var(--muted);
+    font-size: 0.85em;
   }
   .error {
     color: var(--bad);

@@ -336,6 +336,7 @@ async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> Async
         outputs=Path(state_dir) / OUTPUTS_DIR,
         mode=spec.permission,
         timeout=spec.permission_timeout,
+        autoselect_after=spec.ask_autoselect_after,
         waits=PermissionWaits(),
     )
     yield PydanticAIBackend(
