@@ -32,6 +32,7 @@ import anyio
 import anyio.to_thread
 from pydantic_ai import FunctionToolset, ModelRetry, RunContext
 from pyedit.session import EditSession  # pyright: ignore[reportMissingTypeStubs] -- annotated, no py.typed
+from shellous import Runner, sh
 
 from aid.confine import inside
 from aid.protocol import AidError, PermissionChoice, PermissionDecider, PermissionDecision, PermissionRequest, clip
@@ -55,8 +56,35 @@ SPILL_LIMIT: Final = 32_000
 session's outputs directory, named by the result. The head plus the path is stable across turns, so the
 prefix cache holds, and nothing is lost: the model reads the file with `read`."""
 YES, ALWAYS, NO = "yes", "always", "no"
+BACKGROUND_DIR: Final = "background"
+TASK_POLL: Final = 0.2
+"""Seconds between polls while task_output waits."""
+TASK_TAIL: Final = 30
+"""Output lines a running task's report carries; finished tasks report all of it (spilled past the limit)."""
 # A pyrun record, as a report names it: `<scope>.<n>/stdout`, or a scope's own file, `<scope>/printed`.
 _RECORD = re.compile(r"^(?P<scope>[0-9a-f]{6})(?:\.(?P<n>\d+))?/(?P<file>[\w.]+)$")
+
+
+@dataclass
+class BackgroundTask:
+    """A process the session started and did not wait for. Its output files live under the session's store,
+    so `read` reaches them; the runner stays open until the task is reaped, and reaping records how it ended."""
+
+    id: str
+    argv: list[str]
+    runner: Runner
+    stdout_file: Path
+    stderr_file: Path
+    time_limit: float | None
+    deadline: float | None
+    """When the time limit runs out; shellous's own timeout stays off, since it cancels the task that
+    started the runner, which long outlives a background start."""
+    started: float
+    finished: float | None = None
+    exit_code: int | None = None
+    timed_out: bool = False
+    stopped: bool = False
+    reaped: bool = False
 
 
 @dataclass
@@ -76,6 +104,9 @@ class Coding:
     """The running turn's; the worker sets it before each turn."""
     always: set[str] = field(default_factory=set[str])
     """Programs a person allowed for the rest of the session."""
+    tasks: dict[str, BackgroundTask] = field(default_factory=dict[str, BackgroundTask])
+    """Background tasks started this session, by id. They outlive their turn, and die with the worker."""
+    task_seq: int = 0
     compact: Callable[[str], Awaitable[str]] | None = None
     """Summarize the conversation into a digest; the worker sets it per session, and `compact` calls it."""
     _lock: anyio.Lock = field(default_factory=anyio.Lock)
@@ -136,6 +167,17 @@ class Coding:
             self.always.add(remember)
         return option_id in (YES, ALWAYS)
 
+    async def close_tasks(self) -> None:
+        """Stop every running background task and reap it. The worker is going: shielded, so a shutdown
+        cancelling the close still leaves no process behind."""
+        with anyio.CancelScope(shield=True):
+            async with anyio.create_task_group() as tg:
+                for task in self.tasks.values():
+                    if not task.reaped:
+                        if task.runner.returncode is None:
+                            task.runner.cancel()
+                        tg.start_soon(_reap, task)
+
     def resolve(self, path: str) -> Path:
         """A path the agent names: under the session's directory, a pyrun record in the store, or a spilled
         tool result in the outputs directory."""
@@ -157,6 +199,70 @@ def _coding() -> Coding:
         return CODING.get()
     except LookupError:
         raise AidError("no_coding", "aid's coding tools work only in an aid pydantic-ai session") from None
+
+
+def _task(task_id: str) -> BackgroundTask:
+    try:
+        return _coding().tasks[task_id]
+    except KeyError:
+        raise AidError("unknown_task", f"no background task {task_id!r}; tasks lists them") from None
+
+
+async def _read(path: Path) -> str:
+    try:
+        return await anyio.Path(path).read_text()
+    except OSError:
+        return ""
+
+
+async def _tail(path: Path, lines: int = TASK_TAIL) -> str:
+    return "\n".join((await _read(path)).splitlines()[-lines:])
+
+
+async def _reap(task: BackgroundTask) -> None:
+    """Reap a finished task and record how it ended. Shielded: a cancelled turn must not orphan the
+    bookkeeping while the process itself is already gone."""
+    if task.reaped:
+        return
+    task.reaped = True
+    with anyio.CancelScope(shield=True):
+        try:
+            await task.runner.__aexit__(None, None, None)
+        except TimeoutError:
+            task.timed_out = True
+    task.finished = anyio.current_time()
+    task.exit_code = task.runner.returncode
+
+
+async def _enforce(task: BackgroundTask) -> None:
+    """Kill a task past its deadline and reap it as timed out. The check runs wherever the agent touches
+    the task, so an over-limit task is already dead by the time its output is read."""
+    if task.runner.returncode is None and task.deadline is not None and anyio.current_time() >= task.deadline:
+        task.runner.cancel()
+        await _reap(task)
+        task.timed_out = True
+
+
+async def _report(task: BackgroundTask) -> str:
+    """What the agent reads: running tasks a tail of their output so far, finished ones how they ended and
+    all of their output (spilled past the limit by the tool wrapper)."""
+    name = shlex.join(task.argv)
+    if task.runner.returncode is None:
+        tail = await _tail(task.stdout_file)
+        return f"{task.id} is running (pid {task.runner.pid}): {name}\n{tail or '(no output yet)'}"
+    elapsed = (task.finished or task.started) - task.started
+    out = await _read(task.stdout_file)
+    err = await _read(task.stderr_file)
+    if task.timed_out:
+        head = f"{task.id} timed out after {task.time_limit}s and was killed: {name}"
+    elif task.stopped:
+        head = f"{task.id} stopped (exit {task.exit_code}): {name}"
+    else:
+        head = f"{task.id} finished: exit {task.exit_code} after {elapsed:.1f}s: {name}"
+    body = out or "(no output)"
+    if err:
+        body += f"\nstderr:\n{err}"
+    return f"{head}\n{body}"
 
 
 def numbered(text: str, offset: int, limit: int) -> str:
@@ -420,6 +526,97 @@ async def python(ctx: RunContext[Any], script: str, time_limit: float = SCRIPT_T
     return report.render()
 
 
+async def background(
+    ctx: RunContext[Any],
+    argv: list[str],
+    cwd: str | None = None,
+    env: dict[str, str] | None = None,
+    time_limit: float | None = None,
+) -> str:
+    """Start argv as a background task and return its id at once. The task outlives the turn: read its
+    output with task_output, stop it with task_stop, list them with tasks. It dies with the worker, or
+    sooner on its time limit, which kills it and reports the tail. argv only, no shell."""
+    coding = _coding()
+    if not argv:
+        raise AidError("no_command", "background needs an argv, like python needs a script")
+    directory = coding.cwd if cwd is None else inside(coding.cwd, cwd)
+    allowed = await coding.permit(
+        ctx.tool_call_id or "",
+        tool_name="background",
+        title=shlex.join(argv),
+        input={"argv": argv, "cwd": cwd or "."},
+        remember=Path(argv[0]).name,
+    )
+    if not allowed:
+        return "not allowed: the task stays unstarted"
+    coding.task_seq += 1
+    task_id = f"bg{coding.task_seq}"
+    task_dir = (coding.store / BACKGROUND_DIR / task_id).resolve()
+    await anyio.Path(task_dir).mkdir(parents=True, exist_ok=True)
+    cmd = sh(argv[0], *argv[1:]).set(cwd=str(directory))
+    if env:
+        cmd = cmd.env(**env)
+    runner = Runner(cmd.stdout(task_dir / "stdout").stderr(task_dir / "stderr"))
+    await runner.__aenter__()
+    coding.tasks[task_id] = BackgroundTask(
+        id=task_id,
+        argv=list(argv),
+        runner=runner,
+        stdout_file=task_dir / "stdout",
+        stderr_file=task_dir / "stderr",
+        time_limit=time_limit,
+        deadline=anyio.current_time() + time_limit if time_limit is not None else None,
+        started=anyio.current_time(),
+    )
+    return f"started {task_id}: {shlex.join(argv)} (pid {runner.pid})"
+
+
+async def task_output(task_id: str, wait: float | None = None) -> str:
+    """A background task's report: running tasks a tail of their output so far, finished ones how they
+    ended and all of their output. `wait` polls up to that many seconds for a running task to finish."""
+    task = _task(task_id)
+    await _enforce(task)
+    if task.runner.returncode is None and wait:
+        with anyio.move_on_after(wait):
+            while task.runner.returncode is None:
+                await _enforce(task)
+                await anyio.sleep(TASK_POLL)
+    if task.runner.returncode is not None and not task.reaped:
+        await _reap(task)
+    return await _report(task)
+
+
+async def task_stop(task_id: str) -> str:
+    """Stop a background task: SIGTERM, then kill. Reports how it ended. Stopping a finished task reports
+    its finish instead."""
+    task = _task(task_id)
+    await _enforce(task)
+    if task.runner.returncode is None:
+        task.stopped = True
+        task.runner.cancel()
+        await _reap(task)
+    return await _report(task)
+
+
+async def tasks() -> str:
+    """The session's background tasks, running and finished, with how each ended."""
+    coding = _coding()
+    if not coding.tasks:
+        return "no background tasks"
+    lines: list[str] = []
+    for task in coding.tasks.values():
+        if task.runner.returncode is None:
+            state = f"running (pid {task.runner.pid})"
+        elif task.timed_out:
+            state = "timed out"
+        elif task.stopped:
+            state = f"stopped (exit {task.exit_code})"
+        else:
+            state = f"finished (exit {task.exit_code})"
+        lines.append(f"{task.id}: {shlex.join(task.argv)} — {state}")
+    return "\n".join(lines)
+
+
 def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     """A tool's failure goes back to the model as a retry with the reason: an exception would end the run.
     Oversize text results spill to a file, so no turn carries more than a head plus a path."""
@@ -457,5 +654,9 @@ coding_tools: FunctionToolset[Any] = FunctionToolset[Any](
         _retrying(apply_edits),
         _retrying(ask_user),
         _retrying(python),
+        _retrying(background),
+        _retrying(task_output),
+        _retrying(task_stop),
+        _retrying(tasks),
     ]
 )

@@ -339,12 +339,15 @@ async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> Async
         autoselect_after=spec.ask_autoselect_after,
         waits=PermissionWaits(),
     )
-    yield PydanticAIBackend(
-        agent,
-        history_file,
-        history,
-        toolsets,
-        started,
-        coding,
-        desired_max=spec.max_context if spec.max_context is not None else DEFAULT_DESIRED_MAX,
-    )
+    try:
+        yield PydanticAIBackend(
+            agent,
+            history_file,
+            history,
+            toolsets,
+            started,
+            coding,
+            desired_max=spec.max_context if spec.max_context is not None else DEFAULT_DESIRED_MAX,
+        )
+    finally:
+        await coding.close_tasks()

@@ -400,3 +400,94 @@ async def test_ask_user_rejects_unknown_recommended(daemon: Paths, tmp_path: Pat
                 )
             )
     assert "is not one of the options" in str(result.output)
+
+
+async def test_background_outlives_its_turn(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            started = await session.run(plan(("background", {"argv": ["sleep", "30"]})))
+            assert str(started.output).startswith("started bg1: sleep 30 (pid ")
+            # A new turn: the task is still there, running.
+            running = await session.run(plan(("task_output", {"task_id": "bg1"})))
+            assert "bg1 is running" in str(running.output)
+            stopped = await session.run(plan(("task_stop", {"task_id": "bg1"})))
+            assert "bg1 stopped" in str(stopped.output)
+            listed = await session.run(plan(("tasks", {})))
+    assert "bg1: sleep 30 — stopped" in str(listed.output)
+
+
+async def test_background_output_returns_like_a_tool_call(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(
+                    ("background", {"argv": ["echo", "hello"]}),
+                    ("task_output", {"task_id": "bg1", "wait": 5}),
+                )
+            )
+    begun, report = str(result.output).split("\n=====\n")
+    assert begun.startswith("started bg1: echo hello (pid ")
+    assert report.startswith("bg1 finished: exit 0 after ")
+    assert "\nhello" in report
+
+
+async def test_background_timeout_kills(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(
+                    ("background", {"argv": ["sleep", "30"], "time_limit": 0.2}),
+                    ("task_output", {"task_id": "bg1", "wait": 5}),
+                )
+            )
+    _begun, report = str(result.output).split("\n=====\n")
+    assert report.startswith("bg1 timed out after 0.2s and was killed: sleep 30")
+
+
+async def test_background_asks_first(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ASK))
+            events: list[aid.SessionEvent] = []
+            async for event in session.stream(plan(("background", {"argv": ["echo", "hello"]}))):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    await session.answer(event.request_id, "yes")
+            await session.run(plan(("task_stop", {"task_id": "bg1"})))
+    [request] = [e for e in events if isinstance(e, PermissionRequest)]
+    assert (request.tool_name, request.title, [o.option_id for o in request.options]) == (
+        "background",
+        "echo hello",
+        ["yes", "always", "no"],
+    )
+
+
+async def test_background_deny_refuses(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder"))
+            result = await session.run(plan(("background", {"argv": ["echo", "hello"]})))
+    assert str(result.output) == "not allowed: the task stays unstarted"
+
+
+async def test_background_unknown_task(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(plan(("task_output", {"task_id": "bg9"})))
+    assert "no background task 'bg9'" in str(result.output)
+
+
+async def test_background_dies_with_the_worker(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            started = await session.run(plan(("background", {"argv": ["sleep", "120"]})))
+            pid = int(str(started.output).rsplit("(pid ", 1)[1].rstrip(")"))
+            await client.session("coder").delete()
+            # A reaped child leaves /proc; an orphaned one stays. Poll for gone.
+            while await anyio.Path(f"/proc/{pid}").exists():  # noqa: ASYNC110 -- no event fires when a foreign pid dies
+                await anyio.sleep(0.2)

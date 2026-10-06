@@ -24,6 +24,8 @@ dependencies = [
   # aid.coding: agents edit through pyedit's library and run processes through pyrun (./pyrun).
   "pyedit",
   "pyrun",
+  # aid.coding: background tasks run through shellous, in the worker.
+  "shellous",
   # aid web's colours: pymux's theme roles, and the catppuccin styles a pymux theme can name.
   "pymux[catppuccin]",
   "pyzmq>=27",
