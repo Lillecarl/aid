@@ -25,6 +25,14 @@
     rev = "fc6f1b51f1cc1ef35d492787535ae120296d3dd5";
     narHash = "sha256-Sr7o0oXreN5ax+HDHaE3t8oXhc7pH/uj1esw5Q0/8iw=";
   },
+  # xonsh, the Python-powered shell: 0.24.2, the latest release.
+  xonsh ? builtins.fetchTree {
+    type = "github";
+    owner = "xonsh";
+    repo = "xonsh";
+    rev = "d6a344b758ff1bf4fca8e9d32a61dd6b3b4b6254";
+    narHash = "sha256-6dLl2VDUyfoFVbnSpDxXgEhp+GpYab3yewMuq6Nd6oQ=";
+  },
   # Vivarium, the NixOS integration tests aid boots in UML guests. A local path, not a pin: one-man
   # project, and the checkout beside this one is what the tests run against.
   vivariumSrc ? ../nixidae/vivarium,
@@ -78,17 +86,24 @@ let
     inherit python;
     nixpkgsRoots = p.nixpkgsRootsFor {
       inherit python;
+      # xonsh declares no runtime dependencies, but its dev and doc extras name three packages this
+      # nixpkgs does not ship: nothing installs them (the renderer enables no extras), so they join exclude
+      # instead of failing the closure computation.
       projectRoots = p.projectRoots ++ [
         ./.
         ./pyrun
         pyedit
         shellous
+        xonsh
       ];
       exclude = p.suppliedNames ++ [
         "aid"
         "pyrun"
         "pyedit"
         "shellous"
+        "pre-commit"
+        "re-ver"
+        "runthis-sphinxext"
       ]
       ++ grammarsByName;
     }
@@ -102,6 +117,13 @@ let
         shellous = final.callPackage ./nix/shellous.nix {
           inherit (p) mkProject;
           src = shellous;
+        };
+        xonsh = final.callPackage ./nix/xonsh.nix {
+          inherit (p) mkProject;
+          src = xonsh;
+          ply = final.ply;
+          prompt_toolkit = final."prompt-toolkit";
+          pygments = final.pygments;
         };
         pyrun = final.callPackage ./pyrun {
           inherit (p) mkProject;
