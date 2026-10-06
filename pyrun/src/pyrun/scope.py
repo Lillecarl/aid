@@ -147,6 +147,28 @@ class _Tee:
 
 
 @dataclass
+class Spawned:
+    """A process a scope started, without pumps: the holder drains every PIPE it asked for, and the handle
+    itself holds no scope — no task group, no cancel scope — so entering it in one task and closing it in
+    another is sound. Closing kills what is left running and finalizes the record."""
+
+    id: str
+    record: Path
+    command: Command
+    process: Process
+    """anyio's handle: `process.stdout` and `process.stderr` are the pipes the holder drains."""
+    started: float = field(default_factory=time.monotonic)
+    ended: float | None = None
+
+    async def close(self) -> None:
+        """Kill whatever is left running and wait for it. Shielded, and safe to call twice: killing finds
+        nothing the second time, and waiting returns at once."""
+        with anyio.CancelScope(shield=True):
+            await terminate(ID_MARK, self.id)
+            await self.process.wait()
+
+
+@dataclass
 class Launched:
     """A process a scope started, until its record is closed."""
 
@@ -190,7 +212,7 @@ class Scope:
         self._count = 0
         self._cancel: anyio.CancelScope | None = None
         self._token: object = None
-        self._live: dict[str, Launched] = {}
+        self._live: dict[str, Spawned | Launched] = {}
         self._at_timeout: list[Running] = []
         """What was running when the scope's timeout struck."""
 
@@ -237,17 +259,20 @@ class Scope:
         return id, self.dir / str(self._count)
 
     @asynccontextmanager
-    async def launch(
+    async def spawn(
         self,
         command: Command,
         *,
         stdin: int,
         stdout: int,
-        forward: MemoryObjectSendStream[bytes] | None = None,
-    ) -> AsyncGenerator[Launched]:
-        """Start `command` and record it. On exit, whatever it left running is killed and the record is closed.
+        stderr: int = subprocess.PIPE,
+    ) -> AsyncGenerator[Spawned]:
+        """Start `command` and record it, without pumps: the holder drains every PIPE it asked for, and the
+        handle holds no scope, so it survives turns, tasks and timeout scopes. On exit, whatever it left
+        running is killed and the record is closed. `launch` is this plus pumps; a held `launch` would park
+        its pump group on one task's scope stack, which any later scope exit breaks.
 
-        `stdin`/`stdout`: subprocess.PIPE, DEVNULL, or a file descriptor (a pipeline's pipe)."""
+        `stdin`/`stdout`/`stderr`: subprocess.PIPE, DEVNULL, or a file descriptor."""
         id, record = self._allocate()
         await anyio.Path(record).mkdir(parents=True)
         cwd = self.cwd / command.cwd if command.cwd is not None else self.cwd
@@ -265,30 +290,16 @@ class Scope:
             env=self.environment(command, id),
             stdin=stdin,
             stdout=stdout,
-            stderr=subprocess.PIPE,
+            stderr=stderr,
             start_new_session=True,
         )
-        out = _Tee(record / "stdout", forward) if stdout == subprocess.PIPE else None
-        err = _Tee(record / "stderr")
-        launched = Launched(id, record, command, process, out, err)
-        self._live[id] = launched
+        spawned = Spawned(id=id, record=record, command=command, process=process)
+        self._live[id] = spawned
         try:
-            async with anyio.create_task_group() as tg:
-                if out is not None and process.stdout is not None:
-                    tg.start_soon(out.pump, process.stdout)
-                if process.stderr is not None:
-                    tg.start_soon(err.pump, process.stderr)
-                try:
-                    yield launched
-                finally:
-                    with anyio.CancelScope(shield=True):
-                        if self._cancel is not None and self._cancel.cancel_called:
-                            self._at_timeout += await anyio.to_thread.run_sync(launched.running)
-                        # Whatever the command left running dies with it; its pipes close, and the pumps end.
-                        await terminate(ID_MARK, id)
-                        await process.wait()
+            yield spawned
         finally:
-            launched.ended = time.monotonic()
+            await spawned.close()
+            spawned.ended = time.monotonic()
             del self._live[id]
             with anyio.CancelScope(shield=True):
                 code = process.returncode
@@ -298,3 +309,39 @@ class Scope:
                     "signal": -code if code is not None and code < 0 else None,
                 }
                 await anyio.Path(record / "command.json").write_text(json.dumps(meta))
+
+    @asynccontextmanager
+    async def launch(
+        self,
+        command: Command,
+        *,
+        stdin: int,
+        stdout: int,
+        forward: MemoryObjectSendStream[bytes] | None = None,
+    ) -> AsyncGenerator[Launched]:
+        """Start `command` and record it. On exit, whatever it left running is killed and the record is closed.
+
+        `stdin`/`stdout`: subprocess.PIPE, DEVNULL, or a file descriptor (a pipeline's pipe). The pumps run
+        in a task group that lives only inside this block: a held launch never outlives its task, so anything
+        longer-lived holds `spawn` instead."""
+        async with self.spawn(command, stdin=stdin, stdout=stdout) as spawned:
+            process = spawned.process
+            out = _Tee(spawned.record / "stdout", forward) if stdout == subprocess.PIPE else None
+            err = _Tee(spawned.record / "stderr")
+            launched = Launched(spawned.id, spawned.record, command, process, out, err, started=spawned.started)
+            try:
+                async with anyio.create_task_group() as tg:
+                    if out is not None and process.stdout is not None:
+                        tg.start_soon(out.pump, process.stdout)
+                    if process.stderr is not None:
+                        tg.start_soon(err.pump, process.stderr)
+                    try:
+                        yield launched
+                    finally:
+                        with anyio.CancelScope(shield=True):
+                            if self._cancel is not None and self._cancel.cancel_called:
+                                self._at_timeout += await anyio.to_thread.run_sync(launched.running)
+                            # Whatever the command left running dies with it; its pipes close, and the pumps end.
+                            await spawned.close()
+            finally:
+                launched.ended = time.monotonic()

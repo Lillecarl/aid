@@ -17,4 +17,7 @@ from pyrun.result import Result as Result
 from pyrun.result import Running as Running
 from pyrun.result import TimedOut as TimedOut
 from pyrun.scope import Scope as Scope
+from pyrun.scope import Spawned as Spawned
 from pyrun.scope import current as current
+from pyrun.shell import ShellResult as ShellResult
+from pyrun.shell import ShellSession as ShellSession

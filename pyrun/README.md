@@ -73,3 +73,19 @@ The report is what an agent reads, in this shape:
       <the traceback, when the script raised>
 
 A process's output is clipped to its head and tail; the full output stays in the store, by id.
+
+## Shell sessions
+
+`ShellSession` holds one bash open across calls, so `cd` and the environment persist:
+
+    shell = pyrun.ShellSession(cwd=".", store=path)
+    first = await shell.run("cd sub && pwd")     # first.code == 0
+    second = await shell.run("pwd")              # still in sub
+    await shell.restart()                        # kill it now; the next run starts fresh
+    await shell.aclose()                         # kill it for good
+
+Each command is wrapped so the shell reports its own exit code on a random framing line; stdout and
+stderr merge, in the order written, and stdin is empty. Commands run one at a time. A timeout kills the
+shell — framing past that point is untrustworthy — and the next run starts fresh and says the state
+reset. A shell the command itself ends (`exit`) respawns the same way. Every incarnation is recorded
+under the session's store like any other process.
