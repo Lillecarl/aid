@@ -17,6 +17,14 @@
     rev = "0910a2436bcbbbef6889be7c10d96520593e9578";
     narHash = "sha256-AO0LvZeEB/kUNxym2tgpXOU2FpEq3kUWNTnUP8rHBus=";
   },
+  # shellous, the asyncio subprocess library: v0.42.0, the latest release.
+  shellous ? builtins.fetchTree {
+    type = "github";
+    owner = "byllyfish";
+    repo = "shellous";
+    rev = "fc6f1b51f1cc1ef35d492787535ae120296d3dd5";
+    narHash = "sha256-Sr7o0oXreN5ax+HDHaE3t8oXhc7pH/uj1esw5Q0/8iw=";
+  },
   # Vivarium, the NixOS integration tests aid boots in UML guests. A local path, not a pin: one-man
   # project, and the checkout beside this one is what the tests run against.
   vivariumSrc ? ../nixidae/vivarium,
@@ -74,11 +82,13 @@ let
         ./.
         ./pyrun
         pyedit
+        shellous
       ];
       exclude = p.suppliedNames ++ [
         "aid"
         "pyrun"
         "pyedit"
+        "shellous"
       ]
       ++ grammarsByName;
     }
@@ -88,6 +98,10 @@ let
         pyedit = final.callPackage ./nix/pyedit.nix {
           inherit (p) mkProject;
           src = pyedit;
+        };
+        shellous = final.callPackage ./nix/shellous.nix {
+          inherit (p) mkProject;
+          src = shellous;
         };
         pyrun = final.callPackage ./pyrun {
           inherit (p) mkProject;
