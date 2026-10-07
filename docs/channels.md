@@ -32,6 +32,13 @@ entry always fails that last check — only `--dangerously-load-development-chan
   runs without the flag, and the model reports no channel event while wake-disabled (measured
   2026-10-07, scratch daemon, `uses_channel` flipped for isolation, reverted after). Turns XOR
   channel stays: ACP keeps wake turns.
+- The adapter takes SDK options from `session/new` `_meta.claudeCode.options` (read from its bundle),
+  so aid can plant inner-CLI flags via `extraArgs` — measured in the process table with both
+  `--channels server:aid` and `--dangerously-load-development-channels server:aid` present. The
+  model still reports PROMPT-only. Remaining gates live outside aid: the `tengu_harbor` killswitch,
+  and whether 2.1.266 honors `--channels` at all. Re-test when either moves; the recipe is the
+  scratch-daemon essay probe above. The `_meta` kwargs of the Python ACP library spread as the
+  request's `_meta` content — `**{"_meta": meta}` double-wraps.
 - Framing is available everywhere with no protocol: `wake_prompt` can tag firings the way Claude
   tags channel and system-reminder blocks. Mid-turn timing over ACP needs a blocking wait tool
   (their SleepTool pattern); nothing else in this source offers it.
