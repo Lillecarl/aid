@@ -13,8 +13,16 @@ from pydantic_ai.models.test import TestModel
 import aid
 from aid.backends.permissions import PermissionWaits
 from aid.backends.pydantic_ai import PydanticAIBackend
-from aid.coding import CODING, SPILL_LIMIT, Coding, compact, spill
-from aid.protocol import Output, PermissionDecider, PermissionDecision, PermissionRequest, Started
+from aid.coding import CODING, SPILL_LIMIT, Coding, Condition, Line, WatchView, compact, spill
+from aid.protocol import (
+    AidError,
+    MessageEntry,
+    Output,
+    PermissionDecider,
+    PermissionDecision,
+    PermissionRequest,
+    Started,
+)
 from aid.spec import PermissionMode
 from tests.conftest import py_spec
 
@@ -643,8 +651,160 @@ async def test_monitor_duplicate_watches_once(daemon: Paths, tmp_path: Path) -> 
                     ("background", {"argv": ["sleep", "30"]}),
                     ("monitor", {"task_id": "bg1"}),
                     ("monitor", {"task_id": "bg1"}),
+                    ("monitor", {"task_id": "bg1", "on": "failed"}),
+                    ("monitors", {}),
                 )
             )
-    _begun, first, second = str(result.output).split("\n=====\n")
+    _begun, first, second, third, listing = str(result.output).split("\n=====\n")
     assert first.startswith("watching bg1 as m1")
     assert second == "bg1 is already watched as m1"
+    assert third.startswith("watching bg1 as m2")
+    assert "m1: bg1 (sleep 30) — its end" in listing
+    assert "m2: bg1 (sleep 30) — an unclean end" in listing
+
+
+async def test_monitor_rejects_bad_conditions(daemon: Paths, tmp_path: Path) -> None:
+    # One failing call per run: a second failure in the same turn exceeds the tool's retries.
+    # `on` and `stream` are Literals, so the schema rejects bad ones before the tool runs; the rest
+    # reach _condition, which fails fast on what each condition does not take.
+    bad = [
+        ({"task_id": "bg1", "on": "bogus"}, "Input should be 'ended', 'failed', 'pattern' or 'running_after'"),
+        ({"task_id": "bg1", "on": "pattern"}, "a pattern watch needs a pattern"),
+        ({"task_id": "bg1", "on": "pattern", "pattern": "("}, "'(' does not compile"),
+        (
+            {"task_id": "bg1", "on": "pattern", "pattern": "x", "after": 1.0},
+            "a pattern watch takes only pattern and stream",
+        ),
+        ({"task_id": "bg1", "on": "running_after"}, "a running_after watch needs after"),
+        ({"task_id": "bg1", "on": "ended", "after": 1.0}, "an ended watch takes no parameters"),
+        ({"task_id": "bg1", "stream": "bogus"}, "Input should be 'stdout', 'stderr' or 'either'"),
+    ]
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            await session.run(
+                plan(
+                    ("background", {"argv": ["sleep", "30"]}),
+                )
+            )
+            for args, message in bad:
+                result = await session.run(
+                    plan(
+                        ("monitor", args),
+                    )
+                )
+                assert message in str(result.output), args
+
+
+async def test_monitor_stop_and_monitors(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(
+                    ("monitors", {}),
+                    ("background", {"argv": ["sleep", "30"]}),
+                    ("monitor", {"task_id": "bg1", "on": "pattern", "pattern": "READY"}),
+                    ("monitors", {}),
+                    ("monitor_stop", {"monitor_id": "m1"}),
+                    ("monitors", {}),
+                    ("monitor_stop", {"monitor_id": "m1"}),
+                )
+            )
+    parts = str(result.output).split("\n=====\n")
+    assert parts[0] == "nothing is watched"
+    assert parts[2].startswith("watching bg1 as m1")
+    assert parts[3] == "m1: bg1 (sleep 30) — every line matching 'READY' on either"
+    assert parts[4] == "stopped watching bg1 as m1"
+    assert parts[5] == "nothing is watched"
+    assert "no watch 'm1'" in parts[6]
+
+
+async def test_monitor_stop_beats_the_fire(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            await session.run(
+                plan(
+                    ("background", {"argv": ["sleep", "0.5"]}),
+                    ("monitor", {"task_id": "bg1"}),
+                    ("monitor_stop", {"monitor_id": "m1"}),
+                )
+            )
+            await anyio.sleep(1.2)
+            entries = (await session.history(limit=1000)).entries
+    assert not [
+        e for e in entries if isinstance(e.item, MessageEntry) and (e.item.sender or "").startswith("background task")
+    ]
+
+
+def test_condition_takes_only_its_own_parameters() -> None:
+    parse = Condition.parse
+    assert parse("ended", None, "either", None, None) == Condition(kind="ended")
+    assert parse("failed", None, "either", None, [3]) == Condition(kind="failed", codes=(3,))
+    assert parse("pattern", "x", "stderr", None, None) == Condition(kind="pattern", pattern="x", stream="stderr")
+    assert parse("running_after", None, "either", 5.0, None) == Condition(kind="running_after", after=5.0)
+    with pytest.raises(AidError, match="unknown_watch"):
+        parse("bogus", None, "either", None, None)
+    with pytest.raises(AidError, match="unknown_stream"):
+        parse("ended", None, "bogus", None, None)
+    with pytest.raises(AidError, match="no_after"):
+        parse("running_after", None, "either", 0.0, None)
+
+
+def _view(**fields: Any) -> WatchView:
+    base: dict[str, Any] = {
+        "ended": False,
+        "exit_code": None,
+        "timed_out": False,
+        "stopped": False,
+        "elapsed": 1.0,
+        "age": 1.0,
+        "lines": [],
+    }
+    base.update(fields)
+    return WatchView(**base)
+
+
+def test_condition_ended_fires_once_at_the_end() -> None:
+    condition = Condition(kind="ended")
+    assert condition.evaluate(_view()) == ([], False)
+    firings, done = condition.evaluate(_view(ended=True, exit_code=0, elapsed=0.5))
+    assert done and [firing.kind for firing in firings] == ["ended"]
+
+
+def test_condition_failed_matches_unclean_ends() -> None:
+    condition = Condition(kind="failed")
+    assert [f.kind for f in condition.evaluate(_view(ended=True, exit_code=3))[0]] == ["failed"]
+    assert [f.kind for f in condition.evaluate(_view(ended=True, timed_out=True, exit_code=-15))[0]] == ["failed"]
+    assert [f.kind for f in condition.evaluate(_view(ended=True, stopped=True, exit_code=-15))[0]] == ["failed"]
+    firings, done = condition.evaluate(_view(ended=True, exit_code=0))
+    assert done and [firing.kind for firing in firings] == ["failed_moot"]
+
+
+def test_condition_failed_codes_narrow() -> None:
+    condition = Condition(kind="failed", codes=(3,))
+    assert [f.kind for f in condition.evaluate(_view(ended=True, exit_code=3))[0]] == ["failed"]
+    assert [f.kind for f in condition.evaluate(_view(ended=True, exit_code=4))[0]] == ["failed_moot"]
+
+
+def test_condition_pattern_fires_per_line_and_retires_at_the_end() -> None:
+    condition = Condition(kind="pattern", pattern="READY")
+    lines = [Line("stdout", "plain"), Line("stdout", "READY one"), Line("stderr", "READY two")]
+    firings, done = condition.evaluate(_view(lines=lines))
+    assert not done
+    assert all(firing.line is not None for firing in firings)
+    assert [(firing.line.stream, firing.line.text) for firing in firings if firing.line is not None] == [
+        ("stdout", "READY one"),
+        ("stderr", "READY two"),
+    ]
+    firings, done = condition.evaluate(_view(ended=True, exit_code=0, lines=[Line("stdout", "READY late")]))
+    assert done and len(firings) == 1
+
+
+def test_condition_running_after_fires_once_or_dies_quietly() -> None:
+    condition = Condition(kind="running_after", after=10.0)
+    assert condition.evaluate(_view(age=5.0)) == ([], False)
+    firings, done = condition.evaluate(_view(age=10.0))
+    assert done and [firing.kind for firing in firings] == ["running_after"] and firings[0].age == 10.0
+    assert condition.evaluate(_view(ended=True, exit_code=0, age=5.0)) == ([], True)

@@ -40,8 +40,11 @@ two things here; it no longer does.
 
 - **Background task** — a worker-side process started by `background`. Outlives its turn, dies with the
   worker. Reported through `task_output` / `tasks`, stopped with `task_stop`.
-- **Monitor** — a watch on the task registry. Today completion only, one-shot: firing notifies once,
-  then the watch is forgotten. Watches die with the worker (aid#8).
+- **Monitor** — a watch on one background task, armed by `monitor` with a condition. Terminal
+  conditions (`ended`, `failed`) fire once at the task's end; live ones fire while it runs (`pattern` on
+  every matching line, `running_after` once past its age). Watches live with their task and die with it;
+  the agent stops one early with `monitor_stop`, lists them with `monitors`. Watches die with the worker
+  (aid#8).
 
 ## Answered questions
 

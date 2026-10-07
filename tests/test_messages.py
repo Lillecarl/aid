@@ -52,6 +52,20 @@ async def outputs_after_message(session: aid.Session, count: int = 1) -> list[Hi
         await anyio.sleep(0.05)
 
 
+async def background_messages(session: aid.Session, count: int) -> list[MessageEntry]:
+    """Background task reports in history, once `count` arrived."""
+    while True:
+        entries = (await session.history(limit=1000)).entries
+        found = [
+            e.item
+            for e in entries
+            if isinstance(e.item, MessageEntry) and (e.item.sender or "").startswith("background task")
+        ]
+        if len(found) >= count:
+            return found
+        await anyio.sleep(0.05)
+
+
 async def test_a_message_wakes_an_acp_session(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
@@ -178,3 +192,44 @@ async def test_monitor_waits_for_the_running_turn(daemon: Paths, tmp_path: Path)
     assert message.sender == "background task bg1"
     assert message.text.startswith("Background task bg1 finished: exit 0")
     assert "watching bg1 as m1" in str(outputs[1].output)
+
+
+async def test_pattern_monitor_wakes_per_line_then_dies_with_the_task(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("pattern", py_spec(tmp_path, "agents:pattern_watcher", PermissionMode.ALLOW))
+            assert str((await session.run("go")).output) == "armed"
+            await background_messages(session, 2)
+            await anyio.sleep(1.0)
+            again = await background_messages(session, 2)
+    # The end itself wakes nothing: the watch died with the task.
+    assert len(again) == 2
+    assert [message.sender for message in again] == ["background task bg1"] * 2
+    assert [message.text for message in again] == [
+        "Background task bg1 matched 'READY' on stdout:\nREADY one\nRead all of its output with task_output bg1.",
+        "Background task bg1 matched 'READY' on stdout:\nREADY two\nRead all of its output with task_output bg1.",
+    ]
+
+
+async def test_running_after_monitor_fires_while_the_task_runs(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("timeout", py_spec(tmp_path, "agents:timeout_watcher", PermissionMode.ALLOW))
+            assert str((await session.run("go")).output) == "armed"
+            messages = await background_messages(session, 1)
+    assert messages[0].sender == "background task bg1"
+    assert messages[0].text.startswith("Background task bg1 still running ")
+    assert messages[0].text.endswith(
+        "after arming: sleep 30\n(no output yet)\nRead all of its output with task_output bg1."
+    )
+
+
+async def test_failed_monitor_reports_a_clean_end_as_moot(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("failed", py_spec(tmp_path, "agents:failed_watcher", PermissionMode.ALLOW))
+            assert str((await session.run("go")).output) == "armed"
+            messages = await background_messages(session, 1)
+    assert messages[0].sender == "background task bg1"
+    assert messages[0].text.startswith("Background task bg1 finished: exit 0")
+    assert messages[0].text.endswith("\nThe watch asked for failure only.")

@@ -187,3 +187,47 @@ async def _watcher_stream(messages: list[ModelMessage], info: AgentInfo) -> Asyn
 
 
 watcher = Agent(FunctionModel(_watcher, stream_function=_watcher_stream), toolsets=[aid.coding_tools])
+
+
+def _arming_watcher(background: dict[str, object], monitor: dict[str, object]) -> Agent:
+    """An agent that starts one background task, arms one watch, answers "armed", then echoes whatever wakes
+    it. The wake turn's answer proves what each firing delivered."""
+
+    def decide(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        called = {p.tool_name for m in messages for p in m.parts if isinstance(p, ToolCallPart)}
+        if "background" not in called:
+            return ModelResponse(parts=[ToolCallPart("background", background, tool_call_id="call0")])
+        if "monitor" not in called:
+            return ModelResponse(parts=[ToolCallPart("monitor", monitor, tool_call_id="call1")])
+        if _user_prompts(messages) == 1:
+            return ModelResponse(parts=[TextPart("armed")])
+        return ModelResponse(parts=[TextPart(f"woke: {_last_prompt(messages)}")])
+
+    async def stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+        match decide(messages, info).parts:
+            case [ToolCallPart() as call]:
+                yield {
+                    0: DeltaToolCall(
+                        name=call.tool_name, json_args=call.args_as_json_str(), tool_call_id=call.tool_call_id
+                    )
+                }
+            case [TextPart() as text]:
+                yield text.content
+            case parts:
+                raise ValueError(f"unexpected parts {parts}")
+
+    return Agent(FunctionModel(decide, stream_function=stream), toolsets=[aid.coding_tools])
+
+
+pattern_watcher = _arming_watcher(
+    {"argv": ["printf", "plain one\nREADY one\nplain two\nREADY two\n"]},
+    {"task_id": "bg1", "on": "pattern", "pattern": "READY"},
+)
+timeout_watcher = _arming_watcher(
+    {"argv": ["sleep", "30"]},
+    {"task_id": "bg1", "on": "running_after", "after": 0.5},
+)
+failed_watcher = _arming_watcher(
+    {"argv": ["true"]},
+    {"task_id": "bg1", "on": "failed"},
+)
