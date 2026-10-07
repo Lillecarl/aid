@@ -9,7 +9,7 @@ import sys
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 import anyio
 import anyio.to_thread
@@ -63,6 +63,9 @@ from aid.protocol import (
     StopSession,
     TextDelta,
     ThoughtDelta,
+    ToolCall,
+    ToolEvent,
+    TurnEvent,
     Usage,
     decode_reply,
     decode_request,
@@ -489,6 +492,7 @@ class Daemon:
                     await recorder.prompt(request.text)
                     self._routes[request.id] = _Route(client, session.name, recorder)
                     await self._send_worker(session, request)
+                    await self._publish_turn(session.name, request.id, "started", "prompt")
                 except BaseException:
                     self._routes.pop(request.id, None)
                     session.turn = None
@@ -676,6 +680,7 @@ class Daemon:
             await self._ensure_running(session)
             self._routes[request.id] = _Route(None, session.name, recorder)
             await self._send_worker(session, request)
+            await self._publish_turn(session.name, request.id, "started", "wake")
         except (AidError, zmq.ZMQError) as error:
             log.exception("deliver_failed", session=session.name, count=len(messages))
             self._routes.pop(request.id, None)
@@ -685,12 +690,20 @@ class Daemon:
             )
         await self._publish_changes()
 
-    def _end_turn(self, name: str, turn: str) -> None:
+    async def _publish_turn(self, name: str, turn: str, phase: Literal["started", "ended"], reason: str) -> None:
+        """A turn's boundary on its session's turn topic. Started publishes once the worker holds the prompt —
+        a turn that never reaches a worker never starts — and every started has its ended."""
+        await self._publish(
+            events.turn_topic(name), TurnEvent(turn=turn, phase=phase, reason=reason).model_dump_json().encode()
+        )
+
+    async def _end_turn(self, name: str, turn: str, reason: str) -> None:
         session = self._sessions.get(name)
         if session is None or session.turn != turn:
             return
         session.turn = None
         session.permissions.clear()
+        await self._publish_turn(name, turn, "ended", reason)
         if session.inbox and not session.uses_channel and self._tg is not None:
             self._tg.start_soon(self._deliver, session)
 
@@ -778,7 +791,10 @@ class Daemon:
                     await self._record(route, failure)
             # Messages still in the inbox wait for the next turn to end or the next message: a wake now could
             # start a crashing worker again and again.
-            session.turn = None
+            if session.turn is not None:
+                with contextlib.suppress(zmq.ZMQError):
+                    await self._publish_turn(session.name, session.turn, "ended", "worker_exited")
+                session.turn = None
             session.permissions.clear()
             session.working, session.attention = False, None
             with contextlib.suppress(zmq.ZMQError):  # Shutting down: nobody is subscribed any more.
@@ -867,7 +883,8 @@ class Daemon:
                         if route.client is not None:
                             await route.client.send(payload)
                         await self._record(route, reply)
-                        self._end_turn(route.session, reply.id)
+                        reason = "done" if isinstance(reply, Done) else reply.code
+                        await self._end_turn(route.session, reply.id, reason)
             # A turn streams many deltas a second, and they change no status.
             if not (isinstance(reply, Event) and isinstance(reply.event, TextDelta | ThoughtDelta)):
                 await self._publish_changes()
@@ -886,6 +903,12 @@ class Daemon:
                     await route.recorder.error(reply.code, reply.message)
         except OSError:
             log.exception("history_write_failed", session=route.session)
+            return
+        if isinstance(reply, Event) and isinstance(reply.event, ToolCall):
+            await self._publish(
+                events.tool_topic(route.session),
+                ToolEvent(turn=reply.id, call=reply.event).model_dump_json().encode(),
+            )
 
 
 async def list_agents() -> AgentCatalog:

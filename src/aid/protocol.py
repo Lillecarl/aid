@@ -294,6 +294,16 @@ class ToolCall(_Message):
     """Files the call touches, `path` or `path:line`."""
 
 
+class ToolEvent(_Message):
+    """One tool-call event as the worker sent it, with its turn: published on its session's tool topic for
+    subscribers tracking tool lifecycles by tool_call_id. Incremental like the worker's own events — empty
+    fields keep what an earlier event of the call said — and advisory: join by tool_call_id, repair drops
+    through history paging."""
+
+    turn: str
+    call: ToolCall
+
+
 class Cost(_Message):
     amount: float
     currency: str
@@ -338,6 +348,18 @@ class Output(_Message):
     type: Literal["output"] = "output"
     output: JsonValue
     stop_reason: str
+
+
+class TurnEvent(_Message):
+    """A turn's boundary, published on its session's turn topic: started once the worker holds the prompt,
+    ended once the daemon closes the turn. Advisory — every started has an ended, and drops repair through
+    history and status — so subscribers track lifecycles without polling."""
+
+    turn: str
+    phase: Literal["started", "ended"]
+    reason: str | None = None
+    """started: `prompt` (a client asked) or `wake` (the daemon did); ended: `done`, a failure code, or
+    `worker_exited`."""
 
 
 class PermissionChoice(_Message):

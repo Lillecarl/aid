@@ -14,7 +14,9 @@ import zmq.asyncio
 import aid
 from aid import events
 from aid.paths import Paths
+from aid.spec import PermissionMode
 from tests.conftest import py_spec
+from tests.test_coding import plan
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -172,3 +174,36 @@ async def test_a_dropped_entry_is_fetched(daemon: Paths, tmp_path: Path) -> None
         publisher.close(linger=0)
         ctx.term()
     assert got == recorded
+
+
+async def test_turn_boundaries_are_published(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with subscribed(daemon, events.turn_topic("echo")) as sub, aid.connect(daemon) as client:
+            session = await client.create("echo", py_spec(tmp_path, "agents:echo"))
+            await session.run("hi")
+            started = await sub.until(events.turn_topic("echo"), lambda p: p["phase"] == "started")
+            ended = await sub.until(events.turn_topic("echo"), lambda p: p["phase"] == "ended")
+            quiet = await sub.quiet()
+    assert started["turn"] == ended["turn"]
+    assert started["reason"] == "prompt"
+    assert ended["reason"] == "done"
+    assert quiet
+
+
+async def test_tool_calls_are_published_with_their_turn(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with subscribed(daemon, events.tool_topic("coder")) as sub, aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            await session.run(
+                plan(
+                    ("python", {"script": "print('hi')", "mode": "sync"}),
+                )
+            )
+            topic = events.tool_topic("coder")
+            started = await sub.until(topic, lambda p: p["call"]["status"] == "in_progress")
+            finished = await sub.until(topic, lambda p: p["call"]["status"] == "completed")
+            quiet = await sub.quiet()
+    assert started["call"]["tool_call_id"] == finished["call"]["tool_call_id"] == "call0"
+    assert started["call"]["title"] == "python"
+    assert started["turn"] == finished["turn"]
+    assert quiet
