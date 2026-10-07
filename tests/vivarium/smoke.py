@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import anyio
 
 from vivarium_runner import Machine, Machines

@@ -69,6 +69,9 @@ line-length = 120
 exclude = ["tests/vivarium"]
 
 [tool.ruff.lint]
+# Future annotations everywhere (Lillecarl/aid#26): FA100 needs the import wherever `|` appears,
+# UP037 bans quoted annotations. No ruff rule requires the import unconditionally, so
+# tests/test_style.py requires it on every file instead.
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "C4", "TC", "TID", "ASYNC", "PTH", "RET", "FA", "PGH", "PLC0415"]
 ignore = ["E501"]
 # Claude Code draws its prompt with it; matching the screen needs the real character.
