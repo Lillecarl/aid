@@ -8,8 +8,9 @@ import pytest
 import aid
 from aid.daemon import wake_prompt
 from aid.protocol import HistoryItem, MessageEntry, Output, PromptEntry, SessionStatus, Started, TextDelta
-from aid.spec import McpHttp
+from aid.spec import McpHttp, PermissionMode
 from tests.conftest import acp_spec, py_spec
+from tests.test_coding import plan
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -26,6 +27,18 @@ def test_wake_prompt() -> None:
     two = wake_prompt([MessageEntry(sender="alice", text="a"), MessageEntry(sender=None, text="b")])
     assert two.startswith("Message from aid session 'alice':\n\na\n\n---\n\nMessage from a person using aid:\n\nb")
     assert "send_message tool" in two
+
+
+def test_wake_prompt_renders_background_reports() -> None:
+    report = MessageEntry(sender="background task bg1", text="Background task bg1 finished: exit 0 after 0.5s")
+    assert wake_prompt([report]) == "Background task bg1 finished: exit 0 after 0.5s"
+    mixed = wake_prompt([report, MessageEntry(sender=None, text="hi")])
+    assert mixed.startswith("Background task bg1 finished: exit 0 after 0.5s\n\n---\n\nMessage from a person")
+    assert "send_message tool" not in mixed
+    with_session = wake_prompt([report, MessageEntry(sender="alice", text="a")])
+    assert with_session.startswith("Background task bg1 finished")
+    assert "Message from aid session 'alice'" in with_session
+    assert "send_message tool" in with_session
 
 
 async def outputs_after_message(session: aid.Session, count: int = 1) -> list[HistoryItem]:
@@ -126,3 +139,42 @@ async def test_status_shows_the_turn_and_waiting_messages(daemon: Paths, tmp_pat
     assert idle.runs.endswith("fake_acp_agent.py")
     assert idle.mcp_servers == ["web", "aid"]
     assert "hidden" not in idle.model_dump_json()
+
+
+async def test_monitor_resumes_an_idle_loop(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("watcher", py_spec(tmp_path, "agents:watcher", PermissionMode.ALLOW))
+            assert str((await session.run("go")).output) == "armed"
+            items = await outputs_after_message(session)
+    outputs = [item for item in items if isinstance(item, Output)]
+    assert len(outputs) == 2
+    assert str(outputs[0].output) == "armed"
+    message = next(item for item in items if isinstance(item, MessageEntry))
+    # Turn 1 answered before the notification arrived: the loop was idle when it resumed.
+    assert items.index(outputs[0]) < items.index(message)
+    assert message.sender == "background task bg1"
+    assert message.text.startswith("Background task bg1 finished: exit 0")
+    assert f"woke: {message.text}" in str(outputs[1].output)
+
+
+async def test_monitor_waits_for_the_running_turn(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            await session.run(
+                plan(
+                    ("background", {"argv": ["sleep", "0.5"]}),
+                    ("monitor", {"task_id": "bg1"}),
+                    ("python", {"script": "import time; time.sleep(3)", "mode": "sync"}),
+                )
+            )
+            items = await outputs_after_message(session, count=2)
+    outputs = [item for item in items if isinstance(item, Output)]
+    assert len(outputs) == 2
+    message = next(item for item in items if isinstance(item, MessageEntry))
+    # The notification lands mid-turn: ahead of the running turn's own output.
+    assert items.index(message) < items.index(outputs[0])
+    assert message.sender == "background task bg1"
+    assert message.text.startswith("Background task bg1 finished: exit 0")
+    assert "watching bg1 as m1" in str(outputs[1].output)

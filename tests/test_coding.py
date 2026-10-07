@@ -624,3 +624,27 @@ async def test_shell_deny_refuses(daemon: Paths, tmp_path: Path) -> None:
             result = await session.run(plan(("shell", {"command": "touch made"})))
     assert str(result.output) == "not allowed: the command stays unrun"
     assert not (tmp_path / "made").exists()
+
+
+async def test_monitor_unknown_task(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(plan(("monitor", {"task_id": "bg9"})))
+    assert "no background task 'bg9'" in str(result.output)
+
+
+async def test_monitor_duplicate_watches_once(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(
+                    ("background", {"argv": ["sleep", "30"]}),
+                    ("monitor", {"task_id": "bg1"}),
+                    ("monitor", {"task_id": "bg1"}),
+                )
+            )
+    _begun, first, second = str(result.output).split("\n=====\n")
+    assert first.startswith("watching bg1 as m1")
+    assert second == "bg1 is already watched as m1"

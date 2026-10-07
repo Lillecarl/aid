@@ -159,3 +159,31 @@ async def _planned_stream(messages: list[ModelMessage], info: AgentInfo) -> Asyn
 
 # Its answer is every tool result of the plan, joined by =====.
 coder = Agent(FunctionModel(_planned, stream_function=_planned_stream), toolsets=[aid.coding_tools])
+
+
+def _watcher(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """Arms one background sleep and its monitor, answers "armed", then echoes whatever wakes it. The wake
+    turn's answer proves what the resume delivered."""
+    called = {p.tool_name for m in messages for p in m.parts if isinstance(p, ToolCallPart)}
+    if "background" not in called:
+        return ModelResponse(parts=[ToolCallPart("background", {"argv": ["sleep", "0.5"]}, tool_call_id="call0")])
+    if "monitor" not in called:
+        return ModelResponse(parts=[ToolCallPart("monitor", {"task_id": "bg1"}, tool_call_id="call1")])
+    if _user_prompts(messages) == 1:
+        return ModelResponse(parts=[TextPart("armed")])
+    return ModelResponse(parts=[TextPart(f"woke: {_last_prompt(messages)}")])
+
+
+async def _watcher_stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    match _watcher(messages, info).parts:
+        case [ToolCallPart() as call]:
+            yield {
+                0: DeltaToolCall(name=call.tool_name, json_args=call.args_as_json_str(), tool_call_id=call.tool_call_id)
+            }
+        case [TextPart() as text]:
+            yield text.content
+        case parts:
+            raise ValueError(f"unexpected parts {parts}")
+
+
+watcher = Agent(FunctionModel(_watcher, stream_function=_watcher_stream), toolsets=[aid.coding_tools])

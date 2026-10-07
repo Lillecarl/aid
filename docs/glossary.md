@@ -25,26 +25,29 @@ two things here; it no longer does.
 
 - **Wake turn** — a daemon-started turn with no client (ACP and pydantic-ai get one after the running
   turn; interactive Claude gets a channel event instead). Turn mechanics.
-- **Notify** — a background task or monitor firing: a worker-side event carrying facts ("bg3 finished,
-  exit 0, tail …"). Creates no turn by itself. This is what "a background task wakes" means.
-- **Notification** — the event plus its payload, worker→daemon. No worker-initiated path exists yet;
-  see open questions.
-- **Resume message** — what a notification becomes inside the session: a developer/system message
-  (pydantic-ai: a system prompt part) appended so the loop sees the result.
+- **Notify** — the worker→daemon message (`Notify`, wire `notify`): a fired monitor's task id plus the
+  report text for the agent. This is what "a background task wakes" means.
+- **Notification** — the event plus its payload, carried by `Notify`. Creates no turn by itself.
+- **Resume message** — what a notification becomes inside the session: a `MessageEntry` whose sender names
+  the background task (`background task bg1`). `wake_prompt` renders it as written — a report, not a
+  quote — and skips the send_message trailer for it.
   - Loop idle → the message starts a new turn: a **resume**.
-  - Loop live → the message waits for the next iteration: an **injection**. Mechanism open.
+  - Loop live → the message waits in the inbox for end of turn: an **injection**. No mid-run injection
+    exists (a run's input is fixed at start), so the turn boundary is the earliest possible point, and
+    the existing end-of-turn delivery is what delivers it.
 
 ## Background work
 
 - **Background task** — a worker-side process started by `background`. Outlives its turn, dies with the
   worker. Reported through `task_output` / `tasks`, stopped with `task_stop`.
-- **Monitor** — a condition watched on the task registry (output pattern, exit, timeout). Firing produces
-  a notification. Planned, not built (aid#8).
+- **Monitor** — a watch on the task registry. Today completion only, one-shot: firing notifies once,
+  then the watch is forgotten. Watches die with the worker (aid#8).
 
-## Open questions
+## Answered questions
 
-1. Injection into a live loop: can the pydantic-ai backend queue a message for the next iteration
-   mid-run, or must every notification wait for end of turn?
-2. The worker→daemon notification channel: new protocol message plus daemon handling, including what
-   happens when the session ended or the worker died first.
-3. Where resume messages live in history: appended as system parts, or a history item of their own?
+1. Injection into a live loop: impossible mid-run, and unneeded — the inbox holds the notification and
+   end-of-turn delivery hands it to the next turn. Answered by the notify design.
+2. The worker→daemon notification channel: the `Notify` message, handled like a message from no person
+   or session. A worker whose session is gone notifies nothing.
+3. Where resume messages live in history: `MessageEntry` items with a `background task <id>` sender,
+   recorded like any message.
