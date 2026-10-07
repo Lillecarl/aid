@@ -118,6 +118,7 @@ export interface AcpSpec {
   permission?: PermissionMode;
   permission_timeout?: number;
   supervisor?: string | null;
+  supervisor_nudge_budget?: number;
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
   supervisor_permissions?: string[];
@@ -212,6 +213,7 @@ export interface PydanticAISpec {
   permission_timeout?: number;
   python_path?: string[];
   supervisor?: string | null;
+  supervisor_nudge_budget?: number;
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
   supervisor_permissions?: string[];
@@ -248,6 +250,7 @@ export interface ClaudeTtySpec {
   pymux_command?: [string, ...string[]];
   pymux_socket?: string | null;
   supervisor?: string | null;
+  supervisor_nudge_budget?: number;
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
   supervisor_permissions?: string[];

@@ -346,6 +346,48 @@ async def _answering_stream(messages: list[ModelMessage], info: AgentInfo) -> As
 supervisor_answerer = Agent(
     FunctionModel(_answering_decide, stream_function=_answering_stream), toolsets=[aid.supervisor_tools]
 )
+
+
+async def _looping_stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+    """A stuck worker: every turn outputs the same line, so the loop score reads 1.0 from the second turn."""
+    yield "stuck on the same thing"
+
+
+looper = Agent(FunctionModel(stream_function=_looping_stream))
+
+
+_NUDGES = ("keep digging", "try another angle", "check the logs", "ask what changed")
+
+
+def _nagging_decide(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """A nudging supervisor: one send_message per wake turn, each worded differently, until AID_NUDGES
+    sends (default 2). Then it stands by: past the budget the daemon refuses, and silence is the verdict."""
+    target = os.environ.get("AID_SUPERVISED", "coder")
+    budget = int(os.environ.get("AID_NUDGES", "2"))
+    turn = _user_prompts(messages)
+    sent = sum(1 for m in messages for p in m.parts if isinstance(p, ToolCallPart) and p.tool_name == "send_message")
+    if sent < budget and sent < turn and sent < len(_NUDGES):
+        return ModelResponse(
+            parts=[ToolCallPart("send_message", {"to": target, "text": _NUDGES[sent]}, tool_call_id=f"nudge{sent}")]
+        )
+    if sent:
+        return ModelResponse(parts=[TextPart("nudged enough, standing by")])
+    return ModelResponse(parts=[TextPart("noted")])
+
+
+async def _nagging_stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    match _nagging_decide(messages, info).parts:
+        case [ToolCallPart() as call]:
+            yield {
+                0: DeltaToolCall(name=call.tool_name, json_args=call.args_as_json_str(), tool_call_id=call.tool_call_id)
+            }
+        case [TextPart() as text]:
+            yield text.content
+        case parts:
+            raise ValueError(f"unexpected parts {parts}")
+
+
+nagger = Agent(FunctionModel(_nagging_decide, stream_function=_nagging_stream))
 failed_watcher = _arming_watcher(
     {"argv": ["true"]},
     {"task_id": "bg1", "on": "failed"},

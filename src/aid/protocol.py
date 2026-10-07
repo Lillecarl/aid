@@ -295,6 +295,50 @@ class AnswerSupervisedPermission(_Request):
     an `ask_user` question takes."""
 
 
+class SupervisionFiring(_Message):
+    """A supervised turn ended and the daemon woke its supervisor: how the turn closed, and the loop score
+    over recent outputs that says stuck or not."""
+
+    type: Literal["supervision_firing"] = "supervision_firing"
+    turn: str
+    """The supervised turn that ended."""
+    reason: str
+    score: float | None
+    """The loop score, or None with fewer than two recent outputs."""
+    stuck_turns: int
+    """Consecutive supervised turn ends scoring stuck, including this one."""
+
+
+class SupervisionNudge(_Message):
+    """The supervisor nudged its supervised session: what it said, and how many nudges this stuck episode
+    holds including this one."""
+
+    type: Literal["supervision_nudge"] = "supervision_nudge"
+    text: str
+    nudges: int
+
+
+class SupervisionGoals(_Message):
+    """A supervised session's goals changed under its supervisor's hand."""
+
+    type: Literal["supervision_goals"] = "supervision_goals"
+    action: Literal["added", "done", "dropped"]
+    goal: Goal
+
+
+class SupervisionEvent(_Message):
+    """Something the supervision link did, on the supervised session's supervision topic. Observability
+    only — control stays on the reliable paths, so a dropped event costs insight, never action. Exactly
+    one side is set."""
+
+    session: str
+    """The supervised session."""
+    supervisor: str
+    firing: SupervisionFiring | None = None
+    nudge: SupervisionNudge | None = None
+    goals: SupervisionGoals | None = None
+
+
 type Request = Annotated[
     GetStatus
     | GetScreen

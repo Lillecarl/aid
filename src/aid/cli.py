@@ -192,6 +192,13 @@ def _parser() -> argparse.ArgumentParser:
             metavar="SECONDS",
             help="that wait, shortened when no person-authored entry is recent (default: 60)",
         )
+        p.add_argument(
+            "--supervisor-nudge-budget",
+            type=int,
+            default=3,
+            metavar="COUNT",
+            help="nudges the supervisor may send per stuck episode before the daemon refuses and escalates (default: 3)",
+        )
         return p
 
     def with_mcp(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -347,6 +354,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             supervisor_permissions=args.supervisor_permissions,
             supervisor_permission_timeout=args.supervisor_permission_timeout,
             supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
+            supervisor_nudge_budget=args.supervisor_nudge_budget,
         )
     if args.command == "new-claude":
         return ClaudeTtySpec(
@@ -364,6 +372,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             supervisor_permissions=args.supervisor_permissions,
             supervisor_permission_timeout=args.supervisor_permission_timeout,
             supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
+            supervisor_nudge_budget=args.supervisor_nudge_budget,
         )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
     source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
@@ -380,6 +389,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         supervisor_permissions=args.supervisor_permissions,
         supervisor_permission_timeout=args.supervisor_permission_timeout,
         supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
+        supervisor_nudge_budget=args.supervisor_nudge_budget,
         **source,
     )
 

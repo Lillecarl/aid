@@ -77,12 +77,17 @@ from aid.protocol import (
     StopSession,
     SupervisedHistory,
     SupervisedSearch,
+    SupervisionEvent,
+    SupervisionFiring,
+    SupervisionGoals,
+    SupervisionNudge,
     TextDelta,
     ThoughtDelta,
     ToolCall,
     ToolEvent,
     TurnEvent,
     Usage,
+    clip,
     decode_reply,
     decode_request,
     encode,
@@ -144,6 +149,12 @@ class _Session:
     """The running agent session's latest cost per currency: folded into `cost` when the next session starts."""
     permissions: dict[str, PermissionRequest] = field(default_factory=dict[str, PermissionRequest])
     """Requests the agent waits on, by request id."""
+    stuck_turns: int = 0
+    """Consecutive supervised turn ends scoring stuck: the stuck episode's length."""
+    nudges: int = 0
+    """Supervisor nudges accepted this stuck episode."""
+    last_nudge: str | None = None
+    """The last accepted nudge's text: a nudge too like it is refused."""
     working: bool = False
     """In a turn aid did not start, as the worker's Activity says."""
     attention: str | None = None
@@ -274,6 +285,11 @@ def _supervision_line(item: HistoryItem) -> str | None:
     return body
 
 
+def _normalized(body: str) -> str:
+    """One line, one spacing, one case: what similarity compares."""
+    return " ".join(body.split()).casefold()
+
+
 def _loop_score(items: list[HistoryItem]) -> float | None:
     """How alike the recent outputs read: the highest difflib ratio over consecutive normalized pairs, or
     None with fewer than two. Advisory — the supervisor judges, this only points."""
@@ -330,6 +346,32 @@ def permission_backstop_text(name: str, request: PermissionRequest) -> str:
         "A person answering first wins: then the request is gone, and silence is the right answer."
     )
     return "\n".join(lines)
+
+
+def nudge_repeats(last: str | None, text: str) -> bool:
+    """The nudge says what the last one said: the loop-score check turned around, over normalized texts.
+    With no last nudge, anything goes."""
+    if last is None:
+        return False
+    return difflib.SequenceMatcher(None, _normalized(last), _normalized(text)).ratio() >= SUPERVISION_LOOP_THRESHOLD
+
+
+def supervision_stuck(
+    name: str, supervisor: str, stuck_turns: int, nudges: int, budget: int, score: float | None
+) -> tuple[int, int, str | None]:
+    """The stuck episode after a supervised turn end scoring `score`: the next stuck count, the nudges kept,
+    and attention for a person. Below the loop threshold the episode ends: counts reset, attention clears.
+    At `budget` stuck turns after `budget` nudges the session needs a person instead of another nudge."""
+    if score is None or score < SUPERVISION_LOOP_THRESHOLD:
+        return 0, 0, None
+    stuck = stuck_turns + 1
+    if stuck >= budget and nudges >= budget:
+        return (
+            stuck,
+            nudges,
+            f"{name} is stuck for {stuck} turns after {nudges} nudges from {supervisor}; needs a person",
+        )
+    return stuck, nudges, None
 
 
 GOALS_FILE: Final = "goals.json"
@@ -737,12 +779,32 @@ class Daemon:
                 goals = await self._read_goals(session.name)
                 goal = add_goal(goals, request.text)
                 await self._write_goals(session.name, goals)
+                await self._publish(
+                    events.supervision_topic(session.name),
+                    SupervisionEvent(
+                        session=session.name,
+                        supervisor=request.supervisor,
+                        goals=SupervisionGoals(action="added", goal=goal),
+                    )
+                    .model_dump_json()
+                    .encode(),
+                )
                 return Done(id=request.id, data=goal.model_dump(mode="json"))
             case SetGoal():
                 session = self._supervised_session(request.supervisor, request.session)
                 goals = await self._read_goals(session.name)
                 goal = set_goal(goals, request.goal_id, request.state)
                 await self._write_goals(session.name, goals)
+                await self._publish(
+                    events.supervision_topic(session.name),
+                    SupervisionEvent(
+                        session=session.name,
+                        supervisor=request.supervisor,
+                        goals=SupervisionGoals(action="done" if goal.state is GoalState.DONE else "dropped", goal=goal),
+                    )
+                    .model_dump_json()
+                    .encode(),
+                )
                 return Done(id=request.id, data=goal.model_dump(mode="json"))
             case StartSession():
                 await self._ensure_running(self._session(request.session))
@@ -837,7 +899,36 @@ class Daemon:
             raise AidError("to_self", f"{session.name!r} cannot message itself")
         if session.uses_channel and not session.spec.aid_tools:
             raise AidError("cannot_receive", f"{session.name!r} has aid_tools off, so nothing reads its messages")
+        nudge = request.sender is not None and session.spec.supervisor == request.sender
+        if nudge:
+            self._check_nudge(session, request.text)
         await self._accept_message(session, MessageEntry(sender=request.sender, text=request.text), request.id)
+        if nudge and request.sender is not None:
+            session.nudges += 1
+            session.last_nudge = request.text
+            await self._publish(
+                events.supervision_topic(session.name),
+                SupervisionEvent(
+                    session=session.name,
+                    supervisor=request.sender,
+                    nudge=SupervisionNudge(text=clip(request.text), nudges=session.nudges),
+                )
+                .model_dump_json()
+                .encode(),
+            )
+
+    def _check_nudge(self, session: _Session, text: str) -> None:
+        """A supervisor's nudge to its supervised session goes out: within budget, and nothing like the last."""
+        budget = session.spec.supervisor_nudge_budget
+        if session.nudges >= budget:
+            raise AidError(
+                "nudge_budget",
+                f"{session.name!r} had its {budget} nudges this episode; further stuck, it needs a person",
+            )
+        if nudge_repeats(session.last_nudge, text):
+            raise AidError(
+                "repeated_nudge", "that nudge says what the last one said; say it differently or stay silent"
+            )
 
     async def _notify(self, session: _Session, reply: Notify) -> None:
         """A worker's watch fired: record its report and wake the session, like a message but from no person
@@ -905,7 +996,7 @@ class Daemon:
         session.permissions.clear()
         self._disarm_session_backstops(name)
         await self._publish_turn(name, turn, "ended", reason)
-        await self._fire_supervisor(name, reason)
+        await self._fire_supervisor(name, reason, turn)
         if session.inbox and not session.uses_channel and self._tg is not None:
             self._tg.start_soon(self._deliver, session)
 
@@ -975,23 +1066,40 @@ class Daemon:
             before = page.entries[0].seq
         return SearchResults(entries=matches[:limit], total=len(matches))
 
-    async def _fire_supervisor(self, name: str, reason: str) -> None:
-        """A supervised turn ended: hand its clipped tail to the supervisor as a message, through the same
-        accept→inbox→wake path a message takes — a wake turn when idle, the next one when a turn runs. A
-        supervisor that is gone hears nothing, and nothing replays."""
+    async def _fire_supervisor(self, name: str, reason: str, turn: str) -> None:
+        """A supervised turn ended: score its tail for stuckness, then hand it to the supervisor as a message,
+        through the same accept→inbox→wake path a message takes — a wake turn when idle, the next one when
+        a turn runs. A supervisor that is gone hears nothing, and nothing replays. The firing is also
+        published on the supervised session's supervision topic, with its reason and score."""
         if not self._serving:
             return
         session = self._sessions.get(name)
         supervisor = session.spec.supervisor if session is not None else None
-        overseer = self._sessions.get(supervisor) if supervisor is not None else None
-        if session is None or overseer is None:
-            if supervisor is not None:
-                log.info("supervisor_gone", session=name, supervisor=supervisor)
+        if session is None or supervisor is None:
             return
         page = await session.history.page(limit=SUPERVISION_ITEMS)
+        score = _loop_score([entry.item for entry in page.entries])
+        stuck, nudges, attention = supervision_stuck(
+            name, supervisor, session.stuck_turns, session.nudges, session.spec.supervisor_nudge_budget, score
+        )
+        session.stuck_turns, session.nudges, session.attention = stuck, nudges, attention
+        overseer = self._sessions.get(supervisor)
+        if overseer is None:
+            log.info("supervisor_gone", session=name, supervisor=supervisor)
+            return
         goals = [goal for goal in await self._read_goals(name) if goal.state is GoalState.OPEN]
         await self._accept_message(
             overseer, MessageEntry(sender=name, text=supervision_text(name, reason, page, goals)), uuid.uuid4().hex
+        )
+        await self._publish(
+            events.supervision_topic(name),
+            SupervisionEvent(
+                session=name,
+                supervisor=supervisor,
+                firing=SupervisionFiring(turn=turn, reason=reason, score=score, stuck_turns=stuck),
+            )
+            .model_dump_json()
+            .encode(),
         )
 
     async def _person_recent(self, session: _Session, window: float) -> bool:
@@ -1175,7 +1283,7 @@ class Daemon:
             if session.turn is not None:
                 with contextlib.suppress(zmq.ZMQError):
                     await self._publish_turn(session.name, session.turn, "ended", "worker_exited")
-                await self._fire_supervisor(session.name, "worker_exited")
+                await self._fire_supervisor(session.name, "worker_exited", session.turn)
                 session.turn = None
             session.permissions.clear()
             self._disarm_session_backstops(session.name)

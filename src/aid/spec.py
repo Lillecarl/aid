@@ -54,6 +54,10 @@ class _Spec(BaseModel):
     presence window: a person-authored entry (message, permission answer) this recent keeps the full wait."""
     supervisor_permission_absent_timeout: Annotated[float, Field(gt=0)] = 60
     """The wait above, shortened when nobody is around: no person-authored entry in the presence window."""
+    supervisor_nudge_budget: Annotated[int, Field(ge=0)] = 3
+    """Nudges the supervisor may send per stuck episode — the run of supervised turns since the last
+    unstuck one. Past it the daemon refuses nudges; K stuck turns after K nudges raises `attention` to
+    the person instead. Zero never nudges, and escalates the first stuck turn."""
 
     @model_validator(mode="after")
     def _worker_launch_is_sane(self) -> Self:

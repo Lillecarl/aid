@@ -12,6 +12,10 @@
 - `session/<name>/permission/`: each permission request or decision as the worker sent it, with its turn
   (`PermissionEvent`). Observability only: answering stays on the permission paths, so a dropped event
   costs insight, never a hung agent.
+- `session/<name>/supervision/`: what a supervised session's link did (`SupervisionEvent`): each firing
+  with its reason and loop score, each nudge the supervisor sent, each goal it changed. A dropped event
+  repairs through history paging (firings and nudges are messages there), status (attention), and the
+  goals tool.
 
 Topics end in `/`, so a subscription to one session's prefix never matches another session whose name starts the
 same. PUB drops what a slow subscriber cannot take: a history gap shows as a jump in seq and is fetched with
@@ -49,3 +53,7 @@ def tool_topic(name: str) -> bytes:
 
 def permission_topic(name: str) -> bytes:
     return session_prefix(name) + b"permission/"
+
+
+def supervision_topic(name: str) -> bytes:
+    return session_prefix(name) + b"supervision/"

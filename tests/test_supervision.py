@@ -8,13 +8,16 @@ import anyio
 import pytest
 
 import aid
+from aid import events
 from aid.daemon import (
     SUPERVISION_ITEM_CHARS,
     SUPERVISION_LOOP_THRESHOLD,
     add_goal,
+    nudge_repeats,
     permission_backstop_text,
     set_goal,
     supervision_cycle,
+    supervision_stuck,
     supervision_text,
 )
 from aid.protocol import (
@@ -31,6 +34,7 @@ from aid.protocol import (
     PermissionDecision,
     PermissionRequest,
     PromptEntry,
+    SendMessage,
     SetGoal,
     SupervisedHistory,
     TextDelta,
@@ -39,6 +43,7 @@ from aid.protocol import (
 )
 from aid.spec import PermissionMode
 from tests.conftest import py_spec
+from tests.test_events import subscribed
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -424,3 +429,122 @@ async def test_supervised_answer_refuses_strangers_and_gone(daemon: Paths, tmp_p
                 await client.call(
                     AnswerSupervisedPermission(supervisor="boss", session="coder", request_id="x", option_id=None)
                 )
+
+
+def test_nudge_repeats() -> None:
+    assert not nudge_repeats(None, "anything goes")
+    assert nudge_repeats("keep digging", "keep digging")
+    assert nudge_repeats("Keep   digging", "keep digging!")
+    assert not nudge_repeats("keep digging", "try another angle")
+
+
+def test_supervision_stuck_counts_resets_and_escalates() -> None:
+    assert supervision_stuck("coder", "boss", 0, 0, 3, None) == (0, 0, None)
+    assert supervision_stuck("coder", "boss", 4, 1, 3, 0.5) == (0, 0, None)
+    assert supervision_stuck("coder", "boss", 0, 0, 3, 1.0) == (1, 0, None)
+    assert supervision_stuck("coder", "boss", 2, 2, 3, 1.0) == (3, 2, None)
+    assert supervision_stuck("coder", "boss", 2, 3, 3, 1.0) == (
+        3,
+        3,
+        "coder is stuck for 3 turns after 3 nudges from boss; needs a person",
+    )
+    assert supervision_stuck("coder", "boss", 0, 0, 0, 1.0)[2] is not None
+
+
+async def all_idle(client: aid.Client, *names: str) -> None:
+    """Every named session out of its turn: teardown must not cancel a history read mid-flight."""
+    while True:
+        for name in names:
+            if (await client.session(name).status()).busy:
+                break
+        else:
+            return
+        await anyio.sleep(0.05)
+
+
+async def test_nudge_gates(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            await client.create("boss", py_spec(tmp_path, "agents:echo"))
+            await client.create("coder", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "boss"}))
+            await client.create(
+                "tight",
+                py_spec(tmp_path, "agents:echo").model_copy(
+                    update={"supervisor": "boss", "supervisor_nudge_budget": 1}
+                ),
+            )
+            await client.create("other", py_spec(tmp_path, "agents:echo"))
+            await client.call(SendMessage(to="coder", sender="boss", text="keep digging"))
+            with pytest.raises(aid.AidError, match="repeated_nudge"):
+                await client.call(SendMessage(to="coder", sender="boss", text="keep  digging!"))
+            await client.call(SendMessage(to="coder", sender="boss", text="try another angle"))
+            await client.call(SendMessage(to="coder", sender=None, text="keep digging"))
+            await client.call(SendMessage(to="coder", sender=None, text="keep digging"))
+            await client.call(SendMessage(to="other", sender="boss", text="same"))
+            await client.call(SendMessage(to="other", sender="boss", text="same"))
+            await client.call(SendMessage(to="tight", sender="boss", text="one"))
+            with pytest.raises(aid.AidError, match="nudge_budget"):
+                await client.call(SendMessage(to="tight", sender="boss", text="two"))
+            coder_texts = [
+                e.item.text
+                for e in (await client.session("coder").history(limit=1000)).entries
+                if isinstance(e.item, MessageEntry) and e.item.sender == "boss"
+            ]
+            await all_idle(client, "boss", "coder", "tight", "other")
+            await anyio.sleep(0.5)
+    assert coder_texts == ["keep digging", "try another angle"]
+
+
+async def test_stuck_episode_escalates_to_attention(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with subscribed(daemon, events.supervision_topic("coder")) as sub, aid.connect(daemon) as client:
+            boss = await client.create(
+                "boss", py_spec(tmp_path, "agents:nagger", AID_SUPERVISED="coder", AID_NUDGES="2")
+            )
+            coder = await client.create(
+                "coder",
+                py_spec(tmp_path, "agents:looper").model_copy(
+                    update={"supervisor": "boss", "supervisor_nudge_budget": 2}
+                ),
+            )
+            await coder.run("go")
+            topic = events.supervision_topic("coder")
+            first = await sub.until(topic, lambda p: p.get("firing") and p["firing"]["stuck_turns"] == 0)
+            assert first["firing"]["reason"] == "done"
+            assert first["firing"]["score"] is None
+            first_nudge = await sub.until(topic, lambda p: p.get("nudge") and p["nudge"]["nudges"] == 1)
+            assert first_nudge["nudge"]["text"] == "keep digging"
+            second = await sub.until(topic, lambda p: p.get("firing") and p["firing"]["stuck_turns"] == 1)
+            assert second["firing"]["score"] == 1.0
+            second_nudge = await sub.until(topic, lambda p: p.get("nudge") and p["nudge"]["nudges"] == 2)
+            assert second_nudge["nudge"]["text"] == "try another angle"
+            third = await sub.until(topic, lambda p: p.get("firing") and p["firing"]["stuck_turns"] == 2)
+            assert third["firing"]["score"] == 1.0
+            status = await coder.status()
+            assert status.attention is not None
+            assert "coder" in status.attention and "needs a person" in status.attention
+            nudges = [
+                e.item.text
+                for e in (await coder.history(limit=1000)).entries
+                if isinstance(e.item, MessageEntry) and e.item.sender == "boss"
+            ]
+            firings = await supervised_firings(boss, "coder", 3)
+            await output_after(boss, firings[2].seq)
+    assert status.attention == "coder is stuck for 2 turns after 2 nudges from boss; needs a person"
+    assert nudges == ["keep digging", "try another angle"]
+
+
+async def test_supervision_goals_are_published(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with subscribed(daemon, events.supervision_topic("coder")) as sub, aid.connect(daemon) as client:
+            await client.create("boss", py_spec(tmp_path, "agents:echo"))
+            await client.create("coder", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "boss"}))
+            topic = events.supervision_topic("coder")
+            goal = await client.call(AddGoal(supervisor="boss", session="coder", text="ship it"))
+            assert isinstance(goal, dict)
+            goal_id = str(goal["id"])
+            added = await sub.until(topic, lambda p: p.get("goals") and p["goals"]["action"] == "added")
+            assert added["goals"]["goal"]["id"] == goal_id
+            await client.call(SetGoal(supervisor="boss", session="coder", goal_id=goal_id, state=GoalState.DONE))
+            done = await sub.until(topic, lambda p: p.get("goals") and p["goals"]["action"] == "done")
+            assert done["goals"]["goal"]["state"] == "done"

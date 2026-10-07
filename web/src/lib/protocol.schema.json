@@ -56,6 +56,11 @@
           ],
           "default": null
         },
+        "supervisor_nudge_budget": {
+          "default": 3,
+          "minimum": 0,
+          "type": "integer"
+        },
         "supervisor_permission_absent_timeout": {
           "default": 60,
           "exclusiveMinimum": 0,
@@ -362,6 +367,11 @@
             }
           ],
           "default": null
+        },
+        "supervisor_nudge_budget": {
+          "default": 3,
+          "minimum": 0,
+          "type": "integer"
         },
         "supervisor_permission_absent_timeout": {
           "default": 60,
@@ -1579,6 +1589,11 @@
             }
           ],
           "default": null
+        },
+        "supervisor_nudge_budget": {
+          "default": 3,
+          "minimum": 0,
+          "type": "integer"
         },
         "supervisor_permission_absent_timeout": {
           "default": 60,
