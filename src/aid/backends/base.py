@@ -13,6 +13,8 @@ type Record = Callable[[str, HistoryItem], Awaitable[None]]
 """Records an entry of a turn nobody sent through aid, under the turn id the backend chose."""
 type Report = Callable[[Activity], Awaitable[None]]
 """Tells the daemon what the agent is doing."""
+type Notifier = Callable[[str, str], Awaitable[None]]
+"""Tells the daemon one of the session's background tasks ended: its task id, and the report for the agent."""
 
 
 class Backend(Protocol):
@@ -68,6 +70,17 @@ class PermissionBackend(Backend, Protocol):
         answering; None is a person. `text` is the person's own words; only a waiter that reads answer text
         (the `ask_user` tool) hands it to its agent."""
         ...
+
+
+@runtime_checkable
+class WatchBackend(Backend, Protocol):
+    """A backend whose session watches background tasks past their turn, notifying the daemon as they end.
+
+    `runtime_checkable` matches by method name alone: keep `watch` unique among backends."""
+
+    async def watch(self, notify: Notifier) -> None:
+        """Runs for the worker's life, sending a notification per fired watch. It returns when nothing is
+        left to watch, which ends nothing — unlike `follow`, whose return means the agent is gone."""
 
 
 @runtime_checkable

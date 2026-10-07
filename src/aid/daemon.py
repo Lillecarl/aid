@@ -46,6 +46,7 @@ from aid.protocol import (
     ListPlugins,
     ListSessions,
     MessageEntry,
+    Notify,
     Observed,
     PermissionDecision,
     PermissionRequest,
@@ -197,13 +198,25 @@ class _Session:
         )
 
 
+BACKGROUND_SENDER: Final = "background task "
+"""Prefix of a MessageEntry sender naming a background task report, `background task bg1`. The worker sends
+the task id; the daemon builds the sender. A session named this way would also match, and render as a
+report: absurd, and harmless if it ever happens."""
+
+
 def wake_prompt(messages: list[MessageEntry]) -> str:
-    """The turn that hands messages to an ACP or pydantic-ai session."""
+    """The turn that hands messages to an ACP or pydantic-ai session. Background task reports ride as
+    written; person and session messages render as quotes, answered with the send_message tool."""
     parts = [
-        f"Message from {f'aid session {m.sender!r}' if m.sender else 'a person using aid'}:\n\n{m.text}"
-        for m in messages
+        message.text
+        if message.sender is not None and message.sender.startswith(BACKGROUND_SENDER)
+        else (
+            f"Message from {f'aid session {message.sender!r}' if message.sender else 'a person using aid'}:"
+            f"\n\n{message.text}"
+        )
+        for message in messages
     ]
-    if any(m.sender for m in messages):
+    if any(m.sender and not m.sender.startswith(BACKGROUND_SENDER) for m in messages):
         parts.append(
             "Answer a session with the send_message tool, addressed to its name, when its message asks for "
             "something. Do not answer a message that only acknowledges or thanks."
@@ -620,10 +633,21 @@ class Daemon:
             raise AidError("to_self", f"{session.name!r} cannot message itself")
         if session.uses_channel and not session.spec.aid_tools:
             raise AidError("cannot_receive", f"{session.name!r} has aid_tools off, so nothing reads its messages")
+        await self._accept_message(session, MessageEntry(sender=request.sender, text=request.text), request.id)
+
+    async def _notify(self, session: _Session, reply: Notify) -> None:
+        """A worker's background task ended: record its report and wake the session, like a message but from
+        no person or session. A worker whose session is gone notifies nothing."""
+        await self._accept_message(
+            session, MessageEntry(sender=f"{BACKGROUND_SENDER}{reply.task_id}", text=reply.text), uuid.uuid4().hex
+        )
+
+    async def _accept_message(self, session: _Session, message: MessageEntry, turn: str) -> None:
+        """Record a message for the session and wake it: a turn of its own when idle, the next one when a
+        turn runs."""
         if self._tg is None:
             raise RuntimeError("daemon is not serving")
-        message = MessageEntry(sender=request.sender, text=request.text)
-        await Recorder(session.history, request.id).message(message)
+        await Recorder(session.history, turn).message(message)
         session.inbox.append(message)
         session.mail.set()
         # The sender is often an agent mid-turn, waiting on its tool call: it gets its answer before the wake.
@@ -828,6 +852,9 @@ class Daemon:
                 case Activity():
                     if (session := self._sessions.get(name)) is not None:
                         session.working, session.attention = reply.working, reply.attention
+                case Notify():
+                    if (session := self._sessions.get(name)) is not None:
+                        await self._notify(session, reply)
                 case Event():
                     if (route := self._routes.get(reply.id)) is not None:
                         if route.client is not None:

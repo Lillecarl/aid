@@ -18,7 +18,14 @@ import zmq
 import zmq.asyncio
 
 from aid.backends import open_backend
-from aid.backends.base import CompactionBackend, FollowingBackend, HookBackend, PermissionBackend, ScreenBackend
+from aid.backends.base import (
+    CompactionBackend,
+    FollowingBackend,
+    HookBackend,
+    PermissionBackend,
+    ScreenBackend,
+    WatchBackend,
+)
 from aid.protocol import (
     Activity,
     AnswerPermission,
@@ -32,6 +39,7 @@ from aid.protocol import (
     Hello,
     Hook,
     Lifecycle,
+    Notify,
     Observed,
     Prompt,
     StartFailed,
@@ -83,6 +91,8 @@ async def serve(
             await worker.send(Hello(started=backend.started()))
             if isinstance(backend, FollowingBackend):
                 tg.start_soon(worker.follow, backend)
+            if isinstance(backend, WatchBackend):
+                tg.start_soon(worker.watch, backend)
             await worker.serve()
     finally:
         sock.close()
@@ -105,9 +115,12 @@ class _Worker:
         self._send_lock = anyio.Lock()
         self._busy = False
 
-    async def send(self, reply: Hello | Event | Done | Failure | Observed | Activity) -> None:
+    async def send(self, reply: Hello | Event | Done | Failure | Observed | Activity | Notify) -> None:
         async with self._send_lock:
             await self._sock.send(encode(reply))
+
+    async def notify(self, task_id: str, text: str) -> None:
+        await self.send(Notify(task_id=task_id, text=text))
 
     async def record(self, turn: str, item: HistoryItem) -> None:
         await self.send(Observed(turn=turn, item=item))
@@ -116,6 +129,14 @@ class _Worker:
         await backend.follow(self.record, self.send)
         log.info("agent_gone")
         self._tg.cancel_scope.cancel()
+
+    async def watch(self, backend: WatchBackend) -> None:
+        """The session's watch loop, for the worker's life. A failure here must not take the worker: unlike
+        `follow`, its return says nothing about the agent."""
+        try:
+            await backend.watch(self.notify)
+        except Exception:
+            log.exception("watch_failed")
 
     async def serve(self) -> None:
         while True:

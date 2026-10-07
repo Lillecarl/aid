@@ -630,7 +630,18 @@ class Activity(_Message):
     attention: str | None = None
 
 
-type Reply = Annotated[Event | Done | Failure | Hello | StartFailed | Observed | Activity, Field(discriminator="reply")]
+class Notify(_Message):
+    """From a worker, unasked: one of its background tasks ended, and the session should hear about it. The
+    daemon records it and wakes the session: a turn of its own when idle, the next turn when one runs."""
+
+    reply: Literal["notify"] = "notify"
+    task_id: str
+    text: str
+
+
+type Reply = Annotated[
+    Event | Done | Failure | Hello | StartFailed | Observed | Activity | Notify, Field(discriminator="reply")
+]
 
 RequestAdapter: TypeAdapter[Request] = TypeAdapter(Request)
 ReplyAdapter: TypeAdapter[Reply] = TypeAdapter(Reply)

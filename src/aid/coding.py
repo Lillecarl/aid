@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 
     from pyedit.syntax.nodes import NodeInfo  # pyright: ignore[reportMissingTypeStubs]
 
-    from aid.backends.base import Emit
+    from aid.backends.base import Emit, Notifier
     from aid.backends.permissions import PermissionWaits
     from pyrun import Command
 
@@ -100,6 +100,16 @@ class BackgroundTask:
 
 
 @dataclass
+class Monitor:
+    """A watched background task: when it reaches a terminal state, the session hears about it — a new turn
+    when the loop is idle, the next turn when one runs. One-shot: firing removes the watch, and watches die
+    with the worker."""
+
+    id: str
+    task_id: str
+
+
+@dataclass
 class Coding:
     cwd: Path
     store: Path
@@ -119,6 +129,11 @@ class Coding:
     tasks: dict[str, BackgroundTask] = field(default_factory=dict[str, BackgroundTask])
     """Background tasks started this session, by id. They outlive their turn, and die with the worker."""
     task_seq: int = 0
+    monitors: dict[str, Monitor] = field(default_factory=dict[str, Monitor])
+    """Completion watches by id. The watch loop fires each once, then forgets it."""
+    monitor_seq: int = 0
+    monitor_event: anyio.Event = field(default_factory=anyio.Event)
+    """Set whenever `monitors` gains an entry; the watch loop waits on it when nothing is watched."""
     shell: ShellSession | None = None
     """The session's shell, started by the first `shell` call. `cd` and the environment persist between
     calls; it dies with the worker, or sooner on a timeout, which the next call reports as a reset."""
@@ -211,6 +226,35 @@ class Coding:
         await self.shell.restart()
         return "shell restarted; cd and env reset"
 
+    async def watch(self, notify: Notifier) -> None:
+        """The session's monitor loop, for the worker's life: each fired monitor notifies the daemon once,
+        which wakes the session — a new turn when the loop is idle, the next one when a turn runs."""
+        while True:
+            await self.monitor_event.wait()
+            # Fresh wait each round: anyio events fire once and never clear. Arrivals cannot slip past —
+            # insertion happens before set with no checkpoint between, and firing reads the dict itself.
+            self.monitor_event = anyio.Event()
+            await self._watch_live(notify)
+
+    async def _watch_live(self, notify: Notifier) -> None:
+        """Poll watched monitors until none is left: terminal tasks reap like task_output reaps them, then
+        report. Monitors armed mid-poll join the next round on their own."""
+        while self.monitors:
+            for mid, monitor in list(self.monitors.items()):
+                task = self.tasks.get(monitor.task_id)
+                if task is None:
+                    del self.monitors[mid]  # Never happens: tasks are never deleted. Drop it if it does.
+                    continue
+                await _enforce(task)
+                if task.runner.returncode is not None and not task.reaped:
+                    await _reap(task)
+                if task.reaped:
+                    text = await _notify_text(task)
+                    del self.monitors[mid]
+                    await notify(monitor.task_id, text)
+            if self.monitors:
+                await anyio.sleep(TASK_POLL)
+
     def resolve(self, path: str) -> Path:
         """A path the agent names: under the session's directory, a pyrun record in the store, or a spilled
         tool result in the outputs directory."""
@@ -296,6 +340,25 @@ async def _report(task: BackgroundTask) -> str:
     if err:
         body += f"\nstderr:\n{err}"
     return f"{head}\n{body}"
+
+
+async def _notify_text(task: BackgroundTask) -> str:
+    """A fired monitor's report: how the task ended, a tail of what it wrote, and where all of it lives. A
+    wake turn carries this as its prompt, so it stays a head: the full output waits in task_output."""
+    name = shlex.join(task.argv)
+    elapsed = (task.finished or task.started) - task.started
+    if task.timed_out:
+        head = f"Background task {task.id} timed out after {task.time_limit}s and was killed: {name}"
+    elif task.stopped:
+        head = f"Background task {task.id} stopped (exit {task.exit_code}): {name}"
+    else:
+        head = f"Background task {task.id} finished: exit {task.exit_code} after {elapsed:.1f}s: {name}"
+    out = await _tail(task.stdout_file)
+    err = await _tail(task.stderr_file)
+    body = out or "(no output)"
+    if err:
+        body += f"\nstderr:\n{err}"
+    return f"{head}\n{body}\nRead all of its output with task_output {task.id}."
 
 
 def numbered(text: str, offset: int, limit: int) -> str:
@@ -775,6 +838,31 @@ async def tasks() -> str:
     return "\n".join(lines)
 
 
+async def monitor(ctx: RunContext[Any], task_id: str) -> str:
+    """Watch a background task, and hear when it ends: a new turn when the loop is idle, the next turn when
+    one runs. One-shot: firing removes the watch, and watches die with the worker.
+
+    The report names how it ended, a tail of its output, and reads the rest with task_output. Arming on a
+    finished task still notifies: the watch fires on its next poll."""
+    coding = _coding()
+    task = _task(task_id)
+    if armed := next((mid for mid, monitor in coding.monitors.items() if monitor.task_id == task_id), None):
+        return f"{task_id} is already watched as {armed}"
+    allowed = await coding.permit(
+        ctx.tool_call_id or "",
+        tool_name="monitor",
+        title=f"notify when {task_id} ends: {shlex.join(task.argv)}",
+        input={"task_id": task_id, "argv": task.argv},
+    )
+    if not allowed:
+        return "not allowed: nothing is watched"
+    coding.monitor_seq += 1
+    monitor_id = f"m{coding.monitor_seq}"
+    coding.monitors[monitor_id] = Monitor(id=monitor_id, task_id=task_id)
+    coding.monitor_event.set()
+    return f"watching {task_id} as {monitor_id}: its end starts a new turn when idle, or joins the next one when busy"
+
+
 def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     """A tool's failure goes back to the model as a retry with the reason: an exception would end the run.
     Oversize text results spill to a file, so no turn carries more than a head plus a path."""
@@ -818,5 +906,6 @@ coding_tools: FunctionToolset[Any] = FunctionToolset[Any](
         _retrying(task_output),
         _retrying(task_stop),
         _retrying(tasks),
+        _retrying(monitor),
     ]
 )

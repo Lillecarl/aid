@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     from pydantic_ai.run import AgentRunResult
     from pydantic_ai.toolsets import AbstractToolset
 
-    from aid.backends.base import Emit
+    from aid.backends.base import Emit, Notifier
     from aid.spec import PydanticAISpec
 
 log = structlog.get_logger(__name__)
@@ -268,6 +268,11 @@ class PydanticAIBackend:
         self._coding.waits.cancel_all()
         if self._run is not None:
             self._run.cancel()
+
+    async def watch(self, notify: Notifier) -> None:
+        """The session's monitor loop, for the worker's life: the coding tools own the watches, this only
+        hosts them where turns cannot end them."""
+        await self._coding.watch(notify)
 
     async def compact(self, instructions: str) -> str:
         """Summarize the history into a digest focused by `instructions`, and replace everything before the
