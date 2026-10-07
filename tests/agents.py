@@ -227,6 +227,79 @@ timeout_watcher = _arming_watcher(
     {"argv": ["sleep", "30"]},
     {"task_id": "bg1", "on": "running_after", "after": 0.5},
 )
+
+
+def _supervising_call(tool: str, args: dict[str, object], call_id: str) -> ModelResponse:
+    return ModelResponse(parts=[ToolCallPart(tool, args, tool_call_id=call_id)])
+
+
+def _supervising_goal_id(messages: list[ModelMessage], text: str) -> str:
+    """The goal id the goals tool reported for `text`: the wake turn's answer proves what the daemon delivered."""
+    for message in messages:
+        for part in message.parts:
+            if not isinstance(part, ToolReturnPart) or not isinstance(part.content, str):
+                continue
+            try:
+                reported: object = json.loads(part.content)
+            except ValueError:
+                continue
+            if isinstance(reported, list):
+                for goal in cast("list[object]", reported):
+                    if not isinstance(goal, dict):
+                        continue
+                    entry = cast("dict[str, object]", goal)
+                    goal_id = entry.get("id")
+                    if entry.get("text") == text and isinstance(goal_id, str):
+                        return goal_id
+    raise ValueError(f"no goal {text!r} in tool results")
+
+
+def _supervising_decide(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """A supervisor probe: over three wake turns it reads its subject's history, searches it, tracks two goals,
+    then settles both. The subject comes from AID_SUPERVISED, so one probe serves any test."""
+    target = os.environ.get("AID_SUPERVISED", "coder")
+    turn = _user_prompts(messages)
+    called = [p.tool_name for m in messages for p in m.parts if isinstance(p, ToolCallPart)]
+    if turn == 1:
+        if "supervised_history" not in called:
+            return _supervising_call("supervised_history", {"session": target, "limit": 50}, "call0")
+        if "supervised_search" not in called:
+            return _supervising_call("supervised_search", {"session": target, "query": "do the thing"}, "call1")
+        if called.count("goal_add") == 0:
+            return _supervising_call("goal_add", {"session": target, "text": "ship it"}, "call2")
+        if called.count("goal_add") == 1:
+            return _supervising_call("goal_add", {"session": target, "text": "skip it"}, "call3")
+        if "goals" not in called:
+            return _supervising_call("goals", {"session": target}, "call4")
+        return ModelResponse(parts=[TextPart("noted")])
+    if turn == 2:
+        if "goal_done" not in called:
+            return _supervising_call(
+                "goal_done", {"session": target, "goal_id": _supervising_goal_id(messages, "ship it")}, "call5"
+            )
+        if "goal_drop" not in called:
+            return _supervising_call(
+                "goal_drop", {"session": target, "goal_id": _supervising_goal_id(messages, "skip it")}, "call6"
+            )
+        return ModelResponse(parts=[TextPart("settled")])
+    return ModelResponse(parts=[TextPart("all done")])
+
+
+async def _supervising_stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    match _supervising_decide(messages, info).parts:
+        case [ToolCallPart() as call]:
+            yield {
+                0: DeltaToolCall(name=call.tool_name, json_args=call.args_as_json_str(), tool_call_id=call.tool_call_id)
+            }
+        case [TextPart() as text]:
+            yield text.content
+        case parts:
+            raise ValueError(f"unexpected parts {parts}")
+
+
+supervisor_probe = Agent(
+    FunctionModel(_supervising_decide, stream_function=_supervising_stream), toolsets=[aid.supervisor_tools]
+)
 failed_watcher = _arming_watcher(
     {"argv": ["true"]},
     {"task_id": "bg1", "on": "failed"},

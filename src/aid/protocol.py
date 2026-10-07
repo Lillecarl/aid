@@ -196,6 +196,85 @@ class RemovePlugin(_Request):
     name: str
 
 
+class GoalState(StrEnum):
+    OPEN = "open"
+    DONE = "done"
+    DROPPED = "dropped"
+
+
+class Goal(_Message):
+    """One thing a supervised session works toward. The supervisor names them; a DONE-style token in the
+    supervised session's output is a hint the supervisor verifies, never an event."""
+
+    id: str
+    text: str
+    state: GoalState = GoalState.OPEN
+    updated_at: float
+
+
+GoalsAdapter: TypeAdapter[list[Goal]] = TypeAdapter(list[Goal])
+
+
+class SupervisedHistory(_Request):
+    """A supervised session's recent history, for its supervisor. The daemon refuses anyone the session did
+    not name: supervisors read only their own. Done's data is a `HistoryPage`."""
+
+    op: Literal["supervised_history"] = "supervised_history"
+    supervisor: str
+    """The calling session, which the supervised session names in its spec."""
+    session: str
+    limit: Annotated[int, Field(ge=1, le=1000)] = 100
+
+
+class SupervisedSearch(_Request):
+    """History entries of a supervised session matching a case-insensitive substring, oldest first, for its
+    supervisor. Done's data is `SearchResults`."""
+
+    op: Literal["supervised_search"] = "supervised_search"
+    supervisor: str
+    """The calling session, which the supervised session names in its spec."""
+    session: str
+    query: str
+    limit: Annotated[int, Field(ge=1, le=100)] = 20
+
+
+class SearchResults(_Message):
+    entries: list[HistoryEntry]
+    """The newest matches first, capped at the request's limit."""
+    total: int
+    """Matches in the whole history."""
+
+
+class GetGoals(_Request):
+    """Every goal of a supervised session, for its supervisor. Done's data is a list of `Goal`."""
+
+    op: Literal["goals"] = "goals"
+    supervisor: str
+    """The calling session, which the supervised session names in its spec."""
+    session: str
+
+
+class AddGoal(_Request):
+    """Name a goal for a supervised session, as its supervisor. Done's data is the `Goal`."""
+
+    op: Literal["goal_add"] = "goal_add"
+    supervisor: str
+    """The calling session, which the supervised session names in its spec."""
+    session: str
+    text: str
+
+
+class SetGoal(_Request):
+    """Mark a supervised session's goal done or dropped, as its supervisor. Done's data is the `Goal`."""
+
+    op: Literal["goal_set"] = "goal_set"
+    supervisor: str
+    """The calling session, which the supervised session names in its spec."""
+    session: str
+    goal_id: str
+    state: Literal[GoalState.DONE, GoalState.DROPPED]
+
+
 type Request = Annotated[
     GetStatus
     | GetScreen
@@ -217,7 +296,12 @@ type Request = Annotated[
     | Hook
     | AddPlugin
     | ListPlugins
-    | RemovePlugin,
+    | RemovePlugin
+    | SupervisedHistory
+    | SupervisedSearch
+    | GetGoals
+    | AddGoal
+    | SetGoal,
     Field(discriminator="op"),
 ]
 
@@ -270,6 +354,35 @@ def tool_text(value: object) -> str | None:
     if value is None or isinstance(value, str):
         return value
     return json.dumps(to_json(value), indent=2)
+
+
+def history_line(item: HistoryItem) -> str | None:
+    """One full line of a session's history, for supervision tails and search matches. Bookkeeping (starts,
+    usage, lifecycle) is skipped: a supervisor judges the work, not the plumbing. Callers clip."""
+    match item:
+        case PromptEntry():
+            return f"> {item.text}"
+        case MessageEntry():
+            return f"[message from {item.sender or 'a person'}] {item.text}"
+        case TextDelta():
+            return item.text
+        case ThoughtDelta():
+            return f"(thinking) {item.text}"
+        case ToolCall():
+            return " ".join(
+                part for part in (f"[tool] {item.title or item.tool_call_id}", item.status, item.output) if part
+            )
+        case Output():
+            output = item.output if isinstance(item.output, str) else json.dumps(item.output)
+            return f"[{item.stop_reason}] {output}"
+        case PermissionRequest():
+            return f"[permission] {item.tool_name or 'question'}: {item.title or item.request_id}"
+        case PermissionDecision():
+            return f"[permission {item.request_id}] decided by {item.by}"
+        case TurnError():
+            return f"[error {item.code}] {item.message}"
+        case _:
+            return None
 
 
 class ToolDiff(_Message):

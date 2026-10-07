@@ -5,10 +5,10 @@ from __future__ import annotations
 import contextlib
 import difflib
 import itertools
-import json
 import shlex
 import shutil
 import sys
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +27,7 @@ from aid.launcher import CommandLauncher, WorkerArgs
 from aid.plugins import PLUGIN_FILE, PluginSpec
 from aid.protocol import (
     Activity,
+    AddGoal,
     AddPlugin,
     AgentCatalog,
     AidError,
@@ -38,11 +39,15 @@ from aid.protocol import (
     Done,
     Event,
     Failure,
+    GetGoals,
     GetHistory,
     GetPane,
     GetScreen,
     GetStatus,
     GetSummary,
+    Goal,
+    GoalsAdapter,
+    GoalState,
     Hello,
     Hook,
     ListAgents,
@@ -56,27 +61,30 @@ from aid.protocol import (
     PermissionEvent,
     PermissionRequest,
     Prompt,
-    PromptEntry,
     ReceiveMessages,
     RemovePlugin,
+    SearchResults,
     SendMessage,
     SessionInfo,
     SessionInfosAdapter,
     SessionStatus,
+    SetGoal,
     Started,
     StartFailed,
     StartSession,
     StopSession,
+    SupervisedHistory,
+    SupervisedSearch,
     TextDelta,
     ThoughtDelta,
     ToolCall,
     ToolEvent,
-    TurnError,
     TurnEvent,
     Usage,
     decode_reply,
     decode_request,
     encode,
+    history_line,
 )
 from aid.spec import BUILTIN_MCP_SERVER, AcpSpec, AgentKind, AgentSpecAdapter, ClaudeTtySpec, PydanticAISpec
 from aid.summary import summarize
@@ -256,32 +264,9 @@ def supervision_cycle(links: dict[str, str | None], name: str, supervisor: str) 
 
 
 def _supervision_line(item: HistoryItem) -> str | None:
-    """One clipped line of a supervised session's tail. Bookkeeping (starts, usage, lifecycle) is skipped:
-    the supervisor judges the work, not the plumbing."""
-    match item:
-        case PromptEntry():
-            body = f"> {item.text}"
-        case MessageEntry():
-            body = f"[message from {item.sender or 'a person'}] {item.text}"
-        case TextDelta():
-            body = item.text
-        case ThoughtDelta():
-            body = f"(thinking) {item.text}"
-        case ToolCall():
-            body = " ".join(
-                part for part in (f"[tool] {item.title or item.tool_call_id}", item.status, item.output) if part
-            )
-        case Output():
-            output = item.output if isinstance(item.output, str) else json.dumps(item.output)
-            body = f"[{item.stop_reason}] {output}"
-        case PermissionRequest():
-            body = f"[permission] {item.tool_name or 'question'}: {item.title or item.request_id}"
-        case PermissionDecision():
-            body = f"[permission {item.request_id}] decided by {item.by}"
-        case TurnError():
-            body = f"[error {item.code}] {item.message}"
-        case _:
-            return None
+    """One clipped line of a supervised session's tail."""
+    if (body := history_line(item)) is None:
+        return None
     if len(body) > SUPERVISION_ITEM_CHARS:
         body = f"{body[:SUPERVISION_ITEM_CHARS]}\n… {len(body) - SUPERVISION_ITEM_CHARS} more characters"
     return body
@@ -300,12 +285,17 @@ def _loop_score(items: list[HistoryItem]) -> float | None:
     return max(difflib.SequenceMatcher(None, first, second).ratio() for first, second in itertools.pairwise(texts))
 
 
-def supervision_text(name: str, reason: str, page: HistoryPage) -> str:
-    """What the supervisor is told when a supervised turn ends: the session, how the turn closed, its recent
-    history clipped small, and the loop score over recent outputs. Cheap by design: the supervisor reads this
-    inline, and reaches for more history only when it needs it. Bounded by construction: at most
-    `SUPERVISION_ITEMS` lines of `SUPERVISION_ITEM_CHARS` characters."""
+def supervision_text(name: str, reason: str, page: HistoryPage, goals: list[Goal]) -> str:
+    """What the supervisor is told when a supervised turn ends: the session, how the turn closed, its open
+    goals, its recent history clipped small, and the loop score over recent outputs. Cheap by design: the
+    supervisor reads this inline, and reaches for more history only when it needs it. Bounded by
+    construction: open goals plus at most `SUPERVISION_ITEMS` lines of `SUPERVISION_ITEM_CHARS` characters."""
     lines = [f"Supervised session {name!r} ended a turn ({reason})."]
+    if goals:
+        lines.append(f"Open goals ({len(goals)}):")
+        lines.extend(f"- {goal.id[:8]}: {goal.text}" for goal in goals)
+    else:
+        lines.append("No open goals.")
     if page.total > len(page.entries):
         lines.append(f"Showing the newest {len(page.entries)} of {page.total} history entries:")
     rendered = [line for entry in page.entries if (line := _supervision_line(entry.item)) is not None]
@@ -318,6 +308,30 @@ def supervision_text(name: str, reason: str, page: HistoryPage) -> str:
     else:
         lines.append(f"Loop score: {score:.2f} over recent outputs (stuck at {SUPERVISION_LOOP_THRESHOLD:.2f}).")
     return "\n".join(lines)
+
+
+GOALS_FILE: Final = "goals.json"
+"""A supervised session's goals, beside its `history.jsonl`: the supervisor names them, the daemon keeps them."""
+
+SEARCH_PAGE: Final = 1000
+"""History entries one search step scans: page-sized reads, newest first."""
+
+
+def add_goal(goals: list[Goal], text: str) -> Goal:
+    """Name a goal. Pure: the caller saves."""
+    goal = Goal(id=uuid.uuid4().hex, text=text, updated_at=time.time())
+    goals.append(goal)
+    return goal
+
+
+def set_goal(goals: list[Goal], goal_id: str, state: GoalState) -> Goal:
+    """Mark a goal done or dropped. Pure: the caller saves."""
+    for i, goal in enumerate(goals):
+        if goal.id == goal_id:
+            updated = goal.model_copy(update={"state": state, "updated_at": time.time()})
+            goals[i] = updated
+            return updated
+    raise AidError("unknown_goal", f"no goal {goal_id!r}")
 
 
 class _Listener:
@@ -667,6 +681,34 @@ class Daemon:
                 self._routes[request.id] = _Route(client, session.name)
                 await self._send_worker(session, request.model_copy(update={"plugin": client.plugin}))
                 return None
+            case SupervisedHistory():
+                session = self._supervised_session(request.supervisor, request.session)
+                page = await session.history.page(limit=request.limit)
+                return Done(id=request.id, data=page.model_dump(mode="json"))
+            case SupervisedSearch():
+                if not request.query.strip():
+                    raise AidError("empty_query", "a supervision search needs a query")
+                session = self._supervised_session(request.supervisor, request.session)
+                results = await self._search_history(session, request.query, request.limit)
+                return Done(id=request.id, data=results.model_dump(mode="json"))
+            case GetGoals():
+                session = self._supervised_session(request.supervisor, request.session)
+                goals = await self._read_goals(session.name)
+                return Done(id=request.id, data=[goal.model_dump(mode="json") for goal in goals])
+            case AddGoal():
+                if not request.text.strip():
+                    raise AidError("empty_goal", "a goal needs text")
+                session = self._supervised_session(request.supervisor, request.session)
+                goals = await self._read_goals(session.name)
+                goal = add_goal(goals, request.text)
+                await self._write_goals(session.name, goals)
+                return Done(id=request.id, data=goal.model_dump(mode="json"))
+            case SetGoal():
+                session = self._supervised_session(request.supervisor, request.session)
+                goals = await self._read_goals(session.name)
+                goal = set_goal(goals, request.goal_id, request.state)
+                await self._write_goals(session.name, goals)
+                return Done(id=request.id, data=goal.model_dump(mode="json"))
             case StartSession():
                 await self._ensure_running(self._session(request.session))
                 return Done(id=request.id)
@@ -825,6 +867,53 @@ class Daemon:
         if session.inbox and not session.uses_channel and self._tg is not None:
             self._tg.start_soon(self._deliver, session)
 
+    def _supervised_session(self, supervisor: str, name: str) -> _Session:
+        """The session `supervisor` watches. Supervisors read and write only their own: anyone else gets an
+        error, not another session's history."""
+        session = self._session(name)
+        if session.spec.supervisor != supervisor:
+            raise AidError("not_supervised", f"{supervisor!r} supervises no session {name!r}")
+        return session
+
+    async def _read_goals(self, name: str) -> list[Goal]:
+        """The session's goals, or none: a missing file means none yet; an unreadable one is logged and
+        skipped, so a corrupt file never breaks supervision."""
+        path = anyio.Path(self._paths.session_dir(name)) / GOALS_FILE
+        try:
+            data = await path.read_bytes()
+        except FileNotFoundError:
+            return []
+        except OSError:
+            log.exception("goals_unreadable", session=name)
+            return []
+        try:
+            return GoalsAdapter.validate_json(data)
+        except ValidationError:
+            log.exception("goals_unreadable", session=name)
+            return []
+
+    async def _write_goals(self, name: str, goals: list[Goal]) -> None:
+        path = anyio.Path(self._paths.session_dir(name)) / GOALS_FILE
+        tmp = path.with_name(path.name + ".tmp")
+        await tmp.write_bytes(GoalsAdapter.dump_json(goals))
+        await tmp.rename(path)
+
+    async def _search_history(self, session: _Session, query: str, limit: int) -> SearchResults:
+        """Entries whose rendered line holds `query`, newest first. Page-sized reads newest-first across the
+        whole history: the scan costs one pass, and only the newest `limit` matches travel."""
+        needle = query.casefold()
+        matches: list[HistoryEntry] = []
+        before: int | None = None
+        while True:
+            page = await session.history.page(before=before, limit=SEARCH_PAGE)
+            for entry in reversed(page.entries):
+                if (line := history_line(entry.item)) is not None and needle in line.casefold():
+                    matches.append(entry)
+            if not page.has_older:
+                break
+            before = page.entries[0].seq
+        return SearchResults(entries=matches[:limit], total=len(matches))
+
     async def _fire_supervisor(self, name: str, reason: str) -> None:
         """A supervised turn ended: hand its clipped tail to the supervisor as a message, through the same
         accept→inbox→wake path a message takes — a wake turn when idle, the next one when a turn runs. A
@@ -839,8 +928,9 @@ class Daemon:
                 log.info("supervisor_gone", session=name, supervisor=supervisor)
             return
         page = await session.history.page(limit=SUPERVISION_ITEMS)
+        goals = [goal for goal in await self._read_goals(name) if goal.state is GoalState.OPEN]
         await self._accept_message(
-            overseer, MessageEntry(sender=name, text=supervision_text(name, reason, page)), uuid.uuid4().hex
+            overseer, MessageEntry(sender=name, text=supervision_text(name, reason, page, goals)), uuid.uuid4().hex
         )
 
     def _launcher_for(self, session: _Session) -> Launcher:
