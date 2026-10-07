@@ -165,6 +165,40 @@ in
   inherit (set.aid) tests;
   pyrun-tests = set.pyrun.tests;
 
+
+  ruff = pkgs.writeShellApplication {
+    name = "ruff";
+    runtimeInputs = [
+      pkgs.ruff
+    ];
+    text = # bash
+      ''
+        # SET ENV VARS AND SHIT HERE
+        ruff "$@"
+      '';
+  };
+  pyrefly = pkgs.writeShellApplication {
+    name = "pyrefly";
+    runtimeInputs = [
+      pkgs.pyrefly
+    ];
+    text = # bash
+      ''
+        # SET ENV VARS AND SHIT HERE
+        pyrefly "$@"
+      '';
+  };
+  nixpkgs-fmt = pkgs.writeShellApplication {
+    name = "nixpkgs-fmt";
+    runtimeInputs = [
+      pkgs.nixpkgs-fmt
+    ];
+    text = # bash
+      ''
+        nixpkgs-fmt **/*.nix
+      '';
+  };
+
   # One UML guest running dex, the daemon and the web UI as the NixOS module ships them. The UML
   # backend needs no KVM and no root, so this runs in the Nix sandbox like `tests` does.
   vivarium-smoke = pkgs.callPackage ./nix/vivarium-smoke.nix {
