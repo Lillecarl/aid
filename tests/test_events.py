@@ -46,7 +46,7 @@ class Subscriber:
             return False
         return True
 
-    async def until(self, topic: bytes, match: Callable[[Any], object]) -> Any:
+    async def until(self, topic: bytes, match: Callable[[Any], bool]) -> Any:
         while True:
             got, payload = await self.next()
             if got == topic and match(payload):

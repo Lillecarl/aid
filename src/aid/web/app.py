@@ -236,7 +236,7 @@ async def pane(websocket: WebSocket) -> None:
                 said = json.loads(text)
                 if not isinstance(said, dict):
                     break
-                await stream.send(cast("dict[str, Any]", said))
+                await stream.send(cast(dict[str, Any], said))
             tg.cancel_scope.cancel()
     except StreamRefused as error:
         await websocket.close(code=WS_POLICY_VIOLATION, reason=str(error)[:WS_REASON_MAX])

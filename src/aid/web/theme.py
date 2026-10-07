@@ -66,8 +66,8 @@ def css(theme: Theme | None) -> str:
 def _code(style: type[Style] | str) -> str:
     formatter: HtmlFormatter[str] = HtmlFormatter(style=style)
     # The stubs leave both untyped; each returns a list of rules.
-    background = cast("list[str]", formatter.get_background_style_defs(CODE))  # pyright: ignore[reportUnknownMemberType]
-    tokens = cast("list[str]", formatter.get_token_style_defs(CODE))  # pyright: ignore[reportUnknownMemberType]
+    background = cast(list[str], formatter.get_background_style_defs(CODE))  # pyright: ignore[reportUnknownMemberType]
+    tokens = cast(list[str], formatter.get_token_style_defs(CODE))  # pyright: ignore[reportUnknownMemberType]
     return "\n".join([*background, *tokens])
 
 

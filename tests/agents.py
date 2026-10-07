@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import anyio
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue, ValidationError
 from pydantic_ai import Agent
 from pydantic_ai.messages import (
     ModelResponse,
@@ -30,6 +30,7 @@ from pydantic_ai.models.function import (
 from pydantic_ai.models.test import TestModel
 
 import aid
+from aid.protocol import Goal
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -116,7 +117,7 @@ every_tool_caller = Agent(TestModel())
 messenger = Agent(TestModel(call_tools=["send_message"]))
 
 
-def _plan_at(messages: list[ModelMessage]) -> tuple[int, list[tuple[str, dict[str, object]]]]:
+def _plan_at(messages: list[ModelMessage]) -> tuple[int, list[tuple[str, dict[str, JsonValue]]]]:
     """The latest user prompt that parses as a plan, and its index: trailing metadata parses as JSON too, but
     never as a list."""
     for i in range(len(messages) - 1, -1, -1):
@@ -127,7 +128,7 @@ def _plan_at(messages: list[ModelMessage]) -> tuple[int, list[tuple[str, dict[st
                 except ValueError:
                     continue
                 if isinstance(plan, list):
-                    return i, cast("list[tuple[str, dict[str, object]]]", plan)
+                    return i, cast(list[tuple[str, dict[str, JsonValue]]], plan)
     raise ValueError("no plan in messages")
 
 
@@ -190,7 +191,7 @@ async def _watcher_stream(messages: list[ModelMessage], info: AgentInfo) -> Asyn
 watcher = Agent(FunctionModel(_watcher, stream_function=_watcher_stream), toolsets=[aid.coding_tools])
 
 
-def _arming_watcher(background: dict[str, object], monitor: dict[str, object]) -> Agent:
+def _arming_watcher(background: dict[str, JsonValue], monitor: dict[str, JsonValue]) -> Agent:
     """An agent that starts one background task, arms one watch, answers "armed", then echoes whatever wakes
     it. The wake turn's answer proves what each firing delivered."""
 
@@ -230,7 +231,7 @@ timeout_watcher = _arming_watcher(
 )
 
 
-def _supervising_call(tool: str, args: dict[str, object], call_id: str) -> ModelResponse:
+def _supervising_call(tool: str, args: dict[str, JsonValue], call_id: str) -> ModelResponse:
     return ModelResponse(parts=[ToolCallPart(tool, args, tool_call_id=call_id)])
 
 
@@ -241,17 +242,19 @@ def _supervising_goal_id(messages: list[ModelMessage], text: str) -> str:
             if not isinstance(part, ToolReturnPart) or not isinstance(part.content, str):
                 continue
             try:
-                reported: object = json.loads(part.content)
+                reported: JsonValue = json.loads(part.content)
             except ValueError:
                 continue
             if isinstance(reported, list):
-                for goal in cast("list[object]", reported):
-                    if not isinstance(goal, dict):
+                for entry in reported:
+                    if not isinstance(entry, dict):
                         continue
-                    entry = cast("dict[str, object]", goal)
-                    goal_id = entry.get("id")
-                    if entry.get("text") == text and isinstance(goal_id, str):
-                        return goal_id
+                    try:
+                        goal = Goal.model_validate(entry)
+                    except ValidationError:
+                        continue
+                    if goal.text == text:
+                        return goal.id
     raise ValueError(f"no goal {text!r} in tool results")
 
 

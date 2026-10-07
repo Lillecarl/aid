@@ -14,13 +14,12 @@ import shlex
 from typing import TYPE_CHECKING, Final, cast
 
 import structlog
+from pydantic import JsonValue
 
 import aid
 from aid.protocol import AidError
 
 if TYPE_CHECKING:
-    from pydantic import JsonValue
-
     from aid.client import Client
     from aid.protocol import PermissionRequest
 
@@ -37,10 +36,10 @@ def argv_of(tool_input: JsonValue) -> list[str] | None:
     """The command a tool call runs: pyrun's `argv`, or a shell `command` with no shell syntax in it."""
     if not isinstance(tool_input, dict):
         return None
-    fields = cast("dict[str, JsonValue]", tool_input)
+    fields = cast(dict[str, JsonValue], tool_input)
     argv = fields.get("argv")
     if isinstance(argv, list) and argv and all(isinstance(a, str) for a in argv):
-        return cast("list[str]", argv)
+        return cast(list[str], argv)
     command = fields.get("command")
     if isinstance(command, str) and command.strip() and not SHELL_SYNTAX & set(command):
         try:

@@ -66,7 +66,7 @@ def load(model: Path) -> Recognizer:
         num_threads=THREADS,
         enable_endpoint_detection=True,
     )
-    return cast("Recognizer", recognizer)
+    return cast(Recognizer, recognizer)
 
 
 class Transcription:

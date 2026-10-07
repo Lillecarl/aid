@@ -9,6 +9,7 @@ import pytest
 from aid.protocol import TextDelta, ThoughtDelta, ToolCall, ToolDiff, Usage
 from aid.transcript import (
     TranscriptFollower,
+    TranscriptItem,
     TurnEnded,
     TurnUsage,
     find_transcript,
@@ -155,7 +156,7 @@ def test_turn_usage_counts_each_message_once() -> None:
         ({"type": "attachment"}, []),
     ],
 )
-def test_items_from_entry(entry: dict[str, Any], items: list[object]) -> None:
+def test_items_from_entry(entry: dict[str, Any], items: list[TranscriptItem]) -> None:
     assert items_from_entry(entry) == items
 
 

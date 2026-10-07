@@ -411,7 +411,7 @@ def clip(text: str) -> str:
 
 def to_json(value: object) -> JsonValue:
     """A tool's arguments as JSON; what JSON cannot hold becomes its `str`."""
-    return cast("JsonValue", to_jsonable_python(value, fallback=str))
+    return cast(JsonValue, to_jsonable_python(value, fallback=str))
 
 
 def tool_text(value: object) -> str | None:

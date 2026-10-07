@@ -14,6 +14,7 @@ import pytest
 from websockets.asyncio.client import ClientConnection
 from websockets.asyncio.client import connect as ws_connect
 from websockets.exceptions import ConnectionClosed, InvalidStatus
+from websockets.typing import Origin, Subprotocol
 
 import aid
 from aid.web import OidcConfig, create_app, serve
@@ -36,8 +37,6 @@ from tests.web_harness import (
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from websockets.typing import Origin, Subprotocol
 
     from aid.paths import Paths
 
@@ -142,7 +141,7 @@ async def speak(web: Web, cookie: str, *, origin: str | None = None) -> list[dic
     url = web.url.replace("http://", "ws://") + "/api/transcribe"
     headers = {"Cookie": f"aid_session={cookie}"}
     replies: list[dict[str, Any]] = []
-    async with ws_connect(url, origin=cast("Origin", origin or web.url), additional_headers=headers) as ws:
+    async with ws_connect(url, origin=cast(Origin, origin or web.url), additional_headers=headers) as ws:
         await ws.send(json.dumps({"rate": rate}))
         step = rate // 10
         for start in range(0, len(samples), step):
@@ -180,9 +179,9 @@ async def zws_cookie(web: Web) -> dict[str, str]:
 def zws_connect(web: Web, path: str, headers: dict[str, str], *, origin: str | None = None) -> ws_connect:
     return ws_connect(
         web.url.replace("http://", "ws://") + path,
-        origin=cast("Origin", origin or web.url),
+        origin=cast(Origin, origin or web.url),
         additional_headers=headers,
-        subprotocols=[cast("Subprotocol", "ZWS2.0")],
+        subprotocols=[cast(Subprotocol, "ZWS2.0")],
     )
 
 
@@ -312,7 +311,7 @@ async def test_zws_needs_the_login_the_origin_and_the_subprotocol(web: Web) -> N
             with pytest.raises(InvalidStatus):
                 async with ws_connect(
                     web.url.replace("http://", "ws://") + path,
-                    origin=cast("Origin", web.url),
+                    origin=cast(Origin, web.url),
                     additional_headers=headers,
                 ):
                     pass
@@ -326,7 +325,7 @@ async def test_pane_relay(web: Web, tmp_path: Path, pymux_socket: str, daemon: P
             await other.create("tty", fake_spec(tmp_path, pymux_socket))
             await other.create("py", py_spec(tmp_path, "agents:echo"))
         headers = await zws_cookie(web)
-        origin = cast("Origin", web.url)
+        origin = cast(Origin, web.url)
         async with ws_connect(f"{url}/api/sessions/tty/pane", origin=origin, additional_headers=headers) as ws:
             welcome = json.loads(await ws.recv())
             first = json.loads(await ws.recv())
@@ -338,7 +337,7 @@ async def test_pane_relay(web: Web, tmp_path: Path, pymux_socket: str, daemon: P
         with pytest.raises(InvalidStatus):
             async with ws_connect(
                 f"{url}/api/sessions/tty/pane",
-                origin=cast("Origin", "http://elsewhere.example"),
+                origin=cast(Origin, "http://elsewhere.example"),
                 additional_headers=headers,
             ):
                 pass

@@ -128,7 +128,7 @@ def _metadata_of(messages: list[ModelMessage]) -> dict[str, Any]:
                 _, _, payload = part.content.partition("\n")
                 loaded = json.loads(payload)
                 assert isinstance(loaded, dict)
-                return cast("dict[str, Any]", loaded)
+                return cast(dict[str, Any], loaded)
     raise AssertionError("no metadata suffix on the wire")
 
 

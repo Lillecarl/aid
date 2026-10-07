@@ -73,7 +73,9 @@ exclude = ["tests/vivarium"]
 # UP037 bans quoted annotations. No ruff rule requires the import unconditionally, so
 # tests/test_style.py requires it on every file instead.
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "C4", "TC", "TID", "ASYNC", "PTH", "RET", "FA", "PGH", "PLC0415"]
-ignore = ["E501"]
+# TC006 requires quotes in `cast("T", ...)` so the name can stay a TYPE_CHECKING import. The ban covers
+# casts too, so the names are runtime imports instead; tests/test_style.py enforces the cast half.
+ignore = ["E501", "TC006"]
 # Claude Code draws its prompt with it; matching the screen needs the real character.
 allowed-confusables = ["❯"]
 

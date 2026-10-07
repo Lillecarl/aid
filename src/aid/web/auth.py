@@ -56,7 +56,7 @@ def make_oauth(config: OidcConfig) -> Any:
         client_secret=config.client_secret,
         client_kwargs={"scope": "openid email profile", "code_challenge_method": "S256"},
     )
-    return cast("Any", oauth.oidc)  # pyright: ignore[reportUnknownMemberType] -- authlib is untyped
+    return cast(Any, oauth.oidc)  # pyright: ignore[reportUnknownMemberType] -- authlib is untyped
 
 
 def allowed(claims: dict[str, Any], config: OidcConfig) -> str | None:
@@ -69,7 +69,7 @@ def allowed(claims: dict[str, Any], config: OidcConfig) -> str | None:
 
 def current_user(connection: HTTPConnection) -> User | None:
     data = connection.session.get(USER_KEY)
-    return User(**cast("dict[str, str]", data)) if isinstance(data, dict) else None
+    return User(**cast(dict[str, str], data)) if isinstance(data, dict) else None
 
 
 def same_origin(connection: HTTPConnection, config: OidcConfig) -> bool:
@@ -102,7 +102,7 @@ async def callback(request: Request) -> Response:
     except OAuthError as error:
         log.warning("oidc_callback_failed", error=str(error))
         return PlainTextResponse("login failed", status_code=400)
-    claims = cast("dict[str, Any]", token.get("userinfo") or {})
+    claims = cast(dict[str, Any], token.get("userinfo") or {})
     email = allowed(claims, config)
     if email is None:
         log.warning("login_refused", email=claims.get("email"))

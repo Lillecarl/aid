@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, cast
 
 import anyio
 import pytest
+from pydantic import JsonValue
 
 import aid
 from aid.spec import PermissionMode
@@ -62,7 +63,7 @@ async def test_pwa_is_installable(page: Page, browser_name: str) -> None:
     assert await page.locator('link[rel="manifest"]').count() >= 1
     cdp = await page.context.new_cdp_session(page)
     # The CDP bridge is untyped; the verdict below is a plain JSON object.
-    result = cast("dict[str, object]", await cdp.send("Page.getInstallabilityErrors"))  # pyright: ignore[reportUnknownMemberType]
+    result = cast(dict[str, JsonValue], await cdp.send("Page.getInstallabilityErrors"))  # pyright: ignore[reportUnknownMemberType]
     assert result.get("installabilityErrors", []) == []
 
 

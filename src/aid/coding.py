@@ -39,6 +39,7 @@ import anyio.to_thread
 import structlog
 from pydantic_ai import FunctionToolset, ModelRetry, RunContext
 from pyedit.session import EditSession  # pyright: ignore[reportMissingTypeStubs] -- annotated, no py.typed
+from pyedit.syntax.nodes import NodeInfo  # pyright: ignore[reportMissingTypeStubs]
 from shellous import ResultError, Runner, sh
 
 import pyrun
@@ -53,8 +54,6 @@ from pyrun.shell import ShellResult, ShellSession
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
-
-    from pyedit.syntax.nodes import NodeInfo  # pyright: ignore[reportMissingTypeStubs]
 
     from aid.backends.base import Emit, Notifier
     from aid.backends.permissions import PermissionWaits
@@ -726,7 +725,7 @@ async def outline(path: str) -> str:
     target = coding.resolve(path)
     if await anyio.Path(target).is_dir():
         raise AidError("is_dir", f"{path} is a directory; outline reads a single file")
-    nodes = cast("list[NodeInfo]", await coding.edit(lambda s: s.outline(target)))  # pyright: ignore[reportUnknownMemberType, reportUnknownLambdaType] -- pyedit names the type as a string it does not import
+    nodes = cast(list[NodeInfo], await coding.edit(lambda s: s.outline(target)))  # pyright: ignore[reportUnknownMemberType, reportUnknownLambdaType] -- pyedit names the type as a string it does not import
     return "\n".join(f"{n.start_line}-{n.end_line}\t{n.kind}\t{n.name}" for n in nodes) or f"{path} defines nothing"
 
 
@@ -1159,7 +1158,7 @@ def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[
             reason = error.message if isinstance(error, AidError) else str(error)
             raise ModelRetry(f"{type(error).__name__}: {reason}") from error
         if isinstance(result, str):
-            return cast("R", await spill(result))
+            return cast(R, await spill(result))
         return result
 
     return wrapper

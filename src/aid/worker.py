@@ -102,7 +102,7 @@ async def serve(
 def describe(error: BaseException) -> str:
     """One line per underlying error. A task group's own message says only how many there were."""
     if isinstance(error, BaseExceptionGroup):
-        inner: tuple[BaseException, ...] = cast("BaseExceptionGroup[BaseException]", error).exceptions
+        inner: tuple[BaseException, ...] = cast(BaseExceptionGroup[BaseException], error).exceptions
         return "; ".join(describe(e) for e in inner)
     return f"{type(error).__name__}: {error}"
 

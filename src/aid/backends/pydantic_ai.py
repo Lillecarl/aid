@@ -18,6 +18,7 @@ from pydantic_ai import FunctionToolset, RunCancelled, Tool
 from pydantic_ai.agent import AbstractAgent
 from pydantic_ai.capabilities import ProcessHistory
 from pydantic_ai.messages import (
+    AgentStreamEvent,
     FunctionToolCallEvent,
     FunctionToolResultEvent,
     ModelMessage,
@@ -152,7 +153,7 @@ def aid_toolset(catalog: Catalog) -> FunctionToolset[Any]:
     return FunctionToolset[Any](tools)
 
 
-def to_event(event: object) -> SessionEvent | None:
+def to_event(event: AgentStreamEvent) -> SessionEvent | None:
     match event:
         case PartStartEvent(part=TextPart(content=text)) | PartDeltaEvent(delta=TextPartDelta(content_delta=text)):
             return TextDelta(text=text) if text else None

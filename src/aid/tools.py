@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any, Final, cast, overload
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from pydantic import JsonValue
+
 _MARKER: Final = "__aid_mcptool__"
 
 
@@ -62,9 +64,9 @@ def tool_of(obj: object) -> McpTool | None:
 PATH_KEYS: Final = ("file_path", "path", "notebook_path")
 
 
-def tool_paths(input: object) -> list[str]:
+def tool_paths(input: JsonValue) -> list[str]:
     """Files a call touches, from its arguments."""
     if not isinstance(input, dict):
         return []
-    arguments = cast("dict[str, Any]", input)
+    arguments = cast(dict[str, Any], input)
     return [p for key in PATH_KEYS if isinstance(p := arguments.get(key), str)]

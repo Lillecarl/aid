@@ -16,21 +16,28 @@ import structlog
 from acp.connection import StreamDirection
 from acp.schema import (
     AgentMessageChunk,
+    AgentPlanContentUpdate,
+    AgentPlanRemovedUpdate,
+    AgentPlanUpdate,
     AgentThoughtChunk,
     AllowedOutcome,
+    AvailableCommandsUpdate,
     ClientCapabilities,
     ConfigOptionUpdate,
     ContentToolCallContent,
+    CurrentModeUpdate,
     DeniedOutcome,
     FileEditToolCallContent,
     Implementation,
     RequestPermissionResponse,
     SessionConfigOptionSelect,
+    SessionInfoUpdate,
     SessionNotification,
     TextContentBlock,
     ToolCallProgress,
     ToolCallStart,
     UsageUpdate,
+    UserMessageChunk,
 )
 from pydantic import BaseModel, Field, ValidationError
 
@@ -84,6 +91,23 @@ log = structlog.get_logger(__name__)
 SESSION_ID_FILE = "acp-session-id"
 START_TIMEOUT = 60
 
+# The SDK names no union for a session update; this is acp.Client.session_update's update annotation.
+SessionUpdate = (
+    UserMessageChunk
+    | AgentMessageChunk
+    | AgentThoughtChunk
+    | ToolCallStart
+    | ToolCallProgress
+    | AgentPlanUpdate
+    | AgentPlanContentUpdate
+    | AgentPlanRemovedUpdate
+    | AvailableCommandsUpdate
+    | CurrentModeUpdate
+    | ConfigOptionUpdate
+    | SessionInfoUpdate
+    | UsageUpdate
+)
+
 _ALLOW_KINDS = ("allow_once", "allow_always")
 _REJECT_KINDS = ("reject_once", "reject_always")
 
@@ -104,7 +128,7 @@ def permission_response(option_id: str | None) -> RequestPermissionResponse:
     return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=option_id))
 
 
-def to_event(update: object) -> SessionEvent | None:
+def to_event(update: SessionUpdate) -> SessionEvent | None:
     match update:
         case AgentMessageChunk(content=TextContentBlock(text=text)):
             return TextDelta(text=text)
@@ -263,10 +287,10 @@ class _Client:
                 events.send_nowait(decision)
         return permission_response(decision.option_id)
 
-    async def session_update(self, session_id: str, update: object, **kwargs: Any) -> None:
+    async def session_update(self, session_id: str, update: SessionUpdate, **kwargs: Any) -> None:
         return None
 
-    def on_connect(self, conn: object) -> None:
+    def on_connect(self, conn: acp.Agent) -> None:
         return None
 
 
@@ -367,7 +391,7 @@ async def open_acp(spec: AcpSpec, state_dir: anyio.Path) -> AsyncGenerator[AcpBa
 
     async with acp.spawn_agent_process(
         # Partial on purpose: the router answers method_not_found for what `ClientCapabilities()` does not advertise.
-        cast("acp.Client", client),
+        cast(acp.Client, client),
         spec.command[0],
         *spec.command[1:],
         env=agent_environment(spec.env, inherit=spec.inherit_env),

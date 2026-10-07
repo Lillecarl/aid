@@ -253,7 +253,7 @@ def usage_since(path: Path, offset: int) -> tuple[Usage, int]:
         except ValueError:
             continue
         if isinstance(raw, dict):
-            usage.add(cast("dict[str, Any]", raw))
+            usage.add(cast(dict[str, Any], raw))
     return usage.usage(), offset + len(complete)
 
 

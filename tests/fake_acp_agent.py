@@ -148,7 +148,7 @@ class FakeAgent:
 
 
 async def main() -> None:
-    await acp.run_agent(cast("acp.Agent", FakeAgent()))
+    await acp.run_agent(cast(acp.Agent, FakeAgent()))
 
 
 if __name__ == "__main__":

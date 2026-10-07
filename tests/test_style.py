@@ -1,8 +1,9 @@
 """The future-annotations policy (Lillecarl/aid#26): every aid file carries
-`from __future__ import annotations`, and no annotation is quoted.
+`from __future__ import annotations`, and no type is quoted.
 
-Ruff enforces the quoting half in the dev shell (UP037); these tests enforce both halves in the
-sandbox suite, which runs pytest but not ruff. Files are read, never imported: fixtures like
+Ruff enforces the annotation half in the dev shell (UP037); these tests enforce the whole ban in the
+sandbox suite, which runs pytest but not ruff. UP037 never visits `cast("T", ...)` first arguments, so
+the cast check below covers those. Files are read, never imported: fixtures like
 `agent_dir/_private.py` raise on import.
 """
 
@@ -83,3 +84,30 @@ def test_no_quoted_annotations() -> None:
             if has_quoted(annotation):
                 quoted.append(f"{path.relative_to(ROOT)}:{annotation.lineno}:{annotation.col_offset}")
     assert not quoted, f"quoted annotations (unquote them; UP037): {quoted}"
+
+
+def cast_strings(tree: ast.Module) -> list[ast.Constant]:
+    """`cast("T", ...)` first arguments: a runtime string, not an annotation, so UP037 never visits it."""
+    found: list[ast.Constant] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not node.args:
+            continue
+        func = node.func
+        is_cast = (isinstance(func, ast.Name) and func.id == "cast") or (
+            isinstance(func, ast.Attribute) and func.attr == "cast"
+        )
+        if not is_cast:
+            continue
+        first = node.args[0]
+        if isinstance(first, ast.Constant) and isinstance(first.value, str):
+            found.append(first)
+    return found
+
+
+def test_no_quoted_cast_types() -> None:
+    quoted: list[str] = []
+    for path in aid_files():
+        tree = ast.parse(path.read_text())
+        for string in cast_strings(tree):
+            quoted.append(f"{path.relative_to(ROOT)}:{string.lineno}:{string.col_offset}")
+    assert not quoted, f"quoted cast types (unquote them): {quoted}"

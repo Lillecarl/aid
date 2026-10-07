@@ -72,12 +72,12 @@ class _Untitled(GenerateJsonSchema):
 def _tuples_as_items(node: Any) -> Any:
     """JSON Schema 2020's `prefixItems` as draft 7's `items` list, which is what json2ts reads."""
     if isinstance(node, dict):
-        fixed = {key: _tuples_as_items(value) for key, value in cast("dict[str, Any]", node).items()}
+        fixed = {key: _tuples_as_items(value) for key, value in cast(dict[str, Any], node).items()}
         if "prefixItems" in fixed:
             fixed["items"] = fixed.pop("prefixItems")
         return fixed
     if isinstance(node, list):
-        return [_tuples_as_items(value) for value in cast("list[Any]", node)]
+        return [_tuples_as_items(value) for value in cast(list[Any], node)]
     return node
 
 

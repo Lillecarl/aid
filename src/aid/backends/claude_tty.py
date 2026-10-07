@@ -231,7 +231,7 @@ def read_settings(value: str, cwd: str) -> dict[str, Any]:
     document = json.loads(text)
     if not isinstance(document, dict):
         raise ValueError(f"--settings {value!r} is not a JSON object")
-    return cast("dict[str, Any]", document)
+    return cast(dict[str, Any], document)
 
 
 def hook_settings(control: str, session: str, own: dict[str, Any]) -> dict[str, Any]:
@@ -323,7 +323,7 @@ class ClaudeTtyBackend:
         return self._started
 
     async def hook(self, event: str, payload: JsonValue) -> JsonValue:
-        fields = cast("dict[str, JsonValue]", payload) if isinstance(payload, dict) else {}
+        fields = cast(dict[str, JsonValue], payload) if isinstance(payload, dict) else {}
         session_id = fields.get("session_id")
         if event != "SessionEnd" and isinstance(session_id, str) and session_id != self._session_id:
             await self._switch(session_id, fields.get("model"))
