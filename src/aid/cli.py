@@ -166,6 +166,11 @@ def _parser() -> argparse.ArgumentParser:
             metavar="FILE",
             help="with a wss:// --worker-endpoint: PEM CAs its certificate must chain to (default: the system's)",
         )
+        p.add_argument(
+            "--supervisor",
+            metavar="SESSION",
+            help="the session watching this one: the daemon hands it the clipped tail of every turn end",
+        )
         return p
 
     def with_mcp(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -317,6 +322,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             worker_command=worker_command,
             worker_endpoint=worker_endpoint,
             worker_ca=worker_ca,
+            supervisor=args.supervisor,
         )
     if args.command == "new-claude":
         return ClaudeTtySpec(
@@ -330,6 +336,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             worker_command=worker_command,
             worker_endpoint=worker_endpoint,
             worker_ca=worker_ca,
+            supervisor=args.supervisor,
         )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
     source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
@@ -342,6 +349,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         worker_endpoint=worker_endpoint,
         worker_ca=worker_ca,
         max_context=args.max_context,
+        supervisor=args.supervisor,
         **source,
     )
 

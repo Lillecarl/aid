@@ -42,6 +42,10 @@ class _Spec(BaseModel):
     host, with the daemon listening there (`aid daemon --workers-listen`)."""
     worker_ca: str | None = None
     """PEM CAs file for a `wss://` worker_endpoint with a private certificate, like `aid daemon --worker-ca`."""
+    supervisor: str | None = None
+    """The session watching this one: the daemon hands it the clipped tail of every turn end. The supervisor
+    must already exist, must not be this session, and must not close a cycle; the link rides the persisted
+    spec file, so it survives restarts."""
 
     @model_validator(mode="after")
     def _worker_launch_is_sane(self) -> Self:

@@ -116,6 +116,7 @@ export interface AcpSpec {
   mcp_servers?: McpServers;
   permission?: PermissionMode;
   permission_timeout?: number;
+  supervisor?: string | null;
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
   worker_endpoint?: string | null;
@@ -206,6 +207,7 @@ export interface PydanticAISpec {
   permission?: PermissionMode1;
   permission_timeout?: number;
   python_path?: string[];
+  supervisor?: string | null;
   target?: string | null;
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
@@ -238,6 +240,7 @@ export interface ClaudeTtySpec {
    */
   pymux_command?: [string, ...string[]];
   pymux_socket?: string | null;
+  supervisor?: string | null;
   trust_cwd?: boolean;
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;

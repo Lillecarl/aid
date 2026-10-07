@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import difflib
+import itertools
+import json
 import shlex
 import shutil
 import sys
@@ -48,10 +51,12 @@ from aid.protocol import (
     MessageEntry,
     Notify,
     Observed,
+    Output,
     PermissionDecision,
     PermissionEvent,
     PermissionRequest,
     Prompt,
+    PromptEntry,
     ReceiveMessages,
     RemovePlugin,
     SendMessage,
@@ -66,6 +71,7 @@ from aid.protocol import (
     ThoughtDelta,
     ToolCall,
     ToolEvent,
+    TurnError,
     TurnEvent,
     Usage,
     decode_reply,
@@ -82,7 +88,7 @@ if TYPE_CHECKING:
 
     from aid.launcher import Launcher, WorkerHandle
     from aid.paths import Paths
-    from aid.protocol import HistoryEntry, HistoryItem, Request
+    from aid.protocol import HistoryEntry, HistoryItem, HistoryPage, Request
     from aid.spec import AgentSpec
 
 log = structlog.get_logger(__name__)
@@ -228,6 +234,92 @@ def wake_prompt(messages: list[MessageEntry]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
+SUPERVISION_ITEMS: Final = 10
+"""History entries a supervision firing carries: the supervised session's recent tail, newest last."""
+SUPERVISION_ITEM_CHARS: Final = 400
+"""Characters of one tail line; longer bodies clip with their excess counted."""
+SUPERVISION_SCORE_OUTPUTS: Final = 6
+"""Recent outputs the loop score compares."""
+SUPERVISION_LOOP_THRESHOLD: Final = 0.85
+"""Loop score at or above this reads as stuck; advisory, the supervisor judges."""
+
+
+def supervision_cycle(links: dict[str, str | None], name: str, supervisor: str) -> bool:
+    """Whether pointing `name` at `supervisor` closes a cycle through the existing links. Sessions are
+    created oldest-first, so a cycle is unformable through the API; this guards restored specs."""
+    seen = {name}
+    current: str | None = supervisor
+    while current is not None and current not in seen:
+        seen.add(current)
+        current = links.get(current)
+    return current is not None
+
+
+def _supervision_line(item: HistoryItem) -> str | None:
+    """One clipped line of a supervised session's tail. Bookkeeping (starts, usage, lifecycle) is skipped:
+    the supervisor judges the work, not the plumbing."""
+    match item:
+        case PromptEntry():
+            body = f"> {item.text}"
+        case MessageEntry():
+            body = f"[message from {item.sender or 'a person'}] {item.text}"
+        case TextDelta():
+            body = item.text
+        case ThoughtDelta():
+            body = f"(thinking) {item.text}"
+        case ToolCall():
+            body = " ".join(
+                part for part in (f"[tool] {item.title or item.tool_call_id}", item.status, item.output) if part
+            )
+        case Output():
+            output = item.output if isinstance(item.output, str) else json.dumps(item.output)
+            body = f"[{item.stop_reason}] {output}"
+        case PermissionRequest():
+            body = f"[permission] {item.tool_name or 'question'}: {item.title or item.request_id}"
+        case PermissionDecision():
+            body = f"[permission {item.request_id}] decided by {item.by}"
+        case TurnError():
+            body = f"[error {item.code}] {item.message}"
+        case _:
+            return None
+    if len(body) > SUPERVISION_ITEM_CHARS:
+        body = f"{body[:SUPERVISION_ITEM_CHARS]}\n… {len(body) - SUPERVISION_ITEM_CHARS} more characters"
+    return body
+
+
+def _loop_score(items: list[HistoryItem]) -> float | None:
+    """How alike the recent outputs read: the highest difflib ratio over consecutive normalized pairs, or
+    None with fewer than two. Advisory — the supervisor judges, this only points."""
+    texts = [
+        " ".join(str(item.output).split()).casefold()
+        for item in items
+        if isinstance(item, Output) and str(item.output).strip()
+    ][-SUPERVISION_SCORE_OUTPUTS:]
+    if len(texts) < 2:
+        return None
+    return max(difflib.SequenceMatcher(None, first, second).ratio() for first, second in itertools.pairwise(texts))
+
+
+def supervision_text(name: str, reason: str, page: HistoryPage) -> str:
+    """What the supervisor is told when a supervised turn ends: the session, how the turn closed, its recent
+    history clipped small, and the loop score over recent outputs. Cheap by design: the supervisor reads this
+    inline, and reaches for more history only when it needs it. Bounded by construction: at most
+    `SUPERVISION_ITEMS` lines of `SUPERVISION_ITEM_CHARS` characters."""
+    lines = [f"Supervised session {name!r} ended a turn ({reason})."]
+    if page.total > len(page.entries):
+        lines.append(f"Showing the newest {len(page.entries)} of {page.total} history entries:")
+    rendered = [line for entry in page.entries if (line := _supervision_line(entry.item)) is not None]
+    if rendered:
+        lines.extend(rendered)
+    else:
+        lines.append("(Its history holds nothing readable yet.)")
+    if (score := _loop_score([entry.item for entry in page.entries])) is None:
+        lines.append("Loop score: n/a (fewer than two recent outputs).")
+    else:
+        lines.append(f"Loop score: {score:.2f} over recent outputs (stuck at {SUPERVISION_LOOP_THRESHOLD:.2f}).")
+    return "\n".join(lines)
+
+
 class _Listener:
     """A ROUTER socket the daemon answers requests on, and the lock its sends take."""
 
@@ -299,6 +391,8 @@ class Daemon:
         self._published: dict[bytes, bytes] = {}
         """The last status or list published per topic: publish only what changed."""
         self._tg: TaskGroup | None = None
+        self._serving = False
+        """True while the task group runs its loops: no wakes or firings during shutdown."""
 
     async def serve(self, *, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
         await anyio.Path(self._paths.runtime_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -325,10 +419,12 @@ class Daemon:
                 tg.start_soon(self._worker_loop)
                 tg.start_soon(self._plugin_loop)
                 task_status.started()
+                self._serving = True
                 try:
                     await anyio.sleep_forever()
                 finally:
                     # Inside the task group: its shielded watchers must see the workers exit before it can close.
+                    self._serving = False
                     with anyio.CancelScope(shield=True):
                         await self._stop_all()
         finally:
@@ -356,6 +452,12 @@ class Daemon:
                 continue
             self._sessions[session_dir.name] = self._new_session(session_dir.name, spec)
         log.info("sessions_restored", count=len(self._sessions))
+        for session in self._sessions.values():
+            try:
+                self._check_supervisor(session.name, session.spec)
+            except AidError as error:
+                log.warning("invalid_supervision_link", session=session.name, error=error.message)
+                session.spec = session.spec.model_copy(update={"supervisor": None})
 
     async def _load_plugins(self) -> None:
         plugins_dir = anyio.Path(self._paths.state_dir) / "plugins"
@@ -617,9 +719,23 @@ class Daemon:
             raise AidError("not_found", f"no session named {name!r}")
         return session
 
+    def _check_supervisor(self, name: str, spec: AgentSpec) -> None:
+        """The supervision link holds: the supervisor exists, is not this session, and closes no cycle."""
+        supervisor = spec.supervisor
+        if supervisor is None:
+            return
+        if supervisor == name:
+            raise AidError("self_supervised", f"session {name!r} cannot supervise itself")
+        if supervisor not in self._sessions:
+            raise AidError("unknown_supervisor", f"session {name!r} names no supervisor {supervisor!r}")
+        links = {other: session.spec.supervisor for other, session in self._sessions.items()}
+        if supervision_cycle(links, name, supervisor):
+            raise AidError("supervisor_cycle", f"supervising {name!r} by {supervisor!r} closes a cycle")
+
     async def _create(self, request: CreateSession) -> None:
         if request.name in self._sessions:
             raise AidError("exists", f"session {request.name!r} already exists")
+        self._check_supervisor(request.name, request.spec)
         session = self._new_session(request.name, request.spec)
         self._sessions[session.name] = session
         session_dir = anyio.Path(self._paths.session_dir(session.name))
@@ -705,8 +821,27 @@ class Daemon:
         session.turn = None
         session.permissions.clear()
         await self._publish_turn(name, turn, "ended", reason)
+        await self._fire_supervisor(name, reason)
         if session.inbox and not session.uses_channel and self._tg is not None:
             self._tg.start_soon(self._deliver, session)
+
+    async def _fire_supervisor(self, name: str, reason: str) -> None:
+        """A supervised turn ended: hand its clipped tail to the supervisor as a message, through the same
+        accept→inbox→wake path a message takes — a wake turn when idle, the next one when a turn runs. A
+        supervisor that is gone hears nothing, and nothing replays."""
+        if not self._serving:
+            return
+        session = self._sessions.get(name)
+        supervisor = session.spec.supervisor if session is not None else None
+        overseer = self._sessions.get(supervisor) if supervisor is not None else None
+        if session is None or overseer is None:
+            if supervisor is not None:
+                log.info("supervisor_gone", session=name, supervisor=supervisor)
+            return
+        page = await session.history.page(limit=SUPERVISION_ITEMS)
+        await self._accept_message(
+            overseer, MessageEntry(sender=name, text=supervision_text(name, reason, page)), uuid.uuid4().hex
+        )
 
     def _launcher_for(self, session: _Session) -> Launcher:
         """Who starts this session's worker: its own command wins, else the daemon's launcher."""
@@ -795,6 +930,7 @@ class Daemon:
             if session.turn is not None:
                 with contextlib.suppress(zmq.ZMQError):
                     await self._publish_turn(session.name, session.turn, "ended", "worker_exited")
+                await self._fire_supervisor(session.name, "worker_exited")
                 session.turn = None
             session.permissions.clear()
             session.working, session.attention = False, None

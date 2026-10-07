@@ -45,6 +45,17 @@
           "exclusiveMinimum": 0,
           "type": "number"
         },
+        "supervisor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "worker_ca": {
           "anyOf": [
             {
@@ -304,6 +315,17 @@
           "type": "array"
         },
         "pymux_socket": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "supervisor": {
           "anyOf": [
             {
               "type": "string"
@@ -1490,6 +1512,17 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "supervisor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "target": {
           "anyOf": [
