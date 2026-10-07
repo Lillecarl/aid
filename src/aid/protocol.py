@@ -631,8 +631,9 @@ class Activity(_Message):
 
 
 class Notify(_Message):
-    """From a worker, unasked: one of its background tasks ended, and the session should hear about it. The
-    daemon records it and wakes the session: a turn of its own when idle, the next turn when one runs."""
+    """From a worker, unasked: a watch on one of its background tasks fired, and the session should hear
+    about it. The daemon records it and wakes the session: a turn of its own when idle, the next turn when
+    one runs."""
 
     reply: Literal["notify"] = "notify"
     task_id: str

@@ -636,8 +636,8 @@ class Daemon:
         await self._accept_message(session, MessageEntry(sender=request.sender, text=request.text), request.id)
 
     async def _notify(self, session: _Session, reply: Notify) -> None:
-        """A worker's background task ended: record its report and wake the session, like a message but from
-        no person or session. A worker whose session is gone notifies nothing."""
+        """A worker's watch fired: record its report and wake the session, like a message but from no person
+        or session. A worker whose session is gone notifies nothing."""
         await self._accept_message(
             session, MessageEntry(sender=f"{BACKGROUND_SENDER}{reply.task_id}", text=reply.text), uuid.uuid4().hex
         )

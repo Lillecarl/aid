@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import anyio
 import anyio.to_thread
+import structlog
 from pydantic_ai import FunctionToolset, ModelRetry, RunContext
 from pyedit.session import EditSession  # pyright: ignore[reportMissingTypeStubs] -- annotated, no py.typed
 from shellous import ResultError, Runner, sh
@@ -59,6 +60,8 @@ if TYPE_CHECKING:
     from aid.backends.permissions import PermissionWaits
     from pyrun import Command
 
+log = structlog.get_logger(__name__)
+
 READ_LIMIT: Final = 2000
 SCRIPT_TIME_LIMIT: Final = 600.0
 SHELL_TIME_LIMIT: Final = 600.0
@@ -73,6 +76,11 @@ TASK_POLL: Final = 0.2
 """Seconds between polls while task_output waits."""
 TASK_TAIL: Final = 30
 """Output lines a running task's report carries; finished tasks report all of it (spilled past the limit)."""
+MATCH_FIRES_PER_POLL: Final = 20
+"""Matching lines one pattern watch reports per poll; the rest collapse into one overflow note. A spewing
+task must not flood the session's turns."""
+MATCH_LINE_LIMIT: Final = 1000
+"""Characters of one matched line a notification carries; the full line waits in task_output."""
 # A pyrun record, as a report names it: `<scope>.<n>/stdout`, or a scope's own file, `<scope>/printed`.
 _RECORD = re.compile(r"^(?P<scope>[0-9a-f]{6})(?:\.(?P<n>\d+))?/(?P<file>[\w.]+)$")
 
@@ -100,13 +108,148 @@ class BackgroundTask:
 
 
 @dataclass
+class Condition:
+    """When a watched task wakes the session. Terminal kinds fire once at the task's end; live kinds fire
+    while it runs. Every kind dies with the task: a terminal task retires its watches, firing the terminal
+    ones. Judgment only — `evaluate` takes what the loop saw and returns what fires, so it stays pure and a
+    new kind is match plus render, with no loop changes."""
+
+    kind: Literal["ended", "failed", "pattern", "running_after"]
+    codes: tuple[int, ...] = ()
+    """`failed` fires on these exits; empty means any unclean end: timed out, stopped, or non-zero."""
+    pattern: str = ""
+    """`pattern` fires on every output line it matches, as a `re` search."""
+    stream: Literal["stdout", "stderr", "either"] = "either"
+    """Where `pattern` looks."""
+    after: float = 0.0
+    """`running_after` fires once, when the task is still running this many seconds past arming."""
+
+    def describe(self) -> str:
+        """The watch in one phrase, for permits, listings, and arm answers."""
+        if self.kind == "ended":
+            return "its end"
+        if self.kind == "failed":
+            wants = f"exit {', '.join(map(str, self.codes))}" if self.codes else "an unclean end"
+            return f"{wants}"
+        if self.kind == "pattern":
+            return f"every line matching {self.pattern!r} on {self.stream}"
+        return f"still running {self.after:g}s after arming"
+
+    def wants_output(self) -> bool:
+        """Only pattern watches read output files every poll; the rest judge the task's state."""
+        return self.kind == "pattern"
+
+    def evaluate(self, view: WatchView) -> tuple[list[Firing], bool]:
+        """Report firings this poll saw, and whether the watch retires. Terminal watches fire once at the
+        task's end, failed ones moot when the end was clean; pattern watches fire per matching line while the
+        task runs; running_after fires once past its age. A terminal task retires every watch."""
+        if self.kind == "pattern":
+            hits = [Firing(kind="pattern", line=line) for line in view.lines if re.search(self.pattern, line.text)]
+            return hits, view.ended
+        if self.kind == "running_after":
+            if view.ended:
+                return [], True
+            if view.age >= self.after:
+                return [Firing(kind="running_after", age=view.age)], True
+            return [], False
+        if not view.ended:
+            return [], False
+        if self.kind == "failed" and not self._failed(view):
+            return [Firing(kind="failed_moot")], True
+        return [Firing(kind=self.kind)], True
+
+    def _failed(self, view: WatchView) -> bool:
+        if self.codes:
+            return view.exit_code in self.codes
+        return view.timed_out or view.stopped or view.exit_code != 0
+
+    @classmethod
+    def parse(
+        cls,
+        on: str,
+        pattern: str | None,
+        stream: str,
+        after: float | None,
+        codes: list[int] | None,
+    ) -> Condition:
+        """The arm's parameters as a Condition, or why they do not form one. Each condition takes only its
+        own: stray parameters fail fast instead of watching something unasked."""
+        if on not in ("ended", "failed", "pattern", "running_after"):
+            raise AidError("unknown_watch", f"watch {on!r} with on ended, failed, pattern, or running_after")
+        if stream not in ("stdout", "stderr", "either"):
+            raise AidError("unknown_stream", f"watch {stream!r} on stdout, stderr, or either")
+        if on == "pattern":
+            if not pattern:
+                raise AidError("no_pattern", "a pattern watch needs a pattern")
+            if after is not None or codes is not None:
+                raise AidError("stray_params", "a pattern watch takes only pattern and stream")
+            try:
+                re.compile(pattern)
+            except re.error as error:
+                raise AidError("bad_pattern", f"{pattern!r} does not compile: {error}") from error
+            return cls(kind="pattern", pattern=pattern, stream=stream)
+        if on == "running_after":
+            if after is None or after <= 0:
+                raise AidError("no_after", "a running_after watch needs after, in seconds past arming")
+            if pattern is not None or codes is not None:
+                raise AidError("stray_params", "a running_after watch takes only after")
+            return cls(kind="running_after", after=after)
+        if on == "failed":
+            if pattern is not None or after is not None:
+                raise AidError("stray_params", "a failed watch takes only codes")
+            return cls(kind="failed", codes=tuple(codes or ()))
+        if pattern is not None or after is not None or codes is not None:
+            raise AidError("stray_params", "an ended watch takes no parameters")
+        return cls(kind="ended")
+
+
+@dataclass
+class Line:
+    """One new output line since the last poll, and which stream wrote it."""
+
+    stream: str
+    text: str
+
+
+@dataclass
+class WatchView:
+    """What the loop saw this poll: how the task stands, and its new output lines."""
+
+    ended: bool
+    exit_code: int | None
+    timed_out: bool
+    stopped: bool
+    elapsed: float
+    age: float
+    """Seconds since the watch armed."""
+    lines: list[Line]
+
+
+@dataclass
+class Firing:
+    """One notification a poll owes: what fired, and the payload its rendering needs."""
+
+    kind: Literal["ended", "failed", "failed_moot", "pattern", "running_after"]
+    line: Line | None = None
+    age: float = 0.0
+
+
+@dataclass
 class Monitor:
-    """A watched background task: when it reaches a terminal state, the session hears about it — a new turn
-    when the loop is idle, the next turn when one runs. One-shot: firing removes the watch, and watches die
-    with the worker."""
+    """A watched background task, and when it wakes the session — a new turn when the loop is idle, the next
+    turn when one runs. Watches live with their task and die with it; the agent stops one early with
+    monitor_stop. Terminal watches fire once at the task's end; pattern watches fire on every matching line
+    while it runs."""
 
     id: str
     task_id: str
+    condition: Condition
+    armed_at: float
+    offsets: dict[str, int] = field(default_factory=dict[str, int])
+    """Bytes of each stream's file already scanned; cursors start at zero, so output written before arming
+    counts once on the first poll."""
+    carries: dict[str, bytes] = field(default_factory=dict[str, bytes])
+    """A stream's last line without its newline yet; the next poll's bytes complete it."""
 
 
 @dataclass
@@ -130,7 +273,7 @@ class Coding:
     """Background tasks started this session, by id. They outlive their turn, and die with the worker."""
     task_seq: int = 0
     monitors: dict[str, Monitor] = field(default_factory=dict[str, Monitor])
-    """Completion watches by id. The watch loop fires each once, then forgets it."""
+    """Watches by id. The watch loop judges each poll and forgets what retires; a task's end retires its own."""
     monitor_seq: int = 0
     monitor_event: anyio.Event = field(default_factory=anyio.Event)
     """Set whenever `monitors` gains an entry; the watch loop waits on it when nothing is watched."""
@@ -227,8 +370,8 @@ class Coding:
         return "shell restarted; cd and env reset"
 
     async def watch(self, notify: Notifier) -> None:
-        """The session's monitor loop, for the worker's life: each fired monitor notifies the daemon once,
-        which wakes the session — a new turn when the loop is idle, the next one when a turn runs."""
+        """The session's monitor loop, for the worker's life: each firing notifies the daemon, which wakes
+        the session — a new turn when the loop is idle, the next one when a turn runs."""
         while True:
             await self.monitor_event.wait()
             # Fresh wait each round: anyio events fire once and never clear. Arrivals cannot slip past —
@@ -237,8 +380,9 @@ class Coding:
             await self._watch_live(notify)
 
     async def _watch_live(self, notify: Notifier) -> None:
-        """Poll watched monitors until none is left: terminal tasks reap like task_output reaps them, then
-        report. Monitors armed mid-poll join the next round on their own."""
+        """Poll watched monitors until none is left. Terminal tasks reap like task_output reaps them; each
+        monitor judges what the poll saw, and a task's end retires its watches. Monitors armed mid-poll join
+        the next round on their own. One failed send must not end the rest: each notification is isolated."""
         while self.monitors:
             for mid, monitor in list(self.monitors.items()):
                 task = self.tasks.get(monitor.task_id)
@@ -248,12 +392,47 @@ class Coding:
                 await _enforce(task)
                 if task.runner.returncode is not None and not task.reaped:
                     await _reap(task)
-                if task.reaped:
-                    text = await _notify_text(task)
+                lines = await self._new_lines(task, monitor) if monitor.condition.wants_output() else []
+                view = WatchView(
+                    ended=task.reaped,
+                    exit_code=task.exit_code,
+                    timed_out=task.timed_out,
+                    stopped=task.stopped,
+                    elapsed=(task.finished or task.started) - task.started,
+                    age=anyio.current_time() - monitor.armed_at,
+                    lines=lines,
+                )
+                firings, done = monitor.condition.evaluate(view)
+                texts = [await _render_fire(task, monitor, firing) for firing in firings[:MATCH_FIRES_PER_POLL]]
+                if len(firings) > MATCH_FIRES_PER_POLL:
+                    texts.append(
+                        f"Background task {task.id}: {len(firings) - MATCH_FIRES_PER_POLL} more matching "
+                        f"lines this poll; refine the pattern, or read them with task_output {task.id}."
+                    )
+                for text in texts:
+                    try:
+                        await notify(monitor.task_id, text)
+                    except Exception:
+                        log.exception("notify_failed", monitor=mid, task=monitor.task_id)
+                if done or task.reaped:
                     del self.monitors[mid]
-                    await notify(monitor.task_id, text)
             if self.monitors:
                 await anyio.sleep(TASK_POLL)
+
+    @staticmethod
+    async def _new_lines(task: BackgroundTask, monitor: Monitor) -> list[Line]:
+        """Output lines since the last poll, on the watched streams. Splits bytes on newlines first, so a
+        multi-byte character split across polls still decodes; the last partial line waits for its newline."""
+        files = {"stdout": task.stdout_file, "stderr": task.stderr_file}
+        streams = [monitor.condition.stream] if monitor.condition.stream != "either" else ["stdout", "stderr"]
+        lines: list[Line] = []
+        for stream in streams:
+            data, offset = await _read_new(files[stream], monitor.offsets.get(stream, 0))
+            monitor.offsets[stream] = offset
+            *complete, rest = (monitor.carries.get(stream, b"") + data).split(b"\n")
+            monitor.carries[stream] = rest
+            lines.extend(Line(stream, chunk.decode(errors="replace")) for chunk in complete)
+        return lines
 
     def resolve(self, path: str) -> Path:
         """A path the agent names: under the session's directory, a pyrun record in the store, or a spilled
@@ -286,10 +465,34 @@ def _task(task_id: str) -> BackgroundTask:
 
 
 async def _read(path: Path) -> str:
+    """A file's text, undecodable bytes replaced. The watch loop reads task output every poll, and a binary
+    write must not end it — nor a tool's report."""
     try:
-        return await anyio.Path(path).read_text()
+        data = await anyio.Path(path).read_bytes()
     except OSError:
         return ""
+    return data.decode(errors="replace")
+
+
+async def _read_new(path: Path, offset: int) -> tuple[bytes, int]:
+    """Bytes of `path` past `offset`, and the new offset. A shrunk file reads from zero: record files only
+    grow within a worker's life, so shrink means replace, and replace means start over. The offset advances
+    only by what was read, so a file growing mid-read loses nothing."""
+    try:
+        size = (await anyio.Path(path).stat()).st_size
+    except OSError:
+        return b"", offset
+    if size < offset:
+        offset = 0
+    if size == offset:
+        return b"", offset
+    try:
+        async with await anyio.open_file(path, "rb") as file:
+            await file.seek(offset)
+            data = await file.read()
+    except OSError:
+        return b"", offset
+    return data, offset + len(data)
 
 
 async def _tail(path: Path, lines: int = TASK_TAIL) -> str:
@@ -342,23 +545,54 @@ async def _report(task: BackgroundTask) -> str:
     return f"{head}\n{body}"
 
 
-async def _notify_text(task: BackgroundTask) -> str:
-    """A fired monitor's report: how the task ended, a tail of what it wrote, and where all of it lives. A
-    wake turn carries this as its prompt, so it stays a head: the full output waits in task_output."""
+def _notify_head(task: BackgroundTask) -> str:
+    """How a task ended, in one line. Terminal watches render this; wake turns carry it as written."""
     name = shlex.join(task.argv)
     elapsed = (task.finished or task.started) - task.started
     if task.timed_out:
-        head = f"Background task {task.id} timed out after {task.time_limit}s and was killed: {name}"
-    elif task.stopped:
-        head = f"Background task {task.id} stopped (exit {task.exit_code}): {name}"
-    else:
-        head = f"Background task {task.id} finished: exit {task.exit_code} after {elapsed:.1f}s: {name}"
+        return f"Background task {task.id} timed out after {task.time_limit}s and was killed: {name}"
+    if task.stopped:
+        return f"Background task {task.id} stopped (exit {task.exit_code}): {name}"
+    return f"Background task {task.id} finished: exit {task.exit_code} after {elapsed:.1f}s: {name}"
+
+
+async def _notify_text(task: BackgroundTask) -> str:
+    """A fired terminal watch's report: how the task ended, a tail of what it wrote, and where all of it
+    lives. A wake turn carries this as its prompt, so it stays a head: the full output waits in
+    task_output."""
     out = await _tail(task.stdout_file)
     err = await _tail(task.stderr_file)
     body = out or "(no output)"
     if err:
         body += f"\nstderr:\n{err}"
-    return f"{head}\n{body}\nRead all of its output with task_output {task.id}."
+    return f"{_notify_head(task)}\n{body}\nRead all of its output with task_output {task.id}."
+
+
+async def _render_fire(task: BackgroundTask, monitor: Monitor, firing: Firing) -> str:
+    """One firing as the agent reads it: terminal kinds the end report, live kinds what fired and where the
+    rest waits. Every rendering ends where the agent continues: task_output, or nothing left to hear."""
+    if firing.kind in ("ended", "failed"):
+        return await _notify_text(task)
+    if firing.kind == "failed_moot":
+        wants = f"exit {', '.join(map(str, monitor.condition.codes))}" if monitor.condition.codes else "failure"
+        return f"{_notify_head(task)}\nThe watch asked for {wants} only."
+    if firing.kind == "pattern":
+        assert firing.line is not None
+        line = firing.line.text
+        clipped = (
+            f"{line[:MATCH_LINE_LIMIT]}\n… {len(line) - MATCH_LINE_LIMIT} more characters"
+            if len(line) > MATCH_LINE_LIMIT
+            else line
+        )
+        return (
+            f"Background task {task.id} matched {monitor.condition.pattern!r} on {firing.line.stream}:\n"
+            f"{clipped}\nRead all of its output with task_output {task.id}."
+        )
+    tail = await _tail(task.stdout_file)
+    return (
+        f"Background task {task.id} still running {firing.age:.0f}s after arming: {shlex.join(task.argv)}\n"
+        f"{tail or '(no output yet)'}\nRead all of its output with task_output {task.id}."
+    )
 
 
 def numbered(text: str, offset: int, limit: int) -> str:
@@ -838,29 +1072,76 @@ async def tasks() -> str:
     return "\n".join(lines)
 
 
-async def monitor(ctx: RunContext[Any], task_id: str) -> str:
-    """Watch a background task, and hear when it ends: a new turn when the loop is idle, the next turn when
-    one runs. One-shot: firing removes the watch, and watches die with the worker.
+async def monitor(
+    ctx: RunContext[Any],
+    task_id: str,
+    on: Literal["ended", "failed", "pattern", "running_after"] = "ended",
+    pattern: str | None = None,
+    stream: Literal["stdout", "stderr", "either"] = "either",
+    after: float | None = None,
+    codes: list[int] | None = None,
+) -> str:
+    """Watch a background task, and hear when the condition fires: a new turn when the loop is idle, the next
+    turn when one runs. Watches live with their task and die with it; stop one early with monitor_stop.
 
-    The report names how it ended, a tail of its output, and reads the rest with task_output. Arming on a
-    finished task still notifies: the watch fires on its next poll."""
+    `on` names the condition: `ended` fires once at the task's end; `failed` fires once at an unclean end
+    (timed out, stopped, or non-zero — or one of `codes`); `pattern` fires on every output line the `re`
+    search matches, on `stream`; `running_after` fires once when the task is still running `after` seconds
+    past arming. Each condition takes only its own parameters. Arming on a finished task still notifies: the
+    watch fires on its next poll."""
     coding = _coding()
     task = _task(task_id)
-    if armed := next((mid for mid, monitor in coding.monitors.items() if monitor.task_id == task_id), None):
+    condition = Condition.parse(on, pattern, stream, after, codes)
+    if armed := next(
+        (
+            mid
+            for mid, monitor in coding.monitors.items()
+            if monitor.task_id == task_id and monitor.condition == condition
+        ),
+        None,
+    ):
         return f"{task_id} is already watched as {armed}"
     allowed = await coding.permit(
         ctx.tool_call_id or "",
         tool_name="monitor",
-        title=f"notify when {task_id} ends: {shlex.join(task.argv)}",
-        input={"task_id": task_id, "argv": task.argv},
+        title=f"watch {task_id} {condition.describe()}: {shlex.join(task.argv)}",
+        input={"task_id": task_id, "on": on, "pattern": pattern, "stream": stream, "after": after, "codes": codes},
     )
     if not allowed:
         return "not allowed: nothing is watched"
     coding.monitor_seq += 1
     monitor_id = f"m{coding.monitor_seq}"
-    coding.monitors[monitor_id] = Monitor(id=monitor_id, task_id=task_id)
+    coding.monitors[monitor_id] = Monitor(
+        id=monitor_id, task_id=task_id, condition=condition, armed_at=anyio.current_time()
+    )
     coding.monitor_event.set()
-    return f"watching {task_id} as {monitor_id}: its end starts a new turn when idle, or joins the next one when busy"
+    return (
+        f"watching {task_id} as {monitor_id}: {condition.describe()} starts a new turn when idle, "
+        "or joins the next one when busy"
+    )
+
+
+async def monitor_stop(monitor_id: str) -> str:
+    """Stop a watch early; the task runs on. Stopping what already fired, or never armed, says so."""
+    coding = _coding()
+    try:
+        monitor = coding.monitors.pop(monitor_id)
+    except KeyError:
+        raise AidError("unknown_monitor", f"no watch {monitor_id!r}; monitors lists them") from None
+    return f"stopped watching {monitor.task_id} as {monitor_id}"
+
+
+async def monitors() -> str:
+    """The session's watches, and what each fires on. Watches live with their task and die with it."""
+    coding = _coding()
+    if not coding.monitors:
+        return "nothing is watched"
+    lines: list[str] = []
+    for monitor in coding.monitors.values():
+        task = coding.tasks.get(monitor.task_id)
+        argv = shlex.join(task.argv) if task is not None else "(task gone)"
+        lines.append(f"{monitor.id}: {monitor.task_id} ({argv}) — {monitor.condition.describe()}")
+    return "\n".join(lines)
 
 
 def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
@@ -907,5 +1188,7 @@ coding_tools: FunctionToolset[Any] = FunctionToolset[Any](
         _retrying(task_stop),
         _retrying(tasks),
         _retrying(monitor),
+        _retrying(monitor_stop),
+        _retrying(monitors),
     ]
 )
