@@ -2,4 +2,4 @@
 
 from __future__ import annotations
 
-import no_such_module_for_aid_tests  # noqa: F401  # pyright: ignore[reportMissingImports, reportUnusedImport] -- missing on purpose
+import no_such_module_for_aid_tests  # noqa: F401  # pyright: ignore[reportMissingImports, reportUnusedImport] -- missing on purpose  # pyrefly: ignore[missing-import]

@@ -546,7 +546,7 @@ class ClaudeTtyBackend:
         claim = _Claim(emit)
         self._claim = claim
         try:
-            await anyio.to_thread.run_sync(self._pane.send_keys, f"\x1b[200~{text}\x1b[201~", False)
+            await anyio.to_thread.run_sync(self._pane.send_keys, f"\x1b[200~{text}\x1b[201~", False)  # pyrefly: ignore[bad-argument-type] -- pyright accepts run_sync's ParamSpec; exercised at runtime
             await anyio.sleep(PASTE_SETTLE)
             await anyio.to_thread.run_sync(self._pane.send_key, "Enter")
             async with anyio.create_task_group() as tg:

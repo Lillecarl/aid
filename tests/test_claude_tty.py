@@ -243,7 +243,7 @@ async def test_a_turn_typed_into_the_pane_is_recorded(daemon: Paths, tmp_path: P
             first = await session.run("hello")
             address = await session.pane()
             pane = next(p for p in Server(address.socket).panes if p.id == address.pane)
-            await anyio.to_thread.run_sync(pane.send_keys, "typed", False)
+            await anyio.to_thread.run_sync(pane.send_keys, "typed", False)  # pyrefly: ignore[bad-argument-type] -- pyright accepts run_sync's ParamSpec; exercised at runtime
             await anyio.to_thread.run_sync(pane.send_key, "Enter")
             typed = await typed_items(session)
             after = await session.run("after")
@@ -279,7 +279,7 @@ async def test_a_subagents_tokens_are_recorded(daemon: Paths, tmp_path: Path, py
 async def type_command(session: aid.Session, command: str) -> None:
     address = await session.pane()
     pane = next(p for p in Server(address.socket).panes if p.id == address.pane)
-    await anyio.to_thread.run_sync(pane.send_keys, command, False)
+    await anyio.to_thread.run_sync(pane.send_keys, command, False)  # pyrefly: ignore[bad-argument-type] -- pyright accepts run_sync's ParamSpec; exercised at runtime
     await anyio.to_thread.run_sync(pane.send_key, "Enter")
 
 

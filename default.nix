@@ -41,6 +41,12 @@ let
   inherit (pkgs) lib;
   p = import pyterm { inherit pkgs; };
   venv = set.mkVirtualEnv "aid-env" { aid = [ ]; };
+  # One environment for the dev shell and the pyrefly wrapper: its python carries every dependency,
+  # so both resolve the same third-party imports.
+  devEnv = set.mkVirtualEnv "aid-dev" {
+    aid = [ "test" ];
+    pyrun = [ "test" ];
+  };
   ui = pkgs.callPackage ./web { pymuxElement = p.pymux-element; };
   speechModel = pkgs.callPackage ./nix/speech-model.nix { };
   grammars = pkgs.callPackage ./nix/tree-sitter-grammars.nix { };
@@ -181,10 +187,12 @@ in
     name = "pyrefly";
     runtimeInputs = [
       pkgs.pyrefly
+      devEnv
     ];
     text = # bash
       ''
-        # SET ENV VARS AND SHIT HERE
+        # pyrefly resolves imports through PYTHONPATH: point it at the working copy, as the dev shell does.
+        export PYTHONPATH=${lib.escapeShellArg (toString ./src)}:${lib.escapeShellArg (toString ./pyrun/src)}''${PYTHONPATH:+:$PYTHONPATH}
         pyrefly "$@"
       '';
   };
@@ -213,10 +221,7 @@ in
 
   shell = pkgs.mkShell {
     packages = [
-      (set.mkVirtualEnv "aid-dev" {
-        aid = [ "test" ];
-        pyrun = [ "test" ];
-      })
+      devEnv
       p.pymux
       pkgs.dex-oidc
       pkgs.nodejs_24

@@ -1,0 +1,6 @@
+# Bare `pyrefly check` runs in project mode: these includes select the files, the excludes drop the
+# vivarium scripts (they belong to the guest toolchain, as in the ruff and pyright excludes). Imports
+# resolve from src/ (the aid package) and the root (the tests package, as at runtime under pytest).
+project-includes = ["src", "tests"]
+project-excludes = ["tests/vivarium/**"]
+search-path = ["src", "."]

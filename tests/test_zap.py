@@ -59,7 +59,7 @@ def _worker(
 async def _user_id(router: zmq.asyncio.Socket) -> str | None:
     with anyio.move_on_after(1):
         _peer, frame = await router.recv_multipart(copy=False)
-        return frame.get("User-Id")  # pyright: ignore[reportArgumentType, reportReturnType] -- see daemon._worker_loop
+        return frame.get("User-Id")  # pyright: ignore[reportArgumentType, reportReturnType] -- see daemon._worker_loop  # pyrefly: ignore[bad-argument-type, bad-return]
     return None
 
 

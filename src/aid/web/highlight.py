@@ -148,7 +148,7 @@ class Grammars:
                 lang = _language(directory / "parser", self._symbols[language])
                 query = Query(lang, (directory / "highlights.scm").read_text())
                 # A property at runtime; the 0.25 stub calls it a method.
-                count: int = query.capture_count  # pyright: ignore[reportAssignmentType]
+                count: int = query.capture_count  # pyright: ignore[reportAssignmentType]  # pyrefly: ignore[bad-assignment]
                 names = (query.capture_name(i) for i in range(count))
                 classes = {name: token_class(name) for name in names}
                 found = self._compiled[language] = _Compiled(lang, query, classes)

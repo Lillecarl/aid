@@ -613,7 +613,7 @@ class Daemon:
         while True:
             frames = await self._plugins.sock.recv_multipart(copy=False)
             # The plugin the ZAP handler named for this connection's key.
-            name = frames[-1].get("User-Id")  # pyright: ignore[reportArgumentType] -- pyzmq's stub knows only the int options; libzmq also takes metadata names
+            name = frames[-1].get("User-Id")  # pyright: ignore[reportArgumentType] -- pyzmq's stub knows only the int options; libzmq also takes metadata names  # pyrefly: ignore[bad-argument-type]
             if not isinstance(name, str):
                 raise TypeError(f"User-Id is {name!r}")
             client = _Peer(self._plugins, frames[0].bytes, plugin=name)
@@ -1316,7 +1316,7 @@ class Daemon:
                 continue
             peer, frame = frames
             # The session the ZAP handler named for this connection's key.
-            name = frame.get("User-Id")  # pyright: ignore[reportArgumentType] -- pyzmq's stub knows only the int options; libzmq also takes metadata names
+            name = frame.get("User-Id")  # pyright: ignore[reportArgumentType] -- pyzmq's stub knows only the int options; libzmq also takes metadata names  # pyrefly: ignore[bad-argument-type]
             if not isinstance(name, str):
                 raise TypeError(f"User-Id is {name!r}")
             payload = frame.bytes

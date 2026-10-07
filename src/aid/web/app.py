@@ -378,4 +378,4 @@ async def serve(app: Starlette, bind: str, *, shutdown: anyio.Event | None = Non
             with contextlib.suppress(RuntimeError, WebSocketDisconnect):
                 await websocket.close()
 
-    await hypercorn_serve(app, config, shutdown_trigger=_shutdown)  # pyright: ignore[reportArgumentType] -- Starlette is an ASGI app; hypercorn's Framework union does not name it
+    await hypercorn_serve(app, config, shutdown_trigger=_shutdown)  # pyright: ignore[reportArgumentType] -- Starlette is an ASGI app; hypercorn's Framework union does not name it  # pyrefly: ignore[bad-argument-type]
