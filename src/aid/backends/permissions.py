@@ -42,6 +42,7 @@ class PermissionWaits:
         by: PermissionDecider,
         plugin: str | None = None,
         text: str | None = None,
+        supervisor: str | None = None,
     ) -> bool:
         """False when no such request waits, or the option is not one of its own."""
         wait = self._waits.get(request_id)
@@ -49,14 +50,24 @@ class PermissionWaits:
             return False
         if option_id is not None and option_id not in {o.option_id for o in wait.request.options}:
             return False
-        wait.decision = PermissionDecision(request_id=request_id, option_id=option_id, by=by, plugin=plugin, text=text)
+        wait.decision = PermissionDecision(
+            request_id=request_id, option_id=option_id, by=by, plugin=plugin, text=text, supervisor=supervisor
+        )
         wait.answered.set()
         return True
 
     def answer(
-        self, request_id: str, option_id: str | None, plugin: str | None = None, text: str | None = None
+        self,
+        request_id: str,
+        option_id: str | None,
+        plugin: str | None = None,
+        text: str | None = None,
+        supervisor: str | None = None,
     ) -> bool:
-        """A person's answer, or with `plugin`, that plugin's."""
+        """A person's answer, that plugin's with `plugin`, or the supervision link's supervisor with
+        `supervisor`: the daemon stamps the last two, a waiter never claims them."""
+        if supervisor is not None:
+            return self.settle(request_id, option_id, PermissionDecider.SUPERVISOR, text=text, supervisor=supervisor)
         return self.settle(
             request_id, option_id, PermissionDecider.PLUGIN if plugin else PermissionDecider.PERSON, plugin, text
         )

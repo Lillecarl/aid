@@ -171,6 +171,27 @@ def _parser() -> argparse.ArgumentParser:
             metavar="SESSION",
             help="the session watching this one: the daemon hands it the clipped tail of every turn end",
         )
+        p.add_argument(
+            "--supervisor-permissions",
+            action="append",
+            default=[],
+            metavar="TOOL",
+            help="tool names the supervisor may answer permission requests for when the person does not; repeat for more (needs --supervisor and ask mode)",
+        )
+        p.add_argument(
+            "--supervisor-permission-timeout",
+            type=float,
+            default=300,
+            metavar="SECONDS",
+            help="seconds a permission request waits for a person before the daemon wakes the supervisor (default: 300)",
+        )
+        p.add_argument(
+            "--supervisor-permission-absent-timeout",
+            type=float,
+            default=60,
+            metavar="SECONDS",
+            help="that wait, shortened when no person-authored entry is recent (default: 60)",
+        )
         return p
 
     def with_mcp(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
@@ -323,6 +344,9 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             worker_endpoint=worker_endpoint,
             worker_ca=worker_ca,
             supervisor=args.supervisor,
+            supervisor_permissions=args.supervisor_permissions,
+            supervisor_permission_timeout=args.supervisor_permission_timeout,
+            supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
         )
     if args.command == "new-claude":
         return ClaudeTtySpec(
@@ -337,6 +361,9 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             worker_endpoint=worker_endpoint,
             worker_ca=worker_ca,
             supervisor=args.supervisor,
+            supervisor_permissions=args.supervisor_permissions,
+            supervisor_permission_timeout=args.supervisor_permission_timeout,
+            supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
         )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
     source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
@@ -350,6 +377,9 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         worker_ca=worker_ca,
         max_context=args.max_context,
         supervisor=args.supervisor,
+        supervisor_permissions=args.supervisor_permissions,
+        supervisor_permission_timeout=args.supervisor_permission_timeout,
+        supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
         **source,
     )
 

@@ -363,9 +363,14 @@ class ClaudeTtyBackend:
         return None
 
     def answer_permission(
-        self, request_id: str, option_id: str | None, plugin: str | None = None, text: str | None = None
+        self,
+        request_id: str,
+        option_id: str | None,
+        plugin: str | None = None,
+        text: str | None = None,
+        supervisor: str | None = None,
     ) -> bool:
-        return self._waits.answer(request_id, option_id, plugin, text)
+        return self._waits.answer(request_id, option_id, plugin, text, supervisor)
 
     async def _permission(self, fields: dict[str, JsonValue]) -> JsonValue:
         """Ask aid's people while the pane asks too. Whoever answers first decides; the hook answers Claude only for
@@ -388,7 +393,7 @@ class ClaudeTtyBackend:
             decision = await self._waits.wait(request)
         if turn.asking.pop(request.request_id, None) is not None:
             await self._send(turn, decision)
-        answered = decision.by in (PermissionDecider.PERSON, PermissionDecider.PLUGIN)
+        answered = decision.by in (PermissionDecider.PERSON, PermissionDecider.PLUGIN, PermissionDecider.SUPERVISOR)
         return hook_decision(decision.option_id) if answered else None
 
     async def _request_turn(self) -> _Turn:

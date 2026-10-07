@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -299,6 +300,51 @@ async def _supervising_stream(messages: list[ModelMessage], info: AgentInfo) -> 
 
 supervisor_probe = Agent(
     FunctionModel(_supervising_decide, stream_function=_supervising_stream), toolsets=[aid.supervisor_tools]
+)
+
+
+def _answering_decide(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """A supervisor that answers one waiting permission: its first wake names the session, the request id
+    and the option ids, and it answers with AID_ANSWER_OPTION (default: the first). Its answer proves the
+    backstop woke it; any other wake (a turn-end firing) gets a verdict and no tool call."""
+    prompt = _last_prompt(messages)
+    session = re.search(r"Supervised session '([^']+)'", prompt)
+    request = re.search(r"request ([0-9a-f]+)", prompt)
+    options = re.findall(r"(?m)^- (\S+):", prompt)
+    called = {p.tool_name for m in messages for p in m.parts if isinstance(p, ToolCallPart)}
+    if _user_prompts(messages) == 1 and session and request and options and "answer_permission" not in called:
+        return ModelResponse(
+            parts=[
+                ToolCallPart(
+                    "answer_permission",
+                    {
+                        "session": session.group(1),
+                        "request_id": request.group(1),
+                        "option_id": os.environ.get("AID_ANSWER_OPTION") or options[0],
+                    },
+                    tool_call_id="call0",
+                )
+            ]
+        )
+    if "answer_permission" in called:
+        return ModelResponse(parts=[TextPart("answered")])
+    return ModelResponse(parts=[TextPart("noted")])
+
+
+async def _answering_stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    match _answering_decide(messages, info).parts:
+        case [ToolCallPart() as call]:
+            yield {
+                0: DeltaToolCall(name=call.tool_name, json_args=call.args_as_json_str(), tool_call_id=call.tool_call_id)
+            }
+        case [TextPart() as text]:
+            yield text.content
+        case parts:
+            raise ValueError(f"unexpected parts {parts}")
+
+
+supervisor_answerer = Agent(
+    FunctionModel(_answering_decide, stream_function=_answering_stream), toolsets=[aid.supervisor_tools]
 )
 failed_watcher = _arming_watcher(
     {"argv": ["true"]},

@@ -38,7 +38,8 @@ export type SessionEvent =
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "PermissionDecider".
  */
-export type PermissionDecider = "person" | "policy" | "timeout" | "auto" | "cancel" | "terminal" | "plugin";
+export type PermissionDecider =
+  "person" | "policy" | "timeout" | "auto" | "cancel" | "terminal" | "plugin" | "supervisor";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "JsonValue".
@@ -117,6 +118,9 @@ export interface AcpSpec {
   permission?: PermissionMode;
   permission_timeout?: number;
   supervisor?: string | null;
+  supervisor_permission_absent_timeout?: number;
+  supervisor_permission_timeout?: number;
+  supervisor_permissions?: string[];
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
   worker_endpoint?: string | null;
@@ -208,6 +212,9 @@ export interface PydanticAISpec {
   permission_timeout?: number;
   python_path?: string[];
   supervisor?: string | null;
+  supervisor_permission_absent_timeout?: number;
+  supervisor_permission_timeout?: number;
+  supervisor_permissions?: string[];
   target?: string | null;
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
@@ -241,6 +248,9 @@ export interface ClaudeTtySpec {
   pymux_command?: [string, ...string[]];
   pymux_socket?: string | null;
   supervisor?: string | null;
+  supervisor_permission_absent_timeout?: number;
+  supervisor_permission_timeout?: number;
+  supervisor_permissions?: string[];
   trust_cwd?: boolean;
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
@@ -261,6 +271,7 @@ export interface AnswerPermission {
   plugin?: string | null;
   request_id: string;
   session: string;
+  supervisor?: string | null;
   text?: string | null;
 }
 /**
@@ -423,6 +434,7 @@ export interface PermissionDecision {
   option_id: string | null;
   plugin: string | null;
   request_id: string;
+  supervisor: string | null;
   text: string | null;
   type: "permission_decision";
 }

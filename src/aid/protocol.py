@@ -166,6 +166,9 @@ class AnswerPermission(_Request):
     text: str | None = None
     plugin: str | None = None
     """The plugin answering. The daemon sets it from the connection's key, whatever the sender put here."""
+    supervisor: str | None = None
+    """The supervisor answering. The daemon sets it from the verified supervision link, whatever the sender
+    put here: a worker never claims it, the same rule as `plugin`."""
 
 
 class Hook(_Request):
@@ -275,6 +278,23 @@ class SetGoal(_Request):
     state: Literal[GoalState.DONE, GoalState.DROPPED]
 
 
+class AnswerSupervisedPermission(_Request):
+    """Answer a supervised session's waiting permission request, as its supervisor. The daemon refuses anyone
+    the session did not name, tools outside its allow-list, and requests nobody waits on any more: the first
+    resolution wins, so a person answering first reads here as `no_pending`."""
+
+    op: Literal["answer_supervised_permission"] = "answer_supervised_permission"
+    supervisor: str
+    """The calling session, which the supervised session names in its spec."""
+    session: str
+    request_id: str
+    option_id: str | None
+    """One of the request's options, or None to cancel it."""
+    text: str | None = None
+    """The supervisor's own words: with an option, alongside the pick; alone, the whole answer, which only
+    an `ask_user` question takes."""
+
+
 type Request = Annotated[
     GetStatus
     | GetScreen
@@ -301,7 +321,8 @@ type Request = Annotated[
     | SupervisedSearch
     | GetGoals
     | AddGoal
-    | SetGoal,
+    | SetGoal
+    | AnswerSupervisedPermission,
     Field(discriminator="op"),
 ]
 
@@ -514,6 +535,8 @@ class PermissionDecider(StrEnum):
     """Someone answered in the agent's own terminal; aid does not see which answer."""
     PLUGIN = "plugin"
     """A plugin answered (`aid.plugins`); the decision names it."""
+    SUPERVISOR = "supervisor"
+    """The supervised session's supervisor answered, after the person did not; the decision names it."""
 
 
 class PermissionDecision(_Message):
@@ -526,6 +549,8 @@ class PermissionDecision(_Message):
     by: PermissionDecider
     plugin: str | None = None
     """The plugin that answered, when `by` is plugin."""
+    supervisor: str | None = None
+    """The supervisor that answered, when `by` is supervisor."""
 
 
 class PermissionEvent(_Message):

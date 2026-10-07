@@ -12,18 +12,24 @@ from aid.daemon import (
     SUPERVISION_ITEM_CHARS,
     SUPERVISION_LOOP_THRESHOLD,
     add_goal,
+    permission_backstop_text,
     set_goal,
     supervision_cycle,
     supervision_text,
 )
 from aid.protocol import (
     AddGoal,
+    AnswerSupervisedPermission,
     Goal,
     GoalState,
     HistoryEntry,
     HistoryPage,
     MessageEntry,
     Output,
+    PermissionChoice,
+    PermissionDecider,
+    PermissionDecision,
+    PermissionRequest,
     PromptEntry,
     SetGoal,
     SupervisedHistory,
@@ -31,6 +37,7 @@ from aid.protocol import (
     ToolCall,
     Usage,
 )
+from aid.spec import PermissionMode
 from tests.conftest import py_spec
 
 if TYPE_CHECKING:
@@ -38,6 +45,7 @@ if TYPE_CHECKING:
 
     from aid.paths import Paths
     from aid.protocol import HistoryItem
+    from aid.spec import PydanticAISpec
 
 pytestmark = pytest.mark.anyio
 
@@ -148,6 +156,10 @@ async def test_supervisor_link_validation(daemon: Paths, tmp_path: Path) -> None
                 await client.create("a", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "nobody"}))
             with pytest.raises(aid.AidError, match="self_supervised"):
                 await client.create("b", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "b"}))
+            with pytest.raises(aid.AidError, match="supervisor_permissions_need_supervisor"):
+                await client.create(
+                    "c", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor_permissions": ["ask_user"]})
+                )
             await client.create("boss", py_spec(tmp_path, "agents:echo"))
             await client.create("coder", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "boss"}))
 
@@ -225,3 +237,190 @@ async def test_supervised_turn_end_fires_supervisor(daemon: Paths, tmp_path: Pat
     assert "Loop score" in firing.item.text
     # The echo supervisor answers with the prompt, which asks for nothing: silence, no nudge.
     assert not [i for i in coder_items if isinstance(i, MessageEntry) and i.sender == "boss"]
+
+
+def test_permission_backstop_text_names_options() -> None:
+    request = PermissionRequest(
+        request_id="ab12",
+        tool_call_id="t",
+        tool_name="ask_user",
+        title="Which database?",
+        options=[
+            PermissionChoice(option_id="0", name="postgres", kind="ask_once"),
+            PermissionChoice(option_id="1", name="sqlite", kind="ask_once", recommended=True),
+        ],
+    )
+    text = permission_backstop_text("coder", request)
+    assert "coder" in text
+    assert "ab12" in text
+    assert "- 0: postgres" in text
+    assert "- 1: sqlite (recommended)" in text
+    assert "answer_permission" in text
+
+
+def plan(*calls: tuple[str, dict[str, Any]]) -> str:
+    return json.dumps([list(call) for call in calls])
+
+
+def asking_spec(
+    tmp_path: Path,
+    allow: tuple[str, ...] = ("ask_user",),
+    permission_timeout: float = 30,
+    timeout: float = 25,
+    absent: float = 2,
+) -> PydanticAISpec:
+    """A supervised coder whose `ask_user` questions outwait the person fast, for backstop tests."""
+    return py_spec(tmp_path, "agents:coder", PermissionMode.ASK, permission_timeout=permission_timeout).model_copy(
+        update={
+            "supervisor": "boss",
+            "supervisor_permissions": list(allow),
+            "supervisor_permission_timeout": timeout,
+            "supervisor_permission_absent_timeout": absent,
+        }
+    )
+
+
+def permission_wakes(items: list[HistoryItem]) -> list[MessageEntry]:
+    """Backstop wakes among history items: firing-shaped, but about a waiting permission."""
+    return [item for item in items if isinstance(item, MessageEntry) and "waits on permission" in item.text]
+
+
+async def permission_wake(session: aid.Session, name: str) -> HistoryEntry:
+    """The backstop wake the supervisor got about `name`, once it arrives."""
+    while True:
+        entries = (await session.history(limit=1000)).entries
+        found = [
+            e
+            for e in entries
+            if isinstance(e.item, MessageEntry) and e.item.sender == name and "waits on permission" in e.item.text
+        ]
+        if found:
+            return found[0]
+        await anyio.sleep(0.05)
+
+
+async def test_supervisor_answers_after_timeout(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:supervisor_answerer"))
+            asker = await client.create("coder", asking_spec(tmp_path))
+            result = await asker.run(
+                plan(("ask_user", {"question": "Which database?", "options": ["postgres", "sqlite"]}))
+            )
+            asker_items = [e.item for e in (await asker.history(limit=1000)).entries]
+            # The asker's turn ends on the decision; the supervisor's wake turn lands after.
+            wake = await permission_wake(boss, "coder")
+            await output_after(boss, wake.seq)
+            boss_items = [e.item for e in (await boss.history(limit=1000)).entries]
+    assert 'The supervisor picked "postgres".' in str(result.output)
+    decisions = [item for item in asker_items if isinstance(item, PermissionDecision)]
+    assert len(decisions) == 1
+    assert decisions[0].by is PermissionDecider.SUPERVISOR
+    assert decisions[0].supervisor == "boss"
+    assert decisions[0].option_id == "0"
+    assert len(permission_wakes(boss_items)) == 1
+    assert any("Answered" in out and "with 0" in out for out in completed_outputs(boss_items))
+
+
+async def test_person_beats_supervisor(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:supervisor_answerer"))
+            asker = await client.create("coder", asking_spec(tmp_path, timeout=8, absent=2))
+            events: list[aid.SessionEvent] = []
+            async for event in asker.stream(
+                plan(("ask_user", {"question": "Which database?", "options": ["postgres", "sqlite"]}))
+            ):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    await anyio.sleep(0.5)
+                    await asker.answer(event.request_id, "1")
+            assert isinstance(events[-1], Output)
+            assert str(events[-1].output) == 'The person picked "sqlite".'
+            asker_items = [e.item for e in (await asker.history(limit=1000)).entries]
+            # Past the absent wait: a backstop the decision did not disarm would have woken the boss.
+            await anyio.sleep(4)
+            boss_items = [e.item for e in (await boss.history(limit=1000)).entries]
+            # Drain the turn-end firing before leaving: its history read must finish, not die in teardown.
+            firings = await supervised_firings(boss, "coder", 1)
+            await output_after(boss, firings[0].seq)
+    decisions = [item for item in asker_items if isinstance(item, PermissionDecision)]
+    assert len(decisions) == 1
+    assert decisions[0].by is PermissionDecider.PERSON
+    assert permission_wakes(boss_items) == []
+
+
+async def test_unlisted_tool_stays_human(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:supervisor_answerer"))
+            asker = await client.create("coder", asking_spec(tmp_path, ("permit",), permission_timeout=6))
+            events: list[aid.SessionEvent] = []
+            async for event in asker.stream(
+                plan(("ask_user", {"question": "Which database?", "options": ["postgres", "sqlite"]}))
+            ):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    with pytest.raises(aid.AidError, match="unlisted_tool"):
+                        await client.call(
+                            AnswerSupervisedPermission(
+                                supervisor="boss", session="coder", request_id=event.request_id, option_id="0"
+                            )
+                        )
+            assert isinstance(events[-1], Output)
+            assert "Nobody answered; proceed with your best judgment." in str(events[-1].output)
+            asker_items = [e.item for e in (await asker.history(limit=1000)).entries]
+            await anyio.sleep(2)
+            boss_items = [e.item for e in (await boss.history(limit=1000)).entries]
+            # Drain the turn-end firing before leaving: its history read must finish, not die in teardown.
+            firings = await supervised_firings(boss, "coder", 1)
+            await output_after(boss, firings[0].seq)
+    decisions = [item for item in asker_items if isinstance(item, PermissionDecision)]
+    assert len(decisions) == 1
+    assert decisions[0].by is PermissionDecider.TIMEOUT
+    assert permission_wakes(boss_items) == []
+
+
+async def test_recent_answer_keeps_full_timeout(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:supervisor_answerer"))
+            asker = await client.create("coder", asking_spec(tmp_path, timeout=12, absent=2))
+            # Round one: the person answers, leaving a recent person-authored entry.
+            async for event in asker.stream(
+                plan(("ask_user", {"question": "Which database?", "options": ["postgres", "sqlite"]}))
+            ):
+                if isinstance(event, PermissionRequest):
+                    await asker.answer(event.request_id, "1")
+            # Round two: with a person around, the full timeout applies.
+            events: list[aid.SessionEvent] = []
+            async for event in asker.stream(
+                plan(("ask_user", {"question": "Which database?", "options": ["postgres", "sqlite"]}))
+            ):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    # Past the absent wait, inside the full one: a person around keeps the long wait.
+                    await anyio.sleep(4)
+                    during = [e.item for e in (await boss.history(limit=1000)).entries]
+                    assert permission_wakes(during) == []
+                    await asker.answer(event.request_id, "1")
+            # Drain both turn-end firings before leaving: their history reads must finish, not die in teardown.
+            firings = await supervised_firings(boss, "coder", 2)
+            await output_after(boss, firings[1].seq)
+    assert isinstance(events[-1], Output)
+    assert str(events[-1].output) == 'The person picked "sqlite".'
+
+
+async def test_supervised_answer_refuses_strangers_and_gone(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            await client.create("boss", py_spec(tmp_path, "agents:echo"))
+            await client.create("coder", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "boss"}))
+            with pytest.raises(aid.AidError, match="not_supervised"):
+                await client.call(
+                    AnswerSupervisedPermission(supervisor="stranger", session="coder", request_id="x", option_id=None)
+                )
+            with pytest.raises(aid.AidError, match="no_pending"):
+                await client.call(
+                    AnswerSupervisedPermission(supervisor="boss", session="coder", request_id="x", option_id=None)
+                )

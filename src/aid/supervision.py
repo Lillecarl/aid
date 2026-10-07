@@ -1,4 +1,5 @@
-"""Tools for a supervisor session: read a supervised session's history, track its goals.
+"""Tools for a supervisor session: read a supervised session's history, track its goals, answer the
+permission requests its allow-list names when the person does not.
 
     import aid
     from pydantic_ai import Agent
@@ -24,6 +25,7 @@ from aid.paths import ENV_SESSION
 from aid.protocol import (
     AddGoal,
     AidError,
+    AnswerSupervisedPermission,
     GetGoals,
     GoalState,
     HistoryPage,
@@ -120,6 +122,31 @@ async def goal_drop(session: str, goal_id: str) -> str:
         )
 
 
+async def answer_permission(
+    session: str, request_id: str, option_id: str | None = None, text: str | None = None
+) -> str:
+    """Answer a supervised session's waiting permission request: one of its options, or nothing to cancel
+    it. `text` carries your own words: with an option, alongside the pick; alone, the whole answer, which
+    only an `ask_user` question takes. The first resolution wins: when a person answered first, the
+    request is gone, and this says so instead of failing."""
+    try:
+        async with connect() as client:
+            await client.call(
+                AnswerSupervisedPermission(
+                    supervisor=_supervisor(),
+                    session=session,
+                    request_id=request_id,
+                    option_id=option_id,
+                    text=text,
+                )
+            )
+    except AidError as error:
+        if error.code == "no_pending":
+            return "The request is gone: a person answered it first, or the turn moved on."
+        raise
+    return f"Answered {request_id} with {option_id if option_id is not None else 'a cancel'}."
+
+
 def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     """A tool's failure goes back to the model as a retry with the reason: an exception would end the run."""
 
@@ -144,5 +171,6 @@ supervisor_tools: FunctionToolset[Any] = FunctionToolset[Any](
         _retrying(goal_add),
         _retrying(goal_done),
         _retrying(goal_drop),
+        _retrying(answer_permission),
     ]
 )

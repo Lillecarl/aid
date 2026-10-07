@@ -56,6 +56,22 @@
           ],
           "default": null
         },
+        "supervisor_permission_absent_timeout": {
+          "default": 60,
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "supervisor_permission_timeout": {
+          "default": 300,
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "supervisor_permissions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "worker_ca": {
           "anyOf": [
             {
@@ -222,6 +238,17 @@
         "session": {
           "type": "string"
         },
+        "supervisor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "text": {
           "anyOf": [
             {
@@ -335,6 +362,22 @@
             }
           ],
           "default": null
+        },
+        "supervisor_permission_absent_timeout": {
+          "default": 60,
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "supervisor_permission_timeout": {
+          "default": 300,
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "supervisor_permissions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "trust_cwd": {
           "default": false,
@@ -1257,7 +1300,8 @@
         "auto",
         "cancel",
         "terminal",
-        "plugin"
+        "plugin",
+        "supervisor"
       ],
       "title": "PermissionDecider",
       "type": "string"
@@ -1292,6 +1336,17 @@
         "request_id": {
           "type": "string"
         },
+        "supervisor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "text": {
           "anyOf": [
             {
@@ -1315,7 +1370,8 @@
         "option_id",
         "text",
         "by",
-        "plugin"
+        "plugin",
+        "supervisor"
       ],
       "title": "PermissionDecision",
       "type": "object"
@@ -1523,6 +1579,22 @@
             }
           ],
           "default": null
+        },
+        "supervisor_permission_absent_timeout": {
+          "default": 60,
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "supervisor_permission_timeout": {
+          "default": 300,
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "supervisor_permissions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
         },
         "target": {
           "anyOf": [

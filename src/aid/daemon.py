@@ -32,6 +32,7 @@ from aid.protocol import (
     AgentCatalog,
     AidError,
     AnswerPermission,
+    AnswerSupervisedPermission,
     Cancel,
     CompactSession,
     CreateSession,
@@ -57,6 +58,7 @@ from aid.protocol import (
     Notify,
     Observed,
     Output,
+    PermissionDecider,
     PermissionDecision,
     PermissionEvent,
     PermissionRequest,
@@ -310,6 +312,26 @@ def supervision_text(name: str, reason: str, page: HistoryPage, goals: list[Goal
     return "\n".join(lines)
 
 
+def permission_backstop_text(name: str, request: PermissionRequest) -> str:
+    """What the supervisor is told when a supervised session's permission request outwaits the person: the
+    session, the tool, the question, and every option with its id. Small by design: the supervisor answers
+    inline with the answer_permission tool, and stays silent to leave the request for the person."""
+    lines = [
+        f"Supervised session {name!r} waits on permission (request {request.request_id}"
+        f", tool {request.tool_name or 'a question'}): {request.title or 'no question given'}."
+    ]
+    options = [
+        f"- {option.option_id}: {option.name}{' (recommended)' if option.recommended else ''}"
+        for option in request.options
+    ]
+    lines.extend(options or ["(It offers no options: answer only with words, or not at all.)"])
+    lines.append(
+        f"Answer with the answer_permission tool, naming {name!r} and the request id. "
+        "A person answering first wins: then the request is gone, and silence is the right answer."
+    )
+    return "\n".join(lines)
+
+
 GOALS_FILE: Final = "goals.json"
 """A supervised session's goals, beside its `history.jsonl`: the supervisor names them, the daemon keeps them."""
 
@@ -407,6 +429,8 @@ class Daemon:
         self._tg: TaskGroup | None = None
         self._serving = False
         """True while the task group runs its loops: no wakes or firings during shutdown."""
+        self._backstops: dict[str, tuple[str, anyio.CancelScope]] = {}
+        """Permission backstops still waiting, by request id: the supervised session and their cancel scope."""
 
     async def serve(self, *, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
         await anyio.Path(self._paths.runtime_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -663,23 +687,34 @@ class Daemon:
                 return None
             case AnswerPermission():
                 session = self._session(request.session)
-                if (pending := session.permissions.get(request.request_id)) is None:
-                    raise AidError(
-                        "no_pending", f"{session.name!r} waits on no permission request {request.request_id}"
-                    )
-                if request.option_id is not None and request.option_id not in {o.option_id for o in pending.options}:
-                    raise AidError("no_option", f"the request has no option {request.option_id!r}")
-                if (
-                    request.option_id is None
-                    and request.text is not None
-                    and (session.spec.kind is not AgentKind.PYDANTIC_AI or pending.tool_name != "ask_user")
-                ):
-                    # Text with no pick is the whole answer, and only the ask_user tool reads answer text: a
-                    # permission gate answers allow or deny, and anywhere else the text alone would read as a
-                    # cancel while its words went nowhere.
-                    raise AidError("no_text", f"{session.name!r} takes an option, not free text; pick one or cancel")
+                pending = self._checked_pending(session, request.request_id, request.option_id, request.text)
                 self._routes[request.id] = _Route(client, session.name)
-                await self._send_worker(session, request.model_copy(update={"plugin": client.plugin}))
+                await self._send_worker(
+                    session, request.model_copy(update={"plugin": client.plugin, "supervisor": None})
+                )
+                return None
+            case AnswerSupervisedPermission():
+                session = self._supervised_session(request.supervisor, request.session)
+                pending = self._checked_pending(session, request.request_id, request.option_id, request.text)
+                if pending.tool_name not in session.spec.supervisor_permissions:
+                    raise AidError(
+                        "unlisted_tool",
+                        f"{request.supervisor!r} may not answer {pending.tool_name!r} for {session.name!r}",
+                    )
+                self._routes[request.id] = _Route(client, session.name)
+                await self._send_worker(
+                    session,
+                    AnswerPermission(
+                        # The worker's Done carries this id back: it must be the caller's, like the
+                        # person path's model_copy, so the reply routes to who asked.
+                        id=request.id,
+                        session=session.name,
+                        request_id=request.request_id,
+                        option_id=request.option_id,
+                        text=request.text,
+                        supervisor=request.supervisor,
+                    ),
+                )
                 return None
             case SupervisedHistory():
                 session = self._supervised_session(request.supervisor, request.session)
@@ -719,6 +754,7 @@ class Daemon:
                 session = self._session(request.session)
                 await self._stop(session)
                 del self._sessions[session.name]
+                self._disarm_session_backstops(session.name)
                 await anyio.to_thread.run_sync(shutil.rmtree, self._paths.session_dir(session.name), True)
                 return Done(id=request.id)
             case AddPlugin():
@@ -765,6 +801,11 @@ class Daemon:
         """The supervision link holds: the supervisor exists, is not this session, and closes no cycle."""
         supervisor = spec.supervisor
         if supervisor is None:
+            if spec.supervisor_permissions:
+                raise AidError(
+                    "supervisor_permissions_need_supervisor",
+                    f"session {name!r} allows supervisor permissions but names no supervisor",
+                )
             return
         if supervisor == name:
             raise AidError("self_supervised", f"session {name!r} cannot supervise itself")
@@ -862,6 +903,7 @@ class Daemon:
             return
         session.turn = None
         session.permissions.clear()
+        self._disarm_session_backstops(name)
         await self._publish_turn(name, turn, "ended", reason)
         await self._fire_supervisor(name, reason)
         if session.inbox and not session.uses_channel and self._tg is not None:
@@ -874,6 +916,25 @@ class Daemon:
         if session.spec.supervisor != supervisor:
             raise AidError("not_supervised", f"{supervisor!r} supervises no session {name!r}")
         return session
+
+    def _checked_pending(
+        self, session: _Session, request_id: str, option_id: str | None, text: str | None
+    ) -> PermissionRequest:
+        """The permission request an answer may settle: still waited on, with one of its own options. Text
+        with no pick is the whole answer, and only the ask_user tool reads answer text: a permission gate
+        answers allow or deny, and anywhere else the text alone would read as a cancel while its words went
+        nowhere."""
+        if (pending := session.permissions.get(request_id)) is None:
+            raise AidError("no_pending", f"{session.name!r} waits on no permission request {request_id}")
+        if option_id is not None and option_id not in {o.option_id for o in pending.options}:
+            raise AidError("no_option", f"the request has no option {option_id!r}")
+        if (
+            option_id is None
+            and text is not None
+            and (session.spec.kind is not AgentKind.PYDANTIC_AI or pending.tool_name != "ask_user")
+        ):
+            raise AidError("no_text", f"{session.name!r} takes an option, not free text; pick one or cancel")
+        return pending
 
     async def _read_goals(self, name: str) -> list[Goal]:
         """The session's goals, or none: a missing file means none yet; an unreadable one is logged and
@@ -931,6 +992,100 @@ class Daemon:
         goals = [goal for goal in await self._read_goals(name) if goal.state is GoalState.OPEN]
         await self._accept_message(
             overseer, MessageEntry(sender=name, text=supervision_text(name, reason, page, goals)), uuid.uuid4().hex
+        )
+
+    async def _person_recent(self, session: _Session, window: float) -> bool:
+        """A person-authored entry in the last `window` seconds: their own message (sender None), or their
+        answer to a permission request. Agent and daemon senders name themselves, so None is a person."""
+        cutoff = time.time() - window
+        before: int | None = None
+        while True:
+            page = await session.history.page(before=before, limit=SEARCH_PAGE)
+            for entry in reversed(page.entries):
+                if entry.at < cutoff:
+                    return False
+                match entry.item:
+                    case MessageEntry(sender=None):
+                        return True
+                    case PermissionDecision(by=PermissionDecider.PERSON):
+                        return True
+                    case _:
+                        pass
+            if not page.has_older:
+                return False
+            before = page.entries[0].seq
+
+    def _backstop_bound(self, session: _Session, request: PermissionRequest) -> float | None:
+        """Seconds the worker waits on this request itself: the backstop arms only before it. An `ask_user`
+        question with a recommended option ends at the autoselect instead, which keeps working beside the
+        backstop. None when the worker's bound is aid-unknown (interactive Claude)."""
+        match session.spec:
+            case AcpSpec(permission_timeout=timeout):
+                return timeout
+            case PydanticAISpec(permission_timeout=timeout, ask_autoselect_after=autoselect):
+                if request.tool_name == "ask_user" and any(o.recommended for o in request.options):
+                    return min(timeout, autoselect)
+                return timeout
+            case _:
+                return None
+
+    async def _arm_backstop(self, name: str, request: PermissionRequest) -> None:
+        """Wake the session's supervisor over an unanswered permission request, once the person had their
+        window: the full timeout with a person around, the shortened one without. Skipped when the tool is
+        not allow-listed, and when the worker's own timeout answers first."""
+        if self._tg is None:
+            return
+        session = self._sessions.get(name)
+        if session is None:
+            return
+        spec = session.spec
+        if spec.supervisor is None or request.tool_name not in spec.supervisor_permissions:
+            return
+        self._disarm_backstop(request.request_id)
+        wait = spec.supervisor_permission_timeout
+        # Presence doubles as the window: a person-authored entry this recent keeps the full wait.
+        if not await self._person_recent(session, wait):
+            wait = spec.supervisor_permission_absent_timeout
+        if (bound := self._backstop_bound(session, request)) is not None and wait >= bound:
+            log.info("backstop_moot", session=name, request=request.request_id, wait=wait, bound=bound)
+            return
+        scope = anyio.CancelScope()
+        self._backstops[request.request_id] = (name, scope)
+        self._tg.start_soon(self._await_backstop, name, request.request_id, wait, scope)
+
+    def _disarm_backstop(self, request_id: str) -> None:
+        """The request settled: its backstop, if any, stands down."""
+        if (armed := self._backstops.pop(request_id, None)) is not None:
+            armed[1].cancel()
+
+    def _disarm_session_backstops(self, name: str) -> None:
+        """The session's turn ended, its worker went, or it was deleted: no request of it still waits."""
+        for request_id, (session, scope) in list(self._backstops.items()):
+            if session == name:
+                del self._backstops[request_id]
+                scope.cancel()
+
+    async def _await_backstop(self, name: str, request_id: str, wait: float, scope: anyio.CancelScope) -> None:
+        """Outwait the person, then hand the still-waiting request to the supervisor as a message, through
+        the same accept→inbox→wake path a firing takes. A decision first cancels the scope, so the wake
+        only ever carries a live request."""
+        with scope:
+            await anyio.sleep(wait)
+        armed = self._backstops.get(request_id)
+        if armed is None or armed[1] is not scope:
+            return
+        self._backstops.pop(request_id, None)
+        session = self._sessions.get(name)
+        supervisor = session.spec.supervisor if session is not None else None
+        overseer = self._sessions.get(supervisor) if supervisor is not None else None
+        if session is None or overseer is None:
+            if supervisor is not None:
+                log.info("supervisor_gone", session=name, supervisor=supervisor)
+            return
+        if (pending := session.permissions.get(request_id)) is None:
+            return
+        await self._accept_message(
+            overseer, MessageEntry(sender=name, text=permission_backstop_text(name, pending)), uuid.uuid4().hex
         )
 
     def _launcher_for(self, session: _Session) -> Launcher:
@@ -1023,6 +1178,7 @@ class Daemon:
                 await self._fire_supervisor(session.name, "worker_exited")
                 session.turn = None
             session.permissions.clear()
+            self._disarm_session_backstops(session.name)
             session.working, session.attention = False, None
             with contextlib.suppress(zmq.ZMQError):  # Shutting down: nobody is subscribed any more.
                 await self._publish_changes()
@@ -1148,6 +1304,10 @@ class Daemon:
                 case _:
                     return
             await self._publish(topic, envelope.model_dump_json().encode())
+            if isinstance(reply.event, PermissionRequest):
+                await self._arm_backstop(route.session, reply.event)
+            elif isinstance(reply.event, PermissionDecision):
+                self._disarm_backstop(reply.event.request_id)
 
 
 async def list_agents() -> AgentCatalog:

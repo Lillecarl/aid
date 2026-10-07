@@ -17,6 +17,7 @@
     cancel: ": the turn ended",
     terminal: "",
     plugin: " by a plugin",
+    supervisor: " by the supervisor",
   };
 
   let { session, request, decision }: Props = $props();
@@ -100,7 +101,7 @@
       >
     </div>
   {:else}
-    <div class="decided">{chosen}{decision.plugin ? ` by plugin ${decision.plugin}` : BY[decision.by]}</div>
+    <div class="decided">{chosen}{decision.plugin ? ` by plugin ${decision.plugin}` : decision.supervisor ? ` by supervisor ${decision.supervisor}` : BY[decision.by]}</div>
   {/if}
   {#if error}<div class="error">{error}</div>{/if}
 </div>

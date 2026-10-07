@@ -813,12 +813,13 @@ async def ask_user(
     picked = names[int(decision.option_id)] if decision.option_id is not None else None
     if decision.by is PermissionDecider.AUTO and picked is not None:
         return f'Nobody answered in time; proceeding with the recommended option "{picked}".'
+    who = "The supervisor" if decision.by is PermissionDecider.SUPERVISOR else "The person"
     if picked is not None and decision.text:
-        return f'The person picked "{picked}" and added: {decision.text}'
+        return f'{who} picked "{picked}" and added: {decision.text}'
     if picked is not None:
-        return f'The person picked "{picked}".'
+        return f'{who} picked "{picked}".'
     if decision.text:
-        return f"The person answered: {decision.text}"
+        return f"{who} answered: {decision.text}"
     return "Nobody answered; proceed with your best judgment."
 
 

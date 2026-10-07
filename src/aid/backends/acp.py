@@ -344,9 +344,14 @@ class AcpBackend:
         await self._conn.cancel(session_id=self._session_id)
 
     def answer_permission(
-        self, request_id: str, option_id: str | None, plugin: str | None = None, text: str | None = None
+        self,
+        request_id: str,
+        option_id: str | None,
+        plugin: str | None = None,
+        text: str | None = None,
+        supervisor: str | None = None,
     ) -> bool:
-        return self._client.waits.answer(request_id, option_id, plugin, text)
+        return self._client.waits.answer(request_id, option_id, plugin, text, supervisor)
 
 
 @asynccontextmanager

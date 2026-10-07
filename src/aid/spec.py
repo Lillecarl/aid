@@ -46,6 +46,14 @@ class _Spec(BaseModel):
     """The session watching this one: the daemon hands it the clipped tail of every turn end. The supervisor
     must already exist, must not be this session, and must not close a cycle; the link rides the persisted
     spec file, so it survives restarts."""
+    supervisor_permissions: list[str] = Field(default_factory=list[str])
+    """Tool names the supervisor may answer permission requests for when the person does not: allow-listed
+    tools only, and only in `ask` mode. Empty means no backstop — the supervisor never answers permissions."""
+    supervisor_permission_timeout: Annotated[float, Field(gt=0)] = 300
+    """Seconds a permission request waits for a person before the daemon wakes the supervisor. Also the
+    presence window: a person-authored entry (message, permission answer) this recent keeps the full wait."""
+    supervisor_permission_absent_timeout: Annotated[float, Field(gt=0)] = 60
+    """The wait above, shortened when nobody is around: no person-authored entry in the presence window."""
 
     @model_validator(mode="after")
     def _worker_launch_is_sane(self) -> Self:

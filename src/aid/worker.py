@@ -173,7 +173,7 @@ class _Worker:
                         await self.send(Done(id=request.id))
                 case AnswerPermission():
                     if isinstance(self._backend, PermissionBackend) and self._backend.answer_permission(
-                        request.request_id, request.option_id, request.plugin, request.text
+                        request.request_id, request.option_id, request.plugin, request.text, request.supervisor
                     ):
                         await self.send(Done(id=request.id))
                     else:
