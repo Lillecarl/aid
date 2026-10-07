@@ -49,6 +49,7 @@ from aid.protocol import (
     Notify,
     Observed,
     PermissionDecision,
+    PermissionEvent,
     PermissionRequest,
     Prompt,
     ReceiveMessages,
@@ -904,11 +905,23 @@ class Daemon:
         except OSError:
             log.exception("history_write_failed", session=route.session)
             return
-        if isinstance(reply, Event) and isinstance(reply.event, ToolCall):
-            await self._publish(
-                events.tool_topic(route.session),
-                ToolEvent(turn=reply.id, call=reply.event).model_dump_json().encode(),
-            )
+        if isinstance(reply, Event):
+            match reply.event:
+                case ToolCall() as call:
+                    topic, envelope = events.tool_topic(route.session), ToolEvent(turn=reply.id, call=call)
+                case PermissionRequest() as request:
+                    topic, envelope = (
+                        events.permission_topic(route.session),
+                        PermissionEvent(turn=reply.id, request=request),
+                    )
+                case PermissionDecision() as decision:
+                    topic, envelope = (
+                        events.permission_topic(route.session),
+                        PermissionEvent(turn=reply.id, decision=decision),
+                    )
+                case _:
+                    return
+            await self._publish(topic, envelope.model_dump_json().encode())
 
 
 async def list_agents() -> AgentCatalog:

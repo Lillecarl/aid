@@ -207,3 +207,25 @@ async def test_tool_calls_are_published_with_their_turn(daemon: Paths, tmp_path:
     assert started["call"]["title"] == "python"
     assert started["turn"] == finished["turn"]
     assert quiet
+
+
+async def test_permission_requests_and_decisions_are_published(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with subscribed(daemon, events.permission_topic("coder")) as sub, aid.connect(daemon) as client:
+            session = await client.create(
+                "coder", py_spec(tmp_path, "agents:coder", PermissionMode.ASK, permission_timeout=0.2)
+            )
+            await session.run(
+                plan(
+                    ("ask_user", {"question": "Which database?", "options": ["postgres"]}),
+                )
+            )
+            topic = events.permission_topic("coder")
+            requested = await sub.until(topic, lambda p: p["request"] is not None)
+            decided = await sub.until(topic, lambda p: p["decision"] is not None)
+            quiet = await sub.quiet()
+    assert requested["turn"] == decided["turn"]
+    assert requested["request"]["tool_name"] == "ask_user"
+    assert decided["decision"]["request_id"] == requested["request"]["request_id"]
+    assert decided["decision"]["by"] == "timeout"
+    assert quiet

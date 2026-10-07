@@ -9,6 +9,9 @@
 - `session/<name>/tool/`: each `ToolCall` event as the worker sent it, with its turn (`ToolEvent`), for
   subscribers tracking tool lifecycles by tool_call_id. Incremental like the worker's own events, and
   advisory: drops repair through history paging.
+- `session/<name>/permission/`: each permission request or decision as the worker sent it, with its turn
+  (`PermissionEvent`). Observability only: answering stays on the permission paths, so a dropped event
+  costs insight, never a hung agent.
 
 Topics end in `/`, so a subscription to one session's prefix never matches another session whose name starts the
 same. PUB drops what a slow subscriber cannot take: a history gap shows as a jump in seq and is fetched with
@@ -42,3 +45,7 @@ def turn_topic(name: str) -> bytes:
 
 def tool_topic(name: str) -> bytes:
     return session_prefix(name) + b"tool/"
+
+
+def permission_topic(name: str) -> bytes:
+    return session_prefix(name) + b"permission/"

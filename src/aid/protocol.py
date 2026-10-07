@@ -415,6 +415,16 @@ class PermissionDecision(_Message):
     """The plugin that answered, when `by` is plugin."""
 
 
+class PermissionEvent(_Message):
+    """A permission request or its decision as the worker sent it, with its turn: published on its session's
+    permission topic. Observability only — answering stays on the permission paths, so a dropped event costs
+    insight, never a hung agent. Exactly one side is set."""
+
+    turn: str
+    request: PermissionRequest | None = None
+    decision: PermissionDecision | None = None
+
+
 type SessionEvent = Annotated[
     TextDelta | ThoughtDelta | ToolCall | PermissionRequest | PermissionDecision | Usage | Output,
     Field(discriminator="type"),
