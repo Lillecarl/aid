@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import anyio
@@ -7,20 +9,68 @@ import pytest
 
 import aid
 from aid.client import register_plugin
-from aid.plugins import Grant, PluginSpec
+from aid.plugins import ENV_PLUGINS_DIST, ENV_PLUGINS_PATH, Grant, PluginSpec, discover, plugins_path
 from aid.protocol import AidError, MessageEntry, PermissionDecider, PermissionDecision, PermissionRequest
 from aid.spec import PermissionMode
 from aid.zap import Keypair
 from tests.conftest import acp_spec, py_spec
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from aid.paths import Paths
 
 pytestmark = pytest.mark.anyio
 
 TIMEOUT = 30
+PLUGIN_DIR = Path(__file__).parent / "plugin_dir"
+
+
+def test_plugins_path() -> None:
+    assert plugins_path({ENV_PLUGINS_PATH: "/a::/b"}) == [Path("/a"), Path("/b"), Path.home() / ".config/aid/plugins"]
+    assert plugins_path({"XDG_CONFIG_HOME": "/cfg"}) == [Path("/cfg/aid/plugins")]
+    assert plugins_path({"XDG_CONFIG_HOME": "/cfg", ENV_PLUGINS_DIST: "/dist"}) == [
+        Path("/cfg/aid/plugins"),
+        Path("/dist"),
+    ]
+
+
+def test_discovers_plugins_tools_declined_and_problems(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    catalog = discover([PLUGIN_DIR, PLUGIN_DIR / "missing"])
+    assert sorted(catalog.plugins) == ["alpha", "custom-plugin", "dup"]
+    alpha = catalog.plugins["alpha"]
+    assert (alpha.version, alpha.grants, alpha.description()) == (
+        "1.2.3",
+        frozenset({Grant.READ, Grant.MESSAGE}),
+        "First test plugin.",
+    )
+    assert catalog.plugins["dup"].__module__ == "dup_one"
+    assert sorted(catalog.tools) == ["add", "whoami"]
+    assert catalog.declined == {"gated": "needs a token"}
+    assert len(catalog.problems) == 3
+    assert any("unimportable" in problem and "ModuleNotFoundError" in problem for problem in catalog.problems)
+    assert any("available() raised RuntimeError" in problem for problem in catalog.problems)
+    assert any("dup_two" in problem and "dup_one" in problem and "loses to" in problem for problem in catalog.problems)
+
+
+def test_describe_names_versions_grants_and_declined(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    described = discover([PLUGIN_DIR]).describe()
+    assert described["plugins"] == [
+        {
+            "name": "alpha",
+            "description": "First test plugin.",
+            "version": "1.2.3",
+            "grants": ["message", "read"],
+            "module": "alpha",
+        },
+        {"name": "custom-plugin", "description": "", "version": "", "grants": [], "module": "named"},
+        {"name": "dup", "description": "", "version": "", "grants": [], "module": "dup_one"},
+    ]
+    assert described["tools"] == [
+        {"name": "add", "description": "Add two numbers.", "module": "plugintools"},
+        {"name": "whoami", "description": "The plugin tool that names itself.", "module": "plugintools"},
+    ]
+    assert described["declined"] == {"gated": "needs a token"}
 
 
 async def test_a_plugin_may_do_what_it_is_granted_and_nothing_more(daemon: Paths, tmp_path: Path) -> None:

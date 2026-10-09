@@ -43,6 +43,8 @@ from pydantic_core import to_jsonable_python
 from aid.agents import ENV_AGENTS_PATH, Catalog, agents_path, discover
 from aid.backends.permissions import PermissionWaits
 from aid.coding import CODING, OUTPUTS_DIR, Coding
+from aid.plugins import discover as discover_plugins
+from aid.plugins import plugins_path
 from aid.protocol import (
     AidError,
     Output,
@@ -138,6 +140,16 @@ def load_target(target: str) -> AbstractAgent[Any, Any]:
     if not isinstance(obj, AbstractAgent):
         raise TypeError(f"{target} is {type(obj).__name__}, not a pydantic_ai agent")
     return obj  # pyright: ignore[reportUnknownVariableType] -- isinstance cannot narrow the generic parameters
+
+
+def _session_catalog() -> Catalog:
+    catalog = discover(agents_path())
+    plugins = discover_plugins(plugins_path())
+    catalog.problems.extend(plugins.problems)
+    for name, tool in plugins.tools.items():
+        # On a name clash the agents path wins: it is the established tool source.
+        catalog.tools.setdefault(name, tool)
+    return catalog
 
 
 def load_named(catalog: Catalog, name: str) -> AbstractAgent[Any, Any]:
@@ -327,7 +339,7 @@ async def _write_atomic(path: anyio.Path, data: bytes) -> None:
 @asynccontextmanager
 async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> AsyncGenerator[PydanticAIBackend]:
     # Imports and filesystem walks, run off the event loop.
-    catalog = await anyio.to_thread.run_sync(discover, agents_path()) if spec.agent or spec.aid_tools else Catalog()
+    catalog = await anyio.to_thread.run_sync(_session_catalog) if spec.agent or spec.aid_tools else Catalog()
     if spec.agent is not None:
         agent = await anyio.to_thread.run_sync(load_named, catalog, spec.agent)
     elif spec.target is not None:

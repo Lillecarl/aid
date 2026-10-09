@@ -155,7 +155,8 @@ in
 
   # Only `bin/aid`: a profile that installs this next to another virtualenv, such as pymux's, would otherwise
   # get two `bin/python` and `bin/activate` and refuse to build. The wrapper points `aid web` at the built UI
-  # and the highlighter's grammars.
+  # and the highlighter's grammars. In-tree plugins ride along as the plugins path's last tier, after the
+  # caller's AID_PLUGINS_PATH and their XDG directory.
   aid =
     pkgs.runCommand "aid-${set.aid.version}"
       {
@@ -164,8 +165,11 @@ in
         nativeBuildInputs = [ pkgs.makeWrapper ];
       }
       ''
+        mkdir -p $out/share/aid
+        cp -r ${./plugins} $out/share/aid/plugins
         makeWrapper ${venv}/bin/aid $out/bin/aid --set-default AID_WEB_ASSETS ${ui} \
-          --set-default AID_TREE_SITTER_GRAMMARS ${grammars}
+          --set-default AID_TREE_SITTER_GRAMMARS ${grammars} \
+          --set-default AID_PLUGINS_DIST $out/share/aid/plugins
       '';
 
   inherit (set.aid) tests;

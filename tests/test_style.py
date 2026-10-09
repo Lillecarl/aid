@@ -17,7 +17,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def aid_files() -> list[Path]:
     """Every Python file aid ships or tests, including the vivarium scripts mkTest type-checks."""
-    return sorted((*((ROOT / "src").rglob("*.py")), *((ROOT / "tests").rglob("*.py"))))
+    return sorted(
+        (*((ROOT / "src").rglob("*.py")), *((ROOT / "tests").rglob("*.py")), *((ROOT / "plugins").rglob("*.py")))
+    )
 
 
 def has_future_annotations(path: Path) -> bool:

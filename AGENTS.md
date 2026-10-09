@@ -97,7 +97,7 @@ API and a CLI.
 ## Commands
 
 ```sh
-nix develop --file . shell --command sh -c 'ruff format src tests && ruff check src tests && pyright'
+nix develop --file . shell --command sh -c 'ruff format src tests plugins && ruff check src tests plugins && pyright'
 nix develop --file . shell --command python -m pytest -p no:cacheprovider
 nix build --file . tests      # the same suite in the sandbox, against a real pymux
 nix run --file . pyrefly -- check   # project mode: files and import roots come from pyrefly.toml

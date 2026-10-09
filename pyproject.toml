@@ -58,7 +58,7 @@ filterwarnings = ["error"]
 [tool.pyright]
 pythonVersion = "3.14"
 typeCheckingMode = "strict"
-include = ["src", "tests"]
+include = ["src", "tests", "plugins"]
 exclude = ["tests/vivarium"]
 
 [tool.ruff]

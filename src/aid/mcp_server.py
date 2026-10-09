@@ -28,6 +28,8 @@ from mcp.types import JSONRPCMessage, JSONRPCNotification
 from aid.agents import agents_path, discover
 from aid.client import connect
 from aid.paths import ENV_CHANNEL, ENV_SESSION
+from aid.plugins import discover as discover_plugins
+from aid.plugins import plugins_path
 from aid.protocol import AidError
 
 if TYPE_CHECKING:
@@ -59,7 +61,8 @@ def channel_params(message: MessageEntry) -> dict[str, Any]:
 
 def build(channel_session: str | None) -> FastMCP:
     catalog = discover(agents_path())
-    for problem in catalog.problems:
+    plugins = discover_plugins(plugins_path())
+    for problem in (*catalog.problems, *plugins.problems):
         # stdout carries the protocol.
         print(f"aid.mcp_server: {problem}", file=sys.stderr)
     server = FastMCP(
@@ -67,7 +70,8 @@ def build(channel_session: str | None) -> FastMCP:
         instructions=instructions(channel_session) if channel_session else None,
         log_level="WARNING",
     )
-    for tool in catalog.tools.values():
+    # On a name clash the agents path wins: it is the established tool source.
+    for tool in {**plugins.tools, **catalog.tools}.values():
         server.add_tool(tool.fn, name=tool.name, description=tool.description)
     return server
 

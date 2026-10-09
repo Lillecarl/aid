@@ -20,7 +20,8 @@ from aid.launcher import PRELOAD, CommandLauncher, ForkserverLauncher, WorkerArg
 from aid.log import configure_logging
 from aid.mcp import from_claude_config
 from aid.paths import default_paths
-from aid.plugins import Grant
+from aid.plugins import ENV_PLUGINS_PATH, Grant, plugins_path
+from aid.plugins import discover as discover_plugins
 from aid.protocol import (
     AidError,
     Lifecycle,
@@ -296,6 +297,8 @@ def _parser() -> argparse.ArgumentParser:
         "secret where `aid.connect(plugin=NAME)` reads it",
     )
     plugin_sub.add_parser("list", help="list plugins and their grants")
+    run = plugin_sub.add_parser("run", help="run a plugin from the plugins path as its registered name")
+    run.add_argument("name")
     guard_cmd = sub.add_parser(
         "guard", help="run aid.guard: answer permission requests that only read, leave the rest for a person"
     )
@@ -501,15 +504,58 @@ async def _client_command(args: argparse.Namespace) -> None:
 async def _plugin_command(client: Client, args: argparse.Namespace) -> None:
     match args.plugin_command:
         case "add":
-            grants = frozenset(Grant(g) for g in args.grant)
+            grants = frozenset(Grant(g) for g in args.grant) if args.grant else _declared_grants(args.name)
             print(await register_plugin(client, default_paths(), args.name, grants, public_key=args.public_key))
         case "list":
             for spec in await client.plugins():
                 print(f"{spec.name}\t{','.join(sorted(spec.grants)) or '-'}\t{spec.public_key}")
         case "remove":
             await client.remove_plugin(args.name)
+        case "run":
+            raise SystemExit("aid plugin run connects as the plugin itself: it runs outside this command")
         case other:
             raise SystemExit(f"unknown plugin command {other!r}")
+
+
+def _declared_grants(name: str) -> frozenset[Grant]:
+    """The grants the plugins path's `name` declares. Explicit --grant stays for plugins registered from
+    elsewhere, whose code lives on another host."""
+    found = discover_plugins(plugins_path()).plugins.get(name)
+    if found is None:
+        raise SystemExit(
+            f"aid plugin add: no plugin {name!r} on the plugins path: pass --grant, or set {ENV_PLUGINS_PATH}"
+        )
+    return found.grants
+
+
+def _grant_flags(grants: frozenset[Grant]) -> str:
+    return " ".join(f"--grant {grant.value}" for grant in sorted(grants, key=lambda grant: grant.value))
+
+
+async def _run_plugin(name: str) -> None:
+    """Run the plugin the plugins path names, connected as its registered name."""
+    found = discover_plugins(plugins_path()).plugins.get(name)
+    if found is None:
+        raise SystemExit(f"aid plugin run: no plugin {name!r} on the plugins path")
+    plugin = found()
+    async with connect() as control:
+        registered = {spec.name: spec.grants for spec in await control.plugins()}
+    if name not in registered:
+        raise SystemExit(
+            f"aid plugin run: no plugin {name!r} registered: `aid plugin add {name} {_grant_flags(plugin.grants)}` first"
+        )
+    if missing := set(plugin.grants) - set(registered[name]):
+        raise SystemExit(
+            f"aid plugin run: {name!r} is registered without {_grant_flags(frozenset(missing))}: "
+            f"`aid plugin add {name} {_grant_flags(plugin.grants)}` again to replace it"
+        )
+    try:
+        async with connect(plugin=name) as client:
+            await plugin.run(client)
+    except AidError as error:
+        if error.code != "forbidden":
+            raise
+        raise SystemExit(f"aid plugin run: the daemon refused {name!r}: it was removed mid-run") from error
 
 
 def _preload(args: argparse.Namespace) -> list[str]:
@@ -594,6 +640,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     head, agent_command = _split_agent_command(sys.argv[1:] if argv is None else argv)
     args = _parser().parse_args(head)
     args.agent_command = agent_command
+    if args.command == "plugin" and args.plugin_command == "run":
+        configure_logging()
+        try:
+            anyio.run(_run_plugin, args.name)
+        except AidError as error:
+            raise SystemExit(f"aid plugin run: {error}") from None
+        return
     if args.command == "guard":
         configure_logging()
         try:

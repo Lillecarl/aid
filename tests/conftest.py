@@ -15,6 +15,7 @@ from aid.agents import ENV_AGENTS_PATH
 from aid.daemon import Daemon
 from aid.launcher import ForkserverLauncher
 from aid.paths import Paths
+from aid.plugins import ENV_PLUGINS_PATH
 from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
 from aid.speech import load as load_speech
 from aid.web.highlight import ENV_GRAMMARS, Grammars
@@ -26,6 +27,9 @@ if TYPE_CHECKING:
     from aid.speech import Recognizer
 
 TESTS = Path(__file__).parent
+
+sys.path.insert(0, str(TESTS.parent))
+"""In-tree plugins import as `plugins.<name>`, as they resolve once a plugins path names them."""
 
 #: What `--browser` accepts: full chromium is never needed, its headless shell runs the suite.
 BROWSERS = ("chromium", "firefox")
@@ -66,20 +70,23 @@ def anyio_backend() -> str:
 
 
 @pytest.fixture(scope="session", autouse=True)
-def empty_agents_path(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
-    """Keep the agents and tools of whoever runs the tests out of the sessions. Set before the forkserver starts,
-    so every worker inherits it."""
-    previous = os.environ.get(ENV_AGENTS_PATH)
-    os.environ[ENV_AGENTS_PATH] = str(tmp_path_factory.mktemp("no-agents"))
+def empty_extension_paths(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
+    """Keep the agents, tools and plugins of whoever runs the tests out of the sessions. Set before the forkserver
+    starts, so every worker inherits it."""
+    previous = {key: os.environ.get(key) for key in (ENV_AGENTS_PATH, ENV_PLUGINS_PATH)}
+    isolated = str(tmp_path_factory.mktemp("no-extensions"))
+    os.environ[ENV_AGENTS_PATH] = isolated
+    os.environ[ENV_PLUGINS_PATH] = isolated
     yield
-    if previous is None:
-        del os.environ[ENV_AGENTS_PATH]
-    else:
-        os.environ[ENV_AGENTS_PATH] = previous
+    for key, value in previous.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
 
 
 @pytest.fixture(scope="session")
-def launcher(empty_agents_path: None) -> ForkserverLauncher:
+def launcher(empty_extension_paths: None) -> ForkserverLauncher:
     launcher = ForkserverLauncher()
     # Workers inherit the forkserver's environment, frozen when it starts: start it before a test monkeypatches.
     multiprocessing.forkserver.ensure_running()

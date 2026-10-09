@@ -6,6 +6,8 @@ from aid.client import RunResult as RunResult
 from aid.client import Session as Session
 from aid.client import connect as connect
 from aid.coding import coding_tools as coding_tools
+from aid.plugins import Grant as Grant
+from aid.plugins import Plugin as Plugin
 from aid.protocol import AgentCatalog as AgentCatalog
 from aid.protocol import AgentInfo as AgentInfo
 from aid.protocol import AidError as AidError

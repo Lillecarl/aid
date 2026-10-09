@@ -28,7 +28,7 @@ def _free_port() -> int:
         return sock.getsockname()[1]
 
 
-@pytest.mark.usefixtures("empty_agents_path")
+@pytest.mark.usefixtures("empty_extension_paths")
 async def test_a_worker_command_over_ws(paths: Paths, tmp_path: Path) -> None:
     endpoint = f"ws://127.0.0.1:{_free_port()}/aid"
     launcher = CommandLauncher([sys.executable, "-m", "aid", "worker"], endpoint)
@@ -44,7 +44,7 @@ async def test_a_worker_command_over_ws(paths: Paths, tmp_path: Path) -> None:
             tg.cancel_scope.cancel()
 
 
-@pytest.mark.usefixtures("empty_agents_path")
+@pytest.mark.usefixtures("empty_extension_paths")
 async def test_per_session_worker_command(paths: Paths, tmp_path: Path) -> None:
     """One session runs its own worker command while the daemon forks the rest: new worker code without
     restarting the daemon or touching other sessions."""
@@ -61,7 +61,7 @@ async def test_per_session_worker_command(paths: Paths, tmp_path: Path) -> None:
             tg.cancel_scope.cancel()
 
 
-@pytest.mark.usefixtures("empty_agents_path")
+@pytest.mark.usefixtures("empty_extension_paths")
 async def test_per_session_worker_command_needs_permission(paths: Paths, tmp_path: Path) -> None:
     """Without --allow-worker-command the daemon refuses the session's command before starting anything."""
     command = [sys.executable, "-m", "aid", "worker"]
@@ -75,7 +75,7 @@ async def test_per_session_worker_command_needs_permission(paths: Paths, tmp_pat
             tg.cancel_scope.cancel()
 
 
-@pytest.mark.usefixtures("empty_agents_path")
+@pytest.mark.usefixtures("empty_extension_paths")
 async def test_shutdown_while_a_worker_starts(paths: Paths, tmp_path: Path) -> None:
     """The worker never reaches the daemon; stopping the daemon must still end it, well within `STOP_TIMEOUT`."""
     launcher = CommandLauncher([sys.executable, "-m", "aid", "worker"], f"ws://127.0.0.1:{_free_port()}/aid")
