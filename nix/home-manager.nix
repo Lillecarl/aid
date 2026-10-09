@@ -41,5 +41,15 @@ in
       Install.WantedBy = [ "default.target" ];
       Service = (common.webService cfg).serviceConfig;
     };
+
+    systemd.user.services.aid-telegram = lib.mkIf cfg.telegram.enable {
+      Unit = {
+        Description = "aid Telegram plugin";
+        After = [ "aid.service" ];
+        Wants = [ "aid.service" ];
+      };
+      Install.WantedBy = [ "default.target" ];
+      Service = (common.telegramService cfg).serviceConfig;
+    };
   };
 }

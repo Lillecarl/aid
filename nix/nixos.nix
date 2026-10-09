@@ -81,5 +81,25 @@ in
         NoNewPrivileges = true;
       };
     };
+
+    systemd.services.aid-telegram = lib.mkIf cfg.telegram.enable {
+      description = "aid Telegram plugin";
+      wantedBy = [ "multi-user.target" ];
+      after = [
+        "aid.service"
+        "network-online.target"
+      ];
+      wants = [
+        "aid.service"
+        "network-online.target"
+      ];
+      environment.AID_RUNTIME_DIR = runtimeDir;
+      environment.AID_STATE_DIR = "/var/lib/aid";
+      serviceConfig = (common.telegramService cfg).serviceConfig // {
+        User = cfg.user;
+        Group = cfg.group;
+        NoNewPrivileges = true;
+      };
+    };
   };
 }

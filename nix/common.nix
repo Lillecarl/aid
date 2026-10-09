@@ -128,6 +128,19 @@ in
         '';
       };
     };
+
+    telegram = {
+      enable = lib.mkEnableOption "the aid Telegram plugin: settled turn ends as messages, basic commands back";
+
+      environmentFile = lib.mkOption {
+        type = lib.types.str;
+        example = "%t/agenix/aid-env";
+        description = ''
+          systemd EnvironmentFile with AID_TELEGRAM_TOKEN and AID_TELEGRAM_CHATS. Kept out of the store.
+          systemd specifiers work.
+        '';
+      };
+    };
   };
 
   /**
@@ -197,6 +210,26 @@ in
       EnvironmentFile = cfg.web.environmentFile;
       Restart = "on-failure";
       RestartSec = "2s";
+    };
+  };
+
+  /**
+    systemd unit settings for `aid plugin run telegram`, which both modules share.
+
+    # Inputs
+
+    `cfg`
+    : The module's evaluated `services.aid` config
+  */
+  telegramService = cfg: {
+    serviceConfig = {
+      Type = "exec";
+      ExecStart = "${lib.getExe cfg.package} plugin run telegram";
+      EnvironmentFile = cfg.telegram.environmentFile;
+      # The plugin exits loudly on a dead daemon, a refused token and a silent one alike: always come back,
+      # and pick up a provisioned token without anyone restarting the unit.
+      Restart = "always";
+      RestartSec = "10s";
     };
   };
 }
