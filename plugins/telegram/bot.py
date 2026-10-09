@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue
 from aid.protocol import (
     AidError,
     Output,
+    SessionInfo,
     SessionStatus,
     SupervisionEvent,
     TurnEvent,
@@ -69,6 +70,18 @@ CALL_TIMEOUT: Final = 30.0
 """A daemon call slower than this means the daemon is gone: exit loudly and let the unit restart into a
 fresh baseline, rather than hang on a reply a restarted daemon never sends."""
 API_BASE: Final = "https://api.telegram.org"
+
+COMMANDS: Final = (
+    ("sessions", "list sessions"),
+    ("status", "a session's state"),
+    ("tail", "a session's last output"),
+    ("send", "message a session"),
+    ("mute", "silence a session"),
+    ("unmute", "listen to a session again"),
+    ("muted", "list silenced sessions"),
+    ("help", "this list"),
+)
+"""The bot's slash-command menu, published for autocompletion on startup."""
 
 
 class TelegramConfig(BaseModel):
@@ -170,6 +183,16 @@ class Bot:
 
     async def send(self, chat_id: int, text: str) -> None:
         _body(_SendBody, await self._client.post(f"{self._base}/sendMessage", json={"chat_id": chat_id, "text": text}))
+
+    async def set_commands(self, commands: tuple[tuple[str, str], ...] = COMMANDS) -> None:
+        """Publish the slash-command menu, so chats complete it. Idempotent: Telegram keeps the last menu."""
+        _body(
+            _SendBody,
+            await self._client.post(
+                f"{self._base}/setMyCommands",
+                json={"commands": [{"command": name, "description": text} for name, text in commands]},
+            ),
+        )
 
     async def updates(self, offset: int) -> tuple[list[Update], int]:
         """Messages since `offset`, oldest first, with the offset past the newest update seen: unparsable
@@ -425,6 +448,13 @@ async def watch(
 HELP: Final = """sessions, status <name>, tail <name>, send <name> <text>, mute <name>, unmute <name>, muted"""
 
 
+def _state(info: SessionInfo) -> str:
+    """A session's one-word state: stopped beats idle, busy beats both."""
+    if not info.running:
+        return "stopped"
+    return "busy" if info.working else "idle"
+
+
 async def handle_command(client: Client, mutes: Mutes, text: str) -> str | None:
     """An inbound Telegram message as a reply, or None when it is no command."""
     parsed = parse_command(text)
@@ -437,10 +467,7 @@ async def handle_command(client: Client, mutes: Mutes, text: str) -> str | None:
         infos = await daemon_call(client.sessions())
         if not infos:
             return "no sessions"
-        return "\n".join(
-            f"{info.name} {'busy' if info.working else 'idle'}{' muted' if info.name in mutes else ''}"
-            for info in infos
-        )
+        return "\n".join(f"{info.name} {_state(info)}{' muted' if info.name in mutes else ''}" for info in infos)
     if command == "muted":
         names = mutes.names()
         return "nothing muted" if not names else "\n".join(names)
@@ -482,6 +509,10 @@ async def handle_command(client: Client, mutes: Mutes, text: str) -> str | None:
 
 async def serve(client: Client, bot: Bot, chats: Set[int], mutes: Mutes) -> None:
     """Answer allowlisted chats; everything else is dropped on the floor."""
+    try:
+        await bot.set_commands()
+    except BotError, httpx.HTTPError:
+        log.exception("telegram_commands_unpublished")
     offset = 0
     while True:
         try:

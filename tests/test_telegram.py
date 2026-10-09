@@ -17,6 +17,7 @@ from aid.client import register_plugin
 from aid.plugins import Grant, discover
 from aid.protocol import AidError
 from plugins.telegram.bot import (
+    COMMANDS,
     Bot,
     BotError,
     Mutes,
@@ -103,8 +104,28 @@ def _transport(calls: list[tuple[str, str, Any]], result: Any) -> httpx.MockTran
 async def test_send_posts_to_the_bot_api() -> None:
     calls: list[tuple[str, str, Any]] = []
     async with httpx.AsyncClient(transport=_transport(calls, True)) as http:
-        await Bot("tok", client=http).send(7, "hi")
-    assert calls == [("POST", "/bottok/sendMessage", {"chat_id": 7, "text": "hi"})]
+        bot = Bot("tok", client=http)
+        await bot.send(7, "hi")
+        await bot.set_commands()
+    assert calls == [
+        ("POST", "/bottok/sendMessage", {"chat_id": 7, "text": "hi"}),
+        (
+            "POST",
+            "/bottok/setMyCommands",
+            {
+                "commands": [
+                    {"command": "sessions", "description": "list sessions"},
+                    {"command": "status", "description": "a session's state"},
+                    {"command": "tail", "description": "a session's last output"},
+                    {"command": "send", "description": "message a session"},
+                    {"command": "mute", "description": "silence a session"},
+                    {"command": "unmute", "description": "listen to a session again"},
+                    {"command": "muted", "description": "list silenced sessions"},
+                    {"command": "help", "description": "this list"},
+                ]
+            },
+        ),
+    ]
 
 
 async def test_updates_skips_what_has_no_message_text() -> None:
@@ -250,6 +271,8 @@ async def test_commands_answer_and_mute(daemon: Paths, tmp_path: Path) -> None:
             assert await handle_command(control, mutes, "/unmute echo") == "unmuted 'echo'"
             # /send wakes the session, so only its reply is asserted.
             assert await handle_command(control, mutes, "/send echo hello") == "sent to 'echo'"
+            await control.session("echo").stop()
+            assert await handle_command(control, mutes, "/sessions") == "echo stopped"
             assert await handle_command(control, mutes, "/status missing") == "aid: no session named 'missing'"
             assert await handle_command(control, mutes, "/frobnicate echo") == (
                 "unknown command 'frobnicate'; sessions, status <name>, tail <name>, "
@@ -265,11 +288,15 @@ class ScriptBot(Bot):
         super().__init__("test")
         self._queued = updates
         self.sent: list[tuple[int, str]] = []
+        self.menu: tuple[tuple[str, str], ...] = ()
         self.got = anyio.Event()
 
     async def send(self, chat_id: int, text: str) -> None:
         self.sent.append((chat_id, text))
         self.got.set()
+
+    async def set_commands(self, commands: tuple[tuple[str, str], ...] = COMMANDS) -> None:
+        self.menu = commands
 
     async def updates(self, offset: int) -> tuple[list[Update], int]:
         await anyio.lowlevel.checkpoint()  # A checkpoint per poll: the real one awaits the network.
@@ -297,6 +324,7 @@ async def test_serve_answers_allowlisted_chats(daemon: Paths, tmp_path: Path) ->
     finally:
         await bot.aclose()
     assert bot.sent == [(CHAT, "nothing muted")]
+    assert bot.menu == COMMANDS
 
 
 class FakeBot(Bot):
