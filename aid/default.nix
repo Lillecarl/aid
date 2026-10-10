@@ -50,6 +50,8 @@ let
     inherit root;
     fileset = lib.fileset.unions [
       (root + "/tests")
+      # Tests import plugin code the same way the daemon's discovery loads it.
+      (root + "/plugins")
       (root + "/pyproject.toml")
       (root + "/web/src/lib/protocol.schema.json")
     ];
