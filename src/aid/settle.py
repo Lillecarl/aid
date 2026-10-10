@@ -32,6 +32,17 @@ RECONCILE_INTERVAL: Final = 60.0
 """How often the watch loop re-reads the session list, repairing turns a dropped event hid."""
 
 
+def describe_end(reason: str | None) -> str:
+    """How a settled turn ended, in words rather than codes."""
+    if reason is None:
+        return "turn ended (unknown)"
+    if reason == "done":
+        return "turn ended"
+    if reason == "cancelled":
+        return "turn cancelled"
+    return f"turn failed ({reason})"
+
+
 @dataclass
 class _Pending:
     turn: str

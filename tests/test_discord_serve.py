@@ -271,6 +271,26 @@ async def test_notice_posts_to_session_channel(daemon: Paths, tmp_path: Path) ->
     assert components == action_rows(((("mute", "mute:echo"),),))
 
 
+async def test_notice_reports_a_failed_turn(daemon: Paths, tmp_path: Path) -> None:
+    rest = FakeRest()
+    mutes = await Mutes.load(tmp_path / MUTES_FILE)
+    channel_map = ChannelMap(tmp_path / CHANNELS_FILE, None, {"oops": "c1"})
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as control:
+            session = await control.create("oops", py_spec(tmp_path, "agents:failer"))
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(partial(notice_loop, control, rest, mutes, channel_map, idle_window=0.5, tick=0.1))
+                await anyio.sleep(0.3)  # Time for the subscription to reach the daemon.
+                with pytest.raises(AidError, match="agent_error"):
+                    await session.run("go")
+                await anyio.sleep(1.5)  # The turn settles past its idle window, then posts.
+                tg.cancel_scope.cancel()
+    [(channel_id, text, components)] = rest.sent
+    assert channel_id == "c1"
+    assert "oops: turn failed (agent_error)" in text and "boom" in text
+    assert components == action_rows(((("mute", "mute:oops"),),))
+
+
 async def test_muted_sessions_stay_silent(daemon: Paths, tmp_path: Path) -> None:
     rest = FakeRest()
     mutes = await Mutes.load(tmp_path / MUTES_FILE)

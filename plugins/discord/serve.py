@@ -17,8 +17,8 @@ import structlog
 from pydantic import BaseModel, ConfigDict
 
 from aid.client import daemon_call
-from aid.protocol import AidError, Output, tool_text
-from aid.settle import IDLE_WINDOW, TICK_INTERVAL, VERDICT_TIMEOUT, settled_turns
+from aid.protocol import AidError, Output, TurnError, tool_text
+from aid.settle import IDLE_WINDOW, TICK_INTERVAL, VERDICT_TIMEOUT, describe_end, settled_turns
 
 from .channels import reconcile, state_word
 from .gateway import Gateway
@@ -103,6 +103,16 @@ async def _last_output(session: Session) -> Output | None:
     return None
 
 
+async def _last_terminal(session: Session) -> Output | TurnError | None:
+    """The turn's newest terminal entry: its output, or its failure when that came last. One history
+    read serves the whole notice."""
+    page = await daemon_call(session.history(limit=TAIL_SCAN))
+    for entry in reversed(page.entries):
+        if isinstance(entry.item, (Output, TurnError)):
+            return entry.item
+    return None
+
+
 async def _status_text(session: Session, name: str) -> str:
     status = await daemon_call(session.status())
     lines = [f"{name} {'busy' if status.busy else 'idle'}"]
@@ -124,14 +134,16 @@ async def _tail_text(session: Session, name: str) -> str:
 
 async def _notice_text(session: Session, reason: str | None) -> str:
     """What a session channel hears about a settled turn: how it ended, and what it said last."""
-    head = f"{session.name}: turn ended ({reason or 'unknown'})"
+    head = f"{session.name}: {describe_end(reason)}"
     try:
         status = await daemon_call(session.status())
-        output = await _last_output(session)
+        terminal = await _last_terminal(session)
     except AidError as error:
         return f"{head}\ngone since: {error.message}"
     lines = [head]
-    if output is not None and (text := tool_text(output.output)) is not None:
+    if isinstance(terminal, TurnError):
+        lines.append(_clip(terminal.message))
+    elif terminal is not None and (text := tool_text(terminal.output)) is not None:
         lines.append(_clip(text))
     if status.model is not None:
         lines.append(status.model)

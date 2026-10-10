@@ -77,6 +77,15 @@ async def _echo(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[
 echo = Agent(FunctionModel(stream_function=_echo))
 
 
+async def _failing(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+    """A failing worker: it says something, then raises, so the turn ends with `agent_error`."""
+    yield "about to fail"
+    raise RuntimeError("boom")
+
+
+failer = Agent(FunctionModel(stream_function=_failing))
+
+
 def _summarize(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     """A summarizer for compaction tests: the digest is always the same text."""
     return ModelResponse(parts=[TextPart("kept decisions")])
