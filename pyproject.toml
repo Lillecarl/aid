@@ -35,6 +35,9 @@ dependencies = [
   "sherpa-onnx>=1.12",
   "starlette>=1.0",
   "structlog>=24.4",
+  # The Discord plugin's gateway: wsproto frames the wire with no event loop of its own, driven over
+  # anyio streams. (Transitively present via httpx already; declared because the plugin imports it.)
+  "wsproto>=1.2",
   # aid web's highlighter. The grammars come from AID_TREE_SITTER_GRAMMARS (nix/tree-sitter-grammars.nix).
   "tree-sitter>=0.25",
   "watchfiles>=1.0",
