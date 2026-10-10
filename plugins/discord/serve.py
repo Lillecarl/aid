@@ -95,6 +95,11 @@ def _clip(text: str) -> str:
     return f"{text[:NOTICE_LIMIT]}\n… {len(text) - NOTICE_LIMIT} more characters"
 
 
+def fence_output(text: str) -> str:
+    """Wrap machine output in triple-backtick fences; inner fences split with a zero-width space survive."""
+    return f"```\n{text.replace('```', '``\u200b`')}\n```"
+
+
 async def _last_output(session: Session) -> Output | None:
     page = await daemon_call(session.history(limit=TAIL_SCAN))
     for entry in reversed(page.entries):
@@ -129,7 +134,7 @@ async def _tail_text(session: Session, name: str) -> str:
     output = await _last_output(session)
     if output is None or (rendered := tool_text(output.output)) is None:
         return f"{name}: no output yet"
-    return _clip(rendered)
+    return fence_output(_clip(rendered))
 
 
 async def _notice_text(session: Session, reason: str | None) -> str:
@@ -142,9 +147,9 @@ async def _notice_text(session: Session, reason: str | None) -> str:
         return f"{head}\ngone since: {error.message}"
     lines = [head]
     if isinstance(terminal, TurnError):
-        lines.append(_clip(terminal.message))
+        lines.append(fence_output(_clip(terminal.message)))
     elif terminal is not None and (text := tool_text(terminal.output)) is not None:
-        lines.append(_clip(text))
+        lines.append(fence_output(_clip(text)))
     if status.model is not None:
         lines.append(status.model)
     if status.cost:

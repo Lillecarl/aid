@@ -20,8 +20,10 @@ from plugins.discord.rest import GuildChannel, Rest, action_rows
 from plugins.discord.serve import (
     MUTES_FILE,
     Reply,
+    _notice_text,
     channel_loop,
     dispatch,
+    fence_output,
     handle_command,
     handle_tap,
     notice_loop,
@@ -321,3 +323,54 @@ async def test_channel_loop_reconciles_on_list_changes(daemon: Paths, tmp_path: 
                 tg.cancel_scope.cancel()
             assert channel_map.channels.keys() == {"echo"}
             assert rest.created == [("g1", "echo", 0, "cat", f"aid session echo: {await _topic_word(control, 'echo')}")]
+
+
+def test_fence_output_wraps_and_escapes_inner_fences() -> None:
+    assert fence_output("hi") == "```\nhi\n```"
+    assert fence_output("a ``` b") == "```\na ``\u200b` b\n```"
+
+
+async def test_tail_fences_machine_output(daemon: Paths, tmp_path: Path) -> None:
+    mutes = await Mutes.load(tmp_path / MUTES_FILE)
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as control:
+            await control.create("echo", py_spec(tmp_path, "agents:echo"))
+            await control.session("echo").run("hello")
+            tail = await handle_command(control, mutes, "!tail echo", session=None)
+            assert tail is not None
+            assert tail.content.startswith("```\n")
+            assert tail.content.endswith("\n```")
+            assert "echo hello" in tail.content
+
+
+async def test_tail_escapes_inner_fences(daemon: Paths, tmp_path: Path) -> None:
+    mutes = await Mutes.load(tmp_path / MUTES_FILE)
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as control:
+            await control.create("echo", py_spec(tmp_path, "agents:echo"))
+            await control.session("echo").run("say ``` hi ```")
+            tail = await handle_command(control, mutes, "!tail echo", session=None)
+            assert tail is not None
+            assert tail.content.count("```") == 2
+            assert "\u200b" in tail.content
+            assert "say" in tail.content
+
+
+async def test_notice_fences_output_and_leaves_heads_plain(daemon: Paths, tmp_path: Path) -> None:
+    mutes = await Mutes.load(tmp_path / MUTES_FILE)
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as control:
+            await control.create("echo", py_spec(tmp_path, "agents:echo"))
+            await control.session("echo").run("hello")
+            text = await _notice_text(control.session("echo"), None)
+            head, _, _ = text.partition("\n")
+            assert "```" not in head
+            assert "echo hello" in text
+            assert text.count("```") == 2
+            status = await handle_command(control, mutes, "!status echo", session=None)
+            assert status is not None and "```" not in status.content
+            listed = await handle_command(control, mutes, "!sessions", session=None)
+            assert listed is not None and "```" not in listed.content
+            empty = await handle_command(control, mutes, "!tail fresh", session=None)
+            assert empty is not None and empty.content == "aid: no session named 'fresh'"
+            assert "```" not in empty.content
