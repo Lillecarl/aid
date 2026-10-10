@@ -59,6 +59,14 @@ def test_daemon_allow_worker_command() -> None:
     assert _parser().parse_args(["daemon", "--allow-worker-command"]).allow_worker_command is True
 
 
+def test_new_py_max_requests() -> None:
+    args = _parser().parse_args(["new-py", "s", "agents:echo", "--max-requests", "150"])
+    args.agent_command = []
+    spec = _spec(args)
+    assert isinstance(spec, PydanticAISpec)
+    assert spec.max_requests == 150
+
+
 def test_new_py_worker_command(tmp_path: Path) -> None:
     argv = [
         "new-py",

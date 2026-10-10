@@ -38,6 +38,7 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models import ModelRequestParameters, infer_model
 from pydantic_ai.run import AgentRunResultEvent
+from pydantic_ai.usage import UsageLimits
 from pydantic_core import to_jsonable_python
 
 from aid.agents import ENV_AGENTS_PATH, Catalog, agents_path, discover
@@ -221,6 +222,7 @@ class PydanticAIBackend:
         started: Started,
         coding: Coding,
         desired_max: int = DEFAULT_DESIRED_MAX,
+        max_requests: int | None = None,
     ) -> None:
         self._agent = agent
         self._history_file = history_file
@@ -230,6 +232,7 @@ class PydanticAIBackend:
         self._run: AgentRunEvents[Any] | None = None
         self._coding = coding
         self._desired_max = desired_max
+        self._max_requests = max_requests
         coding.compact = self.compact
 
     def started(self) -> Started:
@@ -257,11 +260,13 @@ class PydanticAIBackend:
             self._coding.emit = None
 
     async def _prompt(self, text: str, emit: Emit) -> Output:
+        limits = UsageLimits(request_limit=self._max_requests) if self._max_requests is not None else None
         async with self._agent.run_stream_events(
             text,
             message_history=self._history,
             toolsets=self._toolsets,
             capabilities=[ProcessHistory(_send_policy(len(self._history), self._desired_max))],
+            usage_limits=limits,
         ) as run:
             self._run = run
             try:
@@ -372,6 +377,7 @@ async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> Async
             started,
             coding,
             desired_max=spec.max_context if spec.max_context is not None else DEFAULT_DESIRED_MAX,
+            max_requests=spec.max_requests,
         )
     finally:
         await coding.close()

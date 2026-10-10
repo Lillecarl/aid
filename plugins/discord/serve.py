@@ -45,7 +45,13 @@ _SUBSCRIBE_IDLE: Final = 60.0
 """Seconds a quiet reconcile loop waits per poll: publishes still arrive at once, and cancellation lands
 in the poll rather than in a bare receive, which pyzmq cannot unwind cleanly."""
 NOTICE_LIMIT: Final = 1900
-"""Discord messages hold 2000 characters: notices clip under it with room for the head."""
+"""Discord messages hold 2000 characters: notices clip under it with room for the head. Embed descriptions hold 4096: the same clip stays well under it."""
+EMBED_DONE: Final = 0x57F287
+"""Embed bar for a done turn: Discord green."""
+EMBED_FAILED: Final = 0xED4245
+"""Embed bar for a failed turn: Discord red."""
+EMBED_OTHER: Final = 0x95A5AF
+"""Embed bar for anything else (cancelled, unknown, tails): Discord grey."""
 HELP: Final = """!sessions, !status [name], !tail [name], !send <name> <text>, !mute [name], !unmute [name], !muted"""
 STALE_TAP: Final = "Those buttons expired — ask again"
 
@@ -72,11 +78,12 @@ def read_config() -> DiscordConfig:
 
 @dataclass(frozen=True)
 class Reply:
-    """What answers a command or a tap: content plus optional buttons; a tap may rewrite instead (`update`)
-    or toast the tapper alone (`ephemeral`)."""
+    """What answers a command or a tap: content plus optional buttons and embeds; a tap may rewrite instead (`update`)
+    or toast the tapper alone (`ephemeral`). Only tails carry embeds; taps never do."""
 
     content: str
     components: JsonValue | None = None
+    embeds: list[dict[str, JsonValue]] | None = None
     update: bool = False
     ephemeral: bool = False
 
@@ -98,6 +105,15 @@ def _clip(text: str) -> str:
 def fence_output(text: str) -> str:
     """Wrap machine output in triple-backtick fences; inner fences split with a zero-width space survive."""
     return f"```\n{text.replace('```', '``\u200b`')}\n```"
+
+
+def outcome_color(reason: str | None) -> int:
+    """An embed bar by turn outcome: green for done, red for failed, grey for anything else."""
+    if reason == "done":
+        return EMBED_DONE
+    if reason is None or reason == "cancelled":
+        return EMBED_OTHER
+    return EMBED_FAILED
 
 
 async def _last_output(session: Session) -> Output | None:
@@ -131,30 +147,44 @@ async def _status_text(session: Session, name: str) -> str:
 
 
 async def _tail_text(session: Session, name: str) -> str:
+    """A tap's plain tail: fenced output, or no-output yet. Command tails use `_tail_parts` for the embed."""
     output = await _last_output(session)
     if output is None or (rendered := tool_text(output.output)) is None:
         return f"{name}: no output yet"
     return fence_output(_clip(rendered))
 
 
-async def _notice_text(session: Session, reason: str | None) -> str:
-    """What a session channel hears about a settled turn: how it ended, and what it said last."""
+async def _tail_parts(session: Session, name: str) -> tuple[str, list[dict[str, JsonValue]] | None]:
+    """A command tail as head plus embed: the head stays content, the fenced output rides the embed (grey)."""
+    output = await _last_output(session)
+    if output is None or (rendered := tool_text(output.output)) is None:
+        return f"{name}: no output yet", None
+    return f"{name}: tail", [{"description": fence_output(_clip(rendered)), "color": EMBED_OTHER}]
+
+
+async def _notice_parts(session: Session, reason: str | None) -> tuple[str, list[dict[str, JsonValue]] | None]:
+    """A settled turn as head plus embed: the head (with model and cost) stays content, the fenced terminal
+    output rides the embed with the outcome color. No terminal output means no embed."""
     head = f"{session.name}: {describe_end(reason)}"
     try:
         status = await daemon_call(session.status())
         terminal = await _last_terminal(session)
     except AidError as error:
-        return f"{head}\ngone since: {error.message}"
-    lines = [head]
+        return f"{head}\ngone since: {error.message}", None
+    fenced: str | None = None
     if isinstance(terminal, TurnError):
-        lines.append(fence_output(_clip(terminal.message)))
+        fenced = fence_output(_clip(terminal.message))
     elif terminal is not None and (text := tool_text(terminal.output)) is not None:
-        lines.append(fence_output(_clip(text)))
+        fenced = fence_output(_clip(text))
+    lines = [head]
     if status.model is not None:
         lines.append(status.model)
     if status.cost:
         lines.append(", ".join(f"{amount:g} {currency}" for currency, amount in sorted(status.cost.items())))
-    return "\n".join(lines)
+    content = "\n".join(lines)
+    if fenced is None:
+        return content, None
+    return content, [{"description": fenced, "color": outcome_color(reason)}]
 
 
 async def _sessions_reply(client: Client, mutes: Mutes) -> Reply:
@@ -209,7 +239,8 @@ async def handle_command(client: Client, mutes: Mutes, text: str, *, session: st
         if command == "status":
             return Reply(await _status_text(target, name))
         if command == "tail":
-            return Reply(await _tail_text(target, name))
+            content, embeds = await _tail_parts(target, name)
+            return Reply(content, embeds=embeds)
         if command == "send":
             if not rest:
                 return Reply(HELP)
@@ -255,7 +286,7 @@ async def on_message(
     reply = await handle_command(client, mutes, content, session=session)
     if reply is None:
         return
-    await rest.send_message(channel_id, reply.content, components=reply.components)
+    await rest.send_message(channel_id, reply.content, components=reply.components, embeds=reply.embeds)
 
 
 async def on_interaction(
@@ -353,12 +384,14 @@ async def notice_loop(
             log.warning("discord_no_channel", session=session)
             return
         try:
-            text = await _notice_text(client.session(session), reason)
+            content, embeds = await _notice_parts(client.session(session), reason)
         except Exception:
             log.exception("discord_notice_failed", session=session)
             return
         try:
-            await rest.send_message(channel_id, text, components=action_rows(((("mute", f"mute:{session}"),),)))
+            await rest.send_message(
+                channel_id, content, components=action_rows(((("mute", f"mute:{session}"),),)), embeds=embeds
+            )
         except DiscordError, httpx.HTTPError:
             log.exception("discord_send_failed", session=session)
 

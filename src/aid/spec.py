@@ -185,6 +185,9 @@ class PydanticAISpec(_Spec):
     max_context: Annotated[int, Field(gt=0)] | None = None
     """Tokens the context gauge calls 100%: rule of thumb half the model's window. None takes a conservative
     backend default."""
+    max_requests: Annotated[int, Field(gt=0)] | None = None
+    """Model requests one turn may spend before it ends capped. None keeps pydantic-ai's default; coding
+    sessions doing real tasks want more."""
     instruction_providers: list[str] | None = None
     """Providers that load this session's instructions, in order. None runs every provider the agents path offers,
     in catalog order."""

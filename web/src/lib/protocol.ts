@@ -242,6 +242,7 @@ export interface PydanticAISpec {
   instruction_providers?: string[] | null;
   kind: "pydantic-ai";
   max_context?: number | null;
+  max_requests?: number | null;
   permission?: PermissionMode1;
   permission_timeout?: number;
   python_path?: string[];

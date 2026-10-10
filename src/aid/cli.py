@@ -243,6 +243,11 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         help="tokens the context gauge calls full, as a rule of thumb half the model's window",
     )
+    py.add_argument(
+        "--max-requests",
+        type=int,
+        help="model requests one turn may spend before it ends capped",
+    )
 
     sub.add_parser(
         "agents", help="list the aid.PydanticAgent classes and @aid.mcptool functions on the daemon's agents path"
@@ -388,6 +393,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         worker_endpoint=worker_endpoint,
         worker_ca=worker_ca,
         max_context=args.max_context,
+        max_requests=args.max_requests,
         supervisor=args.supervisor,
         supervisor_permissions=args.supervisor_permissions,
         supervisor_permission_timeout=args.supervisor_permission_timeout,

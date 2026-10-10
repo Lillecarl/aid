@@ -137,11 +137,20 @@ class Rest:
         if response.status_code not in (200, 204):
             raise DiscordError(response.status_code, _error_message(response))
 
-    async def send_message(self, channel_id: str, content: str, *, components: JsonValue | None = None) -> str:
-        """A message; returns its id. Absent components send none (Discord rejects an empty array)."""
+    async def send_message(
+        self,
+        channel_id: str,
+        content: str,
+        *,
+        components: JsonValue | None = None,
+        embeds: list[dict[str, JsonValue]] | None = None,
+    ) -> str:
+        """A message; returns its id. Absent components send none (Discord rejects an empty array). Embeds pass through when given."""
         payload: dict[str, JsonValue] = {"content": content}
         if components is not None:
             payload["components"] = components
+        if embeds is not None:
+            payload["embeds"] = embeds
         return (await self._parse(_MessageBody, "POST", f"/channels/{channel_id}/messages", payload)).id
 
     async def edit_message(

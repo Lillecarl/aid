@@ -1783,6 +1783,18 @@
           ],
           "default": null
         },
+        "max_requests": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "permission": {
           "$ref": "#/$defs/PermissionMode",
           "default": "deny"
