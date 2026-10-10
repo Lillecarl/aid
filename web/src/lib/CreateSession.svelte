@@ -16,6 +16,7 @@
   let agent = $state("");
   let catalog = $state<AgentCatalog | null>(null);
   let args = $state("");
+  let model = $state("");
   let trust = $state(false);
   let error = $state("");
   let busy = $state(false);
@@ -33,6 +34,8 @@
         return { kind, cwd, agent, permission };
       case "claude-tty":
         return { kind, cwd, args: words(args), trust_cwd: trust };
+      case "claude-sdk":
+        return { kind, cwd, model, permission };
     }
   }
 
@@ -75,6 +78,7 @@
     Kind
     <select bind:value={kind}>
       <option value="claude-tty">Claude Code (interactive)</option>
+      <option value="claude-sdk">Claude Code (streaming)</option>
       <option value="acp">ACP agent</option>
       <option value="pydantic-ai">pydantic-ai agent</option>
     </select>
@@ -109,6 +113,8 @@
     {#each catalog?.problems ?? [] as problem (problem)}
       <p class="error">{problem}</p>
     {/each}
+  {:else if kind === "claude-sdk"}
+    <label>Model <input bind:value={model} required placeholder="opus" /></label>
   {:else}
     <label>Claude arguments <input bind:value={args} placeholder="--model opus" /></label>
     <label class="check"><input type="checkbox" bind:checked={trust} /> Trust the directory</label>
