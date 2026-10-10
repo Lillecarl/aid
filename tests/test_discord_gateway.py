@@ -137,6 +137,17 @@ async def test_identifies_dispatches_and_resumes() -> None:
     assert first.closed == [None]  # A resume keeps the session: the TCP drops bare, no close frame.
 
 
+async def test_ready_names_the_session() -> None:
+    gateway = Gateway("tok", open_ws=Opener(ScriptWS([_hello(), _ready()])))
+    assert gateway.session_id is None
+    with anyio.fail_after(TIMEOUT):
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(gateway.run, _ignore)
+            await anyio.sleep(0.5)
+            tg.cancel_scope.cancel()
+    assert gateway.session_id == "s1"
+
+
 async def test_server_reconnect_asks_resume() -> None:
     first = ScriptWS([_hello(), _ready(), {"op": 7}])
     second = ScriptWS([_hello()])

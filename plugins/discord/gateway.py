@@ -209,6 +209,11 @@ class Gateway:
         self._resume_url = url
         self._fresh_backoff = _FIRST_BACKOFF
 
+    @property
+    def session_id(self) -> str | None:
+        """The session READY named, None before it: what a resume carries, and what readiness means here."""
+        return self._session_id
+
     async def run(self, on_dispatch: Callable[[str, JsonValue], Awaitable[None]]) -> None:
         """Hold the session until cancelled."""
         can_resume = False
