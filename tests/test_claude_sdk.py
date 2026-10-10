@@ -9,7 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from aid.backends.claude_sdk import SESSION_ID_FILE, open_sdk
-from aid.protocol import AidError, TextDelta
+from aid.protocol import AidError, Output, TextDelta
 from aid.spec import AgentKind, ClaudeSdkSpec, PermissionMode
 
 if TYPE_CHECKING:
@@ -28,6 +28,11 @@ cat >> "$FAKE_CLAUDE_STDIN"
 echo '{"type":"system","subtype":"init","session_id":"sess-123"}'
 if [ "$FAKE_CLAUDE_MODE" = permission ]; then
   echo '{"type":"control_request","request":{"subtype":"can_use_tool","tool_name":"Bash"},"request_id":"r1"}'
+elif [ "$FAKE_CLAUDE_MODE" = drip ]; then
+  echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"part one"}]}}'
+  sleep 2
+  echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"part two"}]}}'
+  echo '{"type":"result","subtype":"success","result":"part one"}'
 else
   echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi there"}]}}'
   echo '{"type":"result","subtype":"success","result":"hi there"}'
@@ -110,6 +115,37 @@ async def test_can_use_tool_raises_not_implemented(tmp_path: Path, monkeypatch: 
     async with open_sdk(make_spec(tmp_path, fake), state) as backend:
         with pytest.raises(AidError, match="not_implemented"):
             await backend.prompt("run echo hi", emit)
+
+
+async def test_deltas_arrive_before_process_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The drip fake sleeps between lines: the first delta lands while the turn still runs."""
+    fake, _, _ = write_fake(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "drip")
+    state = anyio.Path(str(tmp_path / "state"))
+    await state.mkdir()
+    seen: list[str] = []
+    first = anyio.Event()
+
+    async def emit(event: SessionEvent) -> None:
+        if isinstance(event, TextDelta):
+            seen.append(event.text)
+            first.set()
+
+    async with open_sdk(make_spec(tmp_path, fake), state) as backend:
+        outputs: list[Output] = []
+
+        async def run() -> None:
+            outputs.append(await backend.prompt("hello", emit))
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(run)
+            with anyio.fail_after(10):
+                await first.wait()
+            await anyio.sleep(0.2)
+            assert outputs == []
+        assert seen == ["part one", "part two"]
+        assert outputs[0].output == "part onepart two"
+        assert outputs[0].stop_reason == "success"
 
 
 def test_spec_shape() -> None:
