@@ -27,6 +27,13 @@ API and a CLI.
   `register_plugin`. Grants bind only what arrives on the plugin sockets: a same-user local plugin can open
   control.sock, which checks nothing, until confined (Lillecarl/aid#4). The events PUB cannot drop a subscriber: a
   plugin losing `read` hears events until it reconnects.
+- `src/aid/plugin_host.py` — in-process plugins: registered plugins whose code is on the daemon's `plugin_dirs`
+  (None means the standard tiers) run as supervised tasks speaking the same protocol over
+  `inproc://aid-plugins` / `inproc://aid-plugin-events`, through the same loop (identity is the DEALER name the
+  daemon set). `_reconcile_plugins` runs at startup and after every registry change: unregistered, under-granted
+  and declined code stays outside with a log; removal stops the task at once. Failures restart after
+  `RESTART_DELAY`, give up after `MAX_FAILURES` in `FAIL_WINDOW`. Tests pass `plugin_dirs=[]`; the daemon's own
+  environment is what hosted plugins read.
 - `src/aid/guard.py` — `aid guard`: plugin (read, permissions) that allows a request whose command is one
   program from `READERS` with no shell syntax, and leaves the rest for a person. Seed for aid#3.
 - `src/aid/backends/` — `acp.py`, `pydantic_ai.py`, `claude_tty.py`; each implements `base.Backend`.

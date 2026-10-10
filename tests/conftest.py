@@ -104,7 +104,7 @@ def paths(tmp_path: Path) -> Iterator[Paths]:
 @pytest.fixture
 async def daemon(paths: Paths, launcher: ForkserverLauncher) -> AsyncIterator[Paths]:
     async with anyio.create_task_group() as tg:
-        await tg.start(Daemon(paths, launcher).serve)
+        await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
         yield paths
         tg.cancel_scope.cancel()
 
@@ -124,7 +124,7 @@ def session_paths(tmp_path_factory: pytest.TempPathFactory, browser_name: str) -
 async def session_daemon(session_paths: Paths, launcher: ForkserverLauncher) -> AsyncIterator[Paths]:
     """One daemon per browser run: session names would collide on a shared one, and a run owns its stack."""
     async with anyio.create_task_group() as tg:
-        await tg.start(Daemon(session_paths, launcher).serve)
+        await tg.start(Daemon(session_paths, launcher, plugin_dirs=[]).serve)
         yield session_paths
         tg.cancel_scope.cancel()
 

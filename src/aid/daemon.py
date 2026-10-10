@@ -21,7 +21,7 @@ import zmq
 import zmq.asyncio
 from pydantic import ValidationError
 
-from aid import events, plugins, zap
+from aid import events, plugin_host, plugins, zap
 from aid.client import spawn_plugin_client
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
 from aid.launcher import CommandLauncher, WorkerArgs
@@ -105,6 +105,7 @@ if TYPE_CHECKING:
     from aid.client import Client
     from aid.launcher import Launcher, WorkerHandle
     from aid.paths import Paths
+    from aid.plugins import Plugin
     from aid.protocol import HistoryEntry, HistoryItem, HistoryPage, Request
     from aid.spec import AgentSpec
 
@@ -442,14 +443,20 @@ class Daemon:
         *,
         workers_listen: Sequence[str] = (),
         allow_worker_command: bool = False,
+        plugin_dirs: Sequence[Path] | None = None,
     ) -> None:
         """`workers_listen`: endpoints for workers besides `paths.workers`, such as `ws://` for remote ones.
         `allow_worker_command`: let sessions name their own worker command. It runs as the daemon with the
-        session's worker credentials, so only allow it where session creators are trusted."""
+        session's worker credentials, so only allow it where session creators are trusted.
+        `plugin_dirs`: where in-process plugins load from; None means the standard tiers
+        (`aid.plugins.plugins_path`). Tests pass `[]` for no hosted plugins."""
         self._paths = paths
         self._launcher = launcher
         self._workers_listen = list(workers_listen)
         self._allow_worker_command = allow_worker_command
+        self._plugin_dirs = list(plugin_dirs) if plugin_dirs is not None else None
+        self._hosted: dict[str, anyio.CancelScope] = {}
+        """Supervised plugin tasks running now, by name: removing the registration cancels the scope."""
         self._sessions: dict[str, _Session] = {}
         self._routes: dict[str, _Route] = {}
         self._handling: set[str] = set()
@@ -509,6 +516,7 @@ class Daemon:
                 tg.start_soon(self._plugin_loop, self._local_plugins, True)
                 task_status.started()
                 self._serving = True
+                tg.start_soon(self._reconcile_plugins)
                 try:
                     await anyio.sleep_forever()
                 finally:
@@ -624,6 +632,34 @@ class Daemon:
         peers must share, with the task's name as its identity."""
         async with spawn_plugin_client(self._ctx, name) as client:
             yield client
+
+    async def _reconcile_plugins(self) -> None:
+        """Start supervised tasks for hosted plugins missing one, and stop tasks whose plugin left the registry
+        or lost the grants its code declares. Runs at startup and after every registry change."""
+        if self._tg is None:
+            raise RuntimeError("daemon is not serving")
+        catalog = plugin_host.discover_hosted(self._plugin_dirs)
+        for problem in catalog.problems:
+            log.warning("plugin_problem", problem=problem)
+        for name, reason in catalog.declined.items():
+            log.info("plugin_declined", plugin=name, reason=reason)
+        wanted = dict(plugin_host.enabled(catalog, self._keys.plugins))
+        for name in self._hosted.keys() - wanted.keys():
+            log.info("plugin_stopped", plugin=name)
+            self._hosted.pop(name).cancel()
+        for name, plugin in wanted.items():
+            if name not in self._hosted:
+                scope = anyio.CancelScope()
+                self._hosted[name] = scope
+                self._tg.start_soon(self._host_one, name, plugin, scope)
+
+    async def _host_one(self, name: str, plugin: Plugin, scope: anyio.CancelScope) -> None:
+        """Supervise one plugin task under `scope`, which removing the registration cancels."""
+        with scope:
+            try:
+                await plugin_host.supervise(self._ctx, name, plugin)
+            finally:
+                self._hosted.pop(name, None)
 
     async def _plugin_loop(self, listener: _Listener | None = None, local: bool = False) -> None:
         """Requests from plugins: each checked against the grants its plugin holds now. `local` reads the name
@@ -856,6 +892,7 @@ class Daemon:
                 await plugin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                 await (plugin_dir / PLUGIN_FILE).write_text(request.spec.model_dump_json())
                 self._keys.plugins[request.spec.name] = request.spec
+                await self._reconcile_plugins()
                 return Done(id=request.id)
             case ListPlugins():
                 return Done(id=request.id, data=[s.model_dump(mode="json") for s in self._keys.plugins.values()])
@@ -863,6 +900,7 @@ class Daemon:
                 if self._keys.plugins.pop(request.name, None) is None:
                     raise AidError("not_found", f"no plugin named {request.name!r}")
                 await anyio.to_thread.run_sync(shutil.rmtree, self._paths.plugin_dir(request.name), True)
+                await self._reconcile_plugins()
                 return Done(id=request.id)
             case GetSummary():
                 entries = await self._session(request.session).history.entries()

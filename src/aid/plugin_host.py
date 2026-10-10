@@ -1,0 +1,99 @@
+"""In-process plugins: registered plugins whose code is on the daemon's plugins path run as supervised tasks
+in the daemon, speaking the plugin protocol over the inproc sockets.
+
+What runs: a plugin the registry names (`aid plugin add`), whose code the path holds, and whose registered
+grants cover what the code declares. Anything else stays outside: unregistered code (add it first),
+grants the registry does not hold (add it again with them), and code that never made the path — external
+plugins on other hosts, in other languages, or with conflicting dependencies, which connect over the CURVE
+sockets as before.
+
+A task that fails restarts after a delay; one that fails repeatedly stops until the next daemon start,
+loudly. Removing the registration stops the task at once: a removed plugin is refused everywhere, in-process
+no less than outside. Cancellation ends the task at once: shutdown does not wait out the backoff.
+"""
+
+from __future__ import annotations
+
+import time
+from typing import TYPE_CHECKING, Final
+
+import anyio
+import structlog
+
+from aid.client import spawn_plugin_client
+from aid.plugins import discover, plugins_path
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from pathlib import Path
+
+    import zmq.asyncio
+
+    from aid.plugins import Grant, Plugin, PluginCatalog, PluginSpec
+
+log = structlog.get_logger(__name__)
+
+RESTART_DELAY: Final = 5.0
+"""Seconds between a plugin task's failure and its restart."""
+FAIL_WINDOW: Final = 60.0
+"""Failures this far apart start the count over: a plugin that runs a while before failing is flaky, not broken."""
+MAX_FAILURES: Final = 5
+"""Failures in one window before the task stops until the next daemon start."""
+
+
+def discover_hosted(dirs: Sequence[Path] | None) -> PluginCatalog:
+    """The plugins path's catalog: the daemon's explicit dirs, or the standard tiers. Each module loads
+    guarded: a failure becomes a problem the daemon logs, never a refusal to serve."""
+    return discover(list(dirs) if dirs is not None else plugins_path())
+
+
+def enabled(catalog: PluginCatalog, registered: dict[str, PluginSpec]) -> list[tuple[str, Plugin]]:
+    """Instantiated plugins ready to host: registered, with grants covering what the code declares. Anything
+    else logs why it stays outside: unregistered at info (add it), under-granted at warning (add it again)."""
+    ready: list[tuple[str, Plugin]] = []
+    for name, cls in catalog.plugins.items():
+        spec = registered.get(name)
+        if spec is None:
+            log.info("plugin_not_registered", plugin=name, hint=f"aid plugin add {name} {_grant_flags(cls.grants)}")
+            continue
+        if missing := set(cls.grants) - set(spec.grants):
+            log.warning(
+                "plugin_under_granted",
+                plugin=name,
+                missing=sorted(grant.value for grant in missing),
+                hint=f"aid plugin add {name} {_grant_flags(cls.grants)} again to replace it",
+            )
+            continue
+        try:
+            ready.append((name, cls()))
+        except Exception as error:
+            log.warning("plugin_not_instantiated", plugin=name, error=f"{type(error).__name__}: {error}")
+    return ready
+
+
+def _grant_flags(grants: frozenset[Grant]) -> str:
+    return " ".join(f"--grant {grant.value}" for grant in sorted(grants, key=lambda grant: grant.value))
+
+
+async def supervise(ctx: zmq.asyncio.Context, name: str, plugin: Plugin) -> None:
+    """Run `plugin` until cancelled, restarting after `RESTART_DELAY` on failure; give up after `MAX_FAILURES`
+    failures in `FAIL_WINDOW`, loudly. A `run` that returns counts as a failure: loops run forever."""
+    failures = 0
+    window_start = 0.0
+    while True:
+        try:
+            async with spawn_plugin_client(ctx, name) as client:
+                await plugin.run(client)
+        except anyio.get_cancelled_exc_class():
+            raise
+        except BaseException as error:
+            log.exception("plugin_failed", plugin=name, error=f"{type(error).__name__}: {error}")
+        else:
+            log.warning("plugin_returned", plugin=name)
+        now = time.monotonic()
+        failures = failures + 1 if now - window_start < FAIL_WINDOW else 1
+        window_start = now
+        if failures >= MAX_FAILURES:
+            log.error("plugin_disabled", plugin=name, failures=failures)
+            return
+        await anyio.sleep(RESTART_DELAY)

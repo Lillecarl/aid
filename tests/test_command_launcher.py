@@ -34,7 +34,7 @@ async def test_a_worker_command_over_ws(paths: Paths, tmp_path: Path) -> None:
     launcher = CommandLauncher([sys.executable, "-m", "aid", "worker"], endpoint)
     with anyio.fail_after(TIMEOUT):
         async with anyio.create_task_group() as tg:
-            await tg.start(Daemon(paths, launcher, workers_listen=[endpoint]).serve)
+            await tg.start(Daemon(paths, launcher, workers_listen=[endpoint], plugin_dirs=[]).serve)
             async with aid.connect(paths) as client:
                 session = await client.create("far", py_spec(tmp_path, "agents:echo", AID_TEST_VAR="remote"))
                 result = await session.run("env")
@@ -51,7 +51,7 @@ async def test_per_session_worker_command(paths: Paths, tmp_path: Path) -> None:
     command = [sys.executable, "-m", "aid", "worker"]
     with anyio.fail_after(TIMEOUT):
         async with anyio.create_task_group() as tg:
-            await tg.start(Daemon(paths, ForkserverLauncher(), allow_worker_command=True).serve)
+            await tg.start(Daemon(paths, ForkserverLauncher(), allow_worker_command=True, plugin_dirs=[]).serve)
             async with aid.connect(paths) as client:
                 spec = py_spec(tmp_path, "agents:echo").model_copy(update={"worker_command": command})
                 session = await client.create("sub", spec)
@@ -67,7 +67,7 @@ async def test_per_session_worker_command_needs_permission(paths: Paths, tmp_pat
     command = [sys.executable, "-m", "aid", "worker"]
     with anyio.fail_after(TIMEOUT):
         async with anyio.create_task_group() as tg:
-            await tg.start(Daemon(paths, ForkserverLauncher()).serve)
+            await tg.start(Daemon(paths, ForkserverLauncher(), plugin_dirs=[]).serve)
             async with aid.connect(paths) as client:
                 spec = py_spec(tmp_path, "agents:echo").model_copy(update={"worker_command": command})
                 with pytest.raises(aid.AidError, match="forbidden"):
@@ -81,7 +81,7 @@ async def test_shutdown_while_a_worker_starts(paths: Paths, tmp_path: Path) -> N
     launcher = CommandLauncher([sys.executable, "-m", "aid", "worker"], f"ws://127.0.0.1:{_free_port()}/aid")
     with anyio.fail_after(5):
         async with anyio.create_task_group() as tg:
-            await tg.start(Daemon(paths, launcher).serve)
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
             async with aid.connect(paths) as client:
                 with anyio.move_on_after(1):
                     await client.create("stuck", py_spec(tmp_path, "agents:echo"))

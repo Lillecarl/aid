@@ -353,7 +353,7 @@ async def test_pydantic_ai_history_survives_daemon_restart(
 ) -> None:
     with anyio.fail_after(TIMEOUT):
         async with anyio.create_task_group() as tg:
-            await tg.start(Daemon(paths, launcher).serve)
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
             async with aid.connect(paths) as client:
                 session = await client.create("echo", py_spec(tmp_path, "agents:echo"))
                 assert (await session.run("a")).output == "turn 1: echo a"
@@ -361,7 +361,7 @@ async def test_pydantic_ai_history_survives_daemon_restart(
             tg.cancel_scope.cancel()
 
         async with anyio.create_task_group() as tg:
-            await tg.start(Daemon(paths, launcher).serve)
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
             async with aid.connect(paths) as client:
                 assert [s.name for s in await client.sessions()] == ["echo"]
                 assert (await client.session("echo").run("c")).output == "turn 3: echo c"
