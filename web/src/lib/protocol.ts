@@ -189,6 +189,7 @@ export interface McpSse {
 export interface AgentCatalog {
   agents: AgentInfo[];
   problems: string[];
+  providers: ProviderInfo[];
   tools: ToolInfo[];
 }
 /**
@@ -196,6 +197,15 @@ export interface AgentCatalog {
  * via the `definition` "AgentInfo".
  */
 export interface AgentInfo {
+  description: string;
+  module: string;
+  name: string;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ProviderInfo".
+ */
+export interface ProviderInfo {
   description: string;
   module: string;
   name: string;
@@ -225,11 +235,13 @@ export interface PydanticAISpec {
     [k: string]: string;
   };
   hooks?: Hook[];
+  instruction_providers?: string[] | null;
   kind: "pydantic-ai";
   max_context?: number | null;
   permission?: PermissionMode1;
   permission_timeout?: number;
   python_path?: string[];
+  skip_instructions?: string[];
   supervisor?: string | null;
   supervisor_nudge_budget?: number;
   supervisor_permission_absent_timeout?: number;

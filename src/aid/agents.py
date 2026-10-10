@@ -1,4 +1,5 @@
-"""Agents offered to aid by code: subclasses of `PydanticAgent` in modules on the agents path.
+"""Agents and instruction providers offered to aid by code: subclasses of `PydanticAgent`
+and `InstructionsProvider` in modules on the agents path.
 
     import aid
     from pydantic_ai import Agent
@@ -11,7 +12,7 @@
 
 The agents path is AID_AGENTS_PATH, directories joined with `:`, and defaults to `$XDG_CONFIG_HOME/aid/agents`.
 Every top-level module and package in those directories is imported; each concrete subclass defined there is
-an agent, named after its class in snake case unless it sets `name`.
+an agent (or provider), named after its class in snake case unless it sets `name`.
 """
 
 from __future__ import annotations
@@ -25,6 +26,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar, Final
+
+from pydantic import BaseModel, ConfigDict
 
 from aid import builtin_tools
 from aid.tools import McpTool, tool_of
@@ -58,18 +61,62 @@ class PydanticAgent(ABC):
         """Make the agent. Runs once per session worker, in that worker."""
 
 
+class Instruction(BaseModel):
+    """One named piece of session instructions: `compose` prints each under its name."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    name: str
+    text: str
+
+
+class InstructionsContext(BaseModel):
+    """What a provider loads for: the session's directory, and the session's name."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    cwd: Path
+    session_name: str
+
+
+class InstructionsProvider(ABC):
+    """The interface: subclass it, and return the session's instructions from `load`."""
+
+    name: ClassVar[str] = ""
+    """The name specs select. Empty means the class name in snake case."""
+
+    @classmethod
+    def provider_name(cls) -> str:
+        return cls.name or re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", cls.__name__).lower()
+
+    @classmethod
+    def description(cls) -> str:
+        # `cls.__doc__`, not inspect.getdoc: that falls back to this base class's docstring.
+        doc = cls.__doc__ or ""
+        return inspect.cleandoc(doc).split("\n\n")[0].replace("\n", " ") if doc else ""
+
+    @abstractmethod
+    def load(self, context: InstructionsContext) -> list[Instruction]:
+        """Load the instructions for `context`."""
+
+
 @dataclass(frozen=True)
 class Catalog:
     agents: dict[str, type[PydanticAgent]] = field(default_factory=dict[str, "type[PydanticAgent]"])
+    providers: dict[str, type[InstructionsProvider]] = field(default_factory=dict[str, "type[InstructionsProvider]"])
     tools: dict[str, McpTool] = field(default_factory=dict[str, McpTool])
     problems: list[str] = field(default_factory=list[str])
-    """Modules that failed to import and names defined twice. A problem hides one agent, not the catalog."""
+    """Modules that failed to import and names defined twice. A problem hides one agent or provider, not the catalog."""
 
     def describe(self) -> dict[str, Any]:
         return {
             "agents": [
                 {"name": name, "description": cls.description(), "module": cls.__module__}
                 for name, cls in sorted(self.agents.items())
+            ],
+            "providers": [
+                {"name": name, "description": cls.description(), "module": cls.__module__}
+                for name, cls in sorted(self.providers.items())
             ],
             "tools": [
                 {"name": name, "description": tool.summary(), "module": tool.fn.__module__}
@@ -130,6 +177,15 @@ def discover(paths: Sequence[Path]) -> Catalog:
             for obj in vars(module).values():
                 if (tool := tool_of(obj)) is not None:
                     _add_tool(catalog, module.__name__, tool)
+                    continue
+                if isinstance(obj, type) and issubclass(obj, InstructionsProvider):
+                    if obj.__module__ != module.__name__ or inspect.isabstract(obj):
+                        continue
+                    name = obj.provider_name()
+                    if (other := catalog.providers.get(name)) is not None and other is not obj:
+                        catalog.problems.append(f"{name}: defined by {other.__module__} and {obj.__module__}")
+                        continue
+                    catalog.providers[name] = obj
                     continue
                 if not (isinstance(obj, type) and issubclass(obj, PydanticAgent)):
                     continue

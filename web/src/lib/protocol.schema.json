@@ -144,6 +144,12 @@
           },
           "type": "array"
         },
+        "providers": {
+          "items": {
+            "$ref": "#/$defs/ProviderInfo"
+          },
+          "type": "array"
+        },
         "tools": {
           "items": {
             "$ref": "#/$defs/ToolInfo"
@@ -154,6 +160,7 @@
       "required": [
         "agents",
         "tools",
+        "providers",
         "problems"
       ],
       "title": "AgentCatalog",
@@ -1550,6 +1557,27 @@
       "title": "PromptEntry",
       "type": "object"
     },
+    "ProviderInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "module": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "module"
+      ],
+      "title": "ProviderInfo",
+      "type": "object"
+    },
     "PydanticAISpec": {
       "additionalProperties": false,
       "description": "A pydantic-ai agent: `agent`, the name of an `aid.PydanticAgent` on the agents path, or `target`, a\n`package.module:attribute` that is an agent itself. Exactly one of them.",
@@ -1590,6 +1618,20 @@
           },
           "type": "array"
         },
+        "instruction_providers": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "kind": {
           "const": "pydantic-ai",
           "default": "pydantic-ai",
@@ -1617,6 +1659,12 @@
           "type": "number"
         },
         "python_path": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skip_instructions": {
           "items": {
             "type": "string"
           },

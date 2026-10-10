@@ -383,9 +383,16 @@ class ToolInfo(_Message):
     module: str
 
 
+class ProviderInfo(_Message):
+    name: str
+    description: str
+    module: str
+
+
 class AgentCatalog(_Message):
     agents: list[AgentInfo]
     tools: list[ToolInfo] = Field(default_factory=list[ToolInfo])
+    providers: list[ProviderInfo] = Field(default_factory=list[ProviderInfo])
     problems: list[str]
 
 

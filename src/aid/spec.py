@@ -184,6 +184,11 @@ class PydanticAISpec(_Spec):
     max_context: Annotated[int, Field(gt=0)] | None = None
     """Tokens the context gauge calls 100%: rule of thumb half the model's window. None takes a conservative
     backend default."""
+    instruction_providers: list[str] | None = None
+    """Providers that load this session's instructions, in order. None runs every provider the agents path offers,
+    in catalog order."""
+    skip_instructions: list[str] = Field(default_factory=list[str])
+    """Instruction names to drop after loading: `skill:<name>` opts out of one skill."""
 
     @model_validator(mode="after")
     def _one_source(self) -> Self:
