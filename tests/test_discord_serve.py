@@ -18,9 +18,12 @@ from aid.protocol import AidError, MessageEntry
 from plugins.discord.channels import CHANNELS_FILE, ChannelMap
 from plugins.discord.rest import GuildChannel, Rest, action_rows
 from plugins.discord.serve import (
+    EMBED_DONE,
+    EMBED_FAILED,
+    EMBED_OTHER,
     MUTES_FILE,
     Reply,
-    _notice_text,
+    _notice_parts,
     channel_loop,
     dispatch,
     fence_output,
@@ -89,7 +92,7 @@ class FakeRest(Rest):
 
     def __init__(self, listing: list[GuildChannel] | None = None) -> None:
         self.listing = listing if listing is not None else []
-        self.sent: list[tuple[str, str, JsonValue | None]] = []
+        self.sent: list[tuple[str, str, JsonValue | None, list[dict[str, JsonValue]] | None]] = []
         self.answered: list[tuple[str, str, str, bool, bool, JsonValue | None]] = []
         self.created: list[tuple[str, str, int, str | None, str | None]] = []
         self.deleted: list[str] = []
@@ -116,8 +119,15 @@ class FakeRest(Rest):
         self.deleted.append(channel_id)
         self.listing = [channel for channel in self.listing if channel.id != channel_id]
 
-    async def send_message(self, channel_id: str, content: str, *, components: JsonValue | None = None) -> str:
-        self.sent.append((channel_id, content, components))
+    async def send_message(
+        self,
+        channel_id: str,
+        content: str,
+        *,
+        components: JsonValue | None = None,
+        embeds: list[dict[str, JsonValue]] | None = None,
+    ) -> str:
+        self.sent.append((channel_id, content, components, embeds))
         return "m1"
 
     async def answer_interaction(
@@ -195,7 +205,7 @@ async def test_on_message_routes_commands_and_channel_text(daemon: Paths, tmp_pa
         async with aid.connect(daemon) as control:
             await control.create("echo", py_spec(tmp_path, "agents:echo"))
             await on_message(control, rest, mutes, channel_map, channel_id="c1", content="!status")
-            assert rest.sent[-1] == ("c1", "echo idle\nfunction::_echo", None)
+            assert rest.sent[-1] == ("c1", "echo idle\nfunction::_echo", None, None)
             await on_message(control, rest, mutes, channel_map, channel_id="c1", content="hello")
             history = await control.session("echo").history()
             assert any(isinstance(e.item, MessageEntry) and e.item.text == "hello" for e in history.entries)
@@ -204,6 +214,7 @@ async def test_on_message_routes_commands_and_channel_text(daemon: Paths, tmp_pa
             assert len(rest.sent) == sent  # Bare text outside session channels is ignored.
             await on_message(control, rest, mutes, channel_map, channel_id="c9", content="!sessions")
             assert rest.sent[-1][0] == "c9"  # Commands work in any heard channel.
+            assert rest.sent[-1][3] is None  # Plain replies carry no embeds.
 
 
 async def test_dispatch_routes_and_ignores(daemon: Paths, tmp_path: Path) -> None:
@@ -222,7 +233,7 @@ async def test_dispatch_routes_and_ignores(daemon: Paths, tmp_path: Path) -> Non
             await incoming("MESSAGE_CREATE", {**message, "guild_id": "other"})
             assert rest.sent == []
             await incoming("MESSAGE_CREATE", {**message, "guild_id": GUILD})
-            assert rest.sent == [("c1", "echo: no output yet", None)]
+            assert rest.sent == [("c1", "echo: no output yet", None, None)]
             await incoming("MESSAGE_CREATE", {k: v for k, v in message.items() if k != "guild_id"})
             assert len(rest.sent) == 2  # DMs have no guild id and still work.
             await incoming(
@@ -267,9 +278,14 @@ async def test_notice_posts_to_session_channel(daemon: Paths, tmp_path: Path) ->
                 assert "echo hello" in (await session.run("hello")).text
                 await anyio.sleep(1.5)  # The turn settles past its idle window, then posts.
                 tg.cancel_scope.cancel()
-    [(channel_id, text, components)] = rest.sent
+    [(channel_id, content, components, embeds)] = rest.sent
     assert channel_id == "c1"
-    assert "echo: turn ended" in text and "echo hello" in text
+    assert "echo: turn ended" in content
+    assert "```" not in content
+    assert embeds is not None and len(embeds) == 1
+    assert embeds[0]["color"] == EMBED_DONE
+    assert "echo hello" in str(embeds[0]["description"])
+    assert str(embeds[0]["description"]).count("```") == 2
     assert components == action_rows(((("mute", "mute:echo"),),))
 
 
@@ -287,9 +303,14 @@ async def test_notice_reports_a_failed_turn(daemon: Paths, tmp_path: Path) -> No
                     await session.run("go")
                 await anyio.sleep(1.5)  # The turn settles past its idle window, then posts.
                 tg.cancel_scope.cancel()
-    [(channel_id, text, components)] = rest.sent
+    [(channel_id, content, components, embeds)] = rest.sent
     assert channel_id == "c1"
-    assert "oops: turn failed (agent_error)" in text and "boom" in text
+    assert "oops: turn failed (agent_error)" in content
+    assert "```" not in content
+    assert embeds is not None and len(embeds) == 1
+    assert embeds[0]["color"] == EMBED_FAILED
+    assert "boom" in str(embeds[0]["description"])
+    assert str(embeds[0]["description"]).count("```") == 2
     assert components == action_rows(((("mute", "mute:oops"),),))
 
 
@@ -338,9 +359,13 @@ async def test_tail_fences_machine_output(daemon: Paths, tmp_path: Path) -> None
             await control.session("echo").run("hello")
             tail = await handle_command(control, mutes, "!tail echo", session=None)
             assert tail is not None
-            assert tail.content.startswith("```\n")
-            assert tail.content.endswith("\n```")
-            assert "echo hello" in tail.content
+            assert tail.content == "echo: tail"
+            assert tail.embeds is not None and len(tail.embeds) == 1
+            assert tail.embeds[0]["color"] == EMBED_OTHER
+            description = str(tail.embeds[0]["description"])
+            assert description.startswith("```\n")
+            assert description.endswith("\n```")
+            assert "echo hello" in description
 
 
 async def test_tail_escapes_inner_fences(daemon: Paths, tmp_path: Path) -> None:
@@ -351,9 +376,12 @@ async def test_tail_escapes_inner_fences(daemon: Paths, tmp_path: Path) -> None:
             await control.session("echo").run("say ``` hi ```")
             tail = await handle_command(control, mutes, "!tail echo", session=None)
             assert tail is not None
-            assert tail.content.count("```") == 2
-            assert "\u200b" in tail.content
-            assert "say" in tail.content
+            assert tail.content == "echo: tail"
+            assert tail.embeds is not None and len(tail.embeds) == 1
+            description = str(tail.embeds[0]["description"])
+            assert description.count("```") == 2
+            assert "\u200b" in description
+            assert "say" in description
 
 
 async def test_notice_fences_output_and_leaves_heads_plain(daemon: Paths, tmp_path: Path) -> None:
@@ -362,15 +390,21 @@ async def test_notice_fences_output_and_leaves_heads_plain(daemon: Paths, tmp_pa
         async with aid.connect(daemon) as control:
             await control.create("echo", py_spec(tmp_path, "agents:echo"))
             await control.session("echo").run("hello")
-            text = await _notice_text(control.session("echo"), None)
-            head, _, _ = text.partition("\n")
+            content, embeds = await _notice_parts(control.session("echo"), None)
+            head, _, _ = content.partition("\n")
             assert "```" not in head
-            assert "echo hello" in text
-            assert text.count("```") == 2
+            assert embeds is not None and len(embeds) == 1
+            assert embeds[0]["color"] == EMBED_OTHER
+            description = str(embeds[0]["description"])
+            assert "echo hello" in description
+            assert description.count("```") == 2
             status = await handle_command(control, mutes, "!status echo", session=None)
             assert status is not None and "```" not in status.content
+            assert status.embeds is None
             listed = await handle_command(control, mutes, "!sessions", session=None)
             assert listed is not None and "```" not in listed.content
+            assert listed.embeds is None
             empty = await handle_command(control, mutes, "!tail fresh", session=None)
             assert empty is not None and empty.content == "aid: no session named 'fresh'"
             assert "```" not in empty.content
+            assert empty.embeds is None
