@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import secrets
 import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
@@ -131,6 +132,19 @@ class Update(BaseModel):
     text: str
 
 
+class Callback(BaseModel):
+    """A tap on an inline button: `data` is an opaque token (`Buttons`), answered even on success."""
+
+    model_config = ConfigDict(frozen=True)
+
+    update_id: int
+    query_id: str
+    chat_id: int
+    message_id: int
+    """The tapped message: taps answer by editing it, or by sending anew when the tap only reads."""
+    data: str
+
+
 class _ApiBody(BaseModel):
     ok: bool
     description: str | None = None
@@ -150,9 +164,21 @@ class _MessageBody(BaseModel):
     text: str | None = None
 
 
+class _CallbackMessageBody(BaseModel):
+    message_id: int
+    chat: _ChatBody
+
+
+class _CallbackBody(BaseModel):
+    id: str
+    data: str | None = None
+    message: _CallbackMessageBody | None = None
+
+
 class _UpdateBody(BaseModel):
     update_id: int
     message: _MessageBody | None = None
+    callback_query: _CallbackBody | None = None
 
 
 class _UpdatesBody(_ApiBody):
@@ -169,8 +195,56 @@ def _body[M: _ApiBody](model: type[M], response: httpx.Response) -> M:
     return body
 
 
+@dataclass(frozen=True)
+class Button:
+    text: str
+    callback: str
+    """An opaque token from `Buttons.mint`: `callback_data` holds 1-64 bytes, too small for `action:session`."""
+
+
+@dataclass(frozen=True)
+class Reply:
+    text: str
+    markup: tuple[tuple[Button, ...], ...] = ()
+    """Inline keyboard rows under the message. `edit` answers a tap by rewriting the tapped message."""
+    edit: bool = False
+
+
+class Buttons:
+    """Mint and resolve inline-button tokens. Tokens die with the process: a tap on a stale message is told
+    to ask again. The map is pruned past a cap; pruning only expires buttons early, never wrongly."""
+
+    _PRUNE_AT: Final = 5000
+
+    def __init__(self) -> None:
+        self._actions: dict[str, tuple[str, str]] = {}
+
+    def mint(self, action: str, session: str) -> str:
+        """An opaque token tapping to (`action`, `session`)."""
+        if len(self._actions) >= self._PRUNE_AT:
+            self._actions.clear()
+        while (token := secrets.token_urlsafe(6)) in self._actions:
+            continue
+        self._actions[token] = (action, session)
+        return token
+
+    def take(self, token: str) -> tuple[str, str] | None:
+        """The (`action`, `session`) a token taps to, or None when it expired with a restart or a prune."""
+        return self._actions.get(token)
+
+
+def _markup(markup: tuple[tuple[Button, ...], ...]) -> dict[str, JsonValue] | None:
+    if not markup:
+        return None
+    return {
+        "inline_keyboard": [
+            [{"text": button.text, "callback_data": button.callback} for button in row] for row in markup
+        ]
+    }
+
+
 class Bot:
-    """The two Bot API calls the plugin needs: sending, and long-polling for messages."""
+    """The Bot API calls the plugin needs: sending, editing, tapping back, polling, and describing itself."""
 
     def __init__(self, token: str, *, base_url: str = API_BASE, client: httpx.AsyncClient | None = None) -> None:
         self._base = f"{base_url}/bot{token}"
@@ -181,8 +255,26 @@ class Bot:
         if self._owned:
             await self._client.aclose()
 
-    async def send(self, chat_id: int, text: str) -> None:
-        _body(_SendBody, await self._client.post(f"{self._base}/sendMessage", json={"chat_id": chat_id, "text": text}))
+    async def send(self, chat_id: int, text: str, markup: tuple[tuple[Button, ...], ...] = ()) -> None:
+        payload: dict[str, JsonValue] = {"chat_id": chat_id, "text": text}
+        if (keyboard := _markup(markup)) is not None:
+            payload["reply_markup"] = keyboard
+        _body(_SendBody, await self._client.post(f"{self._base}/sendMessage", json=payload))
+
+    async def edit(self, chat_id: int, message_id: int, text: str, markup: tuple[tuple[Button, ...], ...] = ()) -> None:
+        """Rewrite a message the bot sent, buttons included. Answers a `Message`, not true, hence `_ApiBody`."""
+        payload: dict[str, JsonValue] = {"chat_id": chat_id, "message_id": message_id, "text": text}
+        if (keyboard := _markup(markup)) is not None:
+            payload["reply_markup"] = keyboard
+        _body(_ApiBody, await self._client.post(f"{self._base}/editMessageText", json=payload))
+
+    async def answer_callback(self, query_id: str, text: str | None = None, *, alert: bool = False) -> None:
+        """Answer a tap: an empty answer only dismisses the spinner; `text` toasts, `alert` dialogs instead."""
+        payload: dict[str, JsonValue] = {"callback_query_id": query_id}
+        if text is not None:
+            payload["text"] = text
+            payload["show_alert"] = alert
+        _body(_SendBody, await self._client.post(f"{self._base}/answerCallbackQuery", json=payload))
 
     async def set_commands(self, commands: tuple[tuple[str, str], ...] = COMMANDS) -> None:
         """Publish the slash-command menu, so chats complete it. Idempotent: Telegram keeps the last menu."""
@@ -194,14 +286,28 @@ class Bot:
             ),
         )
 
-    async def updates(self, offset: int) -> tuple[list[Update], int]:
-        """Messages since `offset`, oldest first, with the offset past the newest update seen: unparsable
-        updates are skipped but never re-polled."""
+    async def set_description(self) -> None:
+        """Publish what the chat profile and start screen say. Idempotent, like the menu."""
+        _body(
+            _SendBody,
+            await self._client.post(f"{self._base}/setMyDescription", json={"description": DESCRIPTION}),
+        )
+        _body(
+            _SendBody,
+            await self._client.post(
+                f"{self._base}/setMyShortDescription", json={"short_description": SHORT_DESCRIPTION}
+            ),
+        )
+
+    async def updates(self, offset: int) -> tuple[list[Update], list[Callback], int]:
+        """Messages and taps since `offset`, oldest first, with the offset past the newest update seen:
+        unparsable and buttonless updates are skipped but never re-polled."""
         body = _body(
             _UpdatesBody,
             await self._client.get(f"{self._base}/getUpdates", params={"offset": offset, "timeout": POLL_TIMEOUT}),
         )
-        out: list[Update] = []
+        messages: list[Update] = []
+        taps: list[Callback] = []
         last = offset
         for raw in body.result:
             fields = cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
@@ -214,8 +320,21 @@ class Bot:
                 log.warning("telegram_update_dropped")
                 continue
             if item.message is not None and item.message.text is not None:
-                out.append(Update(update_id=item.update_id, chat_id=item.message.chat.id, text=item.message.text))
-        return out, last
+                messages.append(Update(update_id=item.update_id, chat_id=item.message.chat.id, text=item.message.text))
+            elif item.callback_query is not None:
+                # A tap from outside any message (inline mode) is unanswerable: no chat to reply to.
+                query = item.callback_query
+                if query.data is not None and query.message is not None:
+                    taps.append(
+                        Callback(
+                            update_id=item.update_id,
+                            query_id=query.id,
+                            chat_id=query.message.chat.id,
+                            message_id=query.message.message_id,
+                            data=query.data,
+                        )
+                    )
+        return messages, taps, last
 
 
 async def daemon_call[T](call: Coroutine[Any, Any, T]) -> T:
@@ -447,6 +566,14 @@ async def watch(
 
 HELP: Final = """sessions, status <name>, tail <name>, send <name> <text>, mute <name>, unmute <name>, muted"""
 
+SHORT_DESCRIPTION: Final = "Settled turn ends from your aid sessions, with buttons to drive them."
+DESCRIPTION: Final = (
+    "An aid session ends a turn and stays ended, and this bot says so. /sessions lists sessions with "
+    "status, tail and mute buttons; /status, /tail, /send, /mute, /unmute, /muted and /help do the rest. "
+    "Only allowlisted chats are answered."
+)
+STALE_TAP: Final = "Those buttons expired — send /sessions again"
+
 
 def _state(info: SessionInfo) -> str:
     """A session's one-word state: stopped beats idle, busy beats both."""
@@ -455,68 +582,122 @@ def _state(info: SessionInfo) -> str:
     return "busy" if info.working else "idle"
 
 
-async def handle_command(client: Client, mutes: Mutes, text: str) -> str | None:
+async def _sessions_reply(client: Client, mutes: Mutes, buttons: Buttons) -> Reply:
+    """The session list, each row tapping to its status, tail, and mute state."""
+    infos = await daemon_call(client.sessions())
+    if not infos:
+        return Reply("no sessions")
+    rows = tuple(
+        (
+            Button(info.name, buttons.mint("status", info.name)),
+            Button("tail", buttons.mint("tail", info.name)),
+            Button(
+                "unmute" if info.name in mutes else "mute",
+                buttons.mint("unmute" if info.name in mutes else "mute", info.name),
+            ),
+        )
+        for info in infos
+    )
+    text = "\n".join(f"{info.name} {_state(info)}{' muted' if info.name in mutes else ''}" for info in infos)
+    return Reply(text, rows)
+
+
+async def _status_text(session: Session, name: str) -> str:
+    status = await daemon_call(session.status())
+    lines = [f"{name} {'busy' if status.busy else 'idle'}"]
+    if status.model is not None:
+        lines.append(status.model)
+    if status.permissions:
+        lines.append(f"{len(status.permissions)} permission(s) waiting")
+    if status.attention is not None:
+        lines.append(f"attention: {status.attention}")
+    return "\n".join(lines)
+
+
+async def _tail_text(session: Session, name: str) -> str:
+    output = await _last_output(session)
+    if output is None or (rendered := tool_text(output.output)) is None:
+        return f"{name}: no output yet"
+    return clip(rendered)
+
+
+async def handle_command(client: Client, mutes: Mutes, buttons: Buttons, text: str) -> Reply | None:
     """An inbound Telegram message as a reply, or None when it is no command."""
     parsed = parse_command(text)
     if parsed is None:
         return None
     command, args = parsed
     if command in ("start", "help"):
-        return HELP
+        return Reply(HELP)
     if command == "sessions":
-        infos = await daemon_call(client.sessions())
-        if not infos:
-            return "no sessions"
-        return "\n".join(f"{info.name} {_state(info)}{' muted' if info.name in mutes else ''}" for info in infos)
+        return await _sessions_reply(client, mutes, buttons)
     if command == "muted":
         names = mutes.names()
-        return "nothing muted" if not names else "\n".join(names)
+        if not names:
+            return Reply("nothing muted")
+        rows = tuple((Button(f"unmute {name}", buttons.mint("unmute", name)),) for name in names)
+        return Reply("\n".join(names), rows)
     if not args:
-        return HELP
+        return Reply(HELP)
     name, rest = args[0], args[1:]
     if command == "mute":
         await mutes.mute(name)
-        return f"muted {name!r}"
+        return Reply(f"muted {name!r}")
     if command == "unmute":
         await mutes.unmute(name)
-        return f"unmuted {name!r}"
+        return Reply(f"unmuted {name!r}")
     try:
         session = client.session(name)
         if command == "status":
-            status = await daemon_call(session.status())
-            lines = [f"{name} {'busy' if status.busy else 'idle'}"]
-            if status.model is not None:
-                lines.append(status.model)
-            if status.permissions:
-                lines.append(f"{len(status.permissions)} permission(s) waiting")
-            if status.attention is not None:
-                lines.append(f"attention: {status.attention}")
-            return "\n".join(lines)
+            return Reply(await _status_text(session, name))
         if command == "tail":
-            output = await _last_output(session)
-            if output is None or (rendered := tool_text(output.output)) is None:
-                return f"{name}: no output yet"
-            return clip(rendered)
+            return Reply(await _tail_text(session, name))
         if command == "send":
             if not rest:
-                return HELP
+                return Reply(HELP)
             await daemon_call(client.send_message(name, " ".join(rest)))
-            return f"sent to {name!r}"
+            return Reply(f"sent to {name!r}")
     except AidError as error:
-        return f"aid: {error.message}"
-    return f"unknown command {command!r}; {HELP}"
+        return Reply(f"aid: {error.message}")
+    return Reply(f"unknown command {command!r}; {HELP}")
 
 
-async def serve(client: Client, bot: Bot, chats: Set[int], mutes: Mutes) -> None:
-    """Answer allowlisted chats; everything else is dropped on the floor."""
+async def handle_callback(client: Client, mutes: Mutes, buttons: Buttons, tap: Callback) -> Reply | None:
+    """A button tap as a reply, or None when its buttons expired with a restart or a prune. Mute taps
+    rewrite the tapped list in place; reads answer as new messages, leaving the list standing."""
+    resolved = buttons.take(tap.data)
+    if resolved is None:
+        return None
+    action, name = resolved
+    try:
+        session = client.session(name)
+        if action == "status":
+            return Reply(await _status_text(session, name))
+        if action == "tail":
+            return Reply(await _tail_text(session, name))
+        if action in ("mute", "unmute"):
+            await mutes.mute(name) if action == "mute" else await mutes.unmute(name)
+            refreshed = await _sessions_reply(client, mutes, buttons)
+            return Reply(refreshed.text, refreshed.markup, edit=True)
+    except AidError as error:
+        return Reply(f"aid: {error.message}")
+    return Reply(f"unknown tap {action!r}")
+
+
+async def serve(client: Client, bot: Bot, chats: Set[int], mutes: Mutes, buttons: Buttons) -> None:
+    """Answer allowlisted chats, taps included; everything else is dropped on the floor."""
     try:
         await bot.set_commands()
     except BotError, httpx.HTTPError:
         log.exception("telegram_commands_unpublished")
+    try:
+        await bot.set_description()
+    except BotError, httpx.HTTPError:
+        log.exception("telegram_description_unpublished")
     offset = 0
     while True:
         try:
-            updates, offset = await bot.updates(offset)
+            messages, taps, offset = await bot.updates(offset)
         except BotError as error:
             if (delay := poll_delay(error)) is None:
                 raise SystemExit(
@@ -529,21 +710,42 @@ async def serve(client: Client, bot: Bot, chats: Set[int], mutes: Mutes) -> None
             log.warning("telegram_network_failed", error=str(error))
             await anyio.sleep(RETRY_DELAY)
             continue
-        for update in updates:
+        for update in messages:
             if update.chat_id not in chats:
                 log.info("telegram_chat_dropped", chat=update.chat_id)
                 continue
             try:
-                reply = await handle_command(client, mutes, update.text)
+                reply = await handle_command(client, mutes, buttons, update.text)
             except Exception:
                 log.exception("telegram_command_failed", chat=update.chat_id)
-                reply = "that failed; the log knows why"
+                reply = Reply("that failed; the log knows why")
             if reply is None:
                 continue
             try:
-                await bot.send(update.chat_id, reply)
+                await bot.send(update.chat_id, reply.text, reply.markup)
             except BotError, httpx.HTTPError:
                 log.exception("telegram_send_failed", chat=update.chat_id)
+        for tap in taps:
+            if tap.chat_id not in chats:
+                log.info("telegram_chat_dropped", chat=tap.chat_id)
+                continue
+            try:
+                reply = await handle_callback(client, mutes, buttons, tap)
+            except Exception:
+                log.exception("telegram_tap_failed", chat=tap.chat_id)
+                await bot.answer_callback(tap.query_id, "that failed; the log knows why", alert=True)
+                continue
+            if reply is None:
+                await bot.answer_callback(tap.query_id, STALE_TAP, alert=True)
+                continue
+            await bot.answer_callback(tap.query_id)
+            try:
+                if reply.edit:
+                    await bot.edit(tap.chat_id, tap.message_id, reply.text, reply.markup)
+                else:
+                    await bot.send(tap.chat_id, reply.text, reply.markup)
+            except BotError, httpx.HTTPError:
+                log.exception("telegram_send_failed", chat=tap.chat_id)
 
 
 async def run_loops(client: Client, config: TelegramConfig, mutes: Mutes) -> None:
@@ -552,6 +754,6 @@ async def run_loops(client: Client, config: TelegramConfig, mutes: Mutes) -> Non
     try:
         async with anyio.create_task_group() as tg:
             tg.start_soon(watch, client, bot, config.chats, mutes)
-            tg.start_soon(serve, client, bot, config.chats, mutes)
+            tg.start_soon(serve, client, bot, config.chats, mutes, Buttons())
     finally:
         await bot.aclose()

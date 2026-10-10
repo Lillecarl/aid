@@ -18,12 +18,19 @@ from aid.plugins import Grant, discover
 from aid.protocol import AidError
 from plugins.telegram.bot import (
     COMMANDS,
+    DESCRIPTION,
+    SHORT_DESCRIPTION,
     Bot,
     BotError,
+    Button,
+    Buttons,
+    Callback,
     Mutes,
+    Reply,
     Tracker,
     Update,
     daemon_call,
+    handle_callback,
     handle_command,
     parse_command,
     poll_delay,
@@ -137,10 +144,53 @@ async def test_updates_skips_what_has_no_message_text() -> None:
         {"update_id": 4},
     ]
     async with httpx.AsyncClient(transport=_transport(calls, result)) as http:
-        updates, offset = await Bot("tok", client=http).updates(0)
-    assert updates == [Update(update_id=1, chat_id=7, text="/sessions")]
+        messages, taps, offset = await Bot("tok", client=http).updates(0)
+    assert messages == [Update(update_id=1, chat_id=7, text="/sessions")]
+    assert taps == []
     assert offset == 5
     assert ("GET", "/bottok/getUpdates", {"offset": "0", "timeout": "25"}) in calls
+
+
+async def test_updates_returns_taps_and_skips_the_unanswerable() -> None:
+    calls: list[tuple[str, str, Any]] = []
+    result = [
+        {
+            "update_id": 1,
+            "callback_query": {
+                "id": "q1",
+                "data": "tok",
+                "message": {"message_id": 5, "chat": {"id": CHAT}},
+            },
+        },
+        {"update_id": 2, "callback_query": {"id": "q2"}},  # No data and no message.
+        {"update_id": 3, "callback_query": {"id": "q3", "data": "tok"}},  # No message: unanswerable.
+        {"nonsense": True},  # No update_id: dropped, and the offset untouched.
+    ]
+    async with httpx.AsyncClient(transport=_transport(calls, result)) as http:
+        messages, taps, offset = await Bot("tok", client=http).updates(0)
+    assert messages == []
+    assert taps == [Callback(update_id=1, query_id="q1", chat_id=CHAT, message_id=5, data="tok")]
+    assert offset == 4
+
+
+async def test_button_calls_post_to_the_bot_api() -> None:
+    calls: list[tuple[str, str, Any]] = []
+    keyboard = {"inline_keyboard": [[{"text": "a", "callback_data": "t1"}, {"text": "b", "callback_data": "t2"}]]}
+    async with httpx.AsyncClient(transport=_transport(calls, True)) as http:
+        bot = Bot("tok", client=http)
+        await bot.send(7, "hi", ((Button("a", "t1"), Button("b", "t2")),))
+        await bot.edit(7, 42, "hola", ((Button("a", "t1"), Button("b", "t2")),))
+        await bot.answer_callback("q1", "toast")
+        await bot.answer_callback("q2")
+        await bot.set_description()
+    assert calls == [
+        ("POST", "/bottok/sendMessage", {"chat_id": 7, "text": "hi", "reply_markup": keyboard}),
+        ("POST", "/bottok/editMessageText", {"chat_id": 7, "message_id": 42, "text": "hola", "reply_markup": keyboard}),
+        ("POST", "/bottok/answerCallbackQuery", {"callback_query_id": "q1", "text": "toast", "show_alert": False}),
+        ("POST", "/bottok/answerCallbackQuery", {"callback_query_id": "q2"}),
+        ("POST", "/bottok/setMyDescription", {"description": DESCRIPTION}),
+        ("POST", "/bottok/setMyShortDescription", {"short_description": SHORT_DESCRIPTION}),
+    ]
 
 
 async def test_bot_api_failure_raises() -> None:
@@ -258,53 +308,118 @@ async def test_mutes_refuses_a_corrupt_file(tmp_path: Path) -> None:
 
 async def test_commands_answer_and_mute(daemon: Paths, tmp_path: Path) -> None:
     mutes = await Mutes.load(tmp_path / "mutes.json")
+    buttons = Buttons()
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as control:
-            assert await handle_command(control, mutes, "/sessions") == "no sessions"
+
+            async def cmd(text: str) -> Reply:
+                reply = await handle_command(control, mutes, buttons, text)
+                assert reply is not None
+                return reply
+
+            assert (await cmd("/sessions")).text == "no sessions"
             await control.create("echo", py_spec(tmp_path, "agents:echo"))
-            assert await handle_command(control, mutes, "/sessions") == "echo idle"
-            assert await handle_command(control, mutes, "/status echo") == "echo idle\nfunction::_echo"
-            assert await handle_command(control, mutes, "/tail echo") == "echo: no output yet"
-            assert await handle_command(control, mutes, "/mute echo") == "muted 'echo'"
-            assert await handle_command(control, mutes, "/sessions") == "echo idle muted"
-            assert await handle_command(control, mutes, "/muted") == "echo"
-            assert await handle_command(control, mutes, "/unmute echo") == "unmuted 'echo'"
+            listed = await cmd("/sessions")
+            assert listed.text == "echo idle"
+            [row] = listed.markup
+            [status_button, tail_button, mute_button] = row
+            assert (status_button.text, buttons.take(status_button.callback)) == ("echo", ("status", "echo"))
+            assert (tail_button.text, buttons.take(tail_button.callback)) == ("tail", ("tail", "echo"))
+            assert (mute_button.text, buttons.take(mute_button.callback)) == ("mute", ("mute", "echo"))
+            assert (await cmd("/status echo")).text == "echo idle\nfunction::_echo"
+            assert (await cmd("/tail echo")).text == "echo: no output yet"
+            assert (await cmd("/mute echo")).text == "muted 'echo'"
+            assert (await cmd("/sessions")).text == "echo idle muted"
+            muted = await cmd("/muted")
+            assert muted.text == "echo"
+            [[unmute_button]] = muted.markup
+            assert (unmute_button.text, buttons.take(unmute_button.callback)) == ("unmute echo", ("unmute", "echo"))
+            assert (await cmd("/unmute echo")).text == "unmuted 'echo'"
             # /send wakes the session, so only its reply is asserted.
-            assert await handle_command(control, mutes, "/send echo hello") == "sent to 'echo'"
+            assert (await cmd("/send echo hello")).text == "sent to 'echo'"
             await control.session("echo").stop()
-            assert await handle_command(control, mutes, "/sessions") == "echo stopped"
-            assert await handle_command(control, mutes, "/status missing") == "aid: no session named 'missing'"
-            assert await handle_command(control, mutes, "/frobnicate echo") == (
+            assert (await cmd("/sessions")).text == "echo stopped"
+            assert (await cmd("/status missing")).text == "aid: no session named 'missing'"
+            assert (await cmd("/frobnicate echo")).text == (
                 "unknown command 'frobnicate'; sessions, status <name>, tail <name>, "
                 "send <name> <text>, mute <name>, unmute <name>, muted"
             )
-            assert await handle_command(control, mutes, "just chatting") is None
+            assert await handle_command(control, mutes, buttons, "just chatting") is None
+
+
+def test_buttons_mint_resolve_and_expire() -> None:
+    buttons = Buttons()
+    token = buttons.mint("status", "echo")
+    assert len(token) <= 64  # callback_data holds 1-64 bytes.
+    assert buttons.take(token) == ("status", "echo")
+    assert buttons.take("nope") is None
+
+
+async def test_taps_read_and_toggle(daemon: Paths, tmp_path: Path) -> None:
+    mutes = await Mutes.load(tmp_path / "mutes.json")
+    buttons = Buttons()
+
+    def tap(data: str) -> Callback:
+        return Callback(update_id=1, query_id="q", chat_id=CHAT, message_id=7, data=data)
+
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as control:
+            await control.create("echo", py_spec(tmp_path, "agents:echo"))
+            listed = await handle_command(control, mutes, buttons, "/sessions")
+            assert listed is not None
+            [[status_button, _, mute_button]] = listed.markup
+            status = await handle_callback(control, mutes, buttons, tap(status_button.callback))
+            assert status is not None
+            assert (status.text, status.edit) == ("echo idle\nfunction::_echo", False)
+            toggled = await handle_callback(control, mutes, buttons, tap(mute_button.callback))
+            assert toggled is not None
+            assert (toggled.text, toggled.edit) == ("echo idle muted", True)
+            [[_, _, unmute_button]] = toggled.markup
+            assert buttons.take(unmute_button.callback) == ("unmute", "echo")
+            assert await handle_callback(control, mutes, buttons, tap("nope")) is None
 
 
 class ScriptBot(Bot):
     """Serve-loop driver: each poll drains the queue, so the loop idles after."""
 
-    def __init__(self, updates: list[Update]) -> None:
+    def __init__(self, updates: list[Update | Callback]) -> None:
         super().__init__("test")
         self._queued = updates
-        self.sent: list[tuple[int, str]] = []
+        self.sent: list[tuple[int, str, tuple[tuple[Button, ...], ...]]] = []
+        self.answered: list[tuple[str, str | None, bool]] = []
+        self.edited: list[tuple[int, int, str]] = []
         self.menu: tuple[tuple[str, str], ...] = ()
+        self.described = False
         self.got = anyio.Event()
 
-    async def send(self, chat_id: int, text: str) -> None:
-        self.sent.append((chat_id, text))
+    async def send(self, chat_id: int, text: str, markup: tuple[tuple[Button, ...], ...] = ()) -> None:
+        self.sent.append((chat_id, text, markup))
         self.got.set()
+
+    async def edit(self, chat_id: int, message_id: int, text: str, markup: tuple[tuple[Button, ...], ...] = ()) -> None:
+        self.edited.append((chat_id, message_id, text))
+        self.got.set()
+
+    async def answer_callback(self, query_id: str, text: str | None = None, *, alert: bool = False) -> None:
+        self.answered.append((query_id, text, alert))
 
     async def set_commands(self, commands: tuple[tuple[str, str], ...] = COMMANDS) -> None:
         self.menu = commands
 
-    async def updates(self, offset: int) -> tuple[list[Update], int]:
+    async def set_description(self) -> None:
+        self.described = True
+
+    async def updates(self, offset: int) -> tuple[list[Update], list[Callback], int]:
         await anyio.lowlevel.checkpoint()  # A checkpoint per poll: the real one awaits the network.
         out, self._queued = self._queued, []
         last = offset
         for update in out:
             last = max(last, update.update_id + 1)
-        return out, last
+        return (
+            [update for update in out if isinstance(update, Update)],
+            [update for update in out if isinstance(update, Callback)],
+            last,
+        )
 
 
 async def test_serve_answers_allowlisted_chats(daemon: Paths, tmp_path: Path) -> None:
@@ -317,14 +432,43 @@ async def test_serve_answers_allowlisted_chats(daemon: Paths, tmp_path: Path) ->
     try:
         with anyio.fail_after(TIMEOUT):
             async with aid.connect(daemon) as control, anyio.create_task_group() as tg:
-                tg.start_soon(serve, control, bot, {CHAT}, await Mutes.load(tmp_path / "mutes.json"))
+                tg.start_soon(serve, control, bot, {CHAT}, await Mutes.load(tmp_path / "mutes.json"), Buttons())
                 await bot.got.wait()
                 await anyio.sleep(0.5)  # Time for the dropped chat to pass through.
                 tg.cancel_scope.cancel()
     finally:
         await bot.aclose()
-    assert bot.sent == [(CHAT, "nothing muted")]
+    assert bot.sent == [(CHAT, "nothing muted", ())]
     assert bot.menu == COMMANDS
+    assert bot.described
+
+
+async def test_serve_answers_taps(daemon: Paths, tmp_path: Path) -> None:
+    mutes = await Mutes.load(tmp_path / "mutes.json")
+    buttons = Buttons()
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as control:
+            await control.create("echo", py_spec(tmp_path, "agents:echo"))
+            listed = await handle_command(control, mutes, buttons, "/sessions")
+            assert listed is not None
+            [[_, _, mute_button]] = listed.markup
+            bot = ScriptBot(
+                [
+                    Callback(update_id=1, query_id="q1", chat_id=CHAT, message_id=42, data=mute_button.callback),
+                    Callback(update_id=2, query_id="q2", chat_id=CHAT, message_id=43, data="nope"),
+                ]
+            )
+            try:
+                async with anyio.create_task_group() as tg:
+                    tg.start_soon(serve, control, bot, {CHAT}, mutes, buttons)
+                    await anyio.sleep(1)  # Both taps answer and the mute tap edits, locally and at once.
+                    tg.cancel_scope.cancel()
+            finally:
+                await bot.aclose()
+    [(chat_id, message_id, text)] = bot.edited
+    assert (chat_id, message_id, text) == (CHAT, 42, "echo idle muted")
+    assert bot.answered == [("q1", None, False), ("q2", "Those buttons expired — send /sessions again", True)]
+    assert bot.sent == []
 
 
 class FakeBot(Bot):
@@ -333,12 +477,12 @@ class FakeBot(Bot):
         self.sent: list[tuple[int, str]] = []
         self.got = anyio.Event()
 
-    async def send(self, chat_id: int, text: str) -> None:
+    async def send(self, chat_id: int, text: str, markup: tuple[tuple[Button, ...], ...] = ()) -> None:
         self.sent.append((chat_id, text))
         self.got.set()
 
-    async def updates(self, offset: int) -> tuple[list[Update], int]:
-        return [], offset
+    async def updates(self, offset: int) -> tuple[list[Update], list[Callback], int]:
+        return [], [], offset
 
 
 async def test_watch_notifies_a_settled_turn(daemon: Paths, tmp_path: Path) -> None:
