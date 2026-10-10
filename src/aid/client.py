@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, overload
+from typing import TYPE_CHECKING, Final, overload
 
 import anyio
 import zmq
@@ -64,7 +64,7 @@ from aid.protocol import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
 
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
@@ -145,6 +145,21 @@ async def spawn_plugin_client(ctx: zmq.asyncio.Context, name: str) -> AsyncGener
         sock.close(linger=0)
         for opened in list(client.sockets):  # A socket still open would hold the daemon's context forever.
             opened.close(linger=0)
+
+
+DAEMON_CALL_TIMEOUT: Final = 30.0
+"""A daemon call slower than this means the daemon is gone: exit loudly and let the supervisor restart into a
+fresh baseline, rather than hang on a reply a restarted daemon never sends."""
+
+
+async def daemon_call[T](call: Awaitable[T], *, name: str = "aid") -> T:
+    """Await a daemon call, exiting loudly when the daemon answers nothing: a restarted daemon never replies
+    to requests sent before its restart, so hanging would outlive the outage silently."""
+    try:
+        with anyio.fail_after(DAEMON_CALL_TIMEOUT):
+            return await call
+    except TimeoutError:
+        raise SystemExit(f"{name}: the daemon answered nothing for 30s") from None
 
 
 async def register_plugin(

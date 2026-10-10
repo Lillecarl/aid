@@ -17,6 +17,7 @@ import httpx
 import structlog
 from pydantic import BaseModel, ConfigDict, JsonValue
 
+from aid.client import daemon_call
 from aid.protocol import (
     AidError,
     Output,
@@ -27,7 +28,7 @@ from aid.protocol import (
 from aid.settle import settled_turns
 
 if TYPE_CHECKING:
-    from collections.abc import Coroutine, Set
+    from collections.abc import Set
 
     from aid.client import Client, Session
     from aid.mutes import Mutes
@@ -63,9 +64,6 @@ def poll_delay(error: BotError) -> float | None:
 
 TAIL_SCAN: Final = 20
 """Newest history entries searched for the turn's output when composing a notice."""
-CALL_TIMEOUT: Final = 30.0
-"""A daemon call slower than this means the daemon is gone: exit loudly and let the unit restart into a
-fresh baseline, rather than hang on a reply a restarted daemon never sends."""
 API_BASE: Final = "https://api.telegram.org"
 
 COMMANDS: Final = (
@@ -331,16 +329,6 @@ class Bot:
                         )
                     )
         return messages, taps, last
-
-
-async def daemon_call[T](call: Coroutine[Any, Any, T]) -> T:
-    """Await a daemon call, exiting loudly when the daemon answers nothing: a restarted daemon never replies
-    to requests sent before its restart, so hanging would outlive the outage silently."""
-    try:
-        with anyio.fail_after(CALL_TIMEOUT):
-            return await call
-    except TimeoutError:
-        raise SystemExit("aid telegram: the daemon answered nothing for 30s") from None
 
 
 def parse_command(text: str) -> tuple[str, list[str]] | None:

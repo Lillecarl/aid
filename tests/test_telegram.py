@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 import aid
-from aid.client import register_plugin
+from aid.client import daemon_call, register_plugin
 from aid.mutes import Mutes
 from aid.plugins import Grant, discover
 from aid.protocol import AidError
@@ -29,7 +29,6 @@ from plugins.telegram.bot import (
     Callback,
     Reply,
     Update,
-    daemon_call,
     handle_callback,
     handle_command,
     parse_command,
@@ -228,7 +227,7 @@ def test_poll_delay_exits_on_dead_requests() -> None:
 
 
 async def test_daemon_call_exits_when_the_daemon_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("plugins.telegram.bot.CALL_TIMEOUT", 0.1)
+    monkeypatch.setattr("aid.client.DAEMON_CALL_TIMEOUT", 0.1)
 
     async def hang() -> None:
         await anyio.sleep_forever()
