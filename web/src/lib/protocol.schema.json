@@ -24,6 +24,12 @@
           },
           "type": "object"
         },
+        "hooks": {
+          "items": {
+            "$ref": "#/$defs/Hook"
+          },
+          "type": "array"
+        },
         "inherit_env": {
           "default": true,
           "type": "boolean"
@@ -326,6 +332,12 @@
             "type": "string"
           },
           "type": "object"
+        },
+        "hooks": {
+          "items": {
+            "$ref": "#/$defs/Hook"
+          },
+          "type": "array"
         },
         "inherit_env": {
           "default": true,
@@ -930,6 +942,31 @@
       ],
       "title": "HistoryPage",
       "type": "object"
+    },
+    "Hook": {
+      "additionalProperties": false,
+      "description": "A pre-tool gate: when `tool` runs with rendered text matching `match`, refuse it with `message`.",
+      "properties": {
+        "match": {
+          "$ref": "#/$defs/HookMatch"
+        },
+        "message": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tool",
+        "match",
+        "message"
+      ],
+      "title": "Hook",
+      "type": "object"
+    },
+    "HookMatch": {
+      "type": "string"
     },
     "JsonValue": {},
     "Lifecycle": {
@@ -1546,6 +1583,12 @@
             "type": "string"
           },
           "type": "object"
+        },
+        "hooks": {
+          "items": {
+            "$ref": "#/$defs/Hook"
+          },
+          "type": "array"
         },
         "kind": {
           "const": "pydantic-ai",

@@ -2,6 +2,11 @@
 
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "HookMatch".
+ */
+export type HookMatch = string;
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "McpServer".
  */
 export type McpServer = McpStdio | McpHttp | McpSse;
@@ -112,6 +117,7 @@ export interface AcpSpec {
   env?: {
     [k: string]: string;
   };
+  hooks?: Hook[];
   inherit_env?: boolean;
   kind: "acp";
   mcp_servers?: McpServers;
@@ -125,6 +131,17 @@ export interface AcpSpec {
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
   worker_endpoint?: string | null;
+}
+/**
+ * A pre-tool gate: when `tool` runs with rendered text matching `match`, refuse it with `message`.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "Hook".
+ */
+export interface Hook {
+  match: HookMatch;
+  message: string;
+  tool: string;
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -207,6 +224,7 @@ export interface PydanticAISpec {
   env?: {
     [k: string]: string;
   };
+  hooks?: Hook[];
   kind: "pydantic-ai";
   max_context?: number | null;
   permission?: PermissionMode1;
@@ -241,6 +259,7 @@ export interface ClaudeTtySpec {
   env?: {
     [k: string]: string;
   };
+  hooks?: Hook[];
   inherit_env?: boolean;
   kind: "claude-tty";
   mcp_servers?: McpServers;

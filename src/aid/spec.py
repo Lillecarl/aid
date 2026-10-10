@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Annotated, Final, Literal, Self
 
@@ -21,6 +22,48 @@ class PermissionMode(StrEnum):
     DENY = "deny"
     ASK = "ask"
     """A person answers, from the web UI or `aid answer`; the request is refused after `permission_timeout`."""
+
+
+def _compile_pattern(pattern: str) -> str:
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        raise ValueError(f"invalid hook match regex {pattern!r}: {e}") from e
+    return pattern
+
+
+type HookMatch = Annotated[str, AfterValidator(_compile_pattern)]
+
+
+class Hook(BaseModel):
+    """A pre-tool gate: when `tool` runs with rendered text matching `match`, refuse it with `message`."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    tool: str
+    """A coding tool name (`python`, `shell`, `apply_edits`), or `*` for all tools."""
+    match: HookMatch
+    message: str
+    """Fed back to the model on block."""
+
+
+def match_hook(hooks: list[Hook], tool: str, text: str) -> Hook | None:
+    """First hook whose tool fits and whose match finds `text`, else None. Never raises."""
+    if not isinstance(tool, str) or not isinstance(text, str):
+        return None
+    try:
+        candidates = list(hooks)
+    except TypeError:
+        return None
+    for hook in candidates:
+        try:
+            if hook.tool != "*" and hook.tool != tool:
+                continue
+            if re.search(hook.match, text):
+                return hook
+        except re.error, TypeError, AttributeError:
+            continue
+    return None
 
 
 class _Spec(BaseModel):
@@ -58,6 +101,8 @@ class _Spec(BaseModel):
     """Nudges the supervisor may send per stuck episode — the run of supervised turns since the last
     unstuck one. Past it the daemon refuses nudges; K stuck turns after K nudges raises `attention` to
     the person instead. Zero never nudges, and escalates the first stuck turn."""
+    hooks: list[Hook] = Field(default_factory=list[Hook])
+    """Pre-tool gates: the first hook whose tool fits and whose match finds the call's text refuses it."""
 
     @model_validator(mode="after")
     def _worker_launch_is_sane(self) -> Self:
