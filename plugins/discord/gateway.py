@@ -239,6 +239,7 @@ class Gateway:
         or `FatalGatewayError`; never returns."""
         ws = await self._open(url)
         closing: int | None = 1000
+        cancelled = False  # A close that fails during teardown races a dead socket: silent, expected.
         try:
             hello = await ws.recv_json()
             details = hello.get("d") if isinstance(hello, dict) else None
@@ -280,6 +281,9 @@ class Gateway:
                         raise _Resume(f"receive failed: {error}") from error
             except BaseExceptionGroup as group:
                 raise _unwrap_session(group) from None
+        except anyio.get_cancelled_exc_class():
+            cancelled = True
+            raise
         except _Resume, _Fresh:
             closing = None
             raise
@@ -288,7 +292,8 @@ class Gateway:
                 try:
                     await ws.aclose(closing)
                 except Exception:
-                    log.warning("discord_close_failed")
+                    if not cancelled:
+                        log.warning("discord_close_failed")
 
     async def _heartbeat(self, ws: Channel, interval: float, heart: _Heart) -> None:
         """Heartbeats until cancelled or zombied: a missing ack drops the TCP bare (resumable) and returns,

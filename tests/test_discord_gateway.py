@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import anyio
 import pytest
 from anyio.abc import SocketAttribute
+from structlog.testing import capture_logs
 from wsproto import ConnectionType, WSConnection
 from wsproto.events import AcceptConnection, Request, TextMessage
 
@@ -55,9 +56,12 @@ class ScriptWS:
     acked like the real gateway, unless `ack` is off (the zombie test). Queued payloads wake the reader,
     as network bytes would."""
 
-    def __init__(self, incoming: list[JsonValue | WSClosed], *, ack: bool = True) -> None:
+    def __init__(
+        self, incoming: list[JsonValue | WSClosed], *, ack: bool = True, close_error: Exception | None = None
+    ) -> None:
         self._incoming = incoming
         self._ack = ack
+        self._close_error = close_error
         self._arrived = anyio.Event()
         self.sent: list[JsonValue] = []
         self.closed: list[int | None] = []
@@ -78,6 +82,8 @@ class ScriptWS:
 
     async def aclose(self, code: int | None = 1000) -> None:
         self.closed.append(code)
+        if self._close_error is not None:
+            raise self._close_error
 
 
 class Opener:
@@ -190,6 +196,32 @@ async def test_zombie_drops_bare_and_resumes() -> None:
             tg.cancel_scope.cancel()
     assert len(_beats(first.sent)) == 1  # The second check finds no ack and drops instead of beating.
     assert first.closed[0] is None  # Teardown closes clean (1000) after the zombie drop.
+
+
+async def test_teardown_close_failure_stays_silent() -> None:
+    ws = ScriptWS([_hello(), _ready()], close_error=RuntimeError("socket dead"))
+    with anyio.fail_after(TIMEOUT):
+        with capture_logs() as logs:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(Gateway("tok", open_ws=Opener(ws)).run, _ignore)
+                await anyio.sleep(0.3)
+                tg.cancel_scope.cancel()
+    assert ws.closed == [1000]
+    assert not [entry for entry in logs if entry["event"] == "discord_close_failed"]
+
+
+async def test_resume_close_failure_still_warns() -> None:
+    first = ScriptWS([_hello(), _ready(), WSClosed(1006, "boom")], close_error=RuntimeError("socket dead"))
+    second = ScriptWS([_hello()])
+    opener = Opener(first, second)
+    with anyio.fail_after(TIMEOUT):
+        with capture_logs() as logs:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(Gateway("tok", open_ws=opener).run, _ignore)
+                await anyio.sleep(0.5)
+                tg.cancel_scope.cancel()
+    assert first.closed == [None]
+    assert any(entry["event"] == "discord_close_failed" for entry in logs)
 
 
 async def test_websocket_handshake_validates_and_frames() -> None:
