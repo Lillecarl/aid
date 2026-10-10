@@ -31,6 +31,7 @@ from aid.protocol import (
     PermissionDecision,
     PermissionRequest,
     PromptEntry,
+    RemoteControl,
     Started,
     TextDelta,
     ThoughtDelta,
@@ -38,7 +39,7 @@ from aid.protocol import (
     TurnError,
     Usage,
 )
-from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
+from aid.spec import AcpSpec, ClaudeSdkSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
 from aid.web import OidcConfig, create_app
 from aid.web import serve as serve_web
 from aid.web.app import ENV_ASSETS
@@ -249,6 +250,10 @@ def _parser() -> argparse.ArgumentParser:
         help="model requests one turn may spend before it ends capped",
     )
 
+    sdk = with_permission(new("new-sdk", "create a session driving Claude Code over NDJSON, with Remote Control"))
+    sdk.add_argument("--model", required=True, help="the model the session runs on")
+    sdk.add_argument("--claude", default="claude", help="the claude executable")
+
     sub.add_parser(
         "agents", help="list the aid.PydanticAgent classes and @aid.mcptool functions on the daemon's agents path"
     )
@@ -382,6 +387,22 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
             supervisor_nudge_budget=args.supervisor_nudge_budget,
         )
+    if args.command == "new-sdk":
+        return ClaudeSdkSpec(
+            cwd=cwd,
+            env=env,
+            command=[args.claude],
+            model=args.model,
+            permission=args.permission,
+            worker_command=worker_command,
+            worker_endpoint=worker_endpoint,
+            worker_ca=worker_ca,
+            supervisor=args.supervisor,
+            supervisor_permissions=args.supervisor_permissions,
+            supervisor_permission_timeout=args.supervisor_permission_timeout,
+            supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
+            supervisor_nudge_budget=args.supervisor_nudge_budget,
+        )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
     source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
     return PydanticAISpec(
@@ -433,6 +454,8 @@ def _history_line(entry: HistoryEntry) -> str:
             body = _permission_line(item)
         case Lifecycle():
             body = " ".join(p for p in (f"[{item.event}]", item.detail) if p)
+        case RemoteControl():
+            body = f"[remote] {item.session_url}"
     return f"{entry.seq:>6}  {body}"
 
 
@@ -453,7 +476,7 @@ def _permission_line(item: PermissionRequest | PermissionDecision) -> str:
 async def _client_command(args: argparse.Namespace) -> None:
     async with connect() as client:
         match args.command:
-            case "new-acp" | "new-py" | "new-claude":
+            case "new-acp" | "new-py" | "new-claude" | "new-sdk":
                 await client.create(args.name, _spec(args))
                 print(args.name)
             case "list":

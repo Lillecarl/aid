@@ -1,8 +1,10 @@
 """Backend driving `claude -p` directly over NDJSON, so sessions get Remote Control.
 
-Slice B2 answers `can_use_tool` prompts through the session permission flow, mirroring the ACP backend's
-semantics (`choose_permission`, policy at once, ask waits, cancel settles). Measured protocol facts live in
-`docs/sdk-backend.md`. Remote Control and CLI wiring are later slices.
+Each prompt spawns one process, writes the user line plus a Remote Control
+enable, and handles NDJSON lines as they arrive until the `result` line.
+`can_use_tool` prompts answer through the session permission flow, and the
+bridge URLs emit as a RemoteControl event. Measured protocol facts live in
+`docs/sdk-backend.md`. CLI wiring is a later slice.
 """
 
 from __future__ import annotations
@@ -12,7 +14,7 @@ import json
 import os
 import uuid
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import anyio
 import structlog
@@ -27,6 +29,7 @@ from aid.protocol import (
     PermissionDecider,
     PermissionDecision,
     PermissionRequest,
+    RemoteControl,
     Started,
     TextDelta,
     to_json,
@@ -37,6 +40,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
 
     from anyio.abc import Process
+    from pydantic import JsonValue
 
     from aid.backends.base import Emit
     from aid.spec import ClaudeSdkSpec
@@ -81,6 +85,8 @@ class ClaudeSdkBackend:
         self._waits = PermissionWaits()
         self._process: Process | None = None
         """The running prompt's process, for `cancel` to kill; one prompt runs at a time."""
+        self._rc_id: str | None = None
+        """The pending Remote Control enable's request id; its control_response carries the bridge URLs."""
 
     def started(self) -> Started:
         return self._started
@@ -96,8 +102,21 @@ class ClaudeSdkBackend:
             if process.stdin is None or process.stdout is None or process.stderr is None:
                 raise AidError("sdk_failed", "claude process has no stdio")
             self._process = process
+            self._rc_id = uuid.uuid4().hex
             try:
                 await process.stdin.send(payload.encode())
+                await process.stdin.send(
+                    (
+                        json.dumps(
+                            {
+                                "type": "control_request",
+                                "request": {"subtype": "remote_control", "enabled": True},
+                                "request_id": self._rc_id,
+                            }
+                        )
+                        + "\n"
+                    ).encode()
+                )
 
                 async def respond(request_id: str, allow: bool) -> None:
                     assert process.stdin is not None
@@ -147,6 +166,7 @@ class ClaudeSdkBackend:
                     raise AidError("sdk_failed", f"claude exited with {process.returncode}: {tail}")
             finally:
                 self._process = None
+                self._rc_id = None
                 self._waits.cancel_all()
         return Output(output="".join(chunks), stop_reason=stop_reason)
 
@@ -177,13 +197,15 @@ class ClaudeSdkBackend:
         """Handle one NDJSON line as it arrives; returns a new stop reason for a result line, else None."""
         if not line.strip():
             return None
+        parsed: JsonValue
         try:
-            message = json.loads(line)
+            parsed = json.loads(line)
         except ValueError:
             log.warning("sdk_malformed_line", line=line[:200])
             return None
-        if not isinstance(message, dict):
+        if not isinstance(parsed, dict):
             return None
+        message = parsed
         match message.get("type"):
             case "system" if message.get("subtype") == "init":
                 session_id = message.get("session_id")
@@ -193,20 +215,29 @@ class ClaudeSdkBackend:
                 return None
             case "assistant":
                 envelope = message.get("message")
-                content = envelope.get("content", []) if isinstance(envelope, dict) else []
+                content: JsonValue = envelope.get("content", []) if isinstance(envelope, dict) else []
                 for block in content if isinstance(content, list) else []:
-                    if isinstance(block, dict) and block.get("type") == "text" and isinstance(block.get("text"), str):
-                        chunks.append(block["text"])
-                        await emit(TextDelta(text=block["text"]))
+                    if not isinstance(block, dict) or block.get("type") != "text":
+                        continue
+                    text = block.get("text")
+                    if not isinstance(text, str):
+                        continue
+                    chunks.append(text)
+                    await emit(TextDelta(text=text))
                 return None
             case "control_request":
                 request = message.get("request", {})
                 if isinstance(request, dict) and request.get("subtype") == "can_use_tool":
                     await self._answer_tool(message, request, emit, respond)
                 return None
+            case "control_response":
+                await self._handle_remote_response(message, emit)
+                return None
             case "result":
-                if not chunks and isinstance(message.get("result"), str):
-                    chunks.append(message["result"])
+                if not chunks:
+                    fallback = message.get("result")
+                    if isinstance(fallback, str):
+                        chunks.append(fallback)
                 subtype = message.get("subtype")
                 return subtype if isinstance(subtype, str) else "end_turn"
             case _:
@@ -214,8 +245,8 @@ class ClaudeSdkBackend:
 
     async def _answer_tool(
         self,
-        message: dict[str, Any],
-        request: dict[str, Any],
+        message: dict[str, JsonValue],
+        request: dict[str, JsonValue],
         emit: Emit,
         respond: Callable[[str, bool], Awaitable[None]],
     ) -> None:
@@ -263,6 +294,33 @@ class ClaudeSdkBackend:
             await respond(request_id, decision.option_id == "allow")
         else:
             log.warning("sdk_permission_without_request_id", tool=permission.tool_name)
+
+    async def _handle_remote_response(self, message: dict[str, JsonValue], emit: Emit) -> None:
+        """The bridge's answer to this turn's Remote Control enable: emit its URLs, or log why not.
+
+        A failed enable never fails the turn: the phone link is additive, the work stands without it.
+        """
+        response = message.get("response")
+        if (
+            self._rc_id is None
+            or not isinstance(response, dict)
+            or response.get("request_id") != self._rc_id
+            or response.get("subtype") != "success"
+        ):
+            return
+        self._rc_id = None
+        urls = response.get("response")
+        session_url = urls.get("session_url") if isinstance(urls, dict) else None
+        connect_url = urls.get("connect_url") if isinstance(urls, dict) else None
+        if not isinstance(session_url, str) or not session_url:
+            log.warning("sdk_remote_failed", detail=str(response.get("response"))[:200])
+            return
+        await emit(
+            RemoteControl(
+                session_url=session_url,
+                connect_url=connect_url if isinstance(connect_url, str) else "",
+            )
+        )
 
 
 @asynccontextmanager

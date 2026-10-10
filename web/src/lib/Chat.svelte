@@ -102,6 +102,8 @@
         const line = row("meta", LIFECYCLE[item.event] + (item.detail ? ` (${item.detail})` : ""));
         return item.summary ? [line, { ...row("summary", item.summary), key: `${key}s` }] : [line];
       }
+      case "remote_control":
+        return [row("assistant", `[Open remote session](${item.session_url})`)];
     }
   }
 

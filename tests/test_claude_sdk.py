@@ -9,7 +9,15 @@ import pytest
 from pydantic import ValidationError
 
 from aid.backends.claude_sdk import SESSION_ID_FILE, ClaudeSdkBackend, open_sdk
-from aid.protocol import AidError, Output, PermissionDecider, PermissionDecision, PermissionRequest, TextDelta
+from aid.protocol import (
+    AidError,
+    Output,
+    PermissionDecider,
+    PermissionDecision,
+    PermissionRequest,
+    RemoteControl,
+    TextDelta,
+)
 from aid.spec import AgentKind, ClaudeSdkSpec, PermissionMode
 
 if TYPE_CHECKING:
@@ -40,6 +48,8 @@ case "$FAKE_CLAUDE_MODE" in
     echo '{"type":"result","subtype":"success","result":"part one"}'
     ;;
   ask)
+    read rcline
+    echo "$rcline" >> "$FAKE_CLAUDE_STDIN"
     echo '__PERMISSION_LINE__'
     if read -t 15 answer; then
       echo "$answer" >> "$FAKE_CLAUDE_STDIN"
@@ -48,6 +58,8 @@ case "$FAKE_CLAUDE_MODE" in
     echo '{"type":"result","subtype":"success","result":"done"}'
     ;;
   ask_timeout)
+    read rcline
+    echo "$rcline" >> "$FAKE_CLAUDE_STDIN"
     echo '__PERMISSION_LINE__'
     if read -t 5 answer; then
       echo "$answer" >> "$FAKE_CLAUDE_STDIN"
@@ -56,6 +68,22 @@ case "$FAKE_CLAUDE_MODE" in
   ask_hang)
     echo '__PERMISSION_LINE__'
     sleep 30
+    ;;
+  rc)
+    read rcline
+    echo "$rcline" >> "$FAKE_CLAUDE_STDIN"
+    id=$(echo "$rcline" | grep -o '"request_id": *"[^"]*"' | cut -d'"' -f4)
+    echo '{"type":"control_response","response":{"subtype":"success","request_id":"'$id'","response":{"session_url":"https://claude.ai/code/session_x","connect_url":"https://claude.ai/code?environment="}}}'
+    echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}'
+    echo '{"type":"result","subtype":"success","result":"hi"}'
+    ;;
+  rc_fail)
+    read rcline
+    echo "$rcline" >> "$FAKE_CLAUDE_STDIN"
+    id=$(echo "$rcline" | grep -o '"request_id": *"[^"]*"' | cut -d'"' -f4)
+    echo '{"type":"control_response","response":{"subtype":"error","request_id":"'$id'","response":"/login"}}'
+    echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}'
+    echo '{"type":"result","subtype":"success","result":"hi"}'
     ;;
   *)
     echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi there"}]}}'
@@ -263,6 +291,46 @@ def test_spec_shape() -> None:
     assert spec.command == ["claude"]
     assert spec.permission is PermissionMode.DENY
     with pytest.raises(ValidationError):
-        ClaudeSdkSpec(cwd="/", model="opus", bogus=1)
+        ClaudeSdkSpec(cwd="/", model="opus", bogus=1)  # pyright: ignore[reportCallIssue] -- extra is forbidden
     with pytest.raises(ValidationError):
         spec.model = "haiku"
+
+
+async def test_remote_control_url_emitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The RC enable goes out after the user line; its answer emits the bridge URLs."""
+    fake, _, stdin_log = write_fake(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "rc")
+    state = anyio.Path(str(tmp_path / "state"))
+    await state.mkdir()
+    events: list[SessionEvent] = []
+
+    async def emit(event: SessionEvent) -> None:
+        events.append(event)
+
+    async with open_sdk(make_spec(tmp_path, fake), state) as backend:
+        output = await backend.prompt("hello", emit)
+    assert output.output == "hi"
+    stdin = stdin_log.read_text()
+    assert '"remote_control"' in stdin and '"enabled":true' in stdin.replace(" ", "")
+    [remote] = [event for event in events if isinstance(event, RemoteControl)]
+    assert remote.session_url == "https://claude.ai/code/session_x"
+    assert remote.connect_url == "https://claude.ai/code?environment="
+
+
+async def test_remote_control_failure_is_loud_in_logs_not_turns(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refused bridge enable warns and continues: the phone link is additive, not the work."""
+    fake, _, _ = write_fake(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "rc_fail")
+    state = anyio.Path(str(tmp_path / "state"))
+    await state.mkdir()
+    events: list[SessionEvent] = []
+
+    async def emit(event: SessionEvent) -> None:
+        events.append(event)
+
+    async with open_sdk(make_spec(tmp_path, fake), state) as backend:
+        output = await backend.prompt("hello", emit)
+    assert output.output == "hi"
+    assert [event for event in events if isinstance(event, RemoteControl)] == []

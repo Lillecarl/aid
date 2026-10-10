@@ -69,8 +69,8 @@ def test_no_match_returns_none() -> None:
 
 def test_matcher_is_total() -> None:
     hook = Hook(tool="python", match="evil", message="blocked")
-    assert match_hook([hook], None, "evil") is None  # type: ignore[arg-type]
-    assert match_hook([hook], "python", None) is None  # type: ignore[arg-type]
+    assert match_hook([hook], None, "evil") is None
+    assert match_hook([hook], "python", None) is None
     assert match_hook(None, "python", "evil") is None  # type: ignore[arg-type]
     broken = Hook.model_construct(tool="python", match="(unclosed", message="blocked")
     assert match_hook([broken], "python", "evil") is None

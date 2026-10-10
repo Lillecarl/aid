@@ -48,7 +48,7 @@ class Hook(BaseModel):
     """Fed back to the model on block."""
 
 
-def match_hook(hooks: list[Hook], tool: str, text: str) -> Hook | None:
+def match_hook(hooks: list[Hook], tool: str | None, text: str | None) -> Hook | None:
     """First hook whose tool fits and whose match finds `text`, else None. Never raises."""
     if not isinstance(tool, str) or not isinstance(text, str):
         return None

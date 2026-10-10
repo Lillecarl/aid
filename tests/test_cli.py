@@ -13,7 +13,7 @@ from aid.cli import (
     _split_agent_command,  # pyright: ignore[reportPrivateUsage]
 )
 from aid.launcher import PRELOAD
-from aid.spec import ClaudeTtySpec, McpHttp, McpStdio, PydanticAISpec
+from aid.spec import ClaudeSdkSpec, ClaudeTtySpec, McpHttp, McpStdio, PermissionMode, PydanticAISpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -65,6 +65,14 @@ def test_new_py_max_requests() -> None:
     spec = _spec(args)
     assert isinstance(spec, PydanticAISpec)
     assert spec.max_requests == 150
+
+
+def test_new_sdk_builds_spec() -> None:
+    args = _parser().parse_args(["new-sdk", "s", "--model", "opus", "--permission", "allow"])
+    args.agent_command = []
+    spec = _spec(args)
+    assert isinstance(spec, ClaudeSdkSpec)
+    assert (spec.command, spec.model, spec.permission) == (["claude"], "opus", PermissionMode.ALLOW)
 
 
 def test_new_py_worker_command(tmp_path: Path) -> None:

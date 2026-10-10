@@ -23,7 +23,7 @@ from plugins.discord.serve import (
     EMBED_OTHER,
     MUTES_FILE,
     Reply,
-    _notice_parts,
+    _notice_parts,  # pyright: ignore[reportPrivateUsage] -- the notice shape is the unit under test
     channel_loop,
     dispatch,
     fence_output,

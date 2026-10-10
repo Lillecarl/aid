@@ -1009,6 +1009,7 @@
           "permission_decision": "#/$defs/PermissionDecision",
           "permission_request": "#/$defs/PermissionRequest",
           "prompt": "#/$defs/PromptEntry",
+          "remote_control": "#/$defs/RemoteControl",
           "started": "#/$defs/Started",
           "text": "#/$defs/TextDelta",
           "thought": "#/$defs/ThoughtDelta",
@@ -1050,6 +1051,9 @@
         },
         {
           "$ref": "#/$defs/Output"
+        },
+        {
+          "$ref": "#/$defs/RemoteControl"
         },
         {
           "$ref": "#/$defs/TurnError"
@@ -1958,6 +1962,30 @@
       "title": "Received",
       "type": "object"
     },
+    "RemoteControl": {
+      "additionalProperties": false,
+      "description": "Claude Code's Remote Control bridge for the turn: join it in a browser or over the connect URL.",
+      "properties": {
+        "connect_url": {
+          "type": "string"
+        },
+        "session_url": {
+          "type": "string"
+        },
+        "type": {
+          "const": "remote_control",
+          "default": "remote_control",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "session_url",
+        "connect_url"
+      ],
+      "title": "RemoteControl",
+      "type": "object"
+    },
     "Sent": {
       "description": "What the page sends aid web.",
       "properties": {
@@ -1981,6 +2009,7 @@
           "output": "#/$defs/Output",
           "permission_decision": "#/$defs/PermissionDecision",
           "permission_request": "#/$defs/PermissionRequest",
+          "remote_control": "#/$defs/RemoteControl",
           "text": "#/$defs/TextDelta",
           "thought": "#/$defs/ThoughtDelta",
           "tool_call": "#/$defs/ToolCall",
@@ -2009,6 +2038,9 @@
         },
         {
           "$ref": "#/$defs/Output"
+        },
+        {
+          "$ref": "#/$defs/RemoteControl"
         }
       ]
     },

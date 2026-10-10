@@ -7,7 +7,7 @@ of retrying a token that never heals.
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, cast
 
 import anyio
 import httpx
@@ -150,7 +150,7 @@ class Rest:
         if components is not None:
             payload["components"] = components
         if embeds is not None:
-            payload["embeds"] = embeds
+            payload["embeds"] = cast(JsonValue, embeds)
         return (await self._parse(_MessageBody, "POST", f"/channels/{channel_id}/messages", payload)).id
 
     async def edit_message(

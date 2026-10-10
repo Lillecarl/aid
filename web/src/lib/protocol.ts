@@ -42,7 +42,7 @@ export type PermissionMode2 = "allow" | "deny" | "ask";
  * via the `definition` "SessionEvent".
  */
 export type SessionEvent =
-  TextDelta | ThoughtDelta | ToolCall | PermissionRequest | PermissionDecision | Usage | Output;
+  TextDelta | ThoughtDelta | ToolCall | PermissionRequest | PermissionDecision | Usage | Output | RemoteControl;
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "PermissionDecider".
@@ -70,6 +70,7 @@ export type HistoryItem =
   | PermissionDecision
   | Usage
   | Output
+  | RemoteControl
   | TurnError;
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -549,6 +550,17 @@ export interface Output {
   output: JsonValue;
   stop_reason: string;
   type: "output";
+}
+/**
+ * Claude Code's Remote Control bridge for the turn: join it in a browser or over the connect URL.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "RemoteControl".
+ */
+export interface RemoteControl {
+  connect_url: string;
+  session_url: string;
+  type: "remote_control";
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema

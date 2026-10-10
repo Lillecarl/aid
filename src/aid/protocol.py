@@ -406,6 +406,14 @@ class ThoughtDelta(_Message):
     text: str
 
 
+class RemoteControl(_Message):
+    """Claude Code's Remote Control bridge for the turn: join it in a browser or over the connect URL."""
+
+    type: Literal["remote_control"] = "remote_control"
+    session_url: str
+    connect_url: str
+
+
 TOOL_TEXT_LIMIT: Final = 20_000
 """Characters of a tool's output, or of a side of a diff, that an event carries; history keeps every event."""
 
@@ -615,7 +623,7 @@ class PermissionEvent(_Message):
 
 
 type SessionEvent = Annotated[
-    TextDelta | ThoughtDelta | ToolCall | PermissionRequest | PermissionDecision | Usage | Output,
+    TextDelta | ThoughtDelta | ToolCall | PermissionRequest | PermissionDecision | Usage | Output | RemoteControl,
     Field(discriminator="type"),
 ]
 
@@ -680,6 +688,7 @@ type HistoryItem = Annotated[
     | PermissionDecision
     | Usage
     | Output
+    | RemoteControl
     | TurnError,
     Field(discriminator="type"),
 ]
