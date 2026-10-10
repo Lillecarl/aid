@@ -1,7 +1,13 @@
 """The Telegram plugin: settled turn ends as Telegram messages, basic commands back.
 
-aid plugin add telegram
-AID_TELEGRAM_TOKEN=... AID_TELEGRAM_CHATS=... aid plugin run telegram
+Runs hosted in the daemon by default, reading `AID_TELEGRAM_TOKEN` and `AID_TELEGRAM_CHATS` from its
+environment, with mutes in its plugin dir:
+
+    aid plugin add telegram
+
+Or outside it, with the same environment in the calling shell:
+
+    AID_TELEGRAM_TOKEN=... AID_TELEGRAM_CHATS=... aid plugin run telegram
 """
 
 from __future__ import annotations

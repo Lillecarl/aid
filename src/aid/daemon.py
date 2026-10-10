@@ -655,6 +655,7 @@ class Daemon:
 
     async def _host_one(self, name: str, plugin: Plugin, scope: anyio.CancelScope) -> None:
         """Supervise one plugin task under `scope`, which removing the registration cancels."""
+        log.info("plugin_started", plugin=name)
         with scope:
             try:
                 await plugin_host.supervise(self._ctx, name, plugin)
