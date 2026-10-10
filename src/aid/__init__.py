@@ -26,6 +26,7 @@ from aid.protocol import ThoughtDelta as ThoughtDelta
 from aid.protocol import ToolCall as ToolCall
 from aid.spec import AcpSpec as AcpSpec
 from aid.spec import AgentSpec as AgentSpec
+from aid.spec import ClaudeSdkSpec as ClaudeSdkSpec
 from aid.spec import PermissionMode as PermissionMode
 from aid.spec import PydanticAISpec as PydanticAISpec
 from aid.supervision import supervisor_tools as supervisor_tools

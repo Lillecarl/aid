@@ -13,6 +13,7 @@ class AgentKind(StrEnum):
     ACP = "acp"
     PYDANTIC_AI = "pydantic-ai"
     CLAUDE_TTY = "claude-tty"
+    CLAUDE_SDK = "claude-sdk"
 
 
 class PermissionMode(StrEnum):
@@ -216,6 +217,24 @@ class ClaudeTtySpec(_Spec):
     """Added to the MCP servers Claude Code finds in its own configuration."""
 
 
-type AgentSpec = Annotated[AcpSpec | PydanticAISpec | ClaudeTtySpec, Field(discriminator="kind")]
+class ClaudeSdkSpec(_Spec):
+    """Claude Code driven directly over NDJSON (`claude -p`), so sessions get Remote Control.
+
+    Skeleton slice A: one process per prompt, resumed by the persisted session id. Permissions, Remote Control,
+    and CLI wiring arrive in later slices.
+    """
+
+    kind: Literal[AgentKind.CLAUDE_SDK] = AgentKind.CLAUDE_SDK
+    command: Annotated[list[str], Field(min_length=1)] = Field(default_factory=lambda: ["claude"])
+    """The `claude` program and its fixed arguments. Tests point it at a fake."""
+    model: str
+    """Passed as `--model`: the model the session runs on."""
+    inherit_env: bool = True
+    permission: PermissionMode = PermissionMode.DENY
+    permission_timeout: Annotated[float, Field(gt=0)] = 1800
+    """Seconds an `ask` request waits for a person before it is refused."""
+
+
+type AgentSpec = Annotated[AcpSpec | PydanticAISpec | ClaudeTtySpec | ClaudeSdkSpec, Field(discriminator="kind")]
 
 AgentSpecAdapter: TypeAdapter[AgentSpec] = TypeAdapter(AgentSpec)

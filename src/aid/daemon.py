@@ -94,7 +94,15 @@ from aid.protocol import (
     encode,
     history_line,
 )
-from aid.spec import BUILTIN_MCP_SERVER, AcpSpec, AgentKind, AgentSpecAdapter, ClaudeTtySpec, PydanticAISpec
+from aid.spec import (
+    BUILTIN_MCP_SERVER,
+    AcpSpec,
+    AgentKind,
+    AgentSpecAdapter,
+    ClaudeSdkSpec,
+    ClaudeTtySpec,
+    PydanticAISpec,
+)
 from aid.summary import summarize
 
 if TYPE_CHECKING:
@@ -209,6 +217,8 @@ class _Session:
                 servers = [s.name for s in self.spec.mcp_servers]
             case PydanticAISpec():
                 runs, servers = self.spec.agent or self.spec.target or "", []
+            case ClaudeSdkSpec():
+                runs, servers = shlex.join([*self.spec.command, "-p", "--model", self.spec.model]), []
         if self.spec.aid_tools and not isinstance(self.spec, PydanticAISpec):
             servers.append(BUILTIN_MCP_SERVER)
         return SessionStatus(

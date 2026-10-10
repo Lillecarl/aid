@@ -23,16 +23,20 @@ export type PermissionMode = "allow" | "deny" | "ask";
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "AgentKind".
  */
-export type AgentKind = "acp" | "pydantic-ai" | "claude-tty";
+export type AgentKind = "acp" | "pydantic-ai" | "claude-tty" | "claude-sdk";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "AgentSpec".
  */
-export type AgentSpec = AcpSpec | PydanticAISpec | ClaudeTtySpec;
+export type AgentSpec = AcpSpec | PydanticAISpec | ClaudeTtySpec | ClaudeSdkSpec;
 /**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
  */
 export type PermissionMode1 = "allow" | "deny" | "ask";
+/**
+ * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
+ */
+export type PermissionMode2 = "allow" | "deny" | "ask";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "SessionEvent".
@@ -96,7 +100,7 @@ export type PageRequest =
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "PermissionMode".
  */
-export type PermissionMode2 = "allow" | "deny" | "ask";
+export type PermissionMode3 = "allow" | "deny" | "ask";
 
 export interface AidProtocol {
   [k: string]: unknown;
@@ -286,6 +290,40 @@ export interface ClaudeTtySpec {
   supervisor_permission_timeout?: number;
   supervisor_permissions?: string[];
   trust_cwd?: boolean;
+  worker_ca?: string | null;
+  worker_command?: [string, ...string[]] | null;
+  worker_endpoint?: string | null;
+}
+/**
+ * Claude Code driven directly over NDJSON (`claude -p`), so sessions get Remote Control.
+ *
+ * Skeleton slice A: one process per prompt, resumed by the persisted session id. Permissions, Remote Control,
+ * and CLI wiring arrive in later slices.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ClaudeSdkSpec".
+ */
+export interface ClaudeSdkSpec {
+  aid_tools?: boolean;
+  /**
+   * @minItems 1
+   */
+  command?: [string, ...string[]];
+  cwd: string;
+  env?: {
+    [k: string]: string;
+  };
+  hooks?: Hook[];
+  inherit_env?: boolean;
+  kind: "claude-sdk";
+  model: string;
+  permission?: PermissionMode2;
+  permission_timeout?: number;
+  supervisor?: string | null;
+  supervisor_nudge_budget?: number;
+  supervisor_permission_absent_timeout?: number;
+  supervisor_permission_timeout?: number;
+  supervisor_permissions?: string[];
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
   worker_endpoint?: string | null;
