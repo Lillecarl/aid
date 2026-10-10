@@ -36,7 +36,9 @@ async def test_calls_post_exact_paths_bodies_and_auth() -> None:
         ("PATCH", "/api/v10/channels/c1/messages/m1"): (200, {"id": "m1"}),
         ("DELETE", "/api/v10/channels/c1"): (204, None),
         ("POST", "/api/v10/interactions/i1/t1/callback"): (204, None),
+        ("POST", "/api/v10/interactions/i2/t2/callback"): (204, None),
     }
+    keyboard = action_rows(((("Status", "status:echo"),),))
     async with httpx.AsyncClient(transport=_transport(calls, script)) as http:
         rest = Rest(TOKEN, client=http)
         assert await rest.gateway_url() == "wss://g/"
@@ -45,6 +47,7 @@ async def test_calls_post_exact_paths_bodies_and_auth() -> None:
         await rest.edit_message("c1", "m1", "ho")
         await rest.delete_channel("c1")
         await rest.answer_interaction("i1", "t1", "done", update=True)
+        await rest.answer_interaction("i2", "t2", "fresh", update=True, components=keyboard)
     assert calls
     assert all(auth == "Bot tok" for _, _, _, auth in calls)
     assert calls[1] == (
@@ -58,6 +61,12 @@ async def test_calls_post_exact_paths_bodies_and_auth() -> None:
         "POST",
         "/api/v10/interactions/i1/t1/callback",
         {"type": 7, "data": {"content": "done"}},
+        "Bot tok",
+    )
+    assert calls[6] == (
+        "POST",
+        "/api/v10/interactions/i2/t2/callback",
+        {"type": 7, "data": {"content": "fresh", "components": keyboard}},
         "Bot tok",
     )
 

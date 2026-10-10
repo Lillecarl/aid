@@ -198,12 +198,15 @@ class Gateway:
     session and resume past the failed event: side effects happen at most once, losses log loudly.
     """
 
-    def __init__(self, token: str, *, open_ws: Callable[[str], Awaitable[Channel]] | None = None) -> None:
+    def __init__(
+        self, token: str, *, url: str = GATEWAY_URL, open_ws: Callable[[str], Awaitable[Channel]] | None = None
+    ) -> None:
         self._token = token
+        self._url = url
         self._open = open_ws if open_ws is not None else WebSocket.open
         self._seq: int | None = None
         self._session_id: str | None = None
-        self._resume_url = GATEWAY_URL
+        self._resume_url = url
         self._fresh_backoff = _FIRST_BACKOFF
 
     async def run(self, on_dispatch: Callable[[str, JsonValue], Awaitable[None]]) -> None:
@@ -214,7 +217,7 @@ class Gateway:
                 if can_resume and self._session_id is not None:
                     await self._session(self._resume_url, True, on_dispatch)
                 else:
-                    await self._session(GATEWAY_URL, False, on_dispatch)
+                    await self._session(self._url, False, on_dispatch)
             except _Resume as dropped:
                 log.info("discord_reconnect", reason=str(dropped))
                 can_resume = True

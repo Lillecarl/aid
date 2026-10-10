@@ -160,6 +160,7 @@ class Rest:
         *,
         update: bool = False,
         ephemeral: bool = False,
+        components: JsonValue | None = None,
     ) -> None:
         """Answer a button tap: a new message by default, or a rewrite of the tapped one with `update`;
         `ephemeral` shows it to the tapper alone (stale buttons, errors). Type 4 answers in-channel, type 7
@@ -167,6 +168,8 @@ class Rest:
         data: dict[str, JsonValue] = {"content": content}
         if ephemeral:
             data["flags"] = 64
+        if components is not None:
+            data["components"] = components
         response = await self._call(
             "POST",
             f"/interactions/{interaction_id}/{interaction_token}/callback",

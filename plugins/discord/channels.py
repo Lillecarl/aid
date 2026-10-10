@@ -51,8 +51,8 @@ def unique_slug(base: str, taken: set[str]) -> str:
     return f"{base}-{number}"
 
 
-def _state(info: SessionInfo) -> str:
-    """A session's one-word state, for the channel topic: stopped beats idle, busy beats both."""
+def state_word(info: SessionInfo) -> str:
+    """A session's one-word state, for channel topics and lists: stopped beats idle, busy beats both."""
     if not info.running:
         return "stopped"
     return "busy" if info.working else "idle"
@@ -123,7 +123,7 @@ async def reconcile(client: Client, rest: Rest, guild_id: str, category_name: st
         name = unique_slug(slug(info.name), taken)
         taken.add(name)
         channel_id = await rest.create_channel(
-            guild_id, name, parent_id=category, topic=f"aid session {info.name}: {_state(info)}"
+            guild_id, name, parent_id=category, topic=f"aid session {info.name}: {state_word(info)}"
         )
         channel_map.channels[info.name] = channel_id
         log.info("discord_channel_created", session=info.name, channel=channel_id)

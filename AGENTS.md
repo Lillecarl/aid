@@ -36,6 +36,13 @@ API and a CLI.
   environment is what hosted plugins read.
 - `src/aid/guard.py` — `aid guard`: plugin (read, permissions) that allows a request whose command is one
   program from `READERS` with no shell syntax, and leaves the rest for a person. Seed for aid#3.
+- `plugins/discord/` — the Discord plugin (read, message): `gateway.py` (the gateway over anyio streams, no
+  Discord library — wsproto frames, anyio owns the sockets; resume policy follows the close-code table),
+  `rest.py` (channels, messages, interaction answers; 429s honored and retried, the rest raises at once),
+  `channels.py` (one channel per session under one category, id-mapped on disk, reconciled at startup and
+  on list changes), `serve.py` (bare text in session channels as messages, `!`-commands everywhere,
+  taps as new messages or in-place rewrites, settled notices to session channels). Custom ids hold
+  `action:session` directly (100 bytes); Discord messages clip at 1900/2000.
 - `src/aid/backends/` — `acp.py`, `pydantic_ai.py`, `claude_tty.py`; each implements `base.Backend`.
 - `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON,
   plus the built-in `aid` server (`session_servers`). claude-agent-acp restarts its query when `session/load` gets
@@ -67,6 +74,11 @@ API and a CLI.
   in the daemon itself.
 - `src/aid/env.py` — agent environments, minus the markers of the Claude session that started us.
 - `src/aid/client.py` — public API: `aid.connect()`, `Client`, `Session.run/stream`.
+- `src/aid/client.py:daemon_call` — what hosted loops await daemon calls through: silence past
+  `DAEMON_CALL_TIMEOUT` exits loudly, so the supervisor restarts into a fresh baseline.
+- `src/aid/settle.py` — settled turn ends, platform-agnostic: `Tracker` fed by turn and supervision events,
+  `settled_turns` calling back per settled episode. Both chat plugins share it.
+- `src/aid/mutes.py` — runtime mutes per chat plugin, on disk beside the registration.
 - `src/aid/events.py` — the daemon's PUB socket (`Paths.events`): `[topic, JSON]` for the session list, each
   status, each history entry. The daemon compares state with what it last published after every request,
   worker reply and worker exit (`_publish_changes`); history publishes from `HistoryLog.on_append`. Readers use
