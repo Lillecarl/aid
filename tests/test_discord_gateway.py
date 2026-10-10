@@ -190,17 +190,21 @@ async def test_websocket_handshake_validates_and_frames() -> None:
             async with anyio.create_task_group() as tg:
 
                 async def serve(stream: SocketStream) -> None:
-                    await _answer_upgrade(stream, server_ws)
-                    while True:
-                        server_ws.receive_data(await stream.receive())
-                        if any(isinstance(event, TextMessage) for event in server_ws.events()):
-                            break
-                    await stream.send(server_ws.send(TextMessage('{"op": 11}')))
+                    try:
+                        await _answer_upgrade(stream, server_ws)
+                        while True:
+                            server_ws.receive_data(await stream.receive())
+                            if any(isinstance(event, TextMessage) for event in server_ws.events()):
+                                break
+                        await stream.send(server_ws.send(TextMessage('{"op": 11}')))
+                    finally:
+                        await stream.aclose()
 
                 tg.start_soon(listener.serve, serve)  # pyrefly: ignore[bad-argument-type]
                 client = await WebSocket.open(f"ws://127.0.0.1:{port}/?v=10&encoding=json")
                 await client.send_json({"op": 1, "d": None})
                 assert await client.recv_json() == {"op": 11}
+                await client.aclose()
                 tg.cancel_scope.cancel()
     finally:
         await listener.aclose()
@@ -226,8 +230,11 @@ async def test_websocket_handshake_refuses_a_bad_status() -> None:
             async with anyio.create_task_group() as tg:
 
                 async def serve(stream: SocketStream) -> None:
-                    await stream.receive()
-                    await stream.send(b"HTTP/1.1 400 Bad\r\nContent-Length: 0\r\n\r\n")
+                    try:
+                        await stream.receive()
+                        await stream.send(b"HTTP/1.1 400 Bad\r\nContent-Length: 0\r\n\r\n")
+                    finally:
+                        await stream.aclose()
 
                 tg.start_soon(listener.serve, serve)  # pyrefly: ignore[bad-argument-type]
                 with pytest.raises(WSClosed, match="handshake refused"):
