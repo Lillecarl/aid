@@ -24,6 +24,7 @@ import functools
 import hashlib
 import inspect
 import io
+import json
 import linecache
 import re
 import shlex
@@ -45,7 +46,7 @@ from shellous import ResultError, Runner, sh
 import pyrun
 from aid.confine import inside
 from aid.protocol import AidError, PermissionChoice, PermissionDecider, PermissionDecision, PermissionRequest, clip
-from aid.spec import PermissionMode
+from aid.spec import PermissionMode, match_hook
 from pyrun.host import run_script
 from pyrun.scope import Scope
 from pyrun.script import FILENAME as SCRIPT_FILENAME
@@ -57,6 +58,7 @@ if TYPE_CHECKING:
 
     from aid.backends.base import Emit, Notifier
     from aid.backends.permissions import PermissionWaits
+    from aid.spec import Hook
     from pyrun import Command
 
 log = structlog.get_logger(__name__)
@@ -263,6 +265,8 @@ class Coding:
     waits: PermissionWaits
     autoselect_after: float = 240.0
     """Seconds an `ask_user` question with a recommended option waits for a person before it picks it."""
+    hooks: tuple[Hook, ...] = ()
+    """Pre-tool gates: the first hook whose tool fits and whose match finds the call's text refuses it."""
     edits: EditSession = field(init=False)
     emit: Emit | None = None
     """The running turn's; the worker sets it before each turn."""
@@ -310,7 +314,14 @@ class Coding:
         input: Any,
         remember: str | None = None,
     ) -> bool:
-        """The session's answer. In ask mode, a person's: `remember` offers "always" for that key."""
+        """The session's answer. Hooks refuse first with the hook's message; in ask mode, a person's:
+        `remember` offers "always" for that key."""
+        try:
+            rendered = json.dumps(input, default=str)
+        except TypeError, ValueError:
+            rendered = str(input)
+        if (hook := match_hook(list(self.hooks), tool_name, f"{title}\n{rendered}")) is not None:
+            raise ModelRetry(hook.message)
         if self.mode is not PermissionMode.ASK:
             return self.mode is PermissionMode.ALLOW
         if remember is not None and remember in self.always:

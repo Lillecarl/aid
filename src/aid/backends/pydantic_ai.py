@@ -360,6 +360,7 @@ async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> Async
         mode=spec.permission,
         timeout=spec.permission_timeout,
         autoselect_after=spec.ask_autoselect_after,
+        hooks=tuple(spec.hooks),
         waits=PermissionWaits(),
     )
     try:

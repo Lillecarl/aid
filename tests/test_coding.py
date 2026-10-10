@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import anyio
 import pytest
-from pydantic_ai import Agent
+from pydantic_ai import Agent, ModelRetry
 from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from pydantic_ai.models.test import TestModel
 
@@ -23,7 +23,7 @@ from aid.protocol import (
     PermissionRequest,
     Started,
 )
-from aid.spec import PermissionMode
+from aid.spec import Hook, PermissionMode
 from tests.conftest import py_spec
 
 if TYPE_CHECKING:
@@ -808,3 +808,43 @@ def test_condition_running_after_fires_once_or_dies_quietly() -> None:
     firings, done = condition.evaluate(_view(age=10.0))
     assert done and [firing.kind for firing in firings] == ["running_after"] and firings[0].age == 10.0
     assert condition.evaluate(_view(ended=True, exit_code=0, age=5.0)) == ([], True)
+
+
+def _hooked_coding(tmp_path: Path, mode: PermissionMode) -> Coding:
+    return Coding(
+        cwd=tmp_path,
+        store=tmp_path / "runs",
+        outputs=tmp_path / "outputs",
+        mode=mode,
+        timeout=60,
+        waits=PermissionWaits(),
+        hooks=(Hook(tool="shell", match="rm", message="no deletes here"),),
+    )
+
+
+async def test_hook_hit_refuses_before_mode_logic(tmp_path: Path) -> None:
+    coding = _hooked_coding(tmp_path, PermissionMode.ALLOW)
+    emitted: list[Any] = []
+
+    async def emit(event: Any) -> None:
+        emitted.append(event)
+
+    coding.emit = emit
+    with pytest.raises(ModelRetry, match="no deletes here"):
+        await coding.permit("call1", tool_name="shell", title="rm -rf /", input={"command": "rm -rf /"})
+    assert emitted == []
+
+
+async def test_hook_miss_falls_through_to_mode_logic(tmp_path: Path) -> None:
+    assert (
+        await _hooked_coding(tmp_path, PermissionMode.ALLOW).permit(
+            "call1", tool_name="shell", title="ls", input={"command": "ls"}
+        )
+        is True
+    )
+    assert (
+        await _hooked_coding(tmp_path, PermissionMode.DENY).permit(
+            "call1", tool_name="shell", title="ls", input={"command": "ls"}
+        )
+        is False
+    )
