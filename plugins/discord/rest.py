@@ -12,7 +12,7 @@ from typing import Final
 import anyio
 import httpx
 import structlog
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter
 
 log = structlog.get_logger(__name__)
 
@@ -40,6 +40,18 @@ class _ChannelBody(BaseModel):
 
 class _MessageBody(BaseModel):
     id: str
+
+
+class GuildChannel(BaseModel):
+    """What a guild channel listing carries: enough to find the category and spot the living."""
+
+    model_config = {"frozen": True}
+
+    id: str
+    name: str
+    type: int
+    """0 text, 4 category, and the rest the plugin never touches."""
+    parent_id: str | None = None
 
 
 def action_rows(rows: tuple[tuple[tuple[str, str], ...], ...]) -> JsonValue:
@@ -99,11 +111,21 @@ class Rest:
         """The websocket URL to dial. Called at startup: it also proves the token before any identify."""
         return (await self._parse(_GatewayBody, "GET", "/gateway/bot")).url
 
+    async def guild_channels(self, guild_id: str) -> list[GuildChannel]:
+        """Every channel in the guild: the reconcile finds its category and the living by this."""
+        response = await self._call("GET", f"/guilds/{guild_id}/channels")
+        if response.status_code >= 400:
+            raise DiscordError(response.status_code, _error_message(response))
+        try:
+            return TypeAdapter(list[GuildChannel]).validate_json(response.content)
+        except ValueError:
+            raise DiscordError(response.status_code, "not Discord JSON") from None
+
     async def create_channel(
-        self, guild_id: str, name: str, *, parent_id: str | None = None, topic: str | None = None
+        self, guild_id: str, name: str, *, channel_type: int = 0, parent_id: str | None = None, topic: str | None = None
     ) -> str:
-        """A guild text channel, optionally under a category with a topic line. Returns its channel id."""
-        payload: dict[str, JsonValue] = {"name": name, "type": 0}
+        """A guild channel: text by default, a category with `channel_type=4`. Returns its channel id."""
+        payload: dict[str, JsonValue] = {"name": name, "type": channel_type}
         if parent_id is not None:
             payload["parent_id"] = parent_id
         if topic is not None:
@@ -131,14 +153,24 @@ class Rest:
         await self._parse(_MessageBody, "PATCH", f"/channels/{channel_id}/messages/{message_id}", payload)
 
     async def answer_interaction(
-        self, interaction_id: str, interaction_token: str, content: str, *, update: bool = False
+        self,
+        interaction_id: str,
+        interaction_token: str,
+        content: str,
+        *,
+        update: bool = False,
+        ephemeral: bool = False,
     ) -> None:
-        """Answer a button tap: a new message by default, or a rewrite of the tapped one with `update`.
-        Type 4 answers in-channel, type 7 rewrites; both must land within 3 seconds of the tap."""
+        """Answer a button tap: a new message by default, or a rewrite of the tapped one with `update`;
+        `ephemeral` shows it to the tapper alone (stale buttons, errors). Type 4 answers in-channel, type 7
+        rewrites; both must land within 3 seconds of the tap."""
+        data: dict[str, JsonValue] = {"content": content}
+        if ephemeral:
+            data["flags"] = 64
         response = await self._call(
             "POST",
             f"/interactions/{interaction_id}/{interaction_token}/callback",
-            {"type": 7 if update else 4, "data": {"content": content}},
+            {"type": 7 if update else 4, "data": data},
         )
         if response.status_code >= 400:
             raise DiscordError(response.status_code, _error_message(response))
