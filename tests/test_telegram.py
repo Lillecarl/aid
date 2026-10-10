@@ -14,8 +14,10 @@ import pytest
 
 import aid
 from aid.client import register_plugin
+from aid.mutes import Mutes
 from aid.plugins import Grant, discover
 from aid.protocol import AidError
+from aid.settle import Tracker, route_topic
 from plugins.telegram.bot import (
     COMMANDS,
     DESCRIPTION,
@@ -25,9 +27,7 @@ from plugins.telegram.bot import (
     Button,
     Buttons,
     Callback,
-    Mutes,
     Reply,
-    Tracker,
     Update,
     daemon_call,
     handle_callback,
@@ -35,7 +35,6 @@ from plugins.telegram.bot import (
     parse_command,
     poll_delay,
     read_config,
-    route_topic,
     serve,
     watch,
 )

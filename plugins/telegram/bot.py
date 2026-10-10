@@ -7,10 +7,8 @@ below is that filter.
 
 from __future__ import annotations
 
-import json
 import os
 import secrets
-import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, cast
 
@@ -23,18 +21,16 @@ from aid.protocol import (
     AidError,
     Output,
     SessionInfo,
-    SessionStatus,
-    SupervisionEvent,
-    TurnEvent,
     clip,
     tool_text,
 )
+from aid.settle import settled_turns
 
 if TYPE_CHECKING:
     from collections.abc import Coroutine, Set
-    from pathlib import Path
 
     from aid.client import Client, Session
+    from aid.mutes import Mutes
 
 log = structlog.get_logger(__name__)
 
@@ -355,110 +351,6 @@ def parse_command(text: str) -> tuple[str, list[str]] | None:
     return head.split("@")[0], rest
 
 
-@dataclass
-class _Pending:
-    turn: str
-    deadline: float
-    supervisor: str | None = None
-    """The overseer whose verdict is awaited; None once it stayed silent or no firing came."""
-    verdict_open: bool = False
-    """The overseer's verdict turn runs now: its end without a nudge settles the episode."""
-
-
-class Tracker:
-    """Which sessions sit in an ended turn that nothing revived.
-
-    Fed by a session's turn and supervision events; `tick` names the sessions whose episode settled.
-    Time is the caller's monotonic clock, so tests drive it exactly.
-    """
-
-    def __init__(self, *, idle_window: float = IDLE_WINDOW, verdict_timeout: float = VERDICT_TIMEOUT) -> None:
-        self._idle_window = idle_window
-        self._verdict_timeout = verdict_timeout
-        self._turn: dict[str, bool] = {}
-        self._pending: dict[str, _Pending] = {}
-
-    def set_busy(self, session: str, busy: bool) -> None:
-        self._turn[session] = busy
-
-    def turn_started(self, session: str) -> None:
-        self._turn[session] = True
-        self._pending.pop(session, None)
-        for pending in self._pending.values():
-            if pending.supervisor == session and not pending.verdict_open:
-                pending.verdict_open = True
-
-    def turn_ended(self, session: str, turn: str, now: float) -> None:
-        for pending in self._pending.values():
-            if pending.supervisor == session and pending.verdict_open:
-                pending.supervisor = None
-                pending.verdict_open = False
-                pending.deadline = now + self._idle_window
-        self._turn[session] = False
-        self._pending[session] = _Pending(turn=turn, deadline=now + self._idle_window)
-
-    def firing(self, session: str, supervisor: str, turn: str, now: float) -> None:
-        pending = self._pending.get(session)
-        if pending is None or pending.turn != turn:
-            return
-        pending.supervisor = supervisor
-        pending.verdict_open = False
-        pending.deadline = now + self._verdict_timeout
-
-    def nudge(self, session: str) -> None:
-        self._pending.pop(session, None)
-
-    def tick(self, now: float) -> list[str]:
-        """Sessions whose episode settled and that sit idle: each is named once."""
-        return [
-            session
-            for session, pending in list(self._pending.items())
-            if now >= pending.deadline
-            and not self._turn.get(session, False)
-            and self._pending.pop(session, None) is not None
-        ]
-
-
-class Mutes:
-    """Sessions that stay silent, chosen at runtime; everything else notifies. Kept on disk so a bot
-    restart keeps them."""
-
-    def __init__(self, path: Path, muted: frozenset[str] = frozenset()) -> None:
-        self._path = path
-        self._muted = muted
-
-    @classmethod
-    async def load(cls, path: Path) -> Mutes:
-        try:
-            muted = frozenset(json.loads(await anyio.Path(path).read_text()).get("muted", []))
-        except FileNotFoundError:
-            return cls(path)
-        except ValueError, AttributeError:
-            raise AidError("bad_mutes", f"{path} holds no mute list") from None
-        if not all(isinstance(name, str) for name in muted):
-            raise AidError("bad_mutes", f"{path} holds no mute list")
-        return cls(path, muted)
-
-    def __contains__(self, session: object) -> bool:
-        return session in self._muted
-
-    def names(self) -> list[str]:
-        return sorted(self._muted)
-
-    async def mute(self, session: str) -> None:
-        self._muted |= {session}
-        await self._save()
-
-    async def unmute(self, session: str) -> None:
-        self._muted -= {session}
-        await self._save()
-
-    async def _save(self) -> None:
-        path = anyio.Path(self._path)
-        await path.parent.mkdir(parents=True, exist_ok=True)
-        await path.write_text(json.dumps({"muted": sorted(self._muted)}))
-
-
 async def _last_output(session: Session) -> Output | None:
     page = await daemon_call(session.history(limit=TAIL_SCAN))
     for entry in reversed(page.entries):
@@ -500,14 +392,6 @@ async def _notify(client: Client, bot: Bot, chats: Set[int], mutes: Mutes, sessi
             log.exception("telegram_send_failed", session=session, chat=chat)
 
 
-def route_topic(topic: bytes) -> tuple[str, str] | None:
-    """A session topic as its session and kind (`turn`, `supervision` or `status`); None for anything else."""
-    parts = topic.split(b"/")
-    if len(parts) != 4 or parts[0] != b"session" or parts[2] not in (b"turn", b"supervision", b"status"):
-        return None
-    return parts[1].decode(), parts[2].decode()
-
-
 async def watch(
     client: Client,
     bot: Bot,
@@ -520,48 +404,13 @@ async def watch(
     reconcile: float = RECONCILE_INTERVAL,
 ) -> None:
     """Tell Telegram about turns that ended and stayed ended; a nudge reviving the loop cancels the notice."""
-    tracker = Tracker(idle_window=idle_window, verdict_timeout=verdict_timeout)
-    reasons: dict[str, str | None] = {}
-    async with client.subscribed(b"session/", idle=tick) as published:
-        for info in await daemon_call(client.sessions()):
-            tracker.set_busy(info.name, info.working)
-        quiet = 0.0
-        async for message in published:
-            now = time.monotonic()
-            if message is None:
-                quiet += tick
-                if quiet >= reconcile:
-                    quiet = 0.0
-                    for info in await daemon_call(client.sessions()):
-                        tracker.set_busy(info.name, info.working)
-            else:
-                quiet = 0.0
-                try:
-                    topic, payload = message
-                    routed = route_topic(topic)
-                    if routed is not None:
-                        name, kind = routed
-                        if kind == "turn":
-                            event = TurnEvent.model_validate_json(payload)
-                            if event.phase == "started":
-                                tracker.turn_started(name)
-                                reasons.pop(name, None)
-                            else:
-                                tracker.turn_ended(name, event.turn, now)
-                                reasons[name] = event.reason
-                        elif kind == "supervision":
-                            event = SupervisionEvent.model_validate_json(payload)
-                            if event.firing is not None:
-                                tracker.firing(event.session, event.supervisor, event.firing.turn, now)
-                            if event.nudge is not None:
-                                tracker.nudge(event.session)
-                        elif kind == "status":
-                            tracker.set_busy(name, SessionStatus.model_validate_json(payload).busy)
-                except Exception:
-                    log.exception("telegram_event_dropped")
-                    continue
-            for session in tracker.tick(now):
-                await _notify(client, bot, chats, mutes, session, reasons.pop(session, None))
+
+    async def notify(session: str, reason: str | None) -> None:
+        await _notify(client, bot, chats, mutes, session, reason)
+
+    await settled_turns(
+        client, notify, idle_window=idle_window, verdict_timeout=verdict_timeout, tick=tick, reconcile=reconcile
+    )
 
 
 HELP: Final = """sessions, status <name>, tail <name>, send <name> <text>, mute <name>, unmute <name>, muted"""

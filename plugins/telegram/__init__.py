@@ -15,9 +15,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import aid
+from aid.mutes import Mutes
 from aid.paths import default_paths
 
-from .bot import MUTES_FILE, Mutes, read_config, run_loops
+from .bot import MUTES_FILE, read_config, run_loops
 
 if TYPE_CHECKING:
     from aid.client import Client
