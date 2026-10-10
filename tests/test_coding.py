@@ -13,7 +13,7 @@ from pydantic_ai.models.test import TestModel
 import aid
 from aid.backends.permissions import PermissionWaits
 from aid.backends.pydantic_ai import PydanticAIBackend
-from aid.coding import CODING, SPILL_LIMIT, Coding, Condition, Line, WatchView, compact, spill
+from aid.coding import CODING, SPILL_LIMIT, Coding, Condition, Line, WatchView, coding_tools, compact, spill
 from aid.protocol import (
     AidError,
     MessageEntry,
@@ -848,3 +848,7 @@ async def test_hook_miss_falls_through_to_mode_logic(tmp_path: Path) -> None:
         )
         is False
     )
+
+
+def test_tool_failures_cost_retries_not_the_turn() -> None:
+    assert coding_tools.max_retries == 3

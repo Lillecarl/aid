@@ -1201,5 +1201,8 @@ coding_tools: FunctionToolset[Any] = FunctionToolset[Any](
         _retrying(monitor),
         _retrying(monitor_stop),
         _retrying(monitors),
-    ]
+    ],
+    # A missed anchor or refused command costs retries, not the turn: every failure above already
+    # returns as a ModelRetry with its reason, so retries are second chances with new information.
+    max_retries=3,
 )
