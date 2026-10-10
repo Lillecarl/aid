@@ -1,8 +1,10 @@
 """Plugins: processes the daemon knows by a CURVE public key, each with grants that name what it may ask.
 
 A plugin connects to `Paths.plugins` (requests: a DEALER) and `Paths.plugin_events` (published changes: a SUB), both
-CURVE. The ZAP handler names the plugin as the connection's User-Id; the daemon checks each request against the
-plugin's grants as it is now, so a removed plugin is refused at once. Only the control socket changes the registry.
+CURVE — or, for a task the daemon spawned, to the inproc pair below, on the daemon's context, with the task's
+name as its identity. The ZAP handler names an outside plugin as its connection's User-Id; the daemon checks each
+request against the plugin's grants as it is now, so a removed plugin is refused at once. Only the control
+socket changes the registry.
 
 What grants bind: what arrives on the plugin sockets. A plugin on this host, running as this user, can open the
 control socket, which checks nothing: there its grants are a contract, not a wall, until it runs confined away from
@@ -57,6 +59,12 @@ if TYPE_CHECKING:
 PLUGIN_FILE: Final = "plugin.json"
 SECRET_FILE: Final = "secret"
 """A plugin's CURVE secret key (Z85), beside its plugin.json, for `aid.connect(plugin=...)` on this host."""
+
+INPROC_PLUGINS: Final = "inproc://aid-plugins"
+INPROC_PLUGIN_EVENTS: Final = "inproc://aid-plugin-events"
+"""The plugin sockets inside the daemon: tasks it spawned speak the same protocol over these, on its context,
+with the task's name as its identity. Process-private by construction, so no CURVE: no other process can
+connect, and the daemon names every task it spawns."""
 
 
 class Grant(StrEnum):
@@ -145,8 +153,9 @@ class Plugin(ABC):
 
     @abstractmethod
     async def run(self, client: Client) -> None:
-        """Drive aid as this plugin, against the grants it registered. Runs in the plugin's own process
-        (`aid plugin run`), never the daemon; the client is shared across whatever loops it starts."""
+        """Drive aid as this plugin, against the grants it registered. Runs in the daemon as a task (over the
+        inproc sockets) or in its own process (`aid plugin run`); the client speaks the same protocol either
+        way, and is shared across whatever loops it starts."""
 
 
 @dataclass(frozen=True)
@@ -191,7 +200,8 @@ def plugins_path(env: Mapping[str, str] | None = None) -> list[Path]:
 
 def discover(paths: Sequence[Path]) -> PluginCatalog:
     """Import every module on `paths` and collect the plugins and tools each registers. Imports run the modules'
-    code: call it in a process that may run user code, never the daemon."""
+    code: call it in a process that may run user code (`aid plugin run`, `python -m aid.plugin_catalog`), or in
+    the daemon at startup, where each module loads guarded and a failure becomes a problem, never a refusal."""
     catalog = PluginCatalog()
     seen: dict[str, str] = {}
     seen_tools: dict[str, str] = {}

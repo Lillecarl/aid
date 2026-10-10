@@ -22,6 +22,7 @@ import zmq.asyncio
 from pydantic import ValidationError
 
 from aid import events, plugins, zap
+from aid.client import spawn_plugin_client
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
 from aid.launcher import CommandLauncher, WorkerArgs
 from aid.plugins import PLUGIN_FILE, PluginSpec
@@ -97,10 +98,11 @@ from aid.spec import BUILTIN_MCP_SERVER, AcpSpec, AgentKind, AgentSpecAdapter, C
 from aid.summary import summarize
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import AsyncGenerator, Sequence
 
     from anyio.abc import TaskGroup, TaskStatus
 
+    from aid.client import Client
     from aid.launcher import Launcher, WorkerHandle
     from aid.paths import Paths
     from aid.protocol import HistoryEntry, HistoryItem, HistoryPage, Request
@@ -464,6 +466,10 @@ class Daemon:
         zap.serve_curve(self._plugins.sock, self._keys, zap.PLUGINS_DOMAIN)
         self._plugin_events = self._ctx.socket(zmq.PUB)
         zap.serve_curve(self._plugin_events, self._keys, zap.PLUGIN_EVENTS_DOMAIN)
+        self._local_plugins = _Listener(self._ctx.socket(zmq.ROUTER))
+        self._local_plugin_events = self._ctx.socket(zmq.PUB)
+        """The same protocol over inproc, for tasks the daemon spawned: no CURVE, since no other process can
+        connect, and the task's DEALER identity names the plugin."""
         self._worker_lock = anyio.Lock()
         self._events_lock = anyio.Lock()
         self._published: dict[bytes, bytes] = {}
@@ -487,6 +493,8 @@ class Daemon:
         self._workers.bind(self._paths.workers)
         self._plugins.sock.bind(self._paths.plugins)
         self._plugin_events.bind(self._paths.plugin_events)
+        self._local_plugins.sock.bind(plugins.INPROC_PLUGINS)
+        self._local_plugin_events.bind(plugins.INPROC_PLUGIN_EVENTS)
         for endpoint in self._workers_listen:
             self._workers.bind(endpoint)
             log.info("listening", socket=endpoint)
@@ -498,6 +506,7 @@ class Daemon:
                 tg.start_soon(self._client_loop)
                 tg.start_soon(self._worker_loop)
                 tg.start_soon(self._plugin_loop)
+                tg.start_soon(self._plugin_loop, self._local_plugins, True)
                 task_status.started()
                 self._serving = True
                 try:
@@ -514,6 +523,8 @@ class Daemon:
             self._events.close(linger=0)
             self._plugins.sock.close(linger=0)
             self._plugin_events.close(linger=0)
+            self._local_plugins.sock.close(linger=0)
+            self._local_plugin_events.close(linger=0)
             self._ctx.term()
 
     async def _load_sessions(self) -> None:
@@ -564,6 +575,7 @@ class Daemon:
         async with self._events_lock:
             await self._events.send_multipart([topic, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
             await self._plugin_events.send_multipart([topic, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
+            await self._local_plugin_events.send_multipart([topic, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
 
     def _state(self) -> dict[bytes, bytes]:
         current = {events.status_topic(s.name): s.status().model_dump_json().encode() for s in self._sessions.values()}
@@ -606,17 +618,34 @@ class Daemon:
                 continue
             self._tg.start_soon(self._handle, client, request)
 
-    async def _plugin_loop(self) -> None:
-        """Requests from plugins: each checked against the grants its plugin holds now."""
+    @contextlib.asynccontextmanager
+    async def plugin_client(self, name: str) -> AsyncGenerator[Client]:
+        """A plugin client for a task spawned as `name`: inproc sockets on this daemon's context, which inproc
+        peers must share, with the task's name as its identity."""
+        async with spawn_plugin_client(self._ctx, name) as client:
+            yield client
+
+    async def _plugin_loop(self, listener: _Listener | None = None, local: bool = False) -> None:
+        """Requests from plugins: each checked against the grants its plugin holds now. `local` reads the name
+        from the connection's routing id — the DEALER identity the daemon set where it spawned the task, which
+        no other process can hold, since inproc peers are process-private. Anything else proves its name with
+        its key, through the ZAP handler's User-Id."""
         if self._tg is None:
             raise RuntimeError("daemon is not serving")
+        listener = self._plugins if listener is None else listener
         while True:
-            frames = await self._plugins.sock.recv_multipart(copy=False)
-            # The plugin the ZAP handler named for this connection's key.
-            name = frames[-1].get("User-Id")  # pyright: ignore[reportArgumentType] -- pyzmq's stub knows only the int options; libzmq also takes metadata names  # pyrefly: ignore[bad-argument-type]
-            if not isinstance(name, str):
-                raise TypeError(f"User-Id is {name!r}")
-            client = _Peer(self._plugins, frames[0].bytes, plugin=name)
+            frames = await listener.sock.recv_multipart(copy=False)
+            if local:
+                try:
+                    name = frames[0].bytes.decode("ascii")
+                except UnicodeDecodeError as error:
+                    raise TypeError(f"routing id is {frames[0].bytes!r}") from error
+            else:
+                # The plugin the ZAP handler named for this connection's key.
+                name = frames[-1].get("User-Id")  # pyright: ignore[reportArgumentType] -- pyzmq's stub knows only the int options; libzmq also takes metadata names  # pyrefly: ignore[bad-argument-type]
+                if not isinstance(name, str):
+                    raise TypeError(f"User-Id is {name!r}")
+            client = _Peer(listener, frames[0].bytes, plugin=name)
             if len(frames) != 2:
                 await client.send(encode(Failure(id="", code="invalid_request", message="a request is one frame")))
                 continue

@@ -20,7 +20,7 @@ from pydantic import JsonValue, TypeAdapter
 from aid import events, zap
 from aid.history import MAX_PAGE
 from aid.paths import default_paths
-from aid.plugins import SECRET_FILE, Grant, PluginSpec
+from aid.plugins import INPROC_PLUGIN_EVENTS, INPROC_PLUGINS, SECRET_FILE, Grant, PluginSpec
 from aid.protocol import (
     AddPlugin,
     AgentCatalog,
@@ -111,6 +111,40 @@ async def plugin_endpoints(paths: Paths, name: str) -> Endpoints:
         raise AidError("not_running", f"no {paths.server_key}: the daemon is not running") from None
     keys = zap.Keypair(public=zmq.curve_public(secret.encode()).decode(), secret=secret)
     return Endpoints(paths.plugins, paths.plugin_events, (server, keys))
+
+
+def local_plugin_endpoints() -> Endpoints:
+    """A plugin's sockets inside the daemon: the inproc pair, no keys. Only tasks on the daemon's context can
+    connect, and the daemon names each task it spawns, so identity holds by construction."""
+    return Endpoints(INPROC_PLUGINS, INPROC_PLUGIN_EVENTS)
+
+
+@asynccontextmanager
+async def spawn_plugin_client(ctx: zmq.asyncio.Context, name: str) -> AsyncGenerator[Client]:
+    """A plugin client for a task the daemon spawned as `name`: a DEALER on the daemon's context, whose
+    identity the plugin loop reads as the plugin. Mirrors `connect`, minus the context, which the daemon
+    owns: no `ctx.term()` here, and sockets it opens close with it."""
+    sock = ctx.socket(zmq.DEALER)
+    sock.setsockopt(zmq.IDENTITY, name.encode())
+    endpoints = local_plugin_endpoints()
+    sock.connect(endpoints.control)
+    client = Client(sock, ctx, endpoints)
+    try:
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(client.read_replies)
+            try:
+                yield client
+            finally:
+                tg.cancel_scope.cancel()
+    except BaseExceptionGroup as group:
+        # The reader's task group wraps the caller's own exception; hand it back as the caller raised it.
+        if len(group.exceptions) == 1:
+            raise group.exceptions[0] from None
+        raise
+    finally:
+        sock.close(linger=0)
+        for opened in list(client.sockets):  # A socket still open would hold the daemon's context forever.
+            opened.close(linger=0)
 
 
 async def register_plugin(
