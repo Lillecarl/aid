@@ -306,6 +306,17 @@
         },
         "session": {
           "type": "string"
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [

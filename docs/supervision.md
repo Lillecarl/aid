@@ -14,15 +14,36 @@ questions when no person is around.
 
 ## Firing
 
-- The daemon fires the supervisor at every supervised turn end, from `_end_turn` — the only new
-  decision point. No new wire hooks; delivery reuses the accept→inbox→wake path (idle: new turn,
-  live: next turn).
+- The daemon fires the supervisor at every supervised turn end, from `_end_turn`, and on live tool-loop
+  suspicions. Delivery reuses the accept→inbox→wake path (idle: new turn, live: next turn).
 - Payload is small by design (cheap model): last-N history items clipped (order ~10 items / few k
   chars), open goals only, loop score as one line (difflib ratio over recent normalized Outputs,
-  threshold ~0.85, counter ≥3 — advisory, computed daemon-side at turn end). Silence ("nothing to
+   threshold ~0.85 — advisory, computed daemon-side at turn end). Silence ("nothing to
   do, no nudge") is a valid supervisor verdict.
-- Mid-turn loop detection is deferred: it needs worker-side streaming observation, and turn-end
-  catches cross-turn loops.
+- Turn-end similarity compares the latest two completed answers, separately from the clipped review tail.
+  Tool-heavy turns do not hide the previous answer. Cancelled/missing answers reset the signal; an old
+  repeated pair cannot conceal subsequent progress.
+
+## Live loop review
+
+- `aid.loops.ToolLoopDetector` watches the reliable worker tool events during an aid-started turn. Three
+  identical completed calls, or three cycles of a short sequence (up to eight calls), raise a suspicion.
+  Arguments, status and recorded output must all match; missing telemetry breaks the sequence rather than
+  being interpreted as an unchanged result. The detector retains 24 completed steps and at most 128 pending
+  calls. A repeated episode notifies once, including across rotations of an A/B cycle.
+- The daemon immediately messages the supervisor with the live turn id, the repeated sequence and tool
+  call ids for history inspection. `supervision/` publishes `reason=suspected_tool_loop` for observation;
+  the reliable inbox drives review. The detector never cancels a turn or claims repetition proves a loop.
+- The supervisor may leave useful repetition running, use `interrupt(session, turn)` when it judges the
+  agent stuck, and use `send_message` for corrective instructions. A message alone waits until turn end.
+  `CancelSupervised` checks the supervision link and the daemon's current turn; the worker checks the turn
+  again. A delayed review cannot cancel newer work.
+- Semantic/embedding signals are not implemented yet. A bounded per-session vector window can complement
+  exact fingerprints without requiring a vector database. This first detector needs tool telemetry; it does
+  not detect silent model stalls or observe interactive turns started outside aid.
+- No model-request budget is imposed by default. An explicit `max_requests` is a resource budget, not a
+  loop detector. The pydantic-ai backend preserves available history and usage on failure/cancellation,
+  closing unanswered tool calls as interrupted without replaying their potentially applied effects.
 
 ## Supervisor session
 
@@ -30,7 +51,8 @@ questions when no person is around.
   `supervised_history(session, limit)`, `supervised_search(session, query)` (new worker→daemon
   `SearchSessionHistory` request; daemon enforces the supervision link), `goals(session)`,
   `goal_add` / `goal_done` / `goal_drop`, `answer_permission(request_id, option, text)`, plus the
-  builtin `send_message` for nudges. Each firing names its subject, so one supervisor watches N.
+  turn-scoped `interrupt(session, turn)` and builtin `send_message` for nudges. Each firing names its
+  subject, so one supervisor watches N.
 - Nudges ride `send_message`: attributed, replyable, zero new transport.
 
 ## Goals
@@ -54,6 +76,9 @@ questions when no person is around.
 - Nudge budget per supervised episode; never send a nudge similar to the last (the same difflib
   check turned around); K stuck turns after K nudges stops nudging and raises `attention` to the
   person. Every firing and nudge is metered; nothing loops without a cap.
+- Interrupting a suspected live loop retains the stuck episode. Missing/cancelled answers do not renew
+  the recovery budget; evidence of progress or an explicit new prompt does. Otherwise a supervisor could
+  interrupt, nudge and retry forever while resetting its own budget on every cancellation.
 
 ## ZeroMQ
 

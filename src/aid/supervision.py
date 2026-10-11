@@ -26,6 +26,7 @@ from aid.protocol import (
     AddGoal,
     AidError,
     AnswerSupervisedPermission,
+    CancelSupervised,
     GetGoals,
     GoalState,
     HistoryPage,
@@ -92,6 +93,20 @@ async def goals(session: str) -> str:
     """Every goal of the supervised session, with ids and states, as JSON."""
     async with connect() as client:
         return json.dumps(await client.call(GetGoals(supervisor=_supervisor(), session=session)), indent=2)
+
+
+async def interrupt(session: str, turn: str) -> str:
+    """Stop exactly the supervised turn you reviewed, retaining its completed work. Use this only after
+    judging a suspected loop; send_message can give the next turn corrective instructions. A stale review
+    does not stop newer work. Only your own supervised sessions are eligible."""
+    try:
+        async with connect() as client:
+            await client.call(CancelSupervised(supervisor=_supervisor(), session=session, turn=turn))
+    except AidError as error:
+        if error.code == "stale_turn":
+            return "The reviewed turn is no longer running; newer work was left alone."
+        raise
+    return f"Interruption requested for {session!r} turn {turn!r}."
 
 
 async def goal_add(session: str, text: str) -> str:
@@ -172,5 +187,6 @@ supervisor_tools: FunctionToolset[Any] = FunctionToolset[Any](
         _retrying(goal_done),
         _retrying(goal_drop),
         _retrying(answer_permission),
+        _retrying(interrupt),
     ]
 )

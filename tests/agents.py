@@ -81,6 +81,40 @@ steady = Agent(TestModel(call_tools=[], custom_output_text="steady"))
 """A repeatable plain-text agent: every turn and every summary answers the same, with no tools."""
 
 
+async def repeat() -> str:
+    """A slow, unchanged result, so a live supervisor has time to inspect and interrupt the fake loop."""
+    await anyio.sleep(0.02)
+    return "unchanged"
+
+
+async def _looping(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    if _last_prompt(messages) == "continue":
+        yield "continued"
+        return
+    number = sum(isinstance(part, ToolReturnPart) for message in messages for part in message.parts)
+    yield {0: DeltaToolCall(name="repeat", json_args="{}", tool_call_id=f"repeat{number}")}
+
+
+looping = Agent(FunctionModel(stream_function=_looping), tools=[repeat])
+
+
+async def _loop_judge(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    match = re.search(
+        r"Suspected tool loop in supervised session '([^']+)', live turn '([^']+)'", _last_prompt(messages)
+    )
+    if match is None:
+        yield "reviewed"
+        return
+    yield {
+        0: DeltaToolCall(
+            name="interrupt", json_args=json.dumps({"session": match[1], "turn": match[2]}), tool_call_id="interrupt1"
+        )
+    }
+
+
+loop_judge = Agent(FunctionModel(stream_function=_loop_judge), toolsets=[aid.supervisor_tools])
+
+
 async def _failing(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
     """A failing worker: it says something, then raises, so the turn ends with `agent_error`."""
     yield "about to fail"

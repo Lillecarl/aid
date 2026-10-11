@@ -138,6 +138,7 @@ class _Worker:
         self._send_lock = anyio.Lock()
         self._hook_lock = anyio.Lock()
         self._busy = False
+        self._turn: str | None = None
 
     async def serve_hooks(self, sock: zmq.asyncio.Socket) -> None:
         """Answer `aid/hook.py`'s fast path: Hook requests on the worker's own ROUTER, past the daemon.
@@ -202,8 +203,14 @@ class _Worker:
                         await self.send(Failure(id=request.id, code="busy", message="a prompt is already running"))
                     else:
                         self._busy = True
+                        self._turn = request.id
                         self._tg.start_soon(self._prompt, request)
                 case Cancel():
+                    if request.turn is not None and request.turn != self._turn:
+                        await self.send(
+                            Failure(id=request.id, code="stale_turn", message="the reviewed turn is no longer running")
+                        )
+                        continue
                     await self._backend.cancel()
                     await self.send(Done(id=request.id))
                 case CompactSession():
@@ -296,4 +303,5 @@ class _Worker:
             await emit(output)
             await self.send(Done(id=request.id))
         finally:
+            self._turn = None
             self._busy = False

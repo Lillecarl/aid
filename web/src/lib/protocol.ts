@@ -356,6 +356,7 @@ export interface Cancel {
   id?: string;
   op: "cancel";
   session: string;
+  turn?: string | null;
 }
 /**
  * Summarize the session's history into a digest, outside a turn; the worker records a `compacted` lifecycle.

@@ -61,6 +61,8 @@ class Prompt(_Request):
 class Cancel(_Request):
     op: Literal["cancel"] = "cancel"
     session: str
+    turn: str | None = None
+    """When set, cancel only this turn. The worker rejects a stale review instead of cancelling newer work."""
 
 
 class CompactSession(_Request):
@@ -242,6 +244,16 @@ class SupervisedSearch(_Request):
     limit: Annotated[int, Field(ge=1, le=100)] = 20
 
 
+class CancelSupervised(_Request):
+    """Interrupt exactly the turn a supervisor reviewed. The daemon checks the supervision link and the
+    worker checks the turn again, so a delayed decision cannot cancel a newer turn."""
+
+    op: Literal["cancel_supervised"] = "cancel_supervised"
+    supervisor: str
+    session: str
+    turn: str
+
+
 class SearchResults(_Message):
     entries: list[HistoryEntry]
     """The newest matches first, capped at the request's limit."""
@@ -297,12 +309,12 @@ class AnswerSupervisedPermission(_Request):
 
 
 class SupervisionFiring(_Message):
-    """A supervised turn ended and the daemon woke its supervisor: how the turn closed, and the loop score
-    over recent outputs that says stuck or not."""
+    """The daemon woke a supervisor at turn end or for a live suspicion. A suspicion is advisory: the
+    supervisor judges it and may interrupt exactly the named turn."""
 
     type: Literal["supervision_firing"] = "supervision_firing"
     turn: str
-    """The supervised turn that ended."""
+    """The supervised turn being reviewed; it may still be running."""
     reason: str
     score: float | None
     """The loop score, or None with fewer than two recent outputs."""
@@ -364,6 +376,7 @@ type Request = Annotated[
     | RemovePlugin
     | SupervisedHistory
     | SupervisedSearch
+    | CancelSupervised
     | GetGoals
     | AddGoal
     | SetGoal

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import contextlib
 import difflib
-import itertools
 import shlex
 import shutil
 import sys
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal
@@ -25,6 +25,7 @@ from aid import events, plugin_host, plugins, zap
 from aid.client import spawn_plugin_client
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
 from aid.launcher import CommandLauncher, WorkerArgs
+from aid.loops import LoopEvidence, ToolLoopDetector
 from aid.paths import hook_socket
 from aid.plugins import PLUGIN_FILE, PluginSpec
 from aid.protocol import (
@@ -36,6 +37,7 @@ from aid.protocol import (
     AnswerPermission,
     AnswerSupervisedPermission,
     Cancel,
+    CancelSupervised,
     CompactSession,
     CreateSession,
     DeleteSession,
@@ -167,6 +169,11 @@ class _Session:
     """Supervisor nudges accepted this stuck episode."""
     last_nudge: str | None = None
     """The last accepted nudge's text: a nudge too like it is refused."""
+    recent_outputs: deque[Output] | None = None
+    """Loaded lazily from history, then maintained from events; independent of the clipped review tail."""
+    tool_loops: ToolLoopDetector = field(default_factory=ToolLoopDetector)
+    loop_suspected: bool = False
+    supervisor_interrupted: bool = False
     working: bool = False
     """In a turn aid did not start, as the worker's Activity says."""
     attention: str | None = None
@@ -178,6 +185,9 @@ class _Session:
     def note(self, item: HistoryItem) -> None:
         """What a turn's entry changes in the status, whoever started the turn."""
         match item:
+            case Output():
+                if self.recent_outputs is not None:
+                    self.recent_outputs.append(item)
             case Usage(models=models, agent=None) if models:
                 self.models = models
             case PermissionRequest():
@@ -273,8 +283,8 @@ SUPERVISION_ITEMS: Final = 10
 """History entries a supervision firing carries: the supervised session's recent tail, newest last."""
 SUPERVISION_ITEM_CHARS: Final = 400
 """Characters of one tail line; longer bodies clip with their excess counted."""
-SUPERVISION_SCORE_OUTPUTS: Final = 6
-"""Recent outputs the loop score compares."""
+SUPERVISION_SCORE_OUTPUTS: Final = 2
+"""Latest output pair the loop score compares: old repetition must not conceal new progress."""
 SUPERVISION_LOOP_THRESHOLD: Final = 0.85
 """Loop score at or above this reads as stuck; advisory, the supervisor judges."""
 
@@ -304,20 +314,21 @@ def _normalized(body: str) -> str:
     return " ".join(body.split()).casefold()
 
 
-def _loop_score(items: list[HistoryItem]) -> float | None:
-    """How alike the recent outputs read: the highest difflib ratio over consecutive normalized pairs, or
-    None with fewer than two. Advisory — the supervisor judges, this only points."""
-    texts = [
-        " ".join(str(item.output).split()).casefold()
-        for item in items
-        if isinstance(item, Output) and str(item.output).strip()
-    ][-SUPERVISION_SCORE_OUTPUTS:]
-    if len(texts) < 2:
+def loop_score(items: Sequence[HistoryItem]) -> float | None:
+    """Similarity of the latest two answers, never an older repeated pair. Missing/cancelled answers reset
+    the signal rather than scoring the string 'None'. Advisory — the supervisor judges."""
+    outputs = [item for item in items if isinstance(item, Output)][-SUPERVISION_SCORE_OUTPUTS:]
+    if len(outputs) < SUPERVISION_SCORE_OUTPUTS:
         return None
-    return max(difflib.SequenceMatcher(None, first, second).ratio() for first, second in itertools.pairwise(texts))
+    if any(item.output is None or item.stop_reason != "end_turn" or not str(item.output).strip() for item in outputs):
+        return None
+    first, second = (_normalized(str(item.output)) for item in outputs)
+    return difflib.SequenceMatcher(None, first, second).ratio()
 
 
-def supervision_text(name: str, reason: str, page: HistoryPage, goals: list[Goal]) -> str:
+def supervision_text(
+    name: str, reason: str, page: HistoryPage, goals: list[Goal], *, outputs: list[Output] | None = None
+) -> str:
     """What the supervisor is told when a supervised turn ends: the session, how the turn closed, its open
     goals, its recent history clipped small, and the loop score over recent outputs. Cheap by design: the
     supervisor reads this inline, and reaches for more history only when it needs it. Bounded by
@@ -335,7 +346,8 @@ def supervision_text(name: str, reason: str, page: HistoryPage, goals: list[Goal
         lines.extend(rendered)
     else:
         lines.append("(Its history holds nothing readable yet.)")
-    if (score := _loop_score([entry.item for entry in page.entries])) is None:
+    score = loop_score(outputs if outputs is not None else [entry.item for entry in page.entries])
+    if score is None:
         lines.append("Loop score: n/a (fewer than two recent outputs).")
     else:
         lines.append(f"Loop score: {score:.2f} over recent outputs (stuck at {SUPERVISION_LOOP_THRESHOLD:.2f}).")
@@ -374,12 +386,12 @@ def supervision_stuck(
     name: str, supervisor: str, stuck_turns: int, nudges: int, budget: int, score: float | None
 ) -> tuple[int, int, str | None]:
     """The stuck episode after a supervised turn end scoring `score`: the next stuck count, the nudges kept,
-    and attention for a person. Below the loop threshold the episode ends: counts reset, attention clears.
+    and attention for a person. Evidence of progress ends the episode; missing evidence does not renew budgets.
     At `budget` stuck turns after `budget` nudges the session needs a person instead of another nudge."""
-    if score is None or score < SUPERVISION_LOOP_THRESHOLD:
+    if score is not None and score < SUPERVISION_LOOP_THRESHOLD:
         return 0, 0, None
-    stuck = stuck_turns + 1
-    if stuck >= budget and nudges >= budget:
+    stuck = stuck_turns + int(score is not None)
+    if stuck > 0 and stuck >= budget and nudges >= budget:
         return (
             stuck,
             nudges,
@@ -468,6 +480,9 @@ class Daemon:
         self._plugin_dirs = list(plugin_dirs) if plugin_dirs is not None else None
         self._hosted: dict[str, anyio.CancelScope] = {}
         """Supervised plugin tasks running now, by name: removing the registration cancels the scope."""
+        self._disabled_plugins: set[str] = set()
+        """Plugins exhausting their restart budget stay disabled for this daemon's lifetime."""
+        self._plugin_lock = anyio.Lock()
         self._sessions: dict[str, _Session] = {}
         self._routes: dict[str, _Route] = {}
         self._handling: set[str] = set()
@@ -647,6 +662,10 @@ class Daemon:
     async def _reconcile_plugins(self) -> None:
         """Start supervised tasks for hosted plugins missing one, and stop tasks whose plugin left the registry
         or lost the grants its code declares. Runs at startup and after every registry change."""
+        async with self._plugin_lock:
+            await self._reconcile_plugins_locked()
+
+    async def _reconcile_plugins_locked(self) -> None:
         if self._tg is None:
             raise RuntimeError("daemon is not serving")
         catalog = plugin_host.discover_hosted(self._plugin_dirs)
@@ -658,8 +677,13 @@ class Daemon:
         for name in self._hosted.keys() - wanted.keys():
             log.info("plugin_stopped", plugin=name)
             self._hosted.pop(name).cancel()
-        for name, plugin in wanted.items():
-            if name not in self._hosted:
+        for name, cls in wanted.items():
+            if name not in self._hosted and name not in self._disabled_plugins:
+                try:
+                    plugin = cls()
+                except Exception as error:
+                    log.warning("plugin_not_instantiated", plugin=name, error=f"{type(error).__name__}: {error}")
+                    continue
                 scope = anyio.CancelScope()
                 self._hosted[name] = scope
                 self._tg.start_soon(self._host_one, name, plugin, scope)
@@ -670,8 +694,12 @@ class Daemon:
         with scope:
             try:
                 await plugin_host.supervise(self._ctx, name, plugin)
+                if self._hosted.get(name) is scope:
+                    self._disabled_plugins.add(name)
             finally:
-                self._hosted.pop(name, None)
+                # Removal/re-registration can install a replacement before this cancelled task unwinds.
+                if self._hosted.get(name) is scope:
+                    self._hosted.pop(name, None)
 
     async def _plugin_loop(self, listener: _Listener | None = None, local: bool = False) -> None:
         """Requests from plugins: each checked against the grants its plugin holds now. `local` reads the name
@@ -746,6 +774,11 @@ class Daemon:
                 if session.turn is not None:
                     raise AidError("busy", f"{session.name!r} is in a turn")
                 session.turn = request.id
+                session.tool_loops = ToolLoopDetector()
+                session.loop_suspected = session.supervisor_interrupted = False
+                # An explicit prompt is a new instruction, not another automatic recovery attempt.
+                session.stuck_turns = session.nudges = 0
+                session.last_nudge = None
                 try:
                     await self._ensure_running(session)
                     recorder = Recorder(session.history, request.id)
@@ -788,6 +821,14 @@ class Daemon:
                     return Done(id=request.id)
                 self._routes[request.id] = _Route(client, session.name)
                 await self._send_worker(session, request)
+                return None
+            case CancelSupervised():
+                session = self._supervised_session(request.supervisor, request.session)
+                if session.turn != request.turn or not session.running:
+                    raise AidError("stale_turn", "the reviewed turn is no longer running")
+                self._routes[request.id] = _Route(client, session.name)
+                session.supervisor_interrupted = True
+                await self._send_worker(session, Cancel(id=request.id, session=session.name, turn=request.turn))
                 return None
             case CompactSession():
                 session = self._session(request.session)
@@ -1049,6 +1090,8 @@ class Daemon:
         messages, session.inbox = session.inbox, []
         request = Prompt(session=session.name, text=wake_prompt(messages))
         session.turn = request.id
+        session.tool_loops = ToolLoopDetector()
+        session.loop_suspected = session.supervisor_interrupted = False
         recorder = Recorder(session.history, request.id)
         try:
             await self._ensure_running(session)
@@ -1161,18 +1204,35 @@ class Daemon:
         if session is None or supervisor is None:
             return
         page = await session.history.page(limit=SUPERVISION_ITEMS)
-        score = _loop_score([entry.item for entry in page.entries])
+        outputs = await self._recent_outputs(session)
+        interrupted_loop = (
+            session.loop_suspected
+            and session.supervisor_interrupted
+            and bool(outputs)
+            and outputs[-1].stop_reason == "cancelled"
+        )
+        score = 1.0 if interrupted_loop else loop_score(outputs)
         stuck, nudges, attention = supervision_stuck(
             name, supervisor, session.stuck_turns, session.nudges, session.spec.supervisor_nudge_budget, score
         )
         session.stuck_turns, session.nudges, session.attention = stuck, nudges, attention
+        if stuck == 0 and nudges == 0:
+            session.last_nudge = None
         overseer = self._sessions.get(supervisor)
         if overseer is None:
             log.info("supervisor_gone", session=name, supervisor=supervisor)
             return
         goals = [goal for goal in await self._read_goals(name) if goal.state is GoalState.OPEN]
+        text = supervision_text(name, reason, page, goals, outputs=outputs)
+        if interrupted_loop:
+            text += (
+                "\nThe supervisor interrupted a suspected live tool loop. This remains the same stuck episode; "
+                "interruption alone is not evidence of progress and does not renew the nudge budget."
+            )
         await self._accept_message(
-            overseer, MessageEntry(sender=name, text=supervision_text(name, reason, page, goals)), uuid.uuid4().hex
+            overseer,
+            MessageEntry(sender=name, text=text),
+            uuid.uuid4().hex,
         )
         await self._publish(
             events.supervision_topic(name),
@@ -1180,6 +1240,58 @@ class Daemon:
                 session=name,
                 supervisor=supervisor,
                 firing=SupervisionFiring(turn=turn, reason=reason, score=score, stuck_turns=stuck),
+            )
+            .model_dump_json()
+            .encode(),
+        )
+
+    async def _recent_outputs(self, session: _Session) -> list[Output]:
+        """Restore the small scoring window once. Tool-heavy turns may push the previous answer thousands
+        of entries behind the review tail; subsequent turns update this cache through _Session.note."""
+        if session.recent_outputs is None:
+            newest: list[Output] = []
+            before: int | None = None
+            while len(newest) < SUPERVISION_SCORE_OUTPUTS:
+                page = await session.history.page(before=before, limit=SEARCH_PAGE)
+                newest.extend(entry.item for entry in reversed(page.entries) if isinstance(entry.item, Output))
+                if not page.has_older or not page.entries:
+                    break
+                before = page.entries[0].seq
+            session.recent_outputs = deque(
+                reversed(newest[:SUPERVISION_SCORE_OUTPUTS]), maxlen=SUPERVISION_SCORE_OUTPUTS
+            )
+        return list(session.recent_outputs)
+
+    async def _review_tool_loop(self, session: _Session, turn: str, call: ToolCall) -> None:
+        """Live tool telemetry goes straight to the supervisor's reliable inbox, not through PUB. Detection
+        never interrupts the agent; only the supervisor can decide whether this repetition is useful."""
+        supervisor = session.spec.supervisor
+        if supervisor is None or session.turn != turn or not self._serving:
+            return
+        evidence = session.tool_loops.observe(call)
+        overseer = self._sessions.get(supervisor)
+        if evidence is None or overseer is None:
+            return
+        session.loop_suspected = True
+        await self._send_loop_review(session, overseer, turn, evidence)
+
+    async def _send_loop_review(self, session: _Session, overseer: _Session, turn: str, evidence: LoopEvidence) -> None:
+        text = (
+            f"Suspected tool loop in supervised session {session.name!r}, live turn {turn!r}.\n"
+            f"{evidence.describe()}\n"
+            "Read supervised_history/supervised_search to judge whether work is progressing. "
+            "If it is useful, leave it running. If it is stuck, interrupt(session, turn) stops only this turn; "
+            "send_message can then give corrective instructions. A message alone waits until the turn ends."
+        )
+        await self._accept_message(overseer, MessageEntry(sender=session.name, text=text), uuid.uuid4().hex)
+        await self._publish(
+            events.supervision_topic(session.name),
+            SupervisionEvent(
+                session=session.name,
+                supervisor=overseer.name,
+                firing=SupervisionFiring(
+                    turn=turn, reason="suspected_tool_loop", score=None, stuck_turns=session.stuck_turns
+                ),
             )
             .model_dump_json()
             .encode(),
@@ -1452,6 +1564,8 @@ class Daemon:
                         if (session := self._sessions.get(name)) is not None:
                             session.note(reply.event)
                         await self._record(route, reply)
+                        if isinstance(reply.event, ToolCall) and (session := self._sessions.get(name)) is not None:
+                            await self._review_tool_loop(session, reply.id, reply.event)
                 case Done() | Failure():
                     if (route := self._routes.pop(reply.id, None)) is not None:
                         if route.client is not None:

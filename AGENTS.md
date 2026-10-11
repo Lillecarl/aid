@@ -1,12 +1,71 @@
 # aid
 
-AI daemon. Hosts persistent agent sessions — external ACP agents (`claude-agent-acp`, `opencode acp`, …),
-`pydantic_ai` agents imported by `module:attr`, and interactive Claude Code in pymux — behind an async Python
-API and a CLI.
+AI server for persistent, cooperating agent sessions, with separate execution engines and extension hosts.
+Runs external ACP agents (`claude-agent-acp`, `opencode acp`, …), `pydantic_ai` agents, and Claude Code through
+terminal and SDK backends, behind an async Python API, CLI and web UI.
+
+## Working method — read first
+
+The goal is reliable agent work, not merely code that passes a happy-path test. Use this sequence:
+
+1. **Define the observable outcome.** State what should happen and what must remain unchanged. A request to
+   stop loops does not authorize an arbitrary turn cap; a request for plugins does not imply one universal ABC.
+2. **Trace the actual path before editing.** Follow caller → protocol → daemon → worker → backend → stored
+   state → response. Read the relevant tests too. A helper's docstring is not proof that callers use it correctly.
+3. **Identify the owner and invariant.** Who owns the state, who may mutate it, how long does it live, and what
+   happens on cancellation/restart? Prefer one owner and explicit transitions over two copies kept in sync.
+4. **Reproduce with the smallest real path.** Use deterministic local models/fake agents, not paid API calls.
+   Check the installed dependency version and runtime behaviour when a default or API is involved. Separate
+   confirmed failures, hypotheses and recommendations in updates; do not present guesses as findings.
+5. **Fix the cause at its owning layer.** Keep decisions pure where practical; keep IO and lifecycle effects
+   explicit. Make small coherent changes. Do not rearrange directories, add abstractions or tune thresholds
+   merely to make the code look organized.
+6. **Prove the lifecycle, not just the return value.** Add a regression that fails before the fix. Check success,
+   failure, cancellation, resume/restart and stale/duplicate input where relevant. Verify persisted state, usage,
+   attribution and actual effects. A compaction test outside a turn does not prove the compact tool works inside one.
+7. **Validate and close the change.** Run targeted tests, formatting/lint/types, then the wider affected suite.
+   Regenerate schema/types when models change. Report what changed, the checks run and remaining limitations.
+   Never claim a suite passed if only a subset ran, and never weaken a test just to obtain green output.
+
+If an experiment fails, preserve the evidence and investigate the boundary it exposed. Do not patch blindly
+around a failed check. Change a test's expectation only when the intended contract changed, and explain why.
+
+## Decision guide
+
+| Tempting shortcut | Better decision |
+| --- | --- |
+| Increase a request limit to stop errors | First check whether the user requested a limit, and whether `None` inherits an engine default. |
+| Cancel whenever messages look similar | Raise a suspicion with evidence; let the supervisor judge progress. Polling and repetitive work can be legitimate. |
+| Send a nudge to an indefinitely running turn | Check delivery timing. A queued message cannot redirect that turn; interruption needs an explicit, turn-scoped operation. |
+| Retry a failed/interrupted tool automatically | Its effects may already have happened. Preserve the result/state and inspect before replaying a side effect. |
+| Compare only the newest history entries | Define the signal's unit. Ten tool events are not ten answers; load/cache the relevant completed units. |
+| Catch every error and continue | Distinguish normal outcomes from faults. Preserve work and usage, propagate cancellation, and log faults with their original cause. |
+| Reconstruct every plugin during reconciliation | Select eligible classes first; the lifecycle host constructs only instances it needs to start. |
+| Put critical control on PUB | Use addressed request/reply or the reliable inbox. PUB is observation and may drop events. |
+
+## Ownership and extension boundaries
+
+- **Daemon:** durable session state, routing, supervision links and authorization of daemon operations.
+- **Worker:** one session's execution lifecycle and backend capabilities. Recheck turn identity here before an
+  interruption: a daemon check can become stale while a request travels.
+- **Backend:** engine adaptation, engine conversation history, cancellation and usage. Do not spread engine
+  assumptions across the daemon, CLI and UI. Different engines expose different capabilities; say so explicitly.
+- **Launcher:** process/environment setup and placement, not the agent's conversation or supervision policy.
+- **Extensions:** use the appropriate ABC/contract for their host (`Plugin`, `PydanticAgent`,
+  `InstructionsProvider`, backend capabilities), not a catch-all object. Specify construction, context,
+  shutdown, restart and failure ownership before adding a new extension type. Discovery is not instantiation.
+
+The daemon transcript and the engine's resumable conversation are different stores; preserving one does not
+prove the other survived. A status flag is not enforcement, and a grant checked on one socket does not secure
+another socket. Missing telemetry is unknown, not proof that nothing changed.
+
+The layout below describes the current implementation, not a mandate to preserve every historical design.
+When prose and code disagree, reproduce the behaviour, fix the contract and update both. Keep this file focused
+on reusable decisions and current boundaries; put long investigations and dated measurements in `docs/`.
 
 ## Layout
 
-- `src/aid/spec.py` — `AcpSpec` / `PydanticAISpec` / `ClaudeTtySpec`: what a session runs.
+- `src/aid/spec.py` — `AcpSpec` / `PydanticAISpec` / `ClaudeTtySpec` / `ClaudeSdkSpec`: what a session runs.
 - `src/aid/protocol.py` — pydantic messages on the zmq sockets; `AidError`.
 - `src/aid/daemon.py` — ROUTER for clients (`control.sock`), ROUTER for workers (`workers.sock`), session state.
 - `src/aid/launcher.py` — `Launcher` protocol; `ForkserverLauncher`.
@@ -43,7 +102,7 @@ API and a CLI.
   on list changes), `serve.py` (bare text in session channels as messages, `!`-commands everywhere,
   taps as new messages or in-place rewrites, settled notices to session channels). Custom ids hold
   `action:session` directly (100 bytes); Discord messages clip at 1900/2000.
-- `src/aid/backends/` — `acp.py`, `pydantic_ai.py`, `claude_tty.py`; each implements `base.Backend`.
+- `src/aid/backends/` — `acp.py`, `pydantic_ai.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON,
   plus the built-in `aid` server (`session_servers`). claude-agent-acp restarts its query when `session/load` gets
   servers other than `session/new` did.
@@ -78,6 +137,10 @@ API and a CLI.
   `DAEMON_CALL_TIMEOUT` exits loudly, so the supervisor restarts into a fresh baseline.
 - `src/aid/settle.py` — settled turn ends, platform-agnostic: `Tracker` fed by turn and supervision events,
   `settled_turns` calling back per settled episode. Both chat plugins share it.
+- `src/aid/loops.py` — bounded exact tool-call/cycle signals during aid-started turns. The daemon sends
+  suspicions to the supervisor's reliable inbox; detection never cancels. `supervisor_tools.interrupt`
+  uses `CancelSupervised`, checked against the supervision link and against the reviewed turn id again
+  in the worker. Missing telemetry is not unchanged work. Embedding signals remain future work.
 - `src/aid/mutes.py` — runtime mutes per chat plugin, on disk beside the registration.
 - `src/aid/events.py` — the daemon's PUB socket (`Paths.events`): `[topic, JSON]` for the session list, each
   status, each history entry. The daemon compares state with what it last published after every request,
@@ -125,6 +188,12 @@ nix run --file . pyrefly -- check   # project mode: files and import roots come 
 The dev shell puts `src/` ahead of the aid its venv carries. Dependencies go in `pyproject.toml`; the set
 reads them. Test-only ones go in the `test` extra.
 
+For a focused change, run its test module first, not the entire suite on every edit. Before finishing, expand
+coverage to the affected daemon/client/backends. A generated schema change also needs `tests/test_schema.py`
+and `npm run types:check` in `web/`. Run code generators in an initialized environment: outer-shell `>` can
+truncate an input file before `nix develop` evaluates the repository. Stage generated output outside the repo
+or perform generation inside the already initialized shell, then regenerate its dependent types.
+
 UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `AID_WEB_BACKEND`, default
 127.0.0.1:8080). After changing `package-lock.json`, update `npmDepsHash` in `web/default.nix`.
 
@@ -150,6 +219,10 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   - The daemon depends on `Launcher`/`WorkerHandle`, never on multiprocessing.
 - ACP `session/update` must be read through the connection observer (`AcpBackend.observe`). The library runs
   `Client.session_update` as separate tasks, which can land after `prompt()` returns.
+- pydantic-ai: an unset `max_requests` explicitly disables the engine's default request cap. Turn cleanup
+  persists available new messages and usage on success, failure and cancellation. Compaction owns the old
+  history prefix; finalization appends only the run's new messages, never overwrites that prefix. Unanswered
+  tool calls are closed as interrupted, not replayed: their effects may already have happened.
 - multiprocessing re-imports the parent's `__main__` in each worker: every entry script needs a
   `if __name__ == "__main__":` guard.
 - Daemon shutdown: `_stop_all` runs inside the task group; worker watchers are shielded and must see every exit.

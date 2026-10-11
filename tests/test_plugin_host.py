@@ -18,7 +18,7 @@ from aid.protocol import AidError, MessageEntry
 from tests.conftest import py_spec
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Sequence
     from pathlib import Path
 
     from aid.launcher import ForkserverLauncher
@@ -224,4 +224,63 @@ def test_enabled_runs_registered_and_covered_only() -> None:
     }
     ready = plugin_host.enabled(catalog, registered)
     assert [name for name, _ in ready] == ["full"]
-    assert isinstance(ready[0][1], Full)
+    assert ready[0][1] is Full
+
+
+async def test_reconciliation_does_not_reconstruct_a_running_plugin(
+    paths: Paths, launcher: ForkserverLauncher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    constructions = 0
+    started = anyio.Event()
+
+    class Resident(aid.Plugin):
+        def __init__(self) -> None:
+            nonlocal constructions
+            constructions += 1
+
+        async def run(self, client: aid.Client) -> None:
+            started.set()
+            await anyio.sleep_forever()
+
+    catalog = PluginCatalog(plugins={"resident": Resident})
+
+    def discover(_dirs: Sequence[Path] | None) -> PluginCatalog:
+        return catalog
+
+    monkeypatch.setattr(plugin_host, "discover_hosted", discover)
+    with anyio.fail_after(TIMEOUT):
+        async with _serving(paths, launcher), aid.connect(paths) as control:
+            await register_plugin(control, paths, "resident", frozenset())
+            await started.wait()
+            await register_plugin(control, paths, "unrelated", frozenset({Grant.READ}))
+            await control.remove_plugin("unrelated")
+            assert constructions == 1
+
+
+async def test_unrelated_registry_changes_do_not_restart_a_disabled_plugin(
+    paths: Paths, launcher: ForkserverLauncher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs = 0
+    failed = anyio.Event()
+    monkeypatch.setattr(plugin_host, "MAX_FAILURES", 1)
+
+    class Broken(aid.Plugin):
+        async def run(self, client: aid.Client) -> None:
+            nonlocal runs
+            runs += 1
+            failed.set()
+            raise RuntimeError("broken")
+
+    catalog = PluginCatalog(plugins={"broken": Broken})
+
+    def discover(_dirs: Sequence[Path] | None) -> PluginCatalog:
+        return catalog
+
+    monkeypatch.setattr(plugin_host, "discover_hosted", discover)
+    with anyio.fail_after(TIMEOUT):
+        async with _serving(paths, launcher), aid.connect(paths) as control:
+            await register_plugin(control, paths, "broken", frozenset())
+            await failed.wait()
+            await register_plugin(control, paths, "unrelated", frozenset({Grant.READ}))
+            await control.remove_plugin("unrelated")
+            assert runs == 1

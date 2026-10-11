@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import TYPE_CHECKING, Any
 
 import anyio
@@ -13,6 +14,7 @@ from aid.daemon import (
     SUPERVISION_ITEM_CHARS,
     SUPERVISION_LOOP_THRESHOLD,
     add_goal,
+    loop_score,
     nudge_repeats,
     permission_backstop_text,
     set_goal,
@@ -23,6 +25,8 @@ from aid.daemon import (
 from aid.protocol import (
     AddGoal,
     AnswerSupervisedPermission,
+    Cancel,
+    CancelSupervised,
     Goal,
     GoalState,
     HistoryEntry,
@@ -96,6 +100,156 @@ def test_supervision_text_clips_and_scores() -> None:
 def test_supervision_text_without_outputs() -> None:
     page = HistoryPage(entries=[_entry(0, PromptEntry(text="hi"))], has_older=False, has_newer=False, total=1)
     assert "Loop score: n/a" in supervision_text("coder", "done", page, [])
+
+
+def test_loop_score_ignores_cancelled_and_missing_answers() -> None:
+    assert loop_score([Output(output=None, stop_reason="cancelled")] * 2) is None
+    assert (
+        loop_score([Output(output="same", stop_reason="end_turn"), Output(output="same", stop_reason="cancelled")])
+        is None
+    )
+    assert loop_score([Output(output=" ", stop_reason="end_turn")] * 2) is None
+
+
+def test_loop_score_releases_old_repetition_after_progress() -> None:
+    outputs = [
+        Output(output=text, stop_reason="end_turn") for text in ["same", "same", "new solution", "verified tests"]
+    ]
+    assert loop_score(outputs[:2]) == 1.0
+    score = loop_score(outputs)
+    assert score is not None and score < SUPERVISION_LOOP_THRESHOLD
+
+
+def test_supervision_text_scores_answers_outside_the_review_tail() -> None:
+    page = HistoryPage(
+        entries=[_entry(0, ToolCall(tool_call_id="c", status="completed"))], has_older=True, has_newer=False, total=40
+    )
+    answers = [Output(output="same", stop_reason="end_turn")] * 2
+    assert "Loop score: 1.00" in supervision_text("coder", "done", page, [], outputs=answers)
+
+
+async def test_live_loop_wakes_supervisor_once_and_can_be_interrupted(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:steady"))
+            await client.create("other", py_spec(tmp_path, "agents:steady"))
+            worker = await client.create(
+                "worker", py_spec(tmp_path, "agents:looping").model_copy(update={"supervisor": "boss"})
+            )
+            reviewed: str | None = None
+            completed = 0
+            final: Output | None = None
+            async for event in worker.stream("loop"):
+                if isinstance(event, ToolCall) and event.status == "completed":
+                    completed += 1
+                    if completed == 4:
+                        messages = [
+                            entry.item
+                            for entry in (await boss.history(limit=1000)).entries
+                            if isinstance(entry.item, MessageEntry)
+                            and entry.item.text.startswith("Suspected tool loop")
+                        ]
+                        assert len(messages) == 1
+                        match = re.search(r"live turn '([^']+)'", messages[0].text)
+                        assert match is not None
+                        reviewed = match[1]
+                        assert reviewed is not None
+                        # Notification did not cancel the worker; only the supervisor's explicit decision does.
+                        assert (await worker.status()).busy
+                        with pytest.raises(aid.AidError, match="not_supervised"):
+                            await client.call(CancelSupervised(supervisor="other", session="worker", turn=reviewed))
+                        with pytest.raises(aid.AidError, match="stale_turn"):
+                            await client.call(CancelSupervised(supervisor="boss", session="worker", turn="old"))
+                        await client.call(CancelSupervised(supervisor="boss", session="worker", turn=reviewed))
+                elif isinstance(event, Output):
+                    final = event
+            assert reviewed is not None
+            assert final is not None and final.stop_reason == "cancelled"
+            assert (await worker.run("continue")).output == "continued"
+            with pytest.raises(aid.AidError, match="stale_turn"):
+                await client.call(CancelSupervised(supervisor="boss", session="worker", turn=reviewed))
+            messages = [
+                entry.item
+                for entry in (await boss.history(limit=1000)).entries
+                if isinstance(entry.item, MessageEntry) and entry.item.text.startswith("Suspected tool loop")
+            ]
+            assert len(messages) == 1
+
+
+async def test_worker_rejects_a_stale_cancel_even_after_daemon_routing(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            worker = await client.create("worker", py_spec(tmp_path, "agents:echo"))
+            await worker.run("hi")
+            old_turn = (await worker.history()).entries[-1].turn
+            async for event in worker.stream("slow"):
+                if isinstance(event, TextDelta):
+                    with pytest.raises(aid.AidError, match="stale_turn"):
+                        await client.call(Cancel(session="worker", turn=old_turn))
+                    assert (await worker.status()).busy
+                    await worker.cancel()
+            assert (await worker.run("hi")).output == "turn 3: echo hi"
+
+
+async def test_tool_heavy_turns_keep_previous_output_for_scoring(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:steady"))
+            worker = await client.create(
+                "worker", py_spec(tmp_path, "agents:coder").model_copy(update={"supervisor": "boss"})
+            )
+            calls: list[list[Any]] = [["ls", {}]] * 12
+            await worker.run(json.dumps(calls))
+            await worker.run(json.dumps(calls))
+            # Replay then follow: no polling or race with the end-of-turn review.
+            async for entry in boss.follow_history():
+                if isinstance(entry.item, MessageEntry) and "Loop score: 1.00" in entry.item.text:
+                    break
+
+
+async def test_supervisor_agent_itself_decides_to_interrupt_a_live_loop(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:loop_judge"))
+            worker = await client.create(
+                "worker", py_spec(tmp_path, "agents:looping").model_copy(update={"supervisor": "boss"})
+            )
+            assert (await worker.run("loop")).stop_reason == "cancelled"
+            calls: list[ToolCall] = []
+            async for entry in boss.follow_history():
+                if isinstance(entry.item, ToolCall):
+                    calls.append(entry.item)
+                elif isinstance(entry.item, Output):
+                    break
+            assert any(call.title == "interrupt" for call in calls)
+            assert (await worker.run("continue")).output == "continued"
+
+
+async def test_interruptions_do_not_renew_the_automatic_recovery_budget(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:loop_judge"))
+            worker = await client.create(
+                "worker",
+                py_spec(tmp_path, "agents:looping").model_copy(
+                    update={"supervisor": "boss", "supervisor_nudge_budget": 1}
+                ),
+            )
+            assert (await worker.run("loop")).stop_reason == "cancelled"
+            await client.call(SendMessage(to="worker", sender="boss", text="try another approach"))
+            reviews = 0
+            async for entry in boss.follow_history():
+                if isinstance(entry.item, MessageEntry) and entry.item.text.startswith("Suspected tool loop"):
+                    reviews += 1
+                    if reviews == 2:
+                        break
+            async for status in worker.follow_status():
+                if status.attention is not None and not status.busy:
+                    break
+            with pytest.raises(aid.AidError, match="nudge_budget"):
+                await client.call(SendMessage(to="worker", sender="boss", text="try yet another approach"))
+            # Explicit user instructions can start fresh; they are not an automatic recovery loop.
+            assert (await worker.run("continue")).output == "continued"
 
 
 def test_supervision_text_lists_open_goals() -> None:
@@ -440,6 +594,7 @@ def test_nudge_repeats() -> None:
 
 def test_supervision_stuck_counts_resets_and_escalates() -> None:
     assert supervision_stuck("coder", "boss", 0, 0, 3, None) == (0, 0, None)
+    assert supervision_stuck("coder", "boss", 4, 1, 3, None) == (4, 1, None)
     assert supervision_stuck("coder", "boss", 4, 1, 3, 0.5) == (0, 0, None)
     assert supervision_stuck("coder", "boss", 0, 0, 3, 1.0) == (1, 0, None)
     assert supervision_stuck("coder", "boss", 2, 2, 3, 1.0) == (3, 2, None)

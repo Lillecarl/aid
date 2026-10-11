@@ -47,10 +47,11 @@ def discover_hosted(dirs: Sequence[Path] | None) -> PluginCatalog:
     return discover(list(dirs) if dirs is not None else plugins_path())
 
 
-def enabled(catalog: PluginCatalog, registered: dict[str, PluginSpec]) -> list[tuple[str, Plugin]]:
-    """Instantiated plugins ready to host: registered, with grants covering what the code declares. Anything
-    else logs why it stays outside: unregistered at info (add it), under-granted at warning (add it again)."""
-    ready: list[tuple[str, Plugin]] = []
+def enabled(catalog: PluginCatalog, registered: dict[str, PluginSpec]) -> list[tuple[str, type[Plugin]]]:
+    """Plugin classes eligible to host, without construction: selection has no instance lifecycle effects.
+    The host constructs only missing tasks. Anything else logs why it stays outside: unregistered at info
+    (add it), under-granted at warning (add it again)."""
+    ready: list[tuple[str, type[Plugin]]] = []
     for name, cls in catalog.plugins.items():
         spec = registered.get(name)
         if spec is None:
@@ -64,10 +65,7 @@ def enabled(catalog: PluginCatalog, registered: dict[str, PluginSpec]) -> list[t
                 hint=f"aid plugin add {name} {_grant_flags(cls.grants)} again to replace it",
             )
             continue
-        try:
-            ready.append((name, cls()))
-        except Exception as error:
-            log.warning("plugin_not_instantiated", plugin=name, error=f"{type(error).__name__}: {error}")
+        ready.append((name, cls))
     return ready
 
 
