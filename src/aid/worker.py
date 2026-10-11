@@ -10,9 +10,11 @@ from __future__ import annotations
 import sys
 import uuid
 from contextlib import AsyncExitStack
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import anyio
+import anyio.to_thread
 import structlog
 import zmq
 import zmq.asyncio
@@ -61,23 +63,42 @@ log = structlog.get_logger(__name__)
 
 
 def main(
-    endpoint: str, trust_pem: str, server_key: str, public_key: str, secret_key: str, spec_json: str, state_dir: str
+    endpoint: str,
+    trust_pem: str,
+    server_key: str,
+    public_key: str,
+    secret_key: str,
+    spec_json: str,
+    state_dir: str,
+    hook_endpoint: str,
 ) -> None:
     spec = AgentSpecAdapter.validate_json(spec_json)
     if isinstance(spec, PydanticAISpec):
         sys.path[:0] = spec.python_path
     keys = Keypair(public=public_key, secret=secret_key)
-    anyio.run(serve, endpoint, trust_pem, server_key, keys, spec, anyio.Path(state_dir))
+    anyio.run(serve, endpoint, trust_pem, server_key, keys, spec, anyio.Path(state_dir), hook_endpoint)
 
 
 async def serve(
-    endpoint: str, trust_pem: str, server_key: str, keys: Keypair, spec: AgentSpec, state_dir: anyio.Path
+    endpoint: str,
+    trust_pem: str,
+    server_key: str,
+    keys: Keypair,
+    spec: AgentSpec,
+    state_dir: anyio.Path,
+    hook_endpoint: str,
 ) -> None:
     await state_dir.mkdir(parents=True, exist_ok=True)
     ctx = zmq.asyncio.Context()
     sock = ctx.socket(zmq.DEALER)
     sock.setsockopt(zmq.LINGER, 1000)
     connect_curve(sock, endpoint, server_key, keys, trust_pem)
+    # The session's own hook socket, bound before the backend starts (Claude spawns inside it): hook.py's
+    # fast path, past the daemon. No CURVE: same local-trust domain as control.sock.
+    await anyio.to_thread.run_sync(Path(hook_endpoint.removeprefix("ipc://")).unlink, True)
+    hook_sock = ctx.socket(zmq.ROUTER)
+    hook_sock.setsockopt(zmq.LINGER, 1000)
+    hook_sock.bind(hook_endpoint)
     try:
         async with AsyncExitStack() as stack:
             try:
@@ -89,12 +110,14 @@ async def serve(
             tg = await stack.enter_async_context(anyio.create_task_group())
             worker = _Worker(sock, backend, tg)
             await worker.send(Hello(started=backend.started()))
+            tg.start_soon(worker.serve_hooks, hook_sock)
             if isinstance(backend, FollowingBackend):
                 tg.start_soon(worker.follow, backend)
             if isinstance(backend, WatchBackend):
                 tg.start_soon(worker.watch, backend)
             await worker.serve()
     finally:
+        hook_sock.close()
         sock.close()
         ctx.term()
 
@@ -113,7 +136,39 @@ class _Worker:
         self._backend = backend
         self._tg = tg
         self._send_lock = anyio.Lock()
+        self._hook_lock = anyio.Lock()
         self._busy = False
+
+    async def serve_hooks(self, sock: zmq.asyncio.Socket) -> None:
+        """Answer `aid/hook.py`'s fast path: Hook requests on the worker's own ROUTER, past the daemon.
+        A bad frame never kills the loop: hooks fail open downstream, and a dead loop would wedge them
+        silently."""
+        while True:
+            try:
+                *route, data = await sock.recv_multipart()
+                request = decode_request(data)
+            except Exception:
+                log.exception("hook_frame_dropped")
+                continue
+            if not isinstance(request, Hook):
+                await self._hook_send(
+                    sock,
+                    route,
+                    Failure(id=request.id, code="unsupported", message=f"worker cannot {request.op} over hooks"),
+                )
+            elif isinstance(self._backend, HookBackend):
+                self._tg.start_soon(self._hook_direct, sock, route, self._backend, request)
+            else:
+                await self._hook_send(sock, route, Done(id=request.id))
+
+    async def _hook_send(self, sock: zmq.asyncio.Socket, route: list[bytes], reply: Done | Failure) -> None:
+        async with self._hook_lock:
+            await sock.send_multipart([*route, encode(reply)])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
+
+    async def _hook_direct(
+        self, sock: zmq.asyncio.Socket, route: list[bytes], backend: HookBackend, request: Hook
+    ) -> None:
+        await self._hook_send(sock, route, await self._answer_hook(backend, request))
 
     async def send(self, reply: Hello | Event | Done | Failure | Observed | Activity | Notify) -> None:
         async with self._send_lock:
@@ -189,13 +244,16 @@ class _Worker:
                     await self.send(Failure(id=request.id, code="unsupported", message=f"worker cannot {request.op}"))
 
     async def _hook(self, backend: HookBackend, request: Hook) -> None:
+        await self.send(await self._answer_hook(backend, request))
+
+    @staticmethod
+    async def _answer_hook(backend: HookBackend, request: Hook) -> Done | Failure:
         try:
             answer = await backend.hook(request.event, request.payload)
         except Exception as error:
             log.exception("hook_failed", event=request.event)
-            await self.send(Failure(id=request.id, code="hook_failed", message=f"{type(error).__name__}: {error}"))
-        else:
-            await self.send(Done(id=request.id, data=answer))
+            return Failure(id=request.id, code="hook_failed", message=f"{type(error).__name__}: {error}")
+        return Done(id=request.id, data=answer)
 
     async def _screen(self, request: GetScreen) -> None:
         if not isinstance(self._backend, ScreenBackend):

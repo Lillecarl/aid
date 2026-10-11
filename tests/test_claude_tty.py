@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import anyio
 import anyio.to_thread
 import pytest
+import zmq.asyncio
 from libpymux import Server
 
 import aid
@@ -24,9 +25,10 @@ from aid.backends.claude_tty import (
     split_settings,
 )
 from aid.mcp import claude_config
-from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR
+from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, hook_socket
 from aid.protocol import (
     AidError,
+    Done,
     HistoryItem,
     Lifecycle,
     MessageEntry,
@@ -40,10 +42,13 @@ from aid.protocol import (
     TextDelta,
     ToolCall,
     Usage,
+    decode_request,
+    encode,
 )
 from aid.spec import ClaudeTtySpec, McpHttp
 from tests.conftest import acp_spec, fake_spec, needs_pymux
 from tests.fake_claude import COMPACT_SUMMARY, COUNT, MODEL, NOTICE, PERMISSION_INPUT, SUBAGENT_MODEL
+from tests.test_hook import run_hook
 from tests.test_tools import Rpc
 
 if TYPE_CHECKING:
@@ -120,16 +125,57 @@ def test_a_persons_settings_join_aids_hooks(tmp_path: Path) -> None:
     (tmp_path / "mine.json").write_text(json.dumps({"model": "opus", "hooks": {"Stop": [{"hooks": ["theirs"]}]}}))
     own = read_settings("mine.json", str(tmp_path))
     assert read_settings('{"model": "haiku"}', "/nowhere") == {"model": "haiku"}
-    merged = hook_settings("ipc:///run/aid/control.sock", "s1", own)
+    merged = hook_settings("ipc:///run/aid/control.sock", "s1", "ipc:///run/aid/hook-s1.sock", own)
 
     assert merged["model"] == "opus"
     assert set(merged["hooks"]) == set(HOOK_EVENTS)
     assert merged["hooks"]["Stop"][0] == {"hooks": ["theirs"]}
     [aid_stop] = merged["hooks"]["Stop"][1]["hooks"]
-    assert shlex.split(aid_stop["command"])[1:] == [HOOK_SCRIPT, "ipc:///run/aid/control.sock", "s1", "Stop"]
+    assert shlex.split(aid_stop["command"])[1:] == [
+        HOOK_SCRIPT,
+        "ipc:///run/aid/control.sock",
+        "s1",
+        "Stop",
+        "ipc:///run/aid/hook-s1.sock",
+    ]
 
 
 pytestmark = pytest.mark.anyio
+
+
+@needs_pymux
+async def test_live_hook_socket_answers_past_the_daemon(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    """hook.py's fast path against a real worker: the decoy control answers anything it hears, so silence
+    proves the worker's own socket answered first."""
+    ctx = zmq.asyncio.Context()
+    decoy = ctx.socket(zmq.ROUTER)
+    decoy.setsockopt(zmq.LINGER, 0)
+    decoy.bind(f"ipc://{tmp_path / 'control.sock'}")
+    try:
+        with anyio.fail_after(TIMEOUT):
+            async with anyio.create_task_group() as tg:
+
+                async def decoy_answer() -> None:
+                    while True:
+                        frames = await decoy.recv_multipart()
+                        request = decode_request(frames[-1])
+                        await decoy.send_multipart([*frames[:-1], encode(Done(id=request.id, data="via-control"))])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
+
+                tg.start_soon(decoy_answer)
+                async with aid.connect(daemon) as client:
+                    session = await client.create("hooklive", fake_spec(tmp_path, pymux_socket))
+                    assert (await session.run("hello")).output == "echo: hello"
+                    code, out, _ = await run_hook(
+                        f"ipc://{tmp_path / 'control.sock'}",
+                        "hooklive",
+                        "UserPromptSubmit",
+                        hook_socket(daemon.runtime_dir, "hooklive"),
+                    )
+                assert (code, out) == (0, "")
+                tg.cancel_scope.cancel()
+    finally:
+        decoy.close()
+        ctx.term()
 
 
 @needs_pymux

@@ -54,6 +54,13 @@ class Paths:
         return self.state_dir / "sessions" / name
 
 
+# A session's hook socket beside the daemon's own: ipc paths cap at ~107 chars, and a session dir can run
+# deeper than that. Session names are slug-safe (`CreateSession.name`), so one flat file per session is safe.
+def hook_socket(runtime_dir: Path | str | os.PathLike[str], session: str) -> str:
+    """The endpoint a session's worker binds for its hooks (`aid.worker.serve_hooks`)."""
+    return f"ipc://{Path(str(runtime_dir)) / f'hook-{session}.sock'}"
+
+
 def default_paths() -> Paths:
     uid = os.getuid()
     runtime = os.environ.get(ENV_RUNTIME_DIR) or str(

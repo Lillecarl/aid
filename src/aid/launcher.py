@@ -26,7 +26,7 @@ import structlog
 
 from aid import worker
 from aid.log import configure_logging
-from aid.paths import ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR
+from aid.paths import ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, hook_socket
 from aid.spec import AgentSpecAdapter
 
 if TYPE_CHECKING:
@@ -94,7 +94,14 @@ def process_main(args: WorkerArgs) -> None:
     os.environ[ENV_RUNTIME_DIR] = args.daemon_runtime_dir
     os.environ[ENV_STATE_DIR] = args.daemon_state_dir
     worker.main(
-        args.endpoint, args.trust_pem, args.server_key, args.public_key, args.secret_key, args.spec_json, args.state_dir
+        args.endpoint,
+        args.trust_pem,
+        args.server_key,
+        args.public_key,
+        args.secret_key,
+        args.spec_json,
+        args.state_dir,
+        hook_socket(args.daemon_runtime_dir, args.name),
     )
 
 

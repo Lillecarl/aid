@@ -19,6 +19,7 @@ And on 2.1.284, with `--dangerously-load-development-channels server:aid`:
 
 Hooks, measured on 2.1.284: aid passes its own `--settings` file (`hook_settings`) whose hooks run `aid/hook.py`.
 Claude takes only the last `--settings`, so a person's own `--settings` in the args is merged into aid's.
+Each hook asks the worker's own hook socket first (`aid.worker.serve_hooks`) and falls back to the daemon.
 
 - Payloads carry session_id, transcript_path, cwd, hook_event_name, and mostly prompt_id and permission_mode.
 - UserPromptSubmit has `prompt`; Stop has `last_assistant_message`; Notification has `message` and
@@ -55,7 +56,7 @@ from aid import hook as hook_command
 from aid.backends.permissions import PermissionWaits
 from aid.env import agent_environment
 from aid.mcp import AID_TOOLS_RULE, claude_config, session_servers
-from aid.paths import default_paths
+from aid.paths import default_paths, hook_socket
 from aid.protocol import (
     Activity,
     Lifecycle,
@@ -234,13 +235,14 @@ def read_settings(value: str, cwd: str) -> dict[str, Any]:
     return cast(dict[str, Any], document)
 
 
-def hook_settings(control: str, session: str, own: dict[str, Any]) -> dict[str, Any]:
-    """`own` with aid's hook added to each event in HOOK_EVENTS, after any hook `own` has for it."""
+def hook_settings(control: str, session: str, hook: str, own: dict[str, Any]) -> dict[str, Any]:
+    """`own` with aid's hook added to each event in HOOK_EVENTS, after any hook `own` has for it. The hook
+    command asks the worker on `hook` first and falls back to the daemon on `control` (`aid/hook.py`)."""
     hooks: dict[str, list[Any]] = {event: list(entries) for event, entries in dict(own.get("hooks") or {}).items()}
     for event in HOOK_EVENTS:
         handler: dict[str, Any] = {
             "type": "command",
-            "command": shlex.join([sys.executable, HOOK_SCRIPT, control, session, event]),
+            "command": shlex.join([sys.executable, HOOK_SCRIPT, control, session, event, hook]),
         }
         if event in hook_command.WAITING_EVENTS:
             handler["timeout"] = WAITING_HOOK_TIMEOUT
@@ -657,7 +659,9 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
     own_settings, args = split_settings(spec.args)
     own = await anyio.to_thread.run_sync(read_settings, own_settings, spec.cwd) if own_settings else {}
     settings_file = state_dir / HOOKS_FILE
-    settings = hook_settings(default_paths().control, state_dir.name, own)
+    settings = hook_settings(
+        default_paths().control, state_dir.name, hook_socket(default_paths().runtime_dir, state_dir.name), own
+    )
     await _write_private(settings_file, json.dumps(settings), 0o600)
     argv = claude_argv(spec, args, session_id, resume=resume, mcp_config=mcp_config, settings=str(settings_file))
 

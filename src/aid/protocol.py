@@ -173,7 +173,8 @@ class AnswerPermission(_Request):
 
 class Hook(_Request):
     """A Claude Code hook event of a claude-tty session, from `aid/hook.py`. Done's data is what the hook prints
-    for Claude, or None."""
+    for Claude, or None. hook.py asks the worker's own hook socket first; this leg is its fallback, for hooks
+    from before the worker bound it or after it went."""
 
     op: Literal["hook"] = "hook"
     session: str

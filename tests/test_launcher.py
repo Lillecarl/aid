@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING
 import pytest
 from pydantic import ValidationError
 
-from aid.launcher import PRELOAD, ForkserverLauncher
+from aid.launcher import PRELOAD, ForkserverLauncher, WorkerArgs, process_main
+from aid.paths import hook_socket
 from aid.spec import PydanticAISpec
 
 if TYPE_CHECKING:
@@ -37,6 +38,48 @@ def test_worker_endpoint_needs_command(tmp_path: Path) -> None:
         worker_endpoint="ipc://x",
     )
     assert spec.worker_command == ["aid", "worker"]
+
+
+def test_hook_socket_lives_beside_the_daemons_own() -> None:
+    """ipc paths cap at ~107 chars, and a session dir can run deeper: hooks bind by the daemon's sockets."""
+    assert hook_socket("/run/aid", "s1") == "ipc:///run/aid/hook-s1.sock"
+
+
+def test_process_main_hands_the_worker_its_hook_socket(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    calls: list[tuple[str, ...]] = []
+
+    def fake_main(*args: str) -> None:
+        calls.append(args)
+
+    monkeypatch.setattr("aid.worker.main", fake_main)
+    monkeypatch.setattr("aid.launcher.configure_logging", lambda: None)
+    spec_json = PydanticAISpec(cwd=str(tmp_path), target="agents:echo").model_dump_json()
+    process_main(
+        WorkerArgs(
+            endpoint="ipc://workers.sock",
+            trust_pem="",
+            server_key="s",
+            public_key="p",
+            secret_key="q",
+            name="s1",
+            spec_json=spec_json,
+            state_dir=str(tmp_path),
+            daemon_runtime_dir="/run/aid",
+            daemon_state_dir="/state/aid",
+        )
+    )
+    assert calls == [
+        (
+            "ipc://workers.sock",
+            "",
+            "s",
+            "p",
+            "q",
+            spec_json,
+            str(tmp_path),
+            "ipc:///run/aid/hook-s1.sock",
+        )
+    ]
 
 
 class _FakeContext:

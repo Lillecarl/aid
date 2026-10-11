@@ -25,6 +25,7 @@ from aid import events, plugin_host, plugins, zap
 from aid.client import spawn_plugin_client
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
 from aid.launcher import CommandLauncher, WorkerArgs
+from aid.paths import hook_socket
 from aid.plugins import PLUGIN_FILE, PluginSpec
 from aid.protocol import (
     Activity,
@@ -800,6 +801,7 @@ class Daemon:
                 session = self._session(request.session)
                 if not session.running or session.peer is None:
                     return Done(id=request.id)  # A hook from before Hello, or after the worker went: nobody to tell.
+                # hook.py's fallback: its fast path asks the worker's own hook socket first.
                 self._routes[request.id] = _Route(client, session.name)
                 await self._send_worker(session, request)
                 return None
@@ -894,6 +896,9 @@ class Daemon:
                 del self._sessions[session.name]
                 self._disarm_session_backstops(session.name)
                 await anyio.to_thread.run_sync(shutil.rmtree, self._paths.session_dir(session.name), True)
+                await anyio.to_thread.run_sync(
+                    Path(hook_socket(self._paths.runtime_dir, session.name).removeprefix("ipc://")).unlink, True
+                )
                 return Done(id=request.id)
             case AddPlugin():
                 holder = self._keys.plugin(request.spec.public_key)
