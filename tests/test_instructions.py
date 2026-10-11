@@ -3,20 +3,35 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import anyio
+import pytest
+from pydantic_ai import Agent
+from pydantic_ai.messages import ModelRequest, ModelResponse, SystemPromptPart, TextPart, UserPromptPart
+from pydantic_ai.models.test import TestModel
+
 import aid
-from aid.agents import Catalog, Instruction, InstructionsContext, InstructionsProvider, discover
+from aid.agents import ENV_AGENTS_PATH, Catalog, Instruction, InstructionsContext, InstructionsProvider, discover
+from aid.backends.permissions import PermissionWaits
+from aid.backends.pydantic_ai import PydanticAIBackend, open_pydantic_ai
+from aid.coding import CODING, Coding, compact
 from aid.instructions import compose
-from aid.protocol import AgentCatalog
-from aid.spec import PydanticAISpec
+from aid.protocol import AgentCatalog, Started
+from aid.spec import PermissionMode, PydanticAISpec
+from tests.conftest import TESTS
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
     from typing import Any
 
-    import pytest
+    from aid.protocol import SessionEvent
+
+pytestmark = pytest.mark.anyio
 
 PROVIDER_DIR = Path(__file__).parent / "provider_dir"
 EXAMPLE_FILE = Path(__file__).parents[1] / "examples" / "file_instructions.py"
@@ -151,3 +166,160 @@ def test_spec_instruction_fields() -> None:
     )
     assert spec.instruction_providers == ["file_instructions"]
     assert spec.skip_instructions == ["skill:x"]
+
+
+def test_compose_names_the_session(tmp_path: Path) -> None:
+    class Who(InstructionsProvider):
+        def load(self, context: InstructionsContext) -> list[Instruction]:
+            return [Instruction(name="who", text=f"session {context.session_name}")]
+
+    assert compose(tmp_path, {"who": Who}, session_name="s1") == "# who\n\nsession s1"
+    assert compose(tmp_path, {"who": Who}) == "# who\n\nsession "
+
+
+def write_wired_provider(agents: Path) -> None:
+    """A provider that reads its brief from disk at every load, so a rewrite shows at the next compose."""
+    agents.mkdir(exist_ok=True)
+    # Every test writes its own provider module under the same name: drop the cached one so discovery
+    # imports this test's.
+    sys.modules.pop("prov", None)
+    (agents / "prov.py").write_text(
+        "from __future__ import annotations\n\nfrom pathlib import Path\n\nimport aid\n\n\n"
+        "class Prov(aid.InstructionsProvider):\n"
+        '    """Test provider."""\n\n'
+        "    def load(self, context):\n"
+        "        brief = Path(__file__.replace('prov.py', 'brief.txt')).read_text()\n"
+        "        return [\n"
+        "            aid.Instruction(name='brief', text=brief),\n"
+        "            aid.Instruction(name='who', text='session ' + context.session_name),\n"
+        "        ]\n"
+    )
+    (agents / "brief.txt").write_text("Ship it.")
+
+
+def emit_to(events: list[SessionEvent]) -> Any:
+    async def emit(event: SessionEvent) -> None:
+        events.append(event)
+
+    return emit
+
+
+@asynccontextmanager
+async def wired_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, **spec_kwargs: Any
+) -> AsyncGenerator[PydanticAIBackend]:
+    """The test provider on the agents path, and an open backend wired to it."""
+    write_wired_provider(tmp_path / "agents")
+    monkeypatch.setenv(ENV_AGENTS_PATH, str(tmp_path / "agents"))
+    monkeypatch.syspath_prepend(str(TESTS))  # pyright: ignore[reportUnknownMemberType] -- pytest leaves the path untyped
+    spec = PydanticAISpec(cwd=str(tmp_path), target=target, permission=PermissionMode.DENY, **spec_kwargs)
+    state = anyio.Path(tmp_path / "s1")
+    await state.mkdir()
+    async with open_pydantic_ai(spec, state) as backend:
+        yield backend
+
+
+async def open_wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, **spec_kwargs: Any) -> str:
+    """A session wired to the test provider, one turn run: its stored history as text."""
+    async with wired_backend(tmp_path, monkeypatch, target, **spec_kwargs) as backend:
+        await backend.prompt("hi", emit_to([]))
+    return (tmp_path / "s1" / "history.json").read_text()
+
+
+def contents(stored: str) -> list[str]:
+    """Every text content of a stored history, unescaped."""
+    return [
+        part["content"]
+        for message in json.loads(stored)
+        for part in message["parts"]
+        if isinstance(part.get("content"), str)
+    ]
+
+
+async def test_wiring_prepends_composed_instructions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stored = await open_wired(tmp_path, monkeypatch, "agents:echo")
+    assert "# brief\n\nShip it.\n\n# who\n\nsession s1" in contents(stored)
+
+
+async def test_wiring_skip_drops_named_instructions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stored = await open_wired(tmp_path, monkeypatch, "agents:echo", skip_instructions=["brief"])
+    assert not any(content.startswith("# brief") for content in contents(stored))
+    assert "# who\n\nsession s1" in contents(stored)
+
+
+async def test_wiring_unknown_provider_starts_bare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    stored = await open_wired(tmp_path, monkeypatch, "agents:echo", instruction_providers=["nope"])
+    assert not any("# brief" in content for content in contents(stored))
+    assert any("echo hi" in content for content in contents(stored))
+
+
+async def test_compact_recomposes_instructions_from_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    async with wired_backend(tmp_path, monkeypatch, "agents:steady") as backend:
+        await backend.prompt("hi", emit_to([]))
+        await backend.prompt("again", emit_to([]))
+        (tmp_path / "agents" / "brief.txt").write_text("Ship it, twice.")
+        await backend.compact("the work")
+    stored = (tmp_path / "s1" / "history.json").read_text()
+    assert "# brief\n\nShip it, twice.\n\n# who\n\nsession s1" in contents(stored)
+    assert not any(content == "# brief\n\nShip it.\n\n# who\n\nsession s1" for content in contents(stored))
+
+
+def backend_with(tmp_path: Path, history: list[Any], refresh: Any, output: str = "kept") -> tuple[Coding, Any]:
+    agent = Agent(TestModel(custom_output_text=output))
+    coding = Coding(
+        cwd=tmp_path,
+        store=tmp_path / "runs",
+        outputs=tmp_path / "outputs",
+        mode=PermissionMode.ALLOW,
+        timeout=60,
+        waits=PermissionWaits(),
+    )
+    backend = PydanticAIBackend(
+        agent,
+        anyio.Path(tmp_path / "history.json"),
+        history,
+        [],
+        Started(pid=1, agent="t", model="m"),
+        coding,
+        refresh_instructions=refresh,
+    )
+    return coding, backend
+
+
+def aged_history() -> list[Any]:
+    return [
+        ModelRequest(parts=[SystemPromptPart(content="# brief\n\nStale.")]),
+        ModelRequest(parts=[UserPromptPart(content="first")]),
+        ModelResponse(parts=[TextPart(content="did one")]),
+        ModelRequest(parts=[UserPromptPart(content="second")]),
+        ModelResponse(parts=[TextPart(content="did two")]),
+    ]
+
+
+async def compacted(tmp_path: Path, history: list[Any], refresh: Any) -> list[Any]:
+    coding, _ = backend_with(tmp_path, history, refresh)
+    token = CODING.set(coding)
+    try:
+        await compact("the billing work")
+    finally:
+        CODING.reset(token)
+    return json.loads((tmp_path / "history.json").read_bytes())
+
+
+async def test_compact_replaces_stale_instructions(tmp_path: Path) -> None:
+    stored = await compacted(tmp_path, aged_history(), lambda: "# brief\n\nFresh.")
+    [head] = stored[0]["parts"]
+    assert (head["part_kind"], head["content"]) == ("system-prompt", "# brief\n\nFresh.")
+    assert stored[1]["parts"][0]["content"].startswith("[Summary of earlier work]\nkept")
+
+
+async def test_compact_drops_instructions_when_providers_go_quiet(tmp_path: Path) -> None:
+    stored = await compacted(tmp_path, aged_history(), lambda: "")
+    assert stored[0]["parts"][0]["content"].startswith("[Summary of earlier work]\nkept")
+
+
+async def test_compact_keeps_the_head_without_a_refresher(tmp_path: Path) -> None:
+    stored = await compacted(tmp_path, aged_history(), None)
+    [head] = stored[0]["parts"]
+    assert (head["part_kind"], head["content"]) == ("system-prompt", "# brief\n\nStale.")
+    assert stored[1]["parts"][0]["content"].startswith("[Summary of earlier work]\nkept")

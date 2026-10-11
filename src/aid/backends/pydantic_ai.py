@@ -44,6 +44,7 @@ from pydantic_core import to_jsonable_python
 from aid.agents import ENV_AGENTS_PATH, Catalog, agents_path, discover
 from aid.backends.permissions import PermissionWaits
 from aid.coding import CODING, OUTPUTS_DIR, Coding
+from aid.instructions import compose
 from aid.plugins import discover as discover_plugins
 from aid.plugins import plugins_path
 from aid.protocol import (
@@ -223,6 +224,7 @@ class PydanticAIBackend:
         coding: Coding,
         desired_max: int = DEFAULT_DESIRED_MAX,
         max_requests: int | None = None,
+        refresh_instructions: Callable[[], str] | None = None,
     ) -> None:
         self._agent = agent
         self._history_file = history_file
@@ -233,6 +235,7 @@ class PydanticAIBackend:
         self._coding = coding
         self._desired_max = desired_max
         self._max_requests = max_requests
+        self._refresh_instructions = refresh_instructions
         coding.compact = self.compact
 
     def started(self) -> Started:
@@ -299,13 +302,24 @@ class PydanticAIBackend:
 
     async def compact(self, instructions: str) -> str:
         """Summarize the history into a digest focused by `instructions`, and replace everything before the
-        latest turn with it. A direct model call, no tools: the turn's own run stays out of it."""
+        latest turn with it. A direct model call, no tools: the turn's own run stays out of it. The leading
+        system instructions are re-composed from the providers, not kept: instruction files change, and a
+        compaction is when a long session picks that up. Without a refresher they stay as they are."""
         tail_at = max(
             (i for i, m in enumerate(self._history) if any(p.part_kind == "user-prompt" for p in m.parts)),
             default=None,
         )
-        if tail_at is None or not self._history[:tail_at]:
+        lead = next(
+            (i for i, m in enumerate(self._history) if any(p.part_kind == "user-prompt" for p in m.parts)),
+            len(self._history),
+        )
+        if tail_at is None or not self._history[lead:tail_at]:
             return "history is short; nothing compacted"
+        if self._refresh_instructions is None:
+            head = self._history[:lead]
+        else:
+            fresh = await anyio.to_thread.run_sync(self._refresh_instructions)
+            head = [ModelRequest(parts=[SystemPromptPart(content=fresh)])] if fresh else []
         if self._agent.model is None:
             raise AidError("no_model", "compaction needs the agent to name a model")
         model = infer_model(self._agent.model)
@@ -318,7 +332,8 @@ class PydanticAIBackend:
                     )
                 ]
             ),
-            *self._history[:tail_at],
+            *head,
+            *self._history[lead:tail_at],
             ModelRequest(
                 parts=[UserPromptPart(content=f"Summarize this conversation for upcoming work: {instructions}")]
             ),
@@ -328,6 +343,7 @@ class PydanticAIBackend:
         if not digest:
             raise AidError("empty_digest", "the summarizer returned no text")
         self._history = [
+            *head,
             ModelRequest(parts=[UserPromptPart(content=f"[Summary of earlier work]\n{digest}")]),
             *self._history[tail_at:],
         ]
@@ -343,8 +359,9 @@ async def _write_atomic(path: anyio.Path, data: bytes) -> None:
 
 @asynccontextmanager
 async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> AsyncGenerator[PydanticAIBackend]:
-    # Imports and filesystem walks, run off the event loop.
-    catalog = await anyio.to_thread.run_sync(_session_catalog) if spec.agent or spec.aid_tools else Catalog()
+    # Imports and filesystem walks, run off the event loop. Instructions compose for every session: None
+    # selects every provider, so the catalog is always needed.
+    catalog = await anyio.to_thread.run_sync(_session_catalog)
     if spec.agent is not None:
         agent = await anyio.to_thread.run_sync(load_named, catalog, spec.agent)
     elif spec.target is not None:
@@ -353,9 +370,23 @@ async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> Async
         raise ValueError("the spec names no agent")
     toolsets: list[AbstractToolset[Any]] = [aid_toolset(catalog)] if spec.aid_tools and catalog.tools else []
     history_file = state_dir / HISTORY_FILE
-    history = (
+    history: list[ModelMessage] = (
         ModelMessagesTypeAdapter.validate_json(await history_file.read_bytes()) if await history_file.exists() else []
     )
+
+    def refresh_instructions() -> str:
+        return compose(
+            spec.cwd,
+            catalog,
+            select=spec.instruction_providers,
+            skip=frozenset(spec.skip_instructions),
+            session_name=state_dir.name,
+        )
+
+    if not history:
+        composed = await anyio.to_thread.run_sync(refresh_instructions)
+        if composed:
+            history = [ModelRequest(parts=[SystemPromptPart(content=composed)])]
     log.info("history_loaded", agent=spec.agent or spec.target, messages=len(history))
     started = Started(pid=os.getpid(), resumed=bool(history), agent=spec.agent or spec.target, model=model_name(agent))
     coding = Coding(
@@ -378,6 +409,7 @@ async def open_pydantic_ai(spec: PydanticAISpec, state_dir: anyio.Path) -> Async
             coding,
             desired_max=spec.max_context if spec.max_context is not None else DEFAULT_DESIRED_MAX,
             max_requests=spec.max_requests,
+            refresh_instructions=refresh_instructions,
         )
     finally:
         await coding.close()

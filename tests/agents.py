@@ -77,6 +77,10 @@ async def _echo(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[
 echo = Agent(FunctionModel(stream_function=_echo))
 
 
+steady = Agent(TestModel(call_tools=[], custom_output_text="steady"))
+"""A repeatable plain-text agent: every turn and every summary answers the same, with no tools."""
+
+
 async def _failing(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
     """A failing worker: it says something, then raises, so the turn ends with `agent_error`."""
     yield "about to fail"
