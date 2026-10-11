@@ -27,8 +27,12 @@ message per line.
 - `system init` first: session id, tools, models, skills. `system
   bridge_state` tracks the bridge. `assistant` carries model content blocks
   (tool_use included). `result` ends the turn (`subtype: success`, spend
-  attached); the process then exits on its own — one process per turn.
+  attached); aid closes stdin and the process exits — one process per turn.
 - `rate_limit_event` may appear mid-stream; worth surfacing, not fatal.
+- Measured 2026-10-11: with stdin held open the process stays alive after
+  `result` (multi-turn server posture), so aid stops reading at `result`,
+  closes stdin, and reaps the exit. Permission answers go over stdin while
+  the turn runs, which is why stdin stays open until `result`.
 
 ## Permissions
 
@@ -45,7 +49,8 @@ were read in structuredIO.ts, not yet captured live.
 - `--resume <session-id>` continues the on-disk transcript
   (`~/.claude/projects/<slug>/`); the id is stable across processes and is
   what aid persists per session. Verify with one live run.
-- Abort is process kill; what lands on stdout then is unmeasured. Cancel
+- Abort is process kill (measured 2026-10-11: exit -9, the turn ends
+  `sdk_failed`); what lands on stdout then is unmeasured. Cancel
   must also answer pending `can_use_tool` requests, as the ACP backend does.
 
 ## Spend log

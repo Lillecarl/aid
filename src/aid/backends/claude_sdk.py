@@ -144,7 +144,10 @@ class ClaudeSdkBackend:
                             raw, buffer = buffer.split(b"\n", 1)
                             update = await self._handle_line(raw.decode(errors="replace"), emit, chunks, respond)
                             if update is not None:
+                                # The turn's `result`: terminal. Claude stays alive on open stdin, so stop
+                                # reading instead of waiting for an EOF that never comes.
                                 stop_reason = update
+                                return
                     if buffer.strip():
                         update = await self._handle_line(buffer.decode(errors="replace"), emit, chunks, respond)
                         if update is not None:
@@ -157,7 +160,10 @@ class ClaudeSdkBackend:
                         await read_stdout()
                     except BaseException as error:
                         errors.append(error)
+                    finally:
                         tg.cancel_scope.cancel()
+                with contextlib.suppress(OSError):
+                    await process.stdin.aclose()
                 if errors:
                     raise errors[0]
                 await process.wait()

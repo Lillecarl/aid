@@ -85,6 +85,11 @@ case "$FAKE_CLAUDE_MODE" in
     echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}'
     echo '{"type":"result","subtype":"success","result":"hi"}'
     ;;
+  linger)
+    echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}'
+    echo '{"type":"result","subtype":"success","result":"done"}'
+    cat > /dev/null
+    ;;
   *)
     echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi there"}]}}'
     echo '{"type":"result","subtype":"success","result":"hi there"}'
@@ -283,6 +288,24 @@ async def test_deltas_arrive_before_process_exit(tmp_path: Path, monkeypatch: py
         assert seen == ["part one", "part two"]
         assert outputs[0].output == "part onepart two"
         assert outputs[0].stop_reason == "success"
+
+
+async def test_result_ends_the_turn_while_the_process_lingers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real claude stays alive on open stdin after its result; the turn still ends, closing stdin behind it."""
+    fake, _, _ = write_fake(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "linger")
+    state = anyio.Path(str(tmp_path / "state"))
+    await state.mkdir()
+    events: list[SessionEvent] = []
+
+    async def emit(event: SessionEvent) -> None:
+        events.append(event)
+
+    async with open_sdk(make_spec(tmp_path, fake), state) as backend:
+        with anyio.fail_after(15):
+            output = await backend.prompt("hello", emit)
+    assert output.output == "done"
+    assert output.stop_reason == "success"
 
 
 def test_spec_shape() -> None:
