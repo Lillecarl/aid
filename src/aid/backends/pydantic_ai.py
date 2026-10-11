@@ -17,6 +17,7 @@ import structlog
 from pydantic_ai import FunctionToolset, RunCancelled, Tool
 from pydantic_ai.agent import AbstractAgent
 from pydantic_ai.capabilities import ProcessHistory
+from pydantic_ai.exceptions import UserError
 from pydantic_ai.messages import (
     AgentStreamEvent,
     FunctionToolCallEvent,
@@ -33,6 +34,7 @@ from pydantic_ai.messages import (
     TextPartDelta,
     ThinkingPart,
     ThinkingPartDelta,
+    ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
@@ -134,6 +136,36 @@ def without_metadata(history: list[ModelMessage]) -> list[ModelMessage]:
     return [message for message in history if not isinstance(message, _MetadataRequest)]
 
 
+def interrupted_messages(messages: list[ModelMessage]) -> list[ModelMessage]:
+    """Close unanswered calls without replaying them: cancellation can land between a model response and
+    tool execution, before the engine marks its trailing message interrupted. A failed tool may also have
+    applied effects before raising. The next prompt must be resumable without guessing those effects."""
+    pending: dict[str, ToolCallPart] = {}
+    for message in messages:
+        for part in message.parts:
+            if isinstance(part, ToolCallPart):
+                pending[part.tool_call_id] = part
+            elif isinstance(part, ToolReturnPart | RetryPromptPart) and part.tool_name is not None:
+                pending.pop(part.tool_call_id, None)
+    if not pending:
+        return messages
+    return [
+        *messages,
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name=call.tool_name,
+                    tool_call_id=call.tool_call_id,
+                    content="The turn was interrupted before this tool returned. Its effects are unknown; "
+                    "inspect the current state before retrying it.",
+                    outcome="interrupted",
+                )
+                for call in pending.values()
+            ]
+        ),
+    ]
+
+
 def load_target(target: str) -> AbstractAgent[Any, Any]:
     module_name, _, attr_path = target.partition(":")
     obj: object = importlib.import_module(module_name)
@@ -192,7 +224,7 @@ def to_event(event: AgentStreamEvent) -> SessionEvent | None:
             return None
 
 
-def usage_of(result: AgentRunResult[Any]) -> Usage:
+def usage_of(result: AgentRunResult[Any] | AgentRunEvents[Any] | RunCancelled) -> Usage:
     usage = result.usage
     models = [m.model_name for m in result.new_messages() if isinstance(m, ModelResponse) and m.model_name]
     # Providers name thinking tokens differently in `details`.
@@ -236,6 +268,7 @@ class PydanticAIBackend:
         self._desired_max = desired_max
         self._max_requests = max_requests
         self._refresh_instructions = refresh_instructions
+        self._history_lock = anyio.Lock()
         coding.compact = self.compact
 
     def started(self) -> Started:
@@ -263,32 +296,67 @@ class PydanticAIBackend:
             self._coding.emit = None
 
     async def _prompt(self, text: str, emit: Emit) -> Output:
-        limits = UsageLimits(request_limit=self._max_requests) if self._max_requests is not None else None
-        async with self._agent.run_stream_events(
-            text,
-            message_history=self._history,
-            toolsets=self._toolsets,
-            capabilities=[ProcessHistory(_send_policy(len(self._history), self._desired_max))],
-            usage_limits=limits,
-        ) as run:
-            self._run = run
-            try:
+        # None is aid's explicit unlimited policy, not pydantic-ai's implicit 50-request default.
+        limits = UsageLimits(request_limit=self._max_requests)
+        state: AgentRunResult[Any] | AgentRunEvents[Any] | RunCancelled | None = None
+        completed = False
+        try:
+            async with self._agent.run_stream_events(
+                text,
+                message_history=self._history,
+                toolsets=self._toolsets,
+                capabilities=[ProcessHistory(_send_policy(len(self._history), self._desired_max))],
+                usage_limits=limits,
+            ) as run:
+                self._run = run
+                state = run
                 async for event in run:
                     if isinstance(event, AgentRunResultEvent):
                         result = event.result
+                        state = result
+                        completed = True
                         break
                     if (session_event := to_event(event)) is not None:
                         await emit(session_event)
                 else:
                     raise RuntimeError("pydantic_ai run ended without a result")
-            except RunCancelled:
-                return Output(output=None, stop_reason="cancelled")
-            finally:
-                self._run = None
-        self._history = without_metadata(result.all_messages())
-        await _write_atomic(self._history_file, ModelMessagesTypeAdapter.dump_json(self._history))
-        await emit(usage_of(result))
-        return Output(output=to_jsonable_python(result.output), stop_reason="end_turn")
+            return Output(output=to_jsonable_python(result.output), stop_reason="end_turn")
+        except RunCancelled as error:
+            state = error
+            return Output(output=None, stop_reason="cancelled")
+        except anyio.get_cancelled_exc_class() as error:
+            # The context manager has drained the run and attached its detached partial-stream snapshot.
+            state = RunCancelled.from_cancellation(error) or state
+            raise
+        finally:
+            self._run = None
+            if state is not None:
+                # Completed work survives cancellation and failure, not just a successful final answer.
+                with anyio.CancelScope(shield=True):
+                    await self._finish_turn(state, emit, interrupted=not completed)
+
+    async def _finish_turn(
+        self, state: AgentRunResult[Any] | AgentRunEvents[Any] | RunCancelled, emit: Emit, *, interrupted: bool
+    ) -> None:
+        try:
+            messages = without_metadata(state.new_messages())
+            usage = usage_of(state)
+        except UserError:
+            # A run that failed before binding (or a custom AbstractAgent) exposes no partial state.
+            log.warning("run_state_unavailable", exc_info=True)
+            return
+        if interrupted:
+            messages = interrupted_messages(messages)
+        async with self._history_lock:
+            # Compaction owns the older prefix; the run owns only this turn's messages. Replacing the
+            # whole history with all_messages() would silently undo an in-turn compact.
+            self._history = [*self._history, *messages]
+            try:
+                await _write_atomic(self._history_file, ModelMessagesTypeAdapter.dump_json(self._history))
+            except OSError:
+                # Keep the in-memory conversation and the original turn outcome, as the daemon recorder does.
+                log.exception("history_write_failed", path=str(self._history_file))
+        await emit(usage)
 
     async def cancel(self) -> None:
         self._coding.waits.cancel_all()
@@ -304,7 +372,12 @@ class PydanticAIBackend:
         """Summarize the history into a digest focused by `instructions`, and replace everything before the
         latest turn with it. A direct model call, no tools: the turn's own run stays out of it. The leading
         system instructions are re-composed from the providers, not kept: instruction files change, and a
-        compaction is when a long session picks that up. Without a refresher they stay as they are."""
+        compaction is when a long session picks that up. Without a refresher they stay as they are.
+        During a turn it changes only the older prefix: turn finalization appends the run's new messages."""
+        async with self._history_lock:
+            return await self._compact(instructions)
+
+    async def _compact(self, instructions: str) -> str:
         tail_at = max(
             (i for i, m in enumerate(self._history) if any(p.part_kind == "user-prompt" for p in m.parts)),
             default=None,

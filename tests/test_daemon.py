@@ -314,7 +314,8 @@ async def test_pydantic_ai_cancel(daemon: Paths, tmp_path: Path) -> None:
                     await session.cancel()
             after = await session.run("hi")
     assert events[-1] == Output(output=None, stop_reason="cancelled")
-    assert after.output == "turn 1: echo hi"
+    # The interrupted first turn is retained for the model, not just the visible daemon transcript.
+    assert after.output == "turn 2: echo hi"
 
 
 async def test_compact_session(daemon: Paths, tmp_path: Path) -> None:

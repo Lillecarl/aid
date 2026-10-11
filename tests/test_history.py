@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 import anyio
 import pytest
+from anyio.lowlevel import checkpoint
 
 import aid
 from aid.history import HistoryLog, Recorder
@@ -68,6 +69,26 @@ async def test_wait_after(tmp_path: Path) -> None:
 async def test_empty_log(tmp_path: Path) -> None:
     page = await HistoryLog(anyio.Path(tmp_path / "none.jsonl")).page()
     assert (page.entries, page.has_older, page.has_newer, page.total) == ([], False, False, 0)
+
+
+async def test_cancellation_during_page_read_closes_the_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    log = await filled(tmp_path / "h.jsonl", 3)
+    opened: list[anyio.AsyncFile[bytes]] = []
+    seek = anyio.AsyncFile[bytes].seek
+    with anyio.CancelScope() as scope:
+
+        async def cancel_on_seek(file: anyio.AsyncFile[bytes], offset: int, whence: int = 0) -> int:
+            opened.append(file)
+            result = await seek(file, offset, whence)
+            scope.cancel()
+            return result
+
+        monkeypatch.setattr(anyio.AsyncFile, "seek", cancel_on_seek)
+        await log.page()
+        await checkpoint()
+        pytest.fail("the caller's cancellation must still propagate")
+    assert scope.cancelled_caught
+    assert opened and all(file.wrapped.closed for file in opened)
 
 
 async def test_reopened_log_continues_numbering(tmp_path: Path) -> None:

@@ -55,8 +55,9 @@ class HistoryLog:
             if position != len(data):
                 # A line cut short by a crash. Appending after it would glue the next entry onto it.
                 log.warning("unfinished_line_dropped", path=str(self._path), bytes=len(data) - position)
-                async with await anyio.open_file(self._path, "r+b") as f:
-                    await f.truncate(position)
+                with anyio.CancelScope(shield=True):
+                    async with await anyio.open_file(self._path, "r+b") as f:
+                        await f.truncate(position)
         self._offsets = offsets
         return offsets
 
@@ -117,10 +118,13 @@ class HistoryLog:
                 start = max(0, end - limit)
             entries: list[HistoryEntry] = []
             if start < end:
-                async with await anyio.open_file(self._path, "rb") as f:
-                    await f.seek(offsets[start])
-                    data = await f.read(offsets[end] - offsets[start])
-                entries = self._parse(data)
+                # AsyncFile.close is an await too: cancellation during a read otherwise skips closing
+                # the descriptor. Shield this bounded page, not the caller's whole history traversal.
+                with anyio.CancelScope(shield=True):
+                    async with await anyio.open_file(self._path, "rb") as f:
+                        await f.seek(offsets[start])
+                        data = await f.read(offsets[end] - offsets[start])
+                    entries = self._parse(data)
         return HistoryPage(entries=entries, has_older=start > 0, has_newer=end < total, total=total)
 
 
