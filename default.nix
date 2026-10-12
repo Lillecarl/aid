@@ -240,6 +240,7 @@ let
           webUi = ui;
           inherit speechModel grammars browsers;
           inherit (pkgs) cacert;
+          testArgs = lib.filter (arg: arg != "") (lib.splitString " " (builtins.getEnv "AID_TEST_ARGS"));
         };
       }
     );

@@ -23,6 +23,7 @@
   browsers,
   # Certificates, which pygit2 needs to import and the sandbox lacks.
   cacert,
+  testArgs ? [ ],
 }:
 let
   root = ../.;
@@ -50,6 +51,7 @@ let
     inherit root;
     fileset = lib.fileset.unions [
       (root + "/tests")
+      (root + "/examples")
       # Tests import plugin code the same way the daemon's discovery loads it.
       (root + "/plugins")
       (root + "/pyproject.toml")
@@ -77,7 +79,7 @@ let
         # (pyedit's) fails to import with no certificates at all: give both a real bundle.
         export SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt
         # One run tests one browser; the sandbox runs chromium, developers repeat with --browser firefox.
-        python -m pytest -q -p no:cacheprovider --browser chromium
+        python -m pytest -q -p no:cacheprovider --browser chromium ${lib.escapeShellArgs testArgs}
         touch $out
       '';
 in
