@@ -4,10 +4,22 @@ from typing import TYPE_CHECKING
 
 import anyio
 import pytest
+import zmq
 
 import aid
-from aid.daemon import wake_prompt
-from aid.protocol import HistoryItem, MessageEntry, Output, PromptEntry, SessionStatus, Started, TextDelta
+from aid.daemon import Daemon, wake_prompt
+from aid.protocol import (
+    AidError,
+    HistoryItem,
+    MessageEntry,
+    Output,
+    Prompt,
+    PromptEntry,
+    SessionStatus,
+    Started,
+    TextDelta,
+    TurnError,
+)
 from aid.spec import McpHttp, PermissionMode
 from tests.conftest import acp_spec, py_spec
 from tests.test_coding import plan
@@ -15,7 +27,12 @@ from tests.test_coding import plan
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from aid.daemon import (
+        _Session,  # pyright: ignore[reportPrivateUsage] -- inject cancellation at the daemon's dispatch boundary
+    )
+    from aid.launcher import ForkserverLauncher
     from aid.paths import Paths
+    from aid.protocol import Request
 
 pytestmark = pytest.mark.anyio
 
@@ -107,6 +124,123 @@ async def test_a_message_wakes_a_pydantic_ai_session(daemon: Paths, tmp_path: Pa
             items = await outputs_after_message(session)
     assert isinstance(items[-1], Output)
     assert str(items[-1].output).startswith("turn 1: echo Message from a person using aid")
+
+
+@pytest.mark.parametrize("failure", ["startup", "transport"])
+@pytest.mark.parametrize("recovery", ["restart", "start"])
+async def test_failed_wake_retains_messages_across_restart(
+    paths: Paths,
+    launcher: ForkserverLauncher,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+    recovery: str,
+) -> None:
+    async def fail_start(*args: object) -> None:
+        raise AidError("start_failed", "injected startup failure")
+
+    async def fail_send(*args: object) -> None:
+        raise zmq.ZMQError(zmq.EHOSTUNREACH)
+
+    with anyio.fail_after(TIMEOUT):
+        server = Daemon(paths, launcher, plugin_dirs=[])
+        async with anyio.create_task_group() as tg:
+            await tg.start(server.serve)
+            async with aid.connect(paths) as client:
+                session = await client.create("recipient", acp_spec(tmp_path))
+                await session.stop()
+                if failure == "startup":
+                    monkeypatch.setattr(server, "_ensure_running", fail_start)
+                else:
+                    monkeypatch.setattr(server, "_send_worker", fail_send)
+                await client.send_message("recipient", "keep this", sender="sender")
+                async for entry in session.follow_history():
+                    if isinstance(entry.item, TurnError):
+                        assert entry.item.code == "undelivered"
+                        break
+                assert (await session.status()).pending == 1
+                monkeypatch.undo()
+                if recovery == "start":
+                    await session.start()
+                    await outputs_after_message(session)
+            tg.cancel_scope.cancel()
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
+            async with aid.connect(paths) as client:
+                session = client.session("recipient")
+                items = await outputs_after_message(session)
+                assert items[-1] == Output(
+                    output="echo: " + wake_prompt([MessageEntry(sender="sender", text="keep this")]),
+                    stop_reason="end_turn",
+                )
+                assert sum(isinstance(item, MessageEntry) for item in items) == 1
+                assert sum(isinstance(item, Output) for item in items) == 1
+                assert (await session.status()).pending == 0
+            tg.cancel_scope.cancel()
+
+
+async def test_message_queued_during_a_turn_survives_daemon_shutdown(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path
+) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
+            async with aid.connect(paths) as client:
+                session = await client.create("recipient", acp_spec(tmp_path))
+                async for event in session.stream("slow"):
+                    if event == TextDelta(text="waiting"):
+                        await client.send_message("recipient", "queued before shutdown")
+                        assert (await session.status()).pending == 1
+                        break
+            tg.cancel_scope.cancel()
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
+            async with aid.connect(paths) as client:
+                session = client.session("recipient")
+                async for entry in session.follow_history():
+                    if isinstance(entry.item, Output) and "queued before shutdown" in str(entry.item.output):
+                        break
+                assert (await session.status()).pending == 0
+            tg.cancel_scope.cancel()
+
+
+async def test_interrupted_dispatch_survives_restart_without_replay(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with anyio.fail_after(TIMEOUT):
+        server = Daemon(paths, launcher, plugin_dirs=[])
+        dispatching = anyio.Event()
+        send = server._send_worker  # pyright: ignore[reportPrivateUsage] -- pause dispatch while keeping shutdown requests working
+
+        async def pause_dispatch(session: _Session, request: Request) -> None:
+            if isinstance(request, Prompt):
+                dispatching.set()
+                await anyio.sleep_forever()
+            await send(session, request)
+
+        async with anyio.create_task_group() as tg:
+            await tg.start(server.serve)
+            async with aid.connect(paths) as client:
+                await client.create("recipient", acp_spec(tmp_path))
+                monkeypatch.setattr(server, "_send_worker", pause_dispatch)
+                await client.send_message("recipient", "uncertain work")
+                await dispatching.wait()
+            tg.cancel_scope.cancel()
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
+            async with aid.connect(paths) as client:
+                session = client.session("recipient")
+                status = await session.status()
+                assert status.pending == 0
+                assert status.attention is not None
+                assert "interrupted" in status.attention
+                assert not status.running
+                entries = (await session.history()).entries
+                assert sum(isinstance(e.item, MessageEntry) for e in entries) == 1
+                assert not any(isinstance(e.item, Output) for e in entries)
+                errors = [e.item for e in entries if isinstance(e.item, TurnError)]
+                assert [error.code for error in errors] == ["delivery_uncertain"]
+            tg.cancel_scope.cancel()
 
 
 async def test_refused_messages(daemon: Paths, tmp_path: Path) -> None:

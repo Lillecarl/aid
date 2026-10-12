@@ -24,6 +24,7 @@ from pydantic import ValidationError
 from aid import events, plugin_host, plugins, zap
 from aid.client import spawn_plugin_client
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
+from aid.inbox import INBOX_FILE, Inbox
 from aid.launcher import CommandLauncher, WorkerArgs
 from aid.loops import LoopEvidence, ToolLoopDetector
 from aid.paths import hook_socket
@@ -136,6 +137,7 @@ class _Session:
     name: str
     spec: AgentSpec
     history: HistoryLog
+    inbox: Inbox
     handle: WorkerHandle | None = None
     key: str | None = None
     """The CURVE public key issued to the running worker."""
@@ -149,8 +151,6 @@ class _Session:
     lock: anyio.Lock = field(default_factory=anyio.Lock)
     turn: str | None = None
     """The prompt running now, a client's or a wake. The worker takes one at a time."""
-    inbox: list[MessageEntry] = field(default_factory=list[MessageEntry])
-    """Messages not yet handed over: to a wake turn, or to the channel server of interactive Claude."""
     mail: anyio.Event = field(default_factory=anyio.Event)
     """Set when `inbox` gains a message, for a channel server waiting on it."""
     started: Started | None = None
@@ -542,6 +542,9 @@ class Daemon:
                 tg.start_soon(self._plugin_loop, self._local_plugins, True)
                 task_status.started()
                 self._serving = True
+                for session in self._sessions.values():
+                    if session.inbox:
+                        tg.start_soon(self._wake, session)
                 tg.start_soon(self._reconcile_plugins)
                 try:
                     await anyio.sleep_forever()
@@ -575,7 +578,11 @@ class Daemon:
             except ValidationError:
                 log.exception("invalid_session_spec", session=session_dir.name)
                 continue
-            self._sessions[session_dir.name] = self._new_session(session_dir.name, spec)
+            session = self._new_session(session_dir.name, spec)
+            session.attention = await session.inbox.restore()
+            if session.inbox:
+                session.mail.set()
+            self._sessions[session_dir.name] = session
         log.info("sessions_restored", count=len(self._sessions))
         for session in self._sessions.values():
             try:
@@ -812,8 +819,11 @@ class Daemon:
                 if not session.inbox:
                     with anyio.move_on_after(request.wait):
                         await session.mail.wait()
-                taken, session.inbox = session.inbox, []
+                taken = await session.inbox.claim(request.id)
+                await session.inbox.finish(request.id)
                 session.mail = anyio.Event()
+                if session.inbox:
+                    session.mail.set()
                 return Done(id=request.id, data=[m.model_dump(mode="json") for m in taken])
             case Cancel():
                 session = self._session(request.session)
@@ -926,7 +936,10 @@ class Daemon:
                 )
                 return Done(id=request.id, data=goal.model_dump(mode="json"))
             case StartSession():
-                await self._ensure_running(self._session(request.session))
+                session = self._session(request.session)
+                await self._ensure_running(session)
+                if session.inbox and not session.uses_channel and self._tg is not None:
+                    self._tg.start_soon(self._deliver, session)
                 return Done(id=request.id)
             case StopSession():
                 await self._stop(self._session(request.session))
@@ -976,7 +989,7 @@ class Daemon:
             anyio.Path(self._paths.session_dir(name)) / HISTORY_FILE,
             on_append=lambda entry: self._publish_entry(name, entry),
         )
-        return _Session(name, spec, history)
+        return _Session(name, spec, history, Inbox(anyio.Path(self._paths.session_dir(name)) / INBOX_FILE, history))
 
     def _session(self, name: str) -> _Session:
         if (session := self._sessions.get(name)) is None:
@@ -1011,6 +1024,7 @@ class Daemon:
         await session_dir.mkdir(mode=SESSION_DIR_MODE, parents=True, exist_ok=True)
         await (session_dir / SPEC_FILE).write_bytes(AgentSpecAdapter.dump_json(request.spec))
         try:
+            await session.inbox.initialize()
             await self._ensure_running(session)
         except BaseException:
             del self._sessions[session.name]
@@ -1066,13 +1080,14 @@ class Daemon:
         turn runs."""
         if self._tg is None:
             raise RuntimeError("daemon is not serving")
-        await Recorder(session.history, turn).message(message)
-        session.inbox.append(message)
+        await session.inbox.accept(message, turn)
         session.mail.set()
         # The sender is often an agent mid-turn, waiting on its tool call: it gets its answer before the wake.
         self._tg.start_soon(self._wake, session)
 
     async def _wake(self, session: _Session) -> None:
+        if not self._serving:
+            return
         if not session.uses_channel:
             await self._deliver(session)
             return
@@ -1085,26 +1100,45 @@ class Daemon:
 
     async def _deliver(self, session: _Session) -> None:
         """Hand the inbox to a turn of its own, unless a turn is running: its end calls this again."""
-        if session.turn is not None or not session.inbox:
+        if not self._serving or session.turn is not None or not session.inbox:
             return
-        messages, session.inbox = session.inbox, []
-        request = Prompt(session=session.name, text=wake_prompt(messages))
+        request = Prompt(session=session.name, text="")
         session.turn = request.id
         session.tool_loops = ToolLoopDetector()
         session.loop_suspected = session.supervisor_interrupted = False
         recorder = Recorder(session.history, request.id)
+        claimed = False
+        sent = False
         try:
             await self._ensure_running(session)
+            messages = await session.inbox.claim(request.id)
+            claimed = True
+            request = request.model_copy(update={"text": wake_prompt(messages)})
             self._routes[request.id] = _Route(None, session.name, recorder)
             await self._send_worker(session, request)
+            sent = True
             await self._publish_turn(session.name, request.id, "started", "wake")
         except (AidError, zmq.ZMQError) as error:
-            log.exception("deliver_failed", session=session.name, count=len(messages))
+            log.exception("deliver_failed", session=session.name)
             self._routes.pop(request.id, None)
             session.turn = None
+            rejected = claimed and not sent and isinstance(error, zmq.ZMQError)
+            if rejected:
+                await session.inbox.release(request.id)
             await self._record(
-                _Route(None, session.name, recorder), Failure(id=request.id, code="undelivered", message=str(error))
+                _Route(None, session.name, recorder),
+                Failure(
+                    id=request.id,
+                    code="delivery_uncertain" if claimed and not rejected else "undelivered",
+                    message=str(error),
+                ),
             )
+            await session.inbox.finish(request.id)
+            session.attention = "Message delivery failed; inspect history before retrying"
+        except BaseException:
+            self._routes.pop(request.id, None)
+            session.turn = None
+            raise
         await self._publish_changes()
 
     async def _publish_turn(self, name: str, turn: str, phase: Literal["started", "ended"], reason: str) -> None:
@@ -1118,6 +1152,7 @@ class Daemon:
         session = self._sessions.get(name)
         if session is None or session.turn != turn:
             return
+        await session.inbox.finish(turn)
         session.turn = None
         session.permissions.clear()
         self._disarm_session_backstops(name)
