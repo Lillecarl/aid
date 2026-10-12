@@ -92,7 +92,9 @@ async def test_real_litelm_transport_tool_loop_and_usage(tmp_path: Path, monkeyp
         usage = [item for item in events if isinstance(item, Usage)]
         assert len(usage) == 1
         assert (usage[0].requests, usage[0].input_tokens, usage[0].output_tokens) == (2, 20, 8)
+        assert usage[0].models == ["local"]
         history = ModelMessagesTypeAdapter.validate_json((tmp_path / "history.json").read_bytes())
+        assert all(m.model_name == "local" for m in history if isinstance(m, ModelResponse))
         assert any(isinstance(p, ToolReturnPart) and p.content == 5 for m in history for p in m.parts)
         assert b"Session metadata" not in (tmp_path / "history.json").read_bytes()
     finally:

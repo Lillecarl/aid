@@ -329,6 +329,8 @@ class LiteLMBackend:
                         try:
                             async for delta in stream:
                                 accumulate(response, indexes, delta)
+                                if delta.model_name:
+                                    response.model_name = delta.model_name
                                 if delta.usage is not None:
                                     usage_observed = True
                                     for name in RequestUsage.__dataclass_fields__:
@@ -358,8 +360,9 @@ class LiteLMBackend:
                                     "thought_tokens": (usage.thought_tokens or 0) + request_usage.reasoning_tokens,
                                 }
                             )
-                        if self._model.model_name not in usage.models:
-                            usage = usage.model_copy(update={"models": [*usage.models, self._model.model_name]})
+                        resolved_model = response.model_name or self._model.model_name
+                        if resolved_model not in usage.models:
+                            usage = usage.model_copy(update={"models": [*usage.models, resolved_model]})
                     calls = [part for part in response.parts if isinstance(part, ToolCallPart)]
                     if not calls:
                         answer = "".join(part.content for part in response.parts if isinstance(part, TextPart))

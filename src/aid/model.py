@@ -49,6 +49,7 @@ class StreamDelta:
     index: int = 0
     part: TextPart | ThinkingPart | ToolCallPart | None = None
     usage: RequestUsage | None = None
+    model_name: str | None = None
 
 
 class Model(Protocol):
@@ -162,6 +163,8 @@ class LiteLMModel:
         ids: dict[int, str] = {}
         try:
             async for chunk in stream:
+                if resolved_model := getattr(chunk, "model", None):
+                    yield StreamDelta(model_name=resolved_model)
                 usage = getattr(chunk, "usage", None)
                 if usage is not None:
                     prompt_details: Any = getattr(usage, "prompt_tokens_details", None) or {}
