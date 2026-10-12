@@ -35,7 +35,7 @@ class Tool:
     def __post_init__(self) -> None:
         self.name = self.name or self.fn.__name__
         self.description = self.description or inspect.getdoc(self.fn) or ""
-        hints = get_type_hints(self.fn)
+        hints = get_type_hints(self.fn, include_extras=True)
         parameters = list(inspect.signature(self.fn).parameters.values())
         if self.takes_ctx is None:
             self.takes_ctx = bool(parameters and hints.get(parameters[0].name) is RunContext)

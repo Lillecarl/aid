@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 import anyio
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from aid.agent import Agent
+from aid.agent import Agent, ModelRetry, Tool
 from aid.backends.litelm import LiteLMBackend, UsageLimitExceeded
 from aid.backends.permissions import PermissionWaits
 from aid.coding import Coding, coding_tools
@@ -102,6 +102,23 @@ async def test_invalid_tool_arguments_return_a_correction_without_execution(tmp_
 
 class TypedAnswer(BaseModel):
     count: int
+
+
+async def test_tool_preserves_pydantic_argument_constraints() -> None:
+    executed: list[int] = []
+
+    def positive(value: Annotated[int, Field(gt=0, description="A positive value")]) -> int:
+        executed.append(value)
+        return value
+
+    tool = Tool(positive)
+    schema = tool.definition()["function"]["parameters"]["properties"]["value"]
+    assert schema["exclusiveMinimum"] == 0
+    assert schema["description"] == "A positive value"
+    with pytest.raises(ModelRetry):
+        await tool.call({"value": 0}, "c1")
+    assert executed == []
+    assert await tool.call({"value": 1}, "c2") == 1
 
 
 @pytest.mark.parametrize("identities", [[""], ["c1", "c1"]])
