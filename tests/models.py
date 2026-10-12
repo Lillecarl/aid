@@ -52,6 +52,8 @@ class FunctionModel:
     ) -> None:
         self.function = function
         self.stream_function = stream_function
+        callback = function or stream_function
+        self.model_name = f"function::{callback.__name__}" if callback is not None else "function:test"
 
     async def request(self, messages: list[ModelMessage], info: ModelInfo) -> ModelResponse:
         if self.function is not None:
