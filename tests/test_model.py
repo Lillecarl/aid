@@ -93,6 +93,8 @@ async def test_real_litelm_transport_tool_loop_and_usage(tmp_path: Path, monkeyp
         assert len(usage) == 1
         assert (usage[0].requests, usage[0].input_tokens, usage[0].output_tokens) == (2, 20, 8)
         assert usage[0].models == ["local"]
+        assert usage[0].context_size == native_backend.DEFAULT_DESIRED_MAX
+        assert usage[0].context_used is not None and usage[0].context_used > 0
         history = ModelMessagesTypeAdapter.validate_json((tmp_path / "history.json").read_bytes())
         assert all(m.model_name == "local" for m in history if isinstance(m, ModelResponse))
         assert any(isinstance(p, ToolReturnPart) and p.content == 5 for m in history for p in m.parts)
@@ -173,6 +175,28 @@ async def test_backend_shutdown_closes_cached_clients(tmp_path: Path, monkeypatc
         assert (await session.prompt("go", emit)).output == "done"
         assert clients and not clients[0].is_closed
     assert all(client.is_closed for client in clients)
+
+
+async def test_open_litelm_reports_resume_only_for_stored_history(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A fresh session seeds its system prompt but has no stored conversation: it started, it did not resume."""
+    monkeypatch.setattr(native_backend, "_session_catalog", Catalog)
+
+    def load_target(target: str) -> Agent:
+        return Agent("openai/local", instructions="You are a test agent.")
+
+    monkeypatch.setattr(native_backend, "load_target", load_target)
+    spec = LiteLMSpec(cwd=str(tmp_path), target="local:agent", instruction_providers=[], aid_tools=False)
+
+    async with native_backend.open_litelm(spec, anyio.Path(tmp_path)) as fresh:
+        assert fresh.started().resumed is False
+
+    (tmp_path / "history.json").write_bytes(
+        ModelMessagesTypeAdapter.dump_json([ModelRequest(parts=[UserPromptPart("earlier")])])
+    )
+    async with native_backend.open_litelm(spec, anyio.Path(tmp_path)) as resumed:
+        assert resumed.started().resumed is True
 
 
 def test_signed_thinking_and_tool_identity_survive_anthropic_translation() -> None:

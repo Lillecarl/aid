@@ -2616,7 +2616,7 @@
     },
     "Usage": {
       "additionalProperties": false,
-      "description": "Tokens a turn used, as its agent reports them; sent just before the turn's Output. None where the agent\nsays nothing.\n\nWhat \"the turn\" covers differs by agent (measured 2026-09):\n- claude-agent-acp 0.75.1: every model call of the turn, subagents included.\n- opencode 1.x: the turn's last model response only.\n- LiteLM: the run, every request.\n- claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,\n  which aid does not read.",
+      "description": "Tokens a turn used, as its agent reports them; sent just before the turn's Output. None where the agent\nsays nothing.\n\nWhat \"the turn\" covers differs by agent (measured 2026-09):\n- claude-agent-acp 0.75.1: every model call of the turn, subagents included.\n- opencode 1.x: the turn's last model response only.\n- LiteLM: the run, every request.\n- claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,\n  which aid does not read.\n\n`context_used`/`context_size` come from the agent's own report for ACP and claude-tty. LiteLM sets them\nitself: `context_size` is the session's context gauge (`max_context`, half the model window by default) and\n`context_used` is aid's rough estimate of the send view, since the engine reports no window of its own.",
       "properties": {
         "agent": {
           "anyOf": [

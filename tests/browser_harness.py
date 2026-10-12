@@ -58,13 +58,26 @@ async def seed_acp_session(daemon: Paths, cwd: Path, name: str, **env: str) -> N
 
 async def login_ui(page: Page, web: Web) -> None:
     """Through dex's own form, as a person: email and password, then the app shell."""
-    with anyio.fail_after(TIMEOUT):
-        await page.goto(f"{web.url}/")
-        await page.locator('input[name="login"]').fill(ALLOWED)
-        await page.locator('input[name="password"]').fill("password")
-        await page.locator('input[name="password"]').press("Enter")
-        # The session list mounting means the login round-tripped and the app rendered.
-        await page.get_by_test_id("session-list").wait_for(timeout=TIMEOUT * 1000)
+    errors: list[str] = []
+
+    def record_error(error: object) -> None:
+        errors.append(str(error))
+
+    page.on("pageerror", record_error)
+    try:
+        with anyio.fail_after(TIMEOUT):
+            await page.goto(f"{web.url}/")
+            await page.locator('input[name="login"]').fill(ALLOWED)
+            await page.locator('input[name="password"]').fill("password")
+            await page.locator('input[name="password"]').press("Enter")
+            await page.get_by_test_id("session-list").wait_for(timeout=TIMEOUT * 1000)
+    except Exception:
+        print(f"Login page: {page.url.split('?')[0]}")
+        print(f"Page errors: {errors}")
+        print(await page.locator("body").inner_text())
+        raise
+    finally:
+        page.remove_listener("pageerror", record_error)
 
 
 async def open_session(page: Page, name: str) -> None:

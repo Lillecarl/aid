@@ -526,6 +526,10 @@ class Usage(_Message):
     - LiteLM: the run, every request.
     - claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,
       which aid does not read.
+
+    `context_used`/`context_size` come from the agent's own report for ACP and claude-tty. LiteLM sets them
+    itself: `context_size` is the session's context gauge (`max_context`, half the model window by default) and
+    `context_used` is aid's rough estimate of the send view, since the engine reports no window of its own.
     """
 
     type: Literal["usage"] = "usage"

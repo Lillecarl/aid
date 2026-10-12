@@ -100,6 +100,20 @@ def prune_history(
     return pruned
 
 
+def estimate_tokens(messages: list[ModelMessage]) -> int:
+    """The gauge's rough unit: the serialized size over four."""
+    return len(ModelMessagesTypeAdapter.dump_json(messages)) // 4
+
+
+def context_tokens(history: list[ModelMessage], boundary: int, *, preserve_signed_thinking: bool = False) -> int:
+    """How many tokens a request over `history` would carry, in the gauge's own unit.
+
+    Rough but monotonic, and the same estimate the per-request `context_pct` uses, so the number a turn
+    reports as `context_used` matches what its requests measured.
+    """
+    return estimate_tokens(prune_history(history, boundary, preserve_signed_thinking=preserve_signed_thinking))
+
+
 def _send_policy(
     boundary: int, desired_max: int, *, preserve_signed_thinking: bool = False
 ) -> Callable[[list[ModelMessage]], list[ModelMessage]]:
@@ -110,7 +124,7 @@ def _send_policy(
     def policy(messages: list[ModelMessage]) -> list[ModelMessage]:
         clean = [message for message in messages if not isinstance(message, _MetadataRequest)]
         pruned = prune_history(clean, boundary, preserve_signed_thinking=preserve_signed_thinking)
-        used = len(ModelMessagesTypeAdapter.dump_json(pruned)) // 4
+        used = estimate_tokens(pruned)
         meta = {"context_pct": round(used / desired_max * 100), "unixtime": int(time.time())}
         return [
             *pruned,
@@ -275,6 +289,10 @@ class LiteLMBackend:
     def started(self) -> Started:
         return self._started
 
+    def _preserve_signed_thinking(self) -> bool:
+        """Anthropic rejects a signed block whose signature the wire dropped, so keep them whole."""
+        return self._model.model_name.startswith("anthropic/")
+
     def answer_permission(
         self,
         request_id: str,
@@ -322,7 +340,7 @@ class LiteLMBackend:
                     wire = _send_policy(
                         len(self._history),
                         self._desired_max,
-                        preserve_signed_thinking=self._model.model_name.startswith("anthropic/"),
+                        preserve_signed_thinking=self._preserve_signed_thinking(),
                     )([*self._history, *messages[:-1]])
                     try:
                         stream = self._model.stream(wire, info)
@@ -413,6 +431,18 @@ class LiteLMBackend:
                         await _write_atomic(self._history_file, ModelMessagesTypeAdapter.dump_json(self._history))
                     except OSError:
                         log.exception("history_write_failed", path=str(self._history_file))
+                    # The turn's end state: what a request over the stored history would carry, against the
+                    # gauge. The next turn sends exactly this (its boundary is the whole history) plus its prompt.
+                    usage = usage.model_copy(
+                        update={
+                            "context_used": context_tokens(
+                                self._history,
+                                len(self._history),
+                                preserve_signed_thinking=self._preserve_signed_thinking(),
+                            ),
+                            "context_size": self._desired_max,
+                        }
+                    )
                 await emit(usage)
 
     async def cancel(self) -> None:
@@ -501,6 +531,8 @@ async def open_litelm(spec: LiteLMSpec, state_dir: anyio.Path) -> AsyncGenerator
     history: list[ModelMessage] = (
         ModelMessagesTypeAdapter.validate_json(await history_file.read_bytes()) if await history_file.exists() else []
     )
+    # A loaded conversation, not the fresh system prompt seeded below: that seed is a start, not a resume.
+    resumed = bool(history)
 
     def refresh_instructions() -> str:
         composed = compose(
@@ -517,7 +549,7 @@ async def open_litelm(spec: LiteLMSpec, state_dir: anyio.Path) -> AsyncGenerator
         if composed:
             history = [ModelRequest(parts=[SystemPromptPart(content=composed)])]
     log.info("history_loaded", agent=spec.agent or spec.target, messages=len(history))
-    started = Started(pid=os.getpid(), resumed=bool(history), agent=spec.agent or spec.target, model=model_name(agent))
+    started = Started(pid=os.getpid(), resumed=resumed, agent=spec.agent or spec.target, model=model_name(agent))
     coding = Coding(
         cwd=Path(spec.cwd),
         store=Path(state_dir) / RUNS_DIR,

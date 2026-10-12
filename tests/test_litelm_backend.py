@@ -10,7 +10,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from aid.agent import Agent, ModelRetry, Tool
-from aid.backends.litelm import LiteLMBackend, UsageLimitExceeded
+from aid.backends.litelm import DEFAULT_DESIRED_MAX, LiteLMBackend, UsageLimitExceeded
 from aid.backends.permissions import PermissionWaits
 from aid.coding import Coding, coding_tools
 from aid.messages import (
@@ -46,6 +46,7 @@ async def backend(
     *,
     history: list[ModelMessage] | None = None,
     max_requests: int | None = None,
+    desired_max: int = DEFAULT_DESIRED_MAX,
 ) -> AsyncGenerator[LiteLMBackend]:
     coding = Coding(
         cwd=directory,
@@ -64,6 +65,7 @@ async def backend(
             Started(pid=1, agent="test", model="local"),
             coding,
             max_requests=max_requests,
+            desired_max=desired_max,
         )
     finally:
         await coding.close()
@@ -179,6 +181,28 @@ async def test_missing_usage_stays_unknown(tmp_path: Path) -> None:
     usage = next(event for event in events if isinstance(event, Usage))
     assert usage.requests == 1
     assert usage.input_tokens is usage.output_tokens is usage.cache_read_tokens is None
+    # The context gauge is aid's own estimate, so it is known even when the engine reports no tokens.
+    assert usage.context_size == DEFAULT_DESIRED_MAX
+    assert usage.context_used is not None and usage.context_used > 0
+
+
+async def test_turn_reports_the_context_gauge(tmp_path: Path) -> None:
+    """LiteLM has no engine window to report, so a turn reports aid's estimate against the session's gauge."""
+    events: list[SessionEvent] = []
+
+    async def emit(event: SessionEvent) -> None:
+        events.append(event)
+
+    async with backend(tmp_path, Agent(TestModel(call_tools=[])), desired_max=1000) as session:
+        await session.prompt("first", emit)
+        first = [event for event in events if isinstance(event, Usage)][-1]
+        assert first.context_size == 1000
+        assert first.context_used is not None and first.context_used > 0
+        await session.prompt("second", emit)
+
+    second = [event for event in events if isinstance(event, Usage)][-1]
+    assert second.context_size == 1000
+    assert second.context_used is not None and second.context_used > first.context_used
 
 
 async def test_unset_request_budget_does_not_inherit_library_limit(tmp_path: Path) -> None:
