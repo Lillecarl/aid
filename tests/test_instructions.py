@@ -11,19 +11,19 @@ from typing import TYPE_CHECKING
 
 import anyio
 import pytest
-from pydantic_ai import Agent
-from pydantic_ai.messages import ModelRequest, ModelResponse, SystemPromptPart, TextPart, UserPromptPart
-from pydantic_ai.models.test import TestModel
 
 import aid
+from aid.agent import Agent
 from aid.agents import ENV_AGENTS_PATH, Catalog, Instruction, InstructionsContext, InstructionsProvider, discover
+from aid.backends.litelm import LiteLMBackend, open_litelm
 from aid.backends.permissions import PermissionWaits
-from aid.backends.pydantic_ai import PydanticAIBackend, open_pydantic_ai
 from aid.coding import CODING, Coding, compact
 from aid.instructions import compose
+from aid.messages import ModelRequest, ModelResponse, SystemPromptPart, TextPart, UserPromptPart
 from aid.protocol import AgentCatalog, Started
-from aid.spec import PermissionMode, PydanticAISpec
+from aid.spec import LiteLMSpec, PermissionMode
 from tests.conftest import TESTS
+from tests.models import TestModel
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -159,9 +159,9 @@ def test_default_provider_skips_absent_files(tmp_path: Path, monkeypatch: pytest
 
 
 def test_spec_instruction_fields() -> None:
-    assert PydanticAISpec(cwd="/", agent="briefing").instruction_providers is None
-    assert PydanticAISpec(cwd="/", agent="briefing").skip_instructions == []
-    spec = PydanticAISpec(
+    assert LiteLMSpec(cwd="/", agent="briefing").instruction_providers is None
+    assert LiteLMSpec(cwd="/", agent="briefing").skip_instructions == []
+    spec = LiteLMSpec(
         cwd="/", agent="briefing", instruction_providers=["file_instructions"], skip_instructions=["skill:x"]
     )
     assert spec.instruction_providers == ["file_instructions"]
@@ -207,15 +207,15 @@ def emit_to(events: list[SessionEvent]) -> Any:
 @asynccontextmanager
 async def wired_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, **spec_kwargs: Any
-) -> AsyncGenerator[PydanticAIBackend]:
+) -> AsyncGenerator[LiteLMBackend]:
     """The test provider on the agents path, and an open backend wired to it."""
     write_wired_provider(tmp_path / "agents")
     monkeypatch.setenv(ENV_AGENTS_PATH, str(tmp_path / "agents"))
     monkeypatch.syspath_prepend(str(TESTS))  # pyright: ignore[reportUnknownMemberType] -- pytest leaves the path untyped
-    spec = PydanticAISpec(cwd=str(tmp_path), target=target, permission=PermissionMode.DENY, **spec_kwargs)
+    spec = LiteLMSpec(cwd=str(tmp_path), target=target, permission=PermissionMode.DENY, **spec_kwargs)
     state = anyio.Path(tmp_path / "s1")
     await state.mkdir()
-    async with open_pydantic_ai(spec, state) as backend:
+    async with open_litelm(spec, state) as backend:
         yield backend
 
 
@@ -274,7 +274,7 @@ def backend_with(tmp_path: Path, history: list[Any], refresh: Any, output: str =
         timeout=60,
         waits=PermissionWaits(),
     )
-    backend = PydanticAIBackend(
+    backend = LiteLMBackend(
         agent,
         anyio.Path(tmp_path / "history.json"),
         history,

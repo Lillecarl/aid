@@ -190,6 +190,7 @@
     "AgentKind": {
       "enum": [
         "acp",
+        "litelm",
         "pydantic-ai",
         "claude-tty",
         "claude-sdk"
@@ -203,7 +204,8 @@
           "acp": "#/$defs/AcpSpec",
           "claude-sdk": "#/$defs/ClaudeSdkSpec",
           "claude-tty": "#/$defs/ClaudeTtySpec",
-          "pydantic-ai": "#/$defs/PydanticAISpec"
+          "litelm": "#/$defs/LiteLMSpec",
+          "pydantic-ai": "#/$defs/LiteLMSpec"
         },
         "propertyName": "kind"
       },
@@ -212,7 +214,7 @@
           "$ref": "#/$defs/AcpSpec"
         },
         {
-          "$ref": "#/$defs/PydanticAISpec"
+          "$ref": "#/$defs/LiteLMSpec"
         },
         {
           "$ref": "#/$defs/ClaudeTtySpec"
@@ -1176,7 +1178,7 @@
     },
     "ListAgents": {
       "additionalProperties": false,
-      "description": "The `aid.PydanticAgent`s on the daemon's agents path.",
+      "description": "The `aid.AgentDefinition`s on the daemon's agents path.",
       "properties": {
         "id": {
           "type": "string"
@@ -1209,6 +1211,202 @@
         "op"
       ],
       "title": "ListSessions",
+      "type": "object"
+    },
+    "LiteLMSpec": {
+      "additionalProperties": false,
+      "description": "A LiteLM agent: `agent`, the name of an `aid.AgentDefinition` on the agents path, or `target`, a\n`package.module:attribute` that is an agent itself. Exactly one of them.",
+      "properties": {
+        "agent": {
+          "anyOf": [
+            {
+              "pattern": "^[\\w.-]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "aid_tools": {
+          "default": true,
+          "type": "boolean"
+        },
+        "ask_autoselect_after": {
+          "default": 240.0,
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "hooks": {
+          "items": {
+            "$ref": "#/$defs/Hook"
+          },
+          "type": "array"
+        },
+        "instruction_providers": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "kind": {
+          "default": "litelm",
+          "enum": [
+            "litelm",
+            "pydantic-ai"
+          ],
+          "type": "string"
+        },
+        "max_context": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "max_requests": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "permission": {
+          "$ref": "#/$defs/PermissionMode",
+          "default": "deny"
+        },
+        "permission_timeout": {
+          "default": 1800,
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "python_path": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "skip_instructions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "supervisor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "supervisor_nudge_budget": {
+          "default": 3,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "supervisor_permission_absent_timeout": {
+          "default": 60,
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "supervisor_permission_timeout": {
+          "default": 300,
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        "supervisor_permissions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "pattern": "^[\\w.]+:[\\w.]+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "worker_ca": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "worker_command": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "minItems": 1,
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "worker_endpoint": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "cwd",
+        "kind"
+      ],
+      "title": "LiteLMSpec",
       "type": "object"
     },
     "McpHttp": {
@@ -1365,7 +1563,7 @@
     },
     "Output": {
       "additionalProperties": false,
-      "description": "Final event of a prompt. `output` is text for ACP and the agent's typed output for pydantic-ai.",
+      "description": "Final event of a prompt. `output` is text for ACP and the agent's typed output for LiteLM.",
       "properties": {
         "output": {
           "$ref": "#/$defs/JsonValue"
@@ -1725,199 +1923,6 @@
         "module"
       ],
       "title": "ProviderInfo",
-      "type": "object"
-    },
-    "PydanticAISpec": {
-      "additionalProperties": false,
-      "description": "A pydantic-ai agent: `agent`, the name of an `aid.PydanticAgent` on the agents path, or `target`, a\n`package.module:attribute` that is an agent itself. Exactly one of them.",
-      "properties": {
-        "agent": {
-          "anyOf": [
-            {
-              "pattern": "^[\\w.-]+$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "aid_tools": {
-          "default": true,
-          "type": "boolean"
-        },
-        "ask_autoselect_after": {
-          "default": 240.0,
-          "exclusiveMinimum": 0,
-          "type": "number"
-        },
-        "cwd": {
-          "type": "string"
-        },
-        "env": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": "object"
-        },
-        "hooks": {
-          "items": {
-            "$ref": "#/$defs/Hook"
-          },
-          "type": "array"
-        },
-        "instruction_providers": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "kind": {
-          "const": "pydantic-ai",
-          "default": "pydantic-ai",
-          "type": "string"
-        },
-        "max_context": {
-          "anyOf": [
-            {
-              "exclusiveMinimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "max_requests": {
-          "anyOf": [
-            {
-              "exclusiveMinimum": 0,
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "permission": {
-          "$ref": "#/$defs/PermissionMode",
-          "default": "deny"
-        },
-        "permission_timeout": {
-          "default": 1800,
-          "exclusiveMinimum": 0,
-          "type": "number"
-        },
-        "python_path": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "skip_instructions": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "supervisor": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "supervisor_nudge_budget": {
-          "default": 3,
-          "minimum": 0,
-          "type": "integer"
-        },
-        "supervisor_permission_absent_timeout": {
-          "default": 60,
-          "exclusiveMinimum": 0,
-          "type": "number"
-        },
-        "supervisor_permission_timeout": {
-          "default": 300,
-          "exclusiveMinimum": 0,
-          "type": "number"
-        },
-        "supervisor_permissions": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "target": {
-          "anyOf": [
-            {
-              "pattern": "^[\\w.]+:[\\w.]+$",
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "worker_ca": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "worker_command": {
-          "anyOf": [
-            {
-              "items": {
-                "type": "string"
-              },
-              "minItems": 1,
-              "type": "array"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "worker_endpoint": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
-      "required": [
-        "cwd",
-        "kind"
-      ],
-      "title": "PydanticAISpec",
       "type": "object"
     },
     "Received": {
@@ -2611,7 +2616,7 @@
     },
     "Usage": {
       "additionalProperties": false,
-      "description": "Tokens a turn used, as its agent reports them; sent just before the turn's Output. None where the agent\nsays nothing.\n\nWhat \"the turn\" covers differs by agent (measured 2026-09):\n- claude-agent-acp 0.75.1: every model call of the turn, subagents included.\n- opencode 1.x: the turn's last model response only.\n- pydantic-ai: the run, every request.\n- claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,\n  which aid does not read.",
+      "description": "Tokens a turn used, as its agent reports them; sent just before the turn's Output. None where the agent\nsays nothing.\n\nWhat \"the turn\" covers differs by agent (measured 2026-09):\n- claude-agent-acp 0.75.1: every model call of the turn, subagents included.\n- opencode 1.x: the turn's last model response only.\n- LiteLM: the run, every request.\n- claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,\n  which aid does not read.",
       "properties": {
         "agent": {
           "anyOf": [

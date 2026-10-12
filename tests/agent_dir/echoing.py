@@ -4,16 +4,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from pydantic_ai import Agent
-from pydantic_ai.messages import UserPromptPart
-from pydantic_ai.models.function import AgentInfo, FunctionModel
-
 import aid
+from aid.agent import Agent
+from aid.messages import UserPromptPart
+from tests.models import AgentInfo, FunctionModel
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from pydantic_ai.messages import ModelMessage
+    from aid.messages import ModelMessage
 
 
 async def _shout(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
@@ -29,7 +28,7 @@ async def _shout(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator
     yield (prompts[-1] if prompts else "").upper()
 
 
-class Base(aid.PydanticAgent):
+class Base(aid.AgentDefinition):
     """Abstract: no build, so not an agent."""
 
 
@@ -39,12 +38,12 @@ class Shouter(Base):
     This second paragraph is not part of the description.
     """
 
-    def build(self) -> Agent[None, str]:
+    def build(self) -> Agent:
         return Agent(FunctionModel(stream_function=_shout))
 
 
-class Named(aid.PydanticAgent):
+class Named(aid.AgentDefinition):
     name = "custom-name"
 
-    def build(self) -> Agent[None, str]:
+    def build(self) -> Agent:
         return Agent(FunctionModel(stream_function=_shout))

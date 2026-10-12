@@ -1,7 +1,7 @@
 """Async Python API for the aid daemon.
 
 async with aid.connect() as client:
-    session = await client.create("reviewer", PydanticAISpec(cwd=".", target="agents:reviewer"))
+    session = await client.create("reviewer", LiteLMSpec(cwd=".", target="agents:reviewer"))
     result = await session.run("Review this diff", output_type=Review)
 """
 
@@ -334,7 +334,7 @@ class Client:
         return SessionInfosAdapter.validate_python(await self.call(ListSessions()))
 
     async def agents(self) -> AgentCatalog:
-        """The `aid.PydanticAgent`s on the daemon's agents path, and what failed to load."""
+        """The `aid.AgentDefinition`s on the daemon's agents path, and what failed to load."""
         return AgentCatalog.model_validate(await self.call(ListAgents()))
 
     def session(self, name: str) -> Session:

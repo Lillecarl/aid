@@ -1,4 +1,4 @@
-"""Turn lifecycle regressions against real pydantic-ai runs with deterministic local models."""
+"""Turn lifecycle regressions against real LiteLM runs with deterministic local models."""
 
 from __future__ import annotations
 
@@ -7,33 +7,34 @@ from typing import TYPE_CHECKING, Any
 
 import anyio
 import pytest
-from pydantic_ai import Agent
-from pydantic_ai.exceptions import UsageLimitExceeded
-from pydantic_ai.messages import (
+from pydantic import BaseModel
+
+from aid.agent import Agent
+from aid.backends.litelm import LiteLMBackend, UsageLimitExceeded
+from aid.backends.permissions import PermissionWaits
+from aid.coding import Coding, coding_tools
+from aid.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
+    RetryPromptPart,
     TextPart,
+    ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models.function import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
-from pydantic_ai.models.test import TestModel
-
-from aid.backends.permissions import PermissionWaits
-from aid.backends.pydantic_ai import PydanticAIBackend
-from aid.coding import Coding, coding_tools
-from aid.protocol import Output, SessionEvent, Started, TextDelta, ToolCall, Usage
+from aid.model import ModelInfo, StreamDelta
+from aid.protocol import AidError, Output, SessionEvent, Started, TextDelta, ToolCall, Usage
 from aid.spec import PermissionMode
 from tests.agents import coder, echo
+from tests.models import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel, TestModel
 from tests.test_coding import plan
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
     from pathlib import Path
 
-    from pydantic_ai.agent import AbstractAgent
 
 pytestmark = pytest.mark.anyio
 
@@ -41,11 +42,11 @@ pytestmark = pytest.mark.anyio
 @asynccontextmanager
 async def backend(
     directory: Path,
-    agent: AbstractAgent[Any, Any],
+    agent: Agent,
     *,
     history: list[ModelMessage] | None = None,
     max_requests: int | None = None,
-) -> AsyncGenerator[PydanticAIBackend]:
+) -> AsyncGenerator[LiteLMBackend]:
     coding = Coding(
         cwd=directory,
         store=directory / "runs",
@@ -55,7 +56,7 @@ async def backend(
         waits=PermissionWaits(),
     )
     try:
-        yield PydanticAIBackend(
+        yield LiteLMBackend(
             agent,
             anyio.Path(directory / "history.json"),
             history or [],
@@ -70,6 +71,97 @@ async def backend(
 
 async def stored(directory: Path) -> list[ModelMessage]:
     return ModelMessagesTypeAdapter.validate_json(await anyio.Path(directory / "history.json").read_bytes())
+
+
+@pytest.mark.parametrize("arguments", ['{"value":', '{"value":"wrong"}'])
+async def test_invalid_tool_arguments_return_a_correction_without_execution(tmp_path: Path, arguments: str) -> None:
+    calls: list[int] = []
+
+    def record(value: int) -> int:
+        calls.append(value)
+        return value
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if any(isinstance(p, RetryPromptPart) for m in messages for p in m.parts):
+            return ModelResponse([TextPart("corrected")])
+        return ModelResponse([ToolCallPart("record", arguments, "c1")])
+
+    events: list[SessionEvent] = []
+
+    async def emit(event: SessionEvent) -> None:
+        events.append(event)
+
+    async with backend(tmp_path, Agent(FunctionModel(respond), tools=[record])) as session:
+        assert (await session.prompt("go", emit)).output == "corrected"
+    assert calls == []
+    assert any(isinstance(event, ToolCall) and event.status == "failed" for event in events)
+    assert any(
+        isinstance(p, RetryPromptPart) and p.tool_call_id == "c1" for m in await stored(tmp_path) for p in m.parts
+    )
+
+
+class TypedAnswer(BaseModel):
+    count: int
+
+
+@pytest.mark.parametrize("identities", [[""], ["c1", "c1"]])
+async def test_invalid_tool_identities_never_execute_and_history_remains_resumable(
+    tmp_path: Path, identities: list[str]
+) -> None:
+    executed: list[bool] = []
+
+    def action() -> str:
+        executed.append(True)
+        return "done"
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        return ModelResponse([ToolCallPart("action", {}, identity) for identity in identities])
+
+    async def emit(event: SessionEvent) -> None:
+        pass
+
+    async with backend(tmp_path, Agent(FunctionModel(respond), tools=[action])) as session:
+        with pytest.raises(AidError, match="identities"):
+            await session.prompt("go", emit)
+    history = await stored(tmp_path)
+    assert not executed
+    assert not any(isinstance(part, ToolCallPart) for message in history for part in message.parts)
+    response = next(message for message in history if isinstance(message, ModelResponse))
+    assert response.model_extra and len(response.model_extra["invalid_tool_calls"]) == len(identities)
+    async with backend(tmp_path, Agent(TestModel(call_tools=[])), history=history) as session:
+        assert (await session.prompt("continue", emit)).stop_reason == "end_turn"
+
+
+async def test_typed_output_correction_is_validated_and_counted(tmp_path: Path) -> None:
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        corrected = any(isinstance(p, RetryPromptPart) for m in messages for p in m.parts)
+        return ModelResponse([TextPart('{"count":2}' if corrected else '{"count":"wrong"}')])
+
+    events: list[SessionEvent] = []
+
+    async def emit(event: SessionEvent) -> None:
+        events.append(event)
+
+    async with backend(tmp_path, Agent(FunctionModel(respond), output_type=TypedAnswer)) as session:
+        assert (await session.prompt("go", emit)).output == {"count": 2}
+    assert next(event.requests for event in events if isinstance(event, Usage)) == 2
+
+
+async def test_missing_usage_stays_unknown(tmp_path: Path) -> None:
+    class SilentModel(TestModel):
+        async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
+            yield StreamDelta(0, TextPart("done"))
+
+    events: list[SessionEvent] = []
+
+    async def emit(event: SessionEvent) -> None:
+        events.append(event)
+
+    async with backend(tmp_path, Agent(SilentModel())) as session:
+        await session.prompt("go", emit)
+    usage = next(event for event in events if isinstance(event, Usage))
+    assert usage.requests == 1
+    assert usage.input_tokens is usage.output_tokens is usage.cache_read_tokens is None
 
 
 async def test_unset_request_budget_does_not_inherit_library_limit(tmp_path: Path) -> None:
@@ -178,9 +270,12 @@ async def test_external_cancellation_preserves_state_without_becoming_success(tm
     assert len([event for event in events if isinstance(event, Usage)]) == 1
 
 
-async def test_failed_tool_preserves_original_error_and_closes_unanswered_call(tmp_path: Path) -> None:
+@pytest.mark.parametrize("error_type", [RuntimeError, ValueError])
+async def test_failed_tool_preserves_original_error_and_closes_unanswered_call(
+    tmp_path: Path, error_type: type[Exception]
+) -> None:
     async def fail() -> str:
-        raise RuntimeError("tool broke")
+        raise error_type("tool broke")
 
     events: list[SessionEvent] = []
 
@@ -188,7 +283,7 @@ async def test_failed_tool_preserves_original_error_and_closes_unanswered_call(t
         events.append(event)
 
     async with backend(tmp_path, Agent(TestModel(call_tools=["fail"]), tools=[fail])) as session:
-        with pytest.raises(RuntimeError, match="tool broke"):
+        with pytest.raises(error_type, match="tool broke"):
             await session.prompt("go", emit)
     history = await stored(tmp_path)
     assert any(isinstance(part, ToolReturnPart) and part.outcome == "interrupted" for m in history for part in m.parts)

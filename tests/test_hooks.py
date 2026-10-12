@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from aid.spec import AcpSpec, ClaudeTtySpec, Hook, PydanticAISpec, match_hook
+from aid.spec import AcpSpec, ClaudeTtySpec, Hook, LiteLMSpec, match_hook
 
 
 def test_valid_hook() -> None:
@@ -31,7 +31,7 @@ def test_hook_is_frozen() -> None:
 
 def test_specs_carry_hooks_default_empty() -> None:
     acp = AcpSpec(cwd="/", command=["a"])
-    pyd = PydanticAISpec(cwd="/", agent="myagent")
+    pyd = LiteLMSpec(cwd="/", agent="myagent")
     tty = ClaudeTtySpec(cwd="/")
     assert acp.hooks == []
     assert pyd.hooks == []

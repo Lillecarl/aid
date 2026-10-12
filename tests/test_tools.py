@@ -97,9 +97,7 @@ async def test_mcp_server_serves_the_tools() -> None:
     assert who["content"] == [{"type": "text", "text": "s1"}]
 
 
-async def test_pydantic_ai_session_calls_the_tools(
-    daemon: Paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+async def test_litelm_session_calls_the_tools(daemon: Paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ENV_AGENTS_PATH, str(AGENT_DIR))
     spec = py_spec(tmp_path, "agents:tool_caller", AID_AGENTS_PATH=str(AGENT_DIR))
     with anyio.fail_after(TIMEOUT):

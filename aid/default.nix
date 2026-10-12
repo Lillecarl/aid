@@ -35,7 +35,7 @@ let
           inherit tests;
         };
         meta = rendered.meta // {
-          description = "AI daemon: persistent ACP, pydantic-ai and interactive Claude sessions behind an async API";
+          description = "AI daemon: persistent ACP, LiteLM and interactive Claude sessions behind an async API";
           homepage = "https://github.com/Lillecarl/aid";
           mainProgram = "aid";
           platforms = lib.platforms.linux;
@@ -59,17 +59,26 @@ let
 
   testEnv = mkVirtualEnv "aid-test-env" { aid = [ "test" ]; };
 
-  tests = runCommand "aid-tests" { nativeBuildInputs = [ testEnv pymuxApp dex ]; } ''
-    cp -r ${testSources}/. .
-    chmod -R +w .
-    export HOME="$TMPDIR" PYTHONDONTWRITEBYTECODE=1 AID_WEB_ASSETS=${webUi} AID_TEST_SPEECH_MODEL=${speechModel} \
-      AID_TREE_SITTER_GRAMMARS=${grammars} PLAYWRIGHT_BROWSERS_PATH=${browsers}
-    # The sandbox sets it to /no-cert-file.crt. httpx loads it for every client, http:// ones too, and pygit2
-    # (pyedit's) fails to import with no certificates at all: give both a real bundle.
-    export SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt
-    # One run tests one browser; the sandbox runs chromium, developers repeat with --browser firefox.
-    python -m pytest -q -p no:cacheprovider --browser chromium
-    touch $out
-  '';
+  tests =
+    runCommand "aid-tests"
+      {
+        nativeBuildInputs = [
+          testEnv
+          pymuxApp
+          dex
+        ];
+      }
+      ''
+        cp -r ${testSources}/. .
+        chmod -R +w .
+        export HOME="$TMPDIR" PYTHONDONTWRITEBYTECODE=1 AID_WEB_ASSETS=${webUi} AID_TEST_SPEECH_MODEL=${speechModel} \
+          AID_TREE_SITTER_GRAMMARS=${grammars} PLAYWRIGHT_BROWSERS_PATH=${browsers}
+        # The sandbox sets it to /no-cert-file.crt. httpx loads it for every client, http:// ones too, and pygit2
+        # (pyedit's) fails to import with no certificates at all: give both a real bundle.
+        export SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt
+        # One run tests one browser; the sandbox runs chromium, developers repeat with --browser firefox.
+        python -m pytest -q -p no:cacheprovider --browser chromium
+        touch $out
+      '';
 in
 package

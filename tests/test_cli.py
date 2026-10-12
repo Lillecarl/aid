@@ -13,7 +13,7 @@ from aid.cli import (
     _split_agent_command,  # pyright: ignore[reportPrivateUsage]
 )
 from aid.launcher import PRELOAD
-from aid.spec import ClaudeSdkSpec, ClaudeTtySpec, McpHttp, McpStdio, PermissionMode, PydanticAISpec
+from aid.spec import ClaudeSdkSpec, ClaudeTtySpec, LiteLMSpec, McpHttp, McpStdio, PermissionMode
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -39,7 +39,7 @@ def test_split_agent_command(argv: list[str], head: list[str], tail: list[str]) 
     ("argv", "expected"),
     [
         (["daemon"], [*PRELOAD]),
-        (["daemon", "--preload-module", "pydantic_ai"], [*PRELOAD, "pydantic_ai"]),
+        (["daemon", "--preload-module", "litelm"], [*PRELOAD, "litelm"]),
         (["daemon", "--no-preload"], []),
         (["daemon", "--no-preload", "--preload-module", "zmq.asyncio"], ["zmq.asyncio"]),
     ],
@@ -63,7 +63,7 @@ def test_new_py_max_requests() -> None:
     args = _parser().parse_args(["new-py", "s", "agents:echo", "--max-requests", "150"])
     args.agent_command = []
     spec = _spec(args)
-    assert isinstance(spec, PydanticAISpec)
+    assert isinstance(spec, LiteLMSpec)
     assert spec.max_requests == 150
 
 
@@ -92,7 +92,7 @@ def test_new_py_worker_command(tmp_path: Path) -> None:
     args = _parser().parse_args(argv)
     args.agent_command = []
     spec = _spec(args)
-    assert isinstance(spec, PydanticAISpec)
+    assert isinstance(spec, LiteLMSpec)
     assert spec.worker_command == ["aid", "worker"]
     assert spec.worker_endpoint == "ipc://x"
     assert spec.worker_ca == "/ca.pem"

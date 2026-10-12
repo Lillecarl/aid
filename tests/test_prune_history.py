@@ -4,11 +4,19 @@ import json
 import time
 from typing import TYPE_CHECKING, Any, cast
 
+import anyio
 import pytest
-from pydantic_ai import Agent
-from pydantic_ai.capabilities import ProcessHistory
-from pydantic_ai.messages import (
+
+from aid.agent import Agent
+from aid.backends.litelm import (
+    THOUGHT_LIMIT,
+    _send_policy,  # pyright: ignore[reportPrivateUsage]
+    prune_history,
+    without_metadata,
+)
+from aid.messages import (
     ModelMessage,
+    ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
     TextPart,
@@ -16,17 +24,13 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models.function import FunctionModel
-
-from aid.backends.pydantic_ai import (
-    THOUGHT_LIMIT,
-    _send_policy,  # pyright: ignore[reportPrivateUsage]
-    prune_history,
-    without_metadata,
-)
+from tests.models import FunctionModel
+from tests.test_litelm_backend import backend
 
 if TYPE_CHECKING:
-    from pydantic_ai.models.function import AgentInfo
+    from pathlib import Path
+
+    from tests.models import AgentInfo
 
 pytestmark = pytest.mark.anyio
 
@@ -83,7 +87,7 @@ def test_prune_history_does_not_mutate_store() -> None:
     assert thought.signature == "sig"
 
 
-async def test_policy_filters_wire_but_not_store() -> None:
+async def test_policy_filters_wire_but_not_store(tmp_path: Path) -> None:
     """The model is sent shells and clips; the finished turn itself is stored whole."""
     history = [
         ModelRequest(parts=[UserPromptPart(content="first")]),
@@ -96,8 +100,12 @@ async def test_policy_filters_wire_but_not_store() -> None:
         seen.append(messages)
         return ModelResponse(parts=[TextPart(content="done")])
 
-    agent: Agent[Any, Any] = Agent(FunctionModel(record), capabilities=[ProcessHistory(_send_policy(2, 100_000))])
-    result = await agent.run("go", message_history=history)
+    async def emit(event: Any) -> None:
+        pass
+
+    async with backend(tmp_path, Agent(FunctionModel(record)), history=history) as session:
+        result = await session.prompt("go", emit)
+    stored = ModelMessagesTypeAdapter.validate_json(await anyio.Path(tmp_path / "history.json").read_bytes())
     assert result.output == "done"
     assert len(seen) == 1
     wire = seen[0]
@@ -105,11 +113,10 @@ async def test_policy_filters_wire_but_not_store() -> None:
     wire_thought = wire[1].parts[0]
     assert isinstance(wire_thought, ThinkingPart)
     assert wire_thought.signature is None
-    stored = without_metadata(result.all_messages())
     assert len(stored) == len(history) + 2
     stored_thought = stored[1].parts[0]
     assert isinstance(stored_thought, ThinkingPart)
-    assert stored_thought.signature is None
+    assert stored_thought.signature == "sig"
     new_response = stored[-1]
     assert isinstance(new_response, ModelResponse)
     assert new_response.parts == [TextPart(content="done")]

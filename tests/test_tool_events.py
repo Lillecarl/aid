@@ -8,15 +8,13 @@ from acp.schema import (
     ToolCallProgress,
     ToolCallStart,
 )
-from pydantic_ai.messages import (
-    FunctionToolCallEvent,
-    FunctionToolResultEvent,
+
+from aid.backends import acp, litelm
+from aid.messages import (
     RetryPromptPart,
     ToolCallPart,
     ToolReturnPart,
 )
-
-from aid.backends import acp, pydantic_ai
 from aid.protocol import TOOL_TEXT_LIMIT, ToolCall, ToolDiff
 
 
@@ -70,22 +68,20 @@ def test_acp_raw_output_is_the_fallback_and_is_clipped() -> None:
     assert event.output.endswith("… 5 more characters")
 
 
-def test_pydantic_ai_tool_events() -> None:
-    call = FunctionToolCallEvent(part=ToolCallPart(tool_name="add", args='{"a": 1}', tool_call_id="c1"))
-    done = FunctionToolResultEvent(part=ToolReturnPart(tool_name="add", content={"sum": 3}, tool_call_id="c1"))
-    retry = FunctionToolResultEvent(part=RetryPromptPart(tool_name="add", content="a must be even", tool_call_id="c2"))
-    assert pydantic_ai.to_event(call) == ToolCall(tool_call_id="c1", title="add", status="in_progress", input={"a": 1})
-    assert pydantic_ai.to_event(done) == ToolCall(tool_call_id="c1", status="completed", output='{"sum":3}')
-    failed = pydantic_ai.to_event(retry)
+def test_litelm_tool_events() -> None:
+    call = ToolCallPart(tool_name="add", args='{"a": 1}', tool_call_id="c1")
+    done = ToolReturnPart(tool_name="add", content={"sum": 3}, tool_call_id="c1")
+    retry = RetryPromptPart(tool_name="add", content="a must be even", tool_call_id="c2")
+    assert litelm.to_event(call) == ToolCall(tool_call_id="c1", title="add", status="in_progress", input={"a": 1})
+    assert litelm.to_event(done) == ToolCall(tool_call_id="c1", status="completed", output='{"sum":3}')
+    failed = litelm.to_event(retry)
     assert isinstance(failed, ToolCall)
     assert (failed.status, "a must be even" in (failed.output or "")) == ("failed", True)
 
 
-def test_pydantic_ai_tool_call_carries_paths() -> None:
-    call = FunctionToolCallEvent(
-        part=ToolCallPart(tool_name="read", args='{"path": "a.py", "offset": 1}', tool_call_id="c1")
-    )
-    assert pydantic_ai.to_event(call) == ToolCall(
+def test_litelm_tool_call_carries_paths() -> None:
+    call = ToolCallPart(tool_name="read", args='{"path": "a.py", "offset": 1}', tool_call_id="c1")
+    assert litelm.to_event(call) == ToolCall(
         tool_call_id="c1",
         title="read",
         status="in_progress",

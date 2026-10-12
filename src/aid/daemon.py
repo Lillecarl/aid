@@ -106,7 +106,7 @@ from aid.spec import (
     AgentSpecAdapter,
     ClaudeSdkSpec,
     ClaudeTtySpec,
-    PydanticAISpec,
+    LiteLMSpec,
 )
 from aid.summary import summarize
 
@@ -225,11 +225,11 @@ class _Session:
             case ClaudeTtySpec():
                 runs = shlex.join([*self.spec.command, *self.spec.args])
                 servers = [s.name for s in self.spec.mcp_servers]
-            case PydanticAISpec():
+            case LiteLMSpec():
                 runs, servers = self.spec.agent or self.spec.target or "", []
             case ClaudeSdkSpec():
                 runs, servers = shlex.join([*self.spec.command, "-p", "--model", self.spec.model]), []
-        if self.spec.aid_tools and not isinstance(self.spec, PydanticAISpec):
+        if self.spec.aid_tools and not isinstance(self.spec, LiteLMSpec):
             servers.append(BUILTIN_MCP_SERVER)
         return SessionStatus(
             name=self.name,
@@ -259,7 +259,7 @@ report: absurd, and harmless if it ever happens."""
 
 
 def wake_prompt(messages: list[MessageEntry]) -> str:
-    """The turn that hands messages to an ACP or pydantic-ai session. Background task reports ride as
+    """The turn that hands messages to an ACP or LiteLM session. Background task reports ride as
     written; person and session messages render as quotes, answered with the send_message tool."""
     parts = [
         message.text
@@ -1189,7 +1189,7 @@ class Daemon:
         if (
             option_id is None
             and text is not None
-            and (session.spec.kind is not AgentKind.PYDANTIC_AI or pending.tool_name != "ask_user")
+            and (not isinstance(session.spec, LiteLMSpec) or pending.tool_name != "ask_user")
         ):
             raise AidError("no_text", f"{session.name!r} takes an option, not free text; pick one or cancel")
         return pending
@@ -1366,7 +1366,7 @@ class Daemon:
         match session.spec:
             case AcpSpec(permission_timeout=timeout):
                 return timeout
-            case PydanticAISpec(permission_timeout=timeout, ask_autoselect_after=autoselect):
+            case LiteLMSpec(permission_timeout=timeout, ask_autoselect_after=autoselect):
                 if request.tool_name == "ask_user" and any(o.recommended for o in request.options):
                     return min(timeout, autoselect)
                 return timeout

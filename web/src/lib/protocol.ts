@@ -23,12 +23,12 @@ export type PermissionMode = "allow" | "deny" | "ask";
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "AgentKind".
  */
-export type AgentKind = "acp" | "pydantic-ai" | "claude-tty" | "claude-sdk";
+export type AgentKind = "acp" | "litelm" | "pydantic-ai" | "claude-tty" | "claude-sdk";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "AgentSpec".
  */
-export type AgentSpec = AcpSpec | PydanticAISpec | ClaudeTtySpec | ClaudeSdkSpec;
+export type AgentSpec = AcpSpec | LiteLMSpec | ClaudeTtySpec | ClaudeSdkSpec;
 /**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
  */
@@ -225,13 +225,13 @@ export interface ToolInfo {
   name: string;
 }
 /**
- * A pydantic-ai agent: `agent`, the name of an `aid.PydanticAgent` on the agents path, or `target`, a
+ * A LiteLM agent: `agent`, the name of an `aid.AgentDefinition` on the agents path, or `target`, a
  * `package.module:attribute` that is an agent itself. Exactly one of them.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "PydanticAISpec".
+ * via the `definition` "LiteLMSpec".
  */
-export interface PydanticAISpec {
+export interface LiteLMSpec {
   agent?: string | null;
   aid_tools?: boolean;
   ask_autoselect_after?: number;
@@ -241,7 +241,7 @@ export interface PydanticAISpec {
   };
   hooks?: Hook[];
   instruction_providers?: string[] | null;
-  kind: "pydantic-ai";
+  kind: "litelm" | "pydantic-ai";
   max_context?: number | null;
   max_requests?: number | null;
   permission?: PermissionMode1;
@@ -520,7 +520,7 @@ export interface PermissionDecision {
  * What "the turn" covers differs by agent (measured 2026-09):
  * - claude-agent-acp 0.75.1: every model call of the turn, subagents included.
  * - opencode 1.x: the turn's last model response only.
- * - pydantic-ai: the run, every request.
+ * - LiteLM: the run, every request.
  * - claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,
  *   which aid does not read.
  *
@@ -542,7 +542,7 @@ export interface Usage {
   type: "usage";
 }
 /**
- * Final event of a prompt. `output` is text for ACP and the agent's typed output for pydantic-ai.
+ * Final event of a prompt. `output` is text for ACP and the agent's typed output for LiteLM.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Output".
@@ -706,7 +706,7 @@ export interface HistoryPage {
   total: number;
 }
 /**
- * The `aid.PydanticAgent`s on the daemon's agents path.
+ * The `aid.AgentDefinition`s on the daemon's agents path.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "ListAgents".

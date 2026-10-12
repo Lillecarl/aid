@@ -42,12 +42,12 @@ questions when no person is around.
   exact fingerprints without requiring a vector database. This first detector needs tool telemetry; it does
   not detect silent model stalls or observe interactive turns started outside aid.
 - No model-request budget is imposed by default. An explicit `max_requests` is a resource budget, not a
-  loop detector. The pydantic-ai backend preserves available history and usage on failure/cancellation,
+  loop detector. The LiteLM backend preserves available history and usage on failure/cancellation,
   closing unanswered tool calls as interrupted without replaying their potentially applied effects.
 
 ## Supervisor session
 
-- Always pydantic-ai, pinned cheap model, short verdicts, dedicated `supervisor_tools`:
+- Always LiteLM, pinned cheap model, short verdicts, dedicated `supervisor_tools`:
   `supervised_history(session, limit)`, `supervised_search(session, query)` (new worker→daemon
   `SearchSessionHistory` request; daemon enforces the supervision link), `goals(session)`,
   `goal_add` / `goal_done` / `goal_drop`, `answer_permission(request_id, option, text)`, plus the

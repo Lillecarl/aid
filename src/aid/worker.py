@@ -49,7 +49,7 @@ from aid.protocol import (
     decode_request,
     encode,
 )
-from aid.spec import AgentSpecAdapter, PydanticAISpec
+from aid.spec import AgentSpecAdapter, LiteLMSpec
 from aid.zap import Keypair, connect_curve
 
 if TYPE_CHECKING:
@@ -73,7 +73,7 @@ def main(
     hook_endpoint: str,
 ) -> None:
     spec = AgentSpecAdapter.validate_json(spec_json)
-    if isinstance(spec, PydanticAISpec):
+    if isinstance(spec, LiteLMSpec):
         sys.path[:0] = spec.python_path
     keys = Keypair(public=public_key, secret=secret_key)
     anyio.run(serve, endpoint, trust_pem, server_key, keys, spec, anyio.Path(state_dir), hook_endpoint)

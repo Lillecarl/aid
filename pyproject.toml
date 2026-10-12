@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "aid"
 version = "0.1.0"
-description = "AI daemon: persistent ACP and pydantic-ai agents behind a Pythonic async API."
+description = "AI daemon: persistent ACP and LiteLM agents behind a Pythonic async API."
 requires-python = ">=3.14"
 dependencies = [
   "agent-client-protocol>=0.12",
@@ -17,10 +17,8 @@ dependencies = [
   "libpymux",
   "mcp>=1.20",
   "numpy>=2.0",
-  # The SDK behind pydantic-ai's OpenAI-compatible providers: OpenAI itself, DeepSeek, OpenRouter and the like.
-  "openai>=2.0",
+  "litelm[anthropic]>=0.5.4",
   "pydantic>=2.11",
-  "pydantic-ai-slim>=2.30",
   # aid.coding: agents edit through pyedit's library and run processes through pyrun (./pyrun).
   "pyedit",
   "pyrun",

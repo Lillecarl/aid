@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 
     from aid.paths import Paths
     from aid.protocol import HistoryItem
-    from aid.spec import PydanticAISpec
+    from aid.spec import LiteLMSpec
 
 pytestmark = pytest.mark.anyio
 
@@ -427,7 +427,7 @@ def asking_spec(
     permission_timeout: float = 30,
     timeout: float = 25,
     absent: float = 2,
-) -> PydanticAISpec:
+) -> LiteLMSpec:
     """A supervised coder whose `ask_user` questions outwait the person fast, for backstop tests."""
     return py_spec(tmp_path, "agents:coder", PermissionMode.ASK, permission_timeout=permission_timeout).model_copy(
         update={

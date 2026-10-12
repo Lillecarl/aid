@@ -4,7 +4,7 @@ let
 in
 {
   options = {
-    enable = lib.mkEnableOption "aid, the AI daemon that keeps ACP, pydantic-ai and interactive Claude agents running";
+    enable = lib.mkEnableOption "aid, the AI daemon that keeps ACP, LiteLM and interactive Claude agents running";
 
     package = lib.mkOption {
       type = lib.types.package;
@@ -41,7 +41,7 @@ in
       default = [ ];
       example = [ "/home/me/aid-agents" ];
       description = ''
-        Directories whose modules define `aid.PydanticAgent` subclasses; they become AID_AGENTS_PATH. Empty
+        Directories whose modules define `aid.AgentDefinition` subclasses; they become AID_AGENTS_PATH. Empty
         leaves aid's default, `$XDG_CONFIG_HOME/aid/agents`. Changes to the modules need no restart.
       '';
     };

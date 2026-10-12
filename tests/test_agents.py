@@ -10,7 +10,7 @@ import pytest
 import aid
 from aid.agents import ENV_AGENTS_PATH, agents_path, discover
 from aid.protocol import AgentInfo
-from aid.spec import PydanticAISpec
+from aid.spec import LiteLMSpec
 
 if TYPE_CHECKING:
     from aid.paths import Paths
@@ -37,16 +37,16 @@ def test_agents_path() -> None:
 
 def test_spec_needs_exactly_one_source() -> None:
     with pytest.raises(ValueError, match="exactly one"):
-        PydanticAISpec(cwd="/")
+        LiteLMSpec(cwd="/")
     with pytest.raises(ValueError, match="exactly one"):
-        PydanticAISpec(cwd="/", agent="a", target="m:a")
+        LiteLMSpec(cwd="/", agent="a", target="m:a")
 
 
 @pytest.mark.anyio
 async def test_daemon_lists_and_runs_agents(daemon: Paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The catalog runs in a subprocess of this process; workers take the path from the spec.
     monkeypatch.setenv(ENV_AGENTS_PATH, str(AGENT_DIR))
-    spec = PydanticAISpec(cwd=str(tmp_path), agent="shouter", env={ENV_AGENTS_PATH: str(AGENT_DIR)})
+    spec = LiteLMSpec(cwd=str(tmp_path), agent="shouter", env={ENV_AGENTS_PATH: str(AGENT_DIR)})
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             catalog = await client.agents()

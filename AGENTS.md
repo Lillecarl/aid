@@ -1,7 +1,7 @@
 # aid
 
 AI server for persistent, cooperating agent sessions, with separate execution engines and extension hosts.
-Runs external ACP agents (`claude-agent-acp`, `opencode acp`, …), `pydantic_ai` agents, and Claude Code through
+Runs external ACP agents (`claude-agent-acp`, `opencode acp`, …), `litelm` agents, and Claude Code through
 terminal and SDK backends, behind an async Python API, CLI and web UI.
 
 ## Working method — read first
@@ -51,7 +51,7 @@ around a failed check. Change a test's expectation only when the intended contra
 - **Backend:** engine adaptation, engine conversation history, cancellation and usage. Do not spread engine
   assumptions across the daemon, CLI and UI. Different engines expose different capabilities; say so explicitly.
 - **Launcher:** process/environment setup and placement, not the agent's conversation or supervision policy.
-- **Extensions:** use the appropriate ABC/contract for their host (`Plugin`, `PydanticAgent`,
+- **Extensions:** use the appropriate ABC/contract for their host (`Plugin`, `AgentDefinition`,
   `InstructionsProvider`, backend capabilities), not a catch-all object. Specify construction, context,
   shutdown, restart and failure ownership before adding a new extension type. Discovery is not instantiation.
 
@@ -65,7 +65,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
 
 ## Layout
 
-- `src/aid/spec.py` — `AcpSpec` / `PydanticAISpec` / `ClaudeTtySpec` / `ClaudeSdkSpec`: what a session runs.
+- `src/aid/spec.py` — `AcpSpec` / `LiteLMSpec` / `ClaudeTtySpec` / `ClaudeSdkSpec`: what a session runs.
 - `src/aid/protocol.py` — pydantic messages on the zmq sockets; `AidError`.
 - `src/aid/daemon.py` — ROUTER for clients (`control.sock`), ROUTER for workers (`workers.sock`), session state.
 - `src/aid/launcher.py` — `Launcher` protocol; `ForkserverLauncher`.
@@ -102,20 +102,20 @@ on reusable decisions and current boundaries; put long investigations and dated 
   on list changes), `serve.py` (bare text in session channels as messages, `!`-commands everywhere,
   taps as new messages or in-place rewrites, settled notices to session channels). Custom ids hold
   `action:session` directly (100 bytes); Discord messages clip at 1900/2000.
-- `src/aid/backends/` — `acp.py`, `pydantic_ai.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
+- `src/aid/backends/` — `acp.py`, `litelm.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON,
   plus the built-in `aid` server (`session_servers`). claude-agent-acp restarts its query when `session/load` gets
   servers other than `session/new` did.
 - `src/aid/tools.py` — `@aid.mcptool`, a marker attribute; `agents.discover` collects the marked functions.
   Keep it free of `mcp` imports: every worker and the daemon import it.
 - `src/aid/mcp_server.py` — `python -m aid.mcp_server`, the tools as a stdio MCP server. The agent starts it; it
-  imports user code, so never the daemon. pydantic-ai sessions get the same functions in-process as a toolset.
+  imports user code, so never the daemon. LiteLM sessions get the same functions in-process as a toolset.
   For interactive Claude it is also the session's channel (research preview): it long-polls the daemon for the
   session's messages and pushes `notifications/claude/channel`.
 - `src/aid/builtin_tools.py` — aid's own tools, in every session: `send_message`, `list_sessions`.
 - Request ids route replies across all clients: the daemon refuses an id in flight (`duplicate_id`); relays and
   plugins never pass a caller's id through unchecked.
-- Messages: `SendMessage` → recipient's history + inbox. ACP and pydantic-ai get a daemon-started wake turn after
+- Messages: `SendMessage` → recipient's history + inbox. ACP and LiteLM get a daemon-started wake turn after
   the running turn; interactive Claude gets a channel event. A wake turn has no client (`_Route.client` None).
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.
 - Recording: each turn ends with `Usage` (tokens, models, context, the agent's session cost) before `Output`; each
@@ -128,7 +128,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - claude-tty follows its transcript for the worker's life (`FollowingBackend.follow`): a turn aid's `prompt()` waits
   for is aid's; any other (typed into the pane, woken by a channel event) goes to the daemon as `Observed` entries
   under a turn id of its own.
-- `src/aid/agents.py` — `aid.PydanticAgent`, the interface agent modules implement, and discovery on
+- `src/aid/agents.py` — `aid.AgentDefinition`, the interface agent modules implement, and discovery on
   AID_AGENTS_PATH. `catalog.py` runs discovery in a subprocess for the daemon; never import agent modules
   in the daemon itself.
 - `src/aid/env.py` — agent environments, minus the markers of the Claude session that started us.
@@ -162,9 +162,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   web build's `types:check` fail on drift. After changing a model: regenerate both.
 - `web/` — the Svelte 5 UI (runes, TypeScript, Vite). `web/default.nix` builds it; `aid web` serves the result
   from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.
-- `src/aid/coding.py` — `aid.coding_tools`, a toolset pydantic-ai agents opt into: list and read, pyedit edits through its
+- `src/aid/coding.py` — `aid.coding_tools`, a toolset LiteLM agents opt into: list and read, pyedit edits through its
   library (`EditSession`, staged until `apply_edits`; no agent code runs in the worker), and `python` (pyrun
-  `run_script` in a child, each command asked of `PydanticAISpec.permission`). Results over `SPILL_LIMIT`
+  `run_script` in a child, each command asked of `LiteLMSpec.permission`). Results over `SPILL_LIMIT`
   spill to content-addressed files under the session, sent as a stable head plus the path. `compact`
   summarizes the history into a digest through a direct model call. One `Coding` per session, set per
   turn in the `CODING` contextvar; tool errors go back to the model as `ModelRetry`. pyedit is built into the
@@ -208,8 +208,8 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   regenerate through the project's own commands, never by hand.
 - anyio only. ruff bans `asyncio` and `subprocess` (TID251). The asyncio seam lives inside the `acp` library.
 - Worker isolation is a process per session, forked from a forkserver that preloads only the transport
-  (`launcher.PRELOAD`, default `zmq.asyncio`). Everything else — aid itself, `pydantic_ai`, `acp` — imports fresh
-  in each worker, so restarting a worker picks up new code. `PydanticAISpec.python_path` is prepended per worker,
+  (`launcher.PRELOAD`, default `zmq.asyncio`). Everything else — aid itself, `litelm`, `acp` — imports fresh
+  in each worker, so restarting a worker picks up new code. `LiteLMSpec.python_path` is prepended per worker,
   but a preloaded module and its dependencies win over it. `aid daemon --preload-module` shares more pages
   copy-on-write, `--no-preload` starts bare.
 - Keep workers subinterpreter-ready, for when pydantic-core and pyzmq load in more than one interpreter
@@ -219,7 +219,7 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   - The daemon depends on `Launcher`/`WorkerHandle`, never on multiprocessing.
 - ACP `session/update` must be read through the connection observer (`AcpBackend.observe`). The library runs
   `Client.session_update` as separate tasks, which can land after `prompt()` returns.
-- pydantic-ai: an unset `max_requests` explicitly disables the engine's default request cap. Turn cleanup
+- LiteLM: an unset `max_requests` explicitly disables the engine's default request cap. Turn cleanup
   persists available new messages and usage on success, failure and cancellation. Compaction owns the old
   history prefix; finalization appends only the run's new messages, never overwrites that prefix. Unanswered
   tool calls are closed as interrupted, not replayed: their effects may already have happened.

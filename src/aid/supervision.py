@@ -2,13 +2,13 @@
 permission requests its allow-list names when the person does not.
 
     import aid
-    from pydantic_ai import Agent
+    from aid.agent import Agent
 
     boss = Agent("...", toolsets=[aid.supervisor_tools])
 
 A supervisor names its subjects in their specs (`supervisor`); the tools take the supervised session's name,
 and the daemon refuses any session its caller does not supervise. The caller is the worker's own session, from
-its environment — like `aid.send_message`, these tools work only in an aid pydantic-ai session.
+its environment — like `aid.send_message`, these tools work only in an aid LiteLM session.
 """
 
 from __future__ import annotations
@@ -16,10 +16,9 @@ from __future__ import annotations
 import functools
 import json
 import os
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
-from pydantic_ai import FunctionToolset, ModelRetry
-
+from aid.agent import ModelRetry, Toolset
 from aid.client import connect
 from aid.paths import ENV_SESSION
 from aid.protocol import (
@@ -49,7 +48,7 @@ SUPERVISION_LINE_CHARS: Final = 400
 def _supervisor() -> str:
     name = os.environ.get(ENV_SESSION)
     if not name:
-        raise AidError("no_supervision", "supervision tools work only in an aid pydantic-ai session")
+        raise AidError("no_supervision", "supervision tools work only in an aid LiteLM session")
     return name
 
 
@@ -178,7 +177,7 @@ def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[
     return wrapper
 
 
-supervisor_tools: FunctionToolset[Any] = FunctionToolset[Any](
+supervisor_tools: Toolset = Toolset(
     [
         _retrying(supervised_history),
         _retrying(supervised_search),

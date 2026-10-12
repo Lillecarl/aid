@@ -11,6 +11,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, 
 
 class AgentKind(StrEnum):
     ACP = "acp"
+    LITELM = "litelm"
     PYDANTIC_AI = "pydantic-ai"
     CLAUDE_TTY = "claude-tty"
     CLAUDE_SDK = "claude-sdk"
@@ -74,7 +75,7 @@ class _Spec(BaseModel):
     env: dict[str, str] = Field(default_factory=dict[str, str])
     aid_tools: bool = True
     """Offer the `@aid.mcptool` functions on the agents path: as the MCP server `aid`, or in-process to a
-    pydantic-ai agent."""
+    LiteLM agent."""
     worker_command: Annotated[list[str], Field(min_length=1)] | None = None
     """Start this session's worker by running this command instead of forking it. It must run `aid worker`,
     which reads its arguments as JSON from stdin. A command runs with the daemon's environment and working
@@ -169,11 +170,11 @@ class AcpSpec(_Spec):
     mcp_servers: McpServers = Field(default_factory=list[McpServer])
 
 
-class PydanticAISpec(_Spec):
-    """A pydantic-ai agent: `agent`, the name of an `aid.PydanticAgent` on the agents path, or `target`, a
+class LiteLMSpec(_Spec):
+    """A LiteLM agent: `agent`, the name of an `aid.AgentDefinition` on the agents path, or `target`, a
     `package.module:attribute` that is an agent itself. Exactly one of them."""
 
-    kind: Literal[AgentKind.PYDANTIC_AI] = AgentKind.PYDANTIC_AI
+    kind: Literal[AgentKind.LITELM, AgentKind.PYDANTIC_AI] = AgentKind.LITELM
     agent: Annotated[str, Field(pattern=r"^[\w.-]+$")] | None = None
     target: Annotated[str, Field(pattern=r"^[\w.]+:[\w.]+$")] | None = None
     python_path: list[str] = Field(default_factory=list[str])
@@ -238,6 +239,8 @@ class ClaudeSdkSpec(_Spec):
     """Seconds an `ask` request waits for a person before it is refused."""
 
 
-type AgentSpec = Annotated[AcpSpec | PydanticAISpec | ClaudeTtySpec | ClaudeSdkSpec, Field(discriminator="kind")]
+PydanticAISpec = LiteLMSpec
+
+type AgentSpec = Annotated[AcpSpec | LiteLMSpec | ClaudeTtySpec | ClaudeSdkSpec, Field(discriminator="kind")]
 
 AgentSpecAdapter: TypeAdapter[AgentSpec] = TypeAdapter(AgentSpec)

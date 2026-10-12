@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from aid.control import ENV_AGENT_CONNECTION, AgentConnection
 from aid.launcher import PRELOAD, ForkserverLauncher, WorkerArgs, process_main
 from aid.paths import hook_socket
-from aid.spec import PydanticAISpec
+from aid.spec import LiteLMSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -23,17 +23,17 @@ def test_preload_keeps_worker_code_fresh() -> None:
     worker restart picks up new code and `python_path` can override them."""
     assert PRELOAD == ("zmq.asyncio",)
     assert not any(name == "aid" or name.startswith("aid.") for name in PRELOAD)
-    assert not {"pydantic_ai", "acp"} & set(PRELOAD)
+    assert not {"litelm", "acp"} & set(PRELOAD)
 
 
 def test_worker_endpoint_needs_command(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="need worker_command"):
-        PydanticAISpec(cwd=str(tmp_path), target="agents:echo", worker_endpoint="ipc://x")
+        LiteLMSpec(cwd=str(tmp_path), target="agents:echo", worker_endpoint="ipc://x")
     with pytest.raises(ValidationError, match="need worker_command"):
-        PydanticAISpec(cwd=str(tmp_path), target="agents:echo", worker_ca="/ca.pem")
+        LiteLMSpec(cwd=str(tmp_path), target="agents:echo", worker_ca="/ca.pem")
     with pytest.raises(ValidationError, match="names no program"):
-        PydanticAISpec(cwd=str(tmp_path), target="agents:echo", worker_command=[""])
-    spec = PydanticAISpec(
+        LiteLMSpec(cwd=str(tmp_path), target="agents:echo", worker_command=[""])
+    spec = LiteLMSpec(
         cwd=str(tmp_path),
         target="agents:echo",
         worker_command=["aid", "worker"],
@@ -57,7 +57,7 @@ def test_process_main_hands_the_worker_its_hook_socket(tmp_path: Path, monkeypat
 
     monkeypatch.setattr("aid.worker.main", fake_main)
     monkeypatch.setattr("aid.launcher.configure_logging", lambda: None)
-    spec_json = PydanticAISpec(cwd=str(tmp_path), target="agents:echo").model_dump_json()
+    spec_json = LiteLMSpec(cwd=str(tmp_path), target="agents:echo").model_dump_json()
     process_main(
         WorkerArgs(
             endpoint="ipc://workers.sock",

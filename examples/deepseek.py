@@ -9,13 +9,12 @@ Put this directory on AID_AGENTS_PATH and it shows up as `deep_seek`:
 
 from __future__ import annotations
 
-from pydantic_ai import Agent
-
 import aid
+from aid.agent import Agent
 
 
-class DeepSeek(aid.PydanticAgent):
+class DeepSeek(aid.AgentDefinition):
     """Short, plain answers from DeepSeek's chat model."""
 
-    def build(self) -> Agent[None, str]:
-        return Agent("deepseek:deepseek-chat", instructions="Answer briefly and plainly.")
+    def build(self) -> Agent:
+        return Agent("deepseek/deepseek-chat", instructions="Answer briefly and plainly.")

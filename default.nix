@@ -36,6 +36,34 @@
   # Vivarium, the NixOS integration tests aid boots in UML guests. A local path, not a pin: one-man
   # project, and the checkout beside this one is what the tests run against.
   vivariumSrc ? ../nixidae/vivarium,
+  litelm ? builtins.fetchTree {
+    type = "github";
+    owner = "kennethwolters";
+    repo = "litelm";
+    rev = "3cae20176bbda16633da7238a75d33871abea189";
+    narHash = "sha256-1BGppa4gN3iVA8lDpCV5A8+bXv1kq8oG2U4GVFkqqrY=";
+  },
+  openai ? builtins.fetchTree {
+    type = "github";
+    owner = "openai";
+    repo = "openai-python";
+    rev = "03b3ec474241fe3a73c4818dc6b886da28faaf91";
+    narHash = "sha256-SdoZqL65ptS+VTo18bETJWmTn4/sPWqtFVLoaFf4AYo=";
+  },
+  anthropic ? builtins.fetchTree {
+    type = "github";
+    owner = "anthropics";
+    repo = "anthropic-sdk-python";
+    rev = "eb21a4352015686c30f5759e8c2f02d70f5371e2";
+    narHash = "sha256-DdXmpunIxLL3kCAQ1RrgLskfkyDtzfBqjMMPwWtX2wQ=";
+  },
+  httpx2 ? builtins.fetchTree {
+    type = "github";
+    owner = "pydantic";
+    repo = "httpx2";
+    rev = "71ae23be5448f859c2b4e21d9972ddfa7b8d759d";
+    narHash = "sha256-mEJHlG6skKkV90SfjTg+MHGkL7gnf3QLKLbWlTtEb9Q=";
+  },
 }:
 let
   inherit (pkgs) lib;
@@ -85,37 +113,107 @@ let
   ];
   python = pkgs.python3.override {
     self = python;
-    packageOverrides = _final: prev: { pyzmq = prev.pyzmq.override { inherit zeromq; }; };
+    packageOverrides = final: prev: {
+      pyzmq = prev.pyzmq.override { inherit zeromq; };
+      dunamai = prev.dunamai.overridePythonAttrs {
+        version = "1.26.0";
+        src = builtins.fetchTree {
+          type = "github";
+          owner = "mtkennerly";
+          repo = "dunamai";
+          rev = "70939d32b2da9816f70fcddef544e54358135c30";
+          narHash = "sha256-YzLE0+/ZOROhWDVSBjWGdGmmMuMHOKP69zMnT8MKSvc=";
+        };
+      };
+      uv-dynamic-versioning = prev.uv-dynamic-versioning.overridePythonAttrs {
+        version = "0.14.0";
+        src = builtins.fetchTree {
+          type = "github";
+          owner = "ninoseki";
+          repo = "uv-dynamic-versioning";
+          rev = "46cb92b53a9b822cee62572a0a14aa0be7cd045d";
+          narHash = "sha256-4hfk9A4ZuiO8gevb5U6pTWkD5YKqk7J9I5eZ+KkfYX0=";
+        };
+        UV_DYNAMIC_VERSIONING_BYPASS = "0.14.0";
+        preCheck = prev.uv-dynamic-versioning.preCheck + ''
+          git init
+          git add .
+          git commit -m 'Source fixture for version tests'
+          unset UV_DYNAMIC_VERSIONING_BYPASS
+        '';
+      };
+      httpcore2 = prev.httpcore2.overridePythonAttrs {
+        version = "2.12.0";
+        src = httpx2;
+        dependencies = [
+          final.truststore
+          final.h11
+        ];
+        UV_DYNAMIC_VERSIONING_BYPASS = "2.12.0";
+      };
+      httpx2 = prev.httpx2.overridePythonAttrs {
+        version = "2.12.0";
+        src = httpx2;
+        dependencies = [
+          final.truststore
+          final.httpcore2
+          final.anyio
+          final.idna
+        ];
+        UV_DYNAMIC_VERSIONING_BYPASS = "2.12.0";
+      };
+    };
   };
 
   set = p.mkPythonSet {
     inherit python;
-    nixpkgsRoots = p.nixpkgsRootsFor {
-      inherit python;
-      # xonsh declares no runtime dependencies, but its dev and doc extras name three packages this
-      # nixpkgs does not ship: nothing installs them (the renderer enables no extras), so they join exclude
-      # instead of failing the closure computation.
-      projectRoots = p.projectRoots ++ [
-        ./.
-        ./pyrun
-        pyedit
-        shellous
-        xonsh
-      ];
-      exclude = p.suppliedNames ++ [
-        "aid"
-        "pyrun"
-        "pyedit"
-        "shellous"
-        "pre-commit"
-        "re-ver"
-        "runthis-sphinxext"
-      ]
-      ++ grammarsByName;
-    }
-    ++ map (name: python.pkgs.tree-sitter-grammars.${name}) grammarsByName;
+    nixpkgsRoots =
+      p.nixpkgsRootsFor {
+        inherit python;
+        # xonsh declares no runtime dependencies, but its dev and doc extras name three packages this
+        # nixpkgs does not ship: nothing installs them (the renderer enables no extras), so they join exclude
+        # instead of failing the closure computation.
+        projectRoots = p.projectRoots ++ [
+          ./.
+          ./pyrun
+          pyedit
+          shellous
+          xonsh
+          litelm
+          openai
+          anthropic
+        ];
+        exclude =
+          p.suppliedNames
+          ++ [
+            "aid"
+            "pyrun"
+            "pyedit"
+            "shellous"
+            "litelm"
+            "openai"
+            "anthropic"
+            "pre-commit"
+            "re-ver"
+            "runthis-sphinxext"
+          ]
+          ++ grammarsByName;
+      }
+      ++ map (name: python.pkgs.tree-sitter-grammars.${name}) grammarsByName;
     overlay = lib.composeExtensions p.overlay (
       final: _prev: {
+        openai = final.callPackage ./nix/model-sdk.nix {
+          inherit (p) mkProject;
+          src = openai;
+        };
+        anthropic = final.callPackage ./nix/model-sdk.nix {
+          inherit (p) mkProject;
+          src = anthropic;
+        };
+        litelm = final.callPackage ./nix/litelm.nix {
+          inherit (p) mkProject;
+          src = litelm;
+        };
         pyedit = final.callPackage ./nix/pyedit.nix {
           inherit (p) mkProject;
           src = pyedit;
@@ -148,7 +246,21 @@ let
   };
 in
 {
-  inherit set ui speechModel grammars;
+  inherit
+    set
+    ui
+    speechModel
+    grammars
+    ;
+
+  schema = pkgs.writeShellApplication {
+    name = "aid-schema";
+    runtimeInputs = [ devEnv ];
+    text = ''
+      export PYTHONPATH=${lib.escapeShellArg (toString ./src)}:${lib.escapeShellArg (toString ./pyrun/src)}
+      python -m aid.schema
+    '';
+  };
 
   # The browsers the browser tests drive, here so the vivarium guest takes the same ones as the shell.
   inherit browsers;
@@ -161,7 +273,14 @@ in
     pkgs.runCommand "aid-${set.aid.version}"
       {
         inherit (set.aid) meta;
-        passthru = { inherit venv ui speechModel grammars; };
+        passthru = {
+          inherit
+            venv
+            ui
+            speechModel
+            grammars
+            ;
+        };
         nativeBuildInputs = [ pkgs.makeWrapper ];
       }
       ''
@@ -174,7 +293,6 @@ in
 
   inherit (set.aid) tests;
   pyrun-tests = set.pyrun.tests;
-
 
   ruff = pkgs.writeShellApplication {
     name = "ruff";

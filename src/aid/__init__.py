@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from aid.agent import Agent as Agent
+from aid.agent import ModelRetry as ModelRetry
+from aid.agent import RunContext as RunContext
+from aid.agent import Tool as Tool
+from aid.agent import Toolset as Toolset
+from aid.agents import AgentDefinition as AgentDefinition
 from aid.agents import Instruction as Instruction
 from aid.agents import InstructionsContext as InstructionsContext
 from aid.agents import InstructionsProvider as InstructionsProvider
-from aid.agents import PydanticAgent as PydanticAgent
 from aid.client import Client as Client
 from aid.client import RunResult as RunResult
 from aid.client import Session as Session
@@ -27,7 +32,10 @@ from aid.protocol import ToolCall as ToolCall
 from aid.spec import AcpSpec as AcpSpec
 from aid.spec import AgentSpec as AgentSpec
 from aid.spec import ClaudeSdkSpec as ClaudeSdkSpec
+from aid.spec import LiteLMSpec as LiteLMSpec
 from aid.spec import PermissionMode as PermissionMode
-from aid.spec import PydanticAISpec as PydanticAISpec
 from aid.supervision import supervisor_tools as supervisor_tools
 from aid.tools import mcptool as mcptool
+
+PydanticAgent = AgentDefinition
+PydanticAISpec = LiteLMSpec

@@ -1,4 +1,4 @@
-"""pydantic-ai agents for tests. The daemon imports these by target, through `python_path`."""
+"""LiteLM agents for tests. The daemon imports these by target, through `python_path`."""
 
 from __future__ import annotations
 
@@ -10,8 +10,10 @@ from typing import TYPE_CHECKING, cast
 
 import anyio
 from pydantic import BaseModel, JsonValue, ValidationError
-from pydantic_ai import Agent
-from pydantic_ai.messages import (
+
+import aid
+from aid.agent import Agent
+from aid.messages import (
     ModelResponse,
     RetryPromptPart,
     TextPart,
@@ -19,23 +21,21 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models.function import (
+from aid.protocol import AidError, Goal, decode_request
+from tests.models import (
     AgentInfo,
     DeltaThinkingCalls,
     DeltaThinkingPart,
     DeltaToolCall,
     DeltaToolCalls,
     FunctionModel,
+    TestModel,
 )
-from pydantic_ai.models.test import TestModel
-
-import aid
-from aid.protocol import AidError, Goal, decode_request
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from pydantic_ai.messages import ModelMessage
+    from aid.messages import ModelMessage
 
 
 def _is_note(content: object) -> bool:

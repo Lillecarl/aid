@@ -10,9 +10,8 @@ web UI or `aid answer`.
 
 from __future__ import annotations
 
-from pydantic_ai import Agent
-
 import aid
+from aid.agent import Agent
 
 INSTRUCTIONS = """\
 You work on the code in your working directory.
@@ -29,8 +28,8 @@ You work on the code in your working directory.
 """
 
 
-class Coder(aid.PydanticAgent):
+class Coder(aid.AgentDefinition):
     """Reads, edits and runs code in its session's directory, on DeepSeek."""
 
-    def build(self) -> Agent[None, str]:
-        return Agent("deepseek:deepseek-chat", instructions=INSTRUCTIONS, toolsets=[aid.coding_tools])
+    def build(self) -> Agent:
+        return Agent("deepseek/deepseek-chat", instructions=INSTRUCTIONS, toolsets=[aid.coding_tools])

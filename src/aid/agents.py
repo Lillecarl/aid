@@ -1,14 +1,14 @@
-"""Agents and instruction providers offered to aid by code: subclasses of `PydanticAgent`
+"""Agents and instruction providers offered to aid by code: subclasses of `AgentDefinition`
 and `InstructionsProvider` in modules on the agents path.
 
     import aid
-    from pydantic_ai import Agent
+    from aid.agent import Agent
 
-    class DeepSeek(aid.PydanticAgent):
+    class DeepSeek(aid.AgentDefinition):
         \"\"\"Concise answers from DeepSeek.\"\"\"
 
         def build(self) -> Agent:
-            return Agent("deepseek:deepseek-chat")
+            return Agent("deepseek/deepseek-chat")
 
 The agents path is AID_AGENTS_PATH, directories joined with `:`, and defaults to `$XDG_CONFIG_HOME/aid/agents`.
 Every top-level module and package in those directories is imported; each concrete subclass defined there is
@@ -35,13 +35,13 @@ from aid.tools import McpTool, tool_of
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from pydantic_ai.agent import AbstractAgent
+    from aid.agent import Agent
 
 ENV_AGENTS_PATH: Final = "AID_AGENTS_PATH"
 
 
-class PydanticAgent(ABC):
-    """The interface: subclass it, give it a docstring, and return a pydantic-ai agent from `build`."""
+class AgentDefinition(ABC):
+    """The interface: subclass it, give it a docstring, and return a LiteLM agent from `build`."""
 
     name: ClassVar[str] = ""
     """The name sessions use. Empty means the class name in snake case."""
@@ -57,7 +57,7 @@ class PydanticAgent(ABC):
         return inspect.cleandoc(doc).split("\n\n")[0].replace("\n", " ") if doc else ""
 
     @abstractmethod
-    def build(self) -> AbstractAgent[Any, Any]:
+    def build(self) -> Agent:
         """Make the agent. Runs once per session worker, in that worker."""
 
 
@@ -102,7 +102,7 @@ class InstructionsProvider(ABC):
 
 @dataclass(frozen=True)
 class Catalog:
-    agents: dict[str, type[PydanticAgent]] = field(default_factory=dict[str, "type[PydanticAgent]"])
+    agents: dict[str, type[AgentDefinition]] = field(default_factory=dict[str, "type[AgentDefinition]"])
     providers: dict[str, type[InstructionsProvider]] = field(default_factory=dict[str, "type[InstructionsProvider]"])
     tools: dict[str, McpTool] = field(default_factory=dict[str, McpTool])
     problems: list[str] = field(default_factory=list[str])
@@ -187,7 +187,7 @@ def discover(paths: Sequence[Path]) -> Catalog:
                         continue
                     catalog.providers[name] = obj
                     continue
-                if not (isinstance(obj, type) and issubclass(obj, PydanticAgent)):
+                if not (isinstance(obj, type) and issubclass(obj, AgentDefinition)):
                     continue
                 if obj.__module__ != module.__name__ or inspect.isabstract(obj):
                     continue

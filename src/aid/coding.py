@@ -1,13 +1,13 @@
-"""Tools for pydantic-ai agents that work on code: read files, edit them through pyedit, run processes through pyrun.
+"""Tools for LiteLM agents that work on code: read files, edit them through pyedit, run processes through pyrun.
 
     import aid
-    from pydantic_ai import Agent
+    from aid.agent import Agent
 
-    class Coder(aid.PydanticAgent):
+    class Coder(aid.AgentDefinition):
         \"\"\"Changes code in its session's directory.\"\"\"
 
         def build(self) -> Agent:
-            return Agent("deepseek:deepseek-chat", toolsets=[aid.coding_tools])
+            return Agent("deepseek/deepseek-chat", toolsets=[aid.coding_tools])
 
 Each aid session has one `Coding`: its directory, a pyedit session holding edits until `apply_edits`, a pyrun store
 for what `python` runs, a persistent shell for what `shell` runs, and the session's permission mode. The worker
@@ -38,12 +38,12 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 import anyio
 import anyio.to_thread
 import structlog
-from pydantic_ai import FunctionToolset, ModelRetry, RunContext
 from pyedit.session import EditSession  # pyright: ignore[reportMissingTypeStubs] -- annotated, no py.typed
 from pyedit.syntax.nodes import NodeInfo  # pyright: ignore[reportMissingTypeStubs]
 from shellous import ResultError, Runner, sh
 
 import pyrun
+from aid.agent import ModelRetry, RunContext, Toolset
 from aid.confine import inside
 from aid.protocol import AidError, PermissionChoice, PermissionDecider, PermissionDecision, PermissionRequest, clip
 from aid.spec import PermissionMode, match_hook
@@ -464,7 +464,7 @@ def _coding() -> Coding:
     try:
         return CODING.get()
     except LookupError:
-        raise AidError("no_coding", "aid's coding tools work only in an aid pydantic-ai session") from None
+        raise AidError("no_coding", "aid's coding tools work only in an aid LiteLM session") from None
 
 
 def _task(task_id: str) -> BackgroundTask:
@@ -751,7 +751,7 @@ async def compact(instructions: str) -> str:
     naming what the upcoming work needs. Returns the digest."""
     coding = _coding()
     if coding.compact is None:
-        raise AidError("no_compact", "compaction needs an aid pydantic-ai session")
+        raise AidError("no_compact", "compaction needs an aid LiteLM session")
     return await coding.compact(instructions)
 
 
@@ -762,7 +762,7 @@ async def discard_edits() -> str:
     return "staged edits dropped"
 
 
-async def apply_edits(ctx: RunContext[Any]) -> str:
+async def apply_edits(ctx: RunContext) -> str:
     """Write everything staged to disk. The session's permission mode decides; a person may be asked."""
     coding = _coding()
     # pyedit caches every file read among the staged ones; only the changed ones are edits.
@@ -785,7 +785,7 @@ async def apply_edits(ctx: RunContext[Any]) -> str:
 
 
 async def ask_user(
-    ctx: RunContext[Any], question: str, options: list[str] | None = None, recommended: str | None = None
+    ctx: RunContext, question: str, options: list[str] | None = None, recommended: str | None = None
 ) -> str:
     """Ask the person watching the session one question, and wait for their answer. `options` names the
     alternatives; empty asks open-ended. `recommended` names the option picked automatically when nobody
@@ -834,7 +834,7 @@ async def ask_user(
 
 
 async def python(
-    ctx: RunContext[Any],
+    ctx: RunContext,
     script: str,
     time_limit: float = SCRIPT_TIME_LIMIT,
     mode: Literal["async", "sync", "xonsh", "in-loop"] = "async",
@@ -966,7 +966,7 @@ def _render_shell(result: ShellResult, time_limit: float, first: bool) -> str:
     return f"{reset}shell finished: exit {result.code} after {result.duration:.1f}s:\n{body}"
 
 
-async def shell(ctx: RunContext[Any], command: str, time_limit: float = SHELL_TIME_LIMIT) -> str:
+async def shell(ctx: RunContext, command: str, time_limit: float = SHELL_TIME_LIMIT) -> str:
     """Run a command in the session's shell, and report what it did. The shell persists: `cd` and exported
     variables stay for later calls, across turns. It starts in your working directory, without rc files.
 
@@ -993,7 +993,7 @@ async def shell_restart() -> str:
 
 
 async def background(
-    ctx: RunContext[Any],
+    ctx: RunContext,
     argv: list[str],
     cwd: str | None = None,
     env: dict[str, str] | None = None,
@@ -1084,7 +1084,7 @@ async def tasks() -> str:
 
 
 async def monitor(
-    ctx: RunContext[Any],
+    ctx: RunContext,
     task_id: str,
     on: Literal["ended", "failed", "pattern", "running_after"] = "ended",
     pattern: str | None = None,
@@ -1175,7 +1175,7 @@ def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[
     return wrapper
 
 
-coding_tools: FunctionToolset[Any] = FunctionToolset[Any](
+coding_tools: Toolset = Toolset(
     [
         _retrying(ls),
         _retrying(read),
@@ -1202,7 +1202,4 @@ coding_tools: FunctionToolset[Any] = FunctionToolset[Any](
         _retrying(monitor_stop),
         _retrying(monitors),
     ],
-    # A missed anchor or refused command costs retries, not the turn: every failure above already
-    # returns as a ModelRetry with its reason, so retries are second chances with new information.
-    max_retries=3,
 )

@@ -39,7 +39,7 @@ from aid.protocol import (
     TurnError,
     Usage,
 )
-from aid.spec import AcpSpec, ClaudeSdkSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
+from aid.spec import AcpSpec, ClaudeSdkSpec, ClaudeTtySpec, LiteLMSpec, PermissionMode
 from aid.web import OidcConfig, create_app
 from aid.web import serve as serve_web
 from aid.web.app import ENV_ASSETS
@@ -71,7 +71,7 @@ def _env(values: Sequence[str]) -> dict[str, str]:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="aid", description="AI daemon: persistent ACP and pydantic-ai agents.")
+    parser = argparse.ArgumentParser(prog="aid", description="AI daemon: persistent ACP and LiteLM agents.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     daemon_cmd = sub.add_parser("daemon", help="run the daemon in the foreground")
@@ -236,8 +236,8 @@ def _parser() -> argparse.ArgumentParser:
     claude.add_argument("--pymux-socket", help="the pymux server to run in (default: aid's own)")
     claude.add_argument("--claude", default="claude", help="the claude executable")
 
-    py = with_permission(new("new-py", "create a session running a pydantic-ai agent"))
-    py.add_argument("agent", help="an agent `aid agents` lists, or module:attribute of a pydantic_ai agent")
+    py = with_permission(new("new-py", "create a session running a LiteLM agent"))
+    py.add_argument("agent", help="an agent `aid agents` lists, or module:attribute of an aid.Agent")
     py.add_argument("--python-path", action="append", default=[], help="prepend to the worker's sys.path")
     py.add_argument(
         "--max-context",
@@ -255,7 +255,7 @@ def _parser() -> argparse.ArgumentParser:
     sdk.add_argument("--claude", default="claude", help="the claude executable")
 
     sub.add_parser(
-        "agents", help="list the aid.PydanticAgent classes and @aid.mcptool functions on the daemon's agents path"
+        "agents", help="list the aid.AgentDefinition classes and @aid.mcptool functions on the daemon's agents path"
     )
 
     sub.add_parser(
@@ -405,7 +405,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
     source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
-    return PydanticAISpec(
+    return LiteLMSpec(
         cwd=cwd,
         env=env,
         python_path=python_path,

@@ -6,14 +6,13 @@ from typing import TYPE_CHECKING, Any
 
 import anyio
 import pytest
-from pydantic_ai import Agent, ModelRetry
-from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
-from pydantic_ai.models.test import TestModel
 
 import aid
+from aid.agent import Agent, ModelRetry
+from aid.backends.litelm import LiteLMBackend
 from aid.backends.permissions import PermissionWaits
-from aid.backends.pydantic_ai import PydanticAIBackend
-from aid.coding import CODING, SPILL_LIMIT, Coding, Condition, Line, WatchView, coding_tools, compact, spill
+from aid.coding import CODING, SPILL_LIMIT, Coding, Condition, Line, WatchView, compact, spill
+from aid.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from aid.protocol import (
     AidError,
     MessageEntry,
@@ -25,6 +24,7 @@ from aid.protocol import (
 )
 from aid.spec import Hook, PermissionMode
 from tests.conftest import py_spec
+from tests.models import TestModel
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -139,7 +139,7 @@ async def test_compact_replaces_past_with_digest(tmp_path: Path) -> None:
         timeout=60,
         waits=PermissionWaits(),
     )
-    PydanticAIBackend(  # constructed for its side effect: wiring compact into coding
+    LiteLMBackend(  # constructed for its side effect: wiring compact into coding
         agent, anyio.Path(tmp_path / "history.json"), history, [], Started(pid=1, agent="t", model="m"), coding
     )
     token = CODING.set(coding)
@@ -165,7 +165,7 @@ async def test_compact_leaves_short_history(tmp_path: Path) -> None:
         timeout=60,
         waits=PermissionWaits(),
     )
-    PydanticAIBackend(  # constructed for its side effect: wiring compact into coding
+    LiteLMBackend(  # constructed for its side effect: wiring compact into coding
         agent, anyio.Path(tmp_path / "history.json"), history, [], Started(pid=1, agent="t", model="m"), coding
     )
     token = CODING.set(coding)
@@ -850,5 +850,10 @@ async def test_hook_miss_falls_through_to_mode_logic(tmp_path: Path) -> None:
     )
 
 
-def test_tool_failures_cost_retries_not_the_turn() -> None:
-    assert coding_tools.max_retries == 3
+async def test_correctable_tool_failures_do_not_end_the_turn(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(plan(*[("read", {"path": "missing.txt"})] * 5, ("ls", {})))
+    assert result.stop_reason == "end_turn"
+    assert len(str(result.output).split("\n=====\n")) == 6

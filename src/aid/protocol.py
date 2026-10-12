@@ -94,7 +94,7 @@ class DeleteSession(_Request):
 
 
 class ListAgents(_Request):
-    """The `aid.PydanticAgent`s on the daemon's agents path."""
+    """The `aid.AgentDefinition`s on the daemon's agents path."""
 
     op: Literal["agents"] = "agents"
 
@@ -114,7 +114,7 @@ class GetHistory(_Request):
 
 
 class SendMessage(_Request):
-    """A message to another session. The daemon wakes it: a turn of its own for ACP and pydantic-ai, a channel
+    """A message to another session. The daemon wakes it: a turn of its own for ACP and LiteLM, a channel
     event for interactive Claude. `sender` is a session name, or None for a person."""
 
     op: Literal["send"] = "send"
@@ -523,7 +523,7 @@ class Usage(_Message):
     What "the turn" covers differs by agent (measured 2026-09):
     - claude-agent-acp 0.75.1: every model call of the turn, subagents included.
     - opencode 1.x: the turn's last model response only.
-    - pydantic-ai: the run, every request.
+    - LiteLM: the run, every request.
     - claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,
       which aid does not read.
     """
@@ -550,7 +550,7 @@ class Usage(_Message):
 
 
 class Output(_Message):
-    """Final event of a prompt. `output` is text for ACP and the agent's typed output for pydantic-ai."""
+    """Final event of a prompt. `output` is text for ACP and the agent's typed output for LiteLM."""
 
     type: Literal["output"] = "output"
     output: JsonValue
@@ -648,7 +648,7 @@ class Started(_Message):
     type: Literal["started"] = "started"
     pid: int
     agent_session: str | None = None
-    """The agent's own session id: ACP's, or Claude Code's (its transcript's name). None for pydantic-ai."""
+    """The agent's own session id: ACP's, or Claude Code's (its transcript's name). None for LiteLM."""
     resumed: bool = False
     """It carried on an earlier agent session rather than starting one."""
     agent: str | None = None
@@ -786,7 +786,7 @@ class SessionStatus(_Message):
     pid: int | None
     cwd: str
     runs: str
-    """The agent command, or the pydantic-ai agent's name or target."""
+    """The agent command, or the LiteLM agent's name or target."""
     mcp_servers: list[str]
     aid_tools: bool
     agent_session: str | None = None

@@ -16,7 +16,7 @@ from aid.daemon import Daemon
 from aid.launcher import ForkserverLauncher
 from aid.paths import Paths
 from aid.plugins import ENV_PLUGINS_PATH
-from aid.spec import AcpSpec, ClaudeTtySpec, PermissionMode, PydanticAISpec
+from aid.spec import AcpSpec, ClaudeTtySpec, LiteLMSpec, PermissionMode
 from aid.speech import load as load_speech
 from aid.web.highlight import ENV_GRAMMARS, Grammars
 
@@ -149,8 +149,8 @@ def py_spec(
     permission_timeout: float = 1800,
     ask_autoselect_after: float = 240.0,
     **env: str,
-) -> PydanticAISpec:
-    return PydanticAISpec(
+) -> LiteLMSpec:
+    return LiteLMSpec(
         cwd=str(cwd),
         target=target,
         python_path=[str(TESTS)],
