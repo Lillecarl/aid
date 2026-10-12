@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import socket
 import sys
 from typing import TYPE_CHECKING
@@ -40,6 +41,9 @@ async def test_a_worker_command_over_ws(paths: Paths, tmp_path: Path) -> None:
                 result = await session.run("env")
                 assert result.output == f"remote {tmp_path}"
                 assert (await session.status()).pid is not None
+                probe = await client.create("probe", py_spec(tmp_path, "agents:control_probe"))
+                observed = await probe.run(json.dumps([["control_call", {"request": {"op": "list"}}]]))
+                assert {entry["name"] for entry in json.loads(str(observed.output))} == {"far", "probe"}
                 await session.stop()
             tg.cancel_scope.cancel()
 

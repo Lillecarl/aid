@@ -18,6 +18,7 @@ import zmq
 import zmq.asyncio
 import zmq.utils.z85
 
+from aid.control import AGENT_ID_PREFIX
 from aid.plugins import Grant, PluginSpec
 
 ZAP_ENDPOINT: Final = "inproc://zeromq.zap.01"
@@ -46,6 +47,7 @@ class Keys:
     def __init__(self) -> None:
         self.server = Keypair.new()
         self._sessions: dict[str, str] = {}
+        self._agents: dict[str, str] = {}
         self.plugins: dict[str, PluginSpec] = {}
         """By name."""
 
@@ -58,13 +60,27 @@ class Keys:
         if self._sessions.get(public) == session:
             del self._sessions[public]
 
+    def issue_agent(self, session: str) -> Keypair:
+        """Issue control credentials for this launch, separate from the worker's reporting credentials."""
+        keys = Keypair.new()
+        self._agents = {k: v for k, v in self._agents.items() if v != session} | {keys.public: session}
+        return keys
+
+    def agent_session(self, public: str) -> str | None:
+        """Resolve a control key against the live registry, including connections authenticated before revocation."""
+        return self._agents.get(public)
+
+    def revoke_agent(self, session: str, public: str) -> None:
+        if self._agents.get(public) == session:
+            del self._agents[public]
+
     def plugin(self, public: str) -> PluginSpec | None:
         return next((spec for spec in self.plugins.values() if spec.public_key == public), None)
 
     def user_id(self, domain: bytes, public: str) -> str | None:
         """Who a CURVE key is on a domain: a session for workers, a plugin for the plugin sockets."""
         if domain == DOMAIN:
-            return self._sessions.get(public)
+            return AGENT_ID_PREFIX + public if public in self._agents else self._sessions.get(public)
         spec = self.plugin(public)
         if spec is None:
             return None

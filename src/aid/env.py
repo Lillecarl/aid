@@ -3,6 +3,9 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Final
 
+from aid.control import ENV_AGENT_CONNECTION
+from aid.paths import ENV_SESSION
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -30,4 +33,8 @@ SESSION_MARKERS: Final = frozenset(
 
 def agent_environment(extra: Mapping[str, str], *, inherit: bool = True) -> dict[str, str]:
     base = {k: v for k, v in os.environ.items() if k not in SESSION_MARKERS} if inherit else {}
-    return {**base, **extra}
+    result = {**base, **extra}
+    for name in (ENV_AGENT_CONNECTION, ENV_SESSION):
+        if name in os.environ:
+            result[name] = os.environ[name]
+    return result

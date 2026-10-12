@@ -23,6 +23,7 @@ from pydantic import ValidationError
 
 from aid import events, plugin_host, plugins, zap
 from aid.client import spawn_plugin_client
+from aid.control import AGENT_ID_PREFIX, authorize
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
 from aid.inbox import INBOX_FILE, Inbox
 from aid.launcher import CommandLauncher, WorkerArgs
@@ -139,8 +140,6 @@ class _Session:
     history: HistoryLog
     inbox: Inbox
     handle: WorkerHandle | None = None
-    key: str | None = None
-    """The CURVE public key issued to the running worker."""
     peer: bytes | None = None
     """The routing id of the worker's connection, from its Hello."""
     ready: anyio.Event = field(default_factory=anyio.Event)
@@ -444,6 +443,7 @@ class _Peer:
     routing_id: bytes
     plugin: str | None = None
     """The plugin whose key the connection holds; None on the control socket."""
+    agent_key: str | None = None
 
     async def send(self, payload: bytes) -> None:
         await self.listener.send(self.routing_id, payload)
@@ -490,6 +490,7 @@ class Daemon:
         self._ctx = zmq.asyncio.Context()
         self._clients = _Listener(self._ctx.socket(zmq.ROUTER))
         self._workers = self._ctx.socket(zmq.ROUTER)
+        self._worker_clients = _Listener(self._workers)
         self._workers.setsockopt(zmq.ROUTER_MANDATORY, 1)
         self._keys = zap.Keys()
         zap.serve_curve(self._workers, self._keys)
@@ -503,7 +504,6 @@ class Daemon:
         self._local_plugin_events = self._ctx.socket(zmq.PUB)
         """The same protocol over inproc, for tasks the daemon spawned: no CURVE, since no other process can
         connect, and the task's DEALER identity names the plugin."""
-        self._worker_lock = anyio.Lock()
         self._events_lock = anyio.Lock()
         self._published: dict[bytes, bytes] = {}
         """The last status or list published per topic: publish only what changed."""
@@ -640,8 +640,7 @@ class Daemon:
         peer = session.peer
         if peer is None:
             raise zmq.ZMQError(zmq.EHOSTUNREACH, f"no worker connected for {session.name!r}")
-        async with self._worker_lock:
-            await self._workers.send_multipart([peer, encode(request)])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
+        await self._worker_clients.send(peer, encode(request))
 
     async def _client_loop(self) -> None:
         if self._tg is None:
@@ -767,6 +766,11 @@ class Daemon:
         await self._publish_changes()
 
     async def _dispatch(self, client: _Peer, request: Request) -> Done | None:
+        if client.agent_key is not None:
+            actor = self._keys.agent_session(client.agent_key)
+            if actor is None:
+                raise AidError("unauthenticated", "agent control credentials were revoked")
+            request = authorize(request, actor)
         match request:
             case CreateSession():
                 await self._create(request)
@@ -819,6 +823,8 @@ class Daemon:
                 if not session.inbox:
                     with anyio.move_on_after(request.wait):
                         await session.mail.wait()
+                if client.agent_key is not None and self._keys.agent_session(client.agent_key) != session.name:
+                    raise AidError("unauthenticated", "agent control credentials were revoked")
                 taken = await session.inbox.claim(request.id)
                 await session.inbox.finish(request.id)
                 session.mail = anyio.Event()
@@ -1453,22 +1459,29 @@ class Daemon:
             session.start_error = None
             session.peer = None
             keys = self._keys.issue(session.name)
-            session.key = keys.public
+            agent_keys = self._keys.issue_agent(session.name)
             args = WorkerArgs(
                 endpoint=self._paths.workers,
                 trust_pem="",
                 server_key=self._keys.server.public,
                 public_key=keys.public,
                 secret_key=keys.secret,
+                agent_public_key=agent_keys.public,
+                agent_secret_key=agent_keys.secret,
                 name=session.name,
                 spec_json=AgentSpecAdapter.dump_json(session.spec).decode(),
                 state_dir=str(self._paths.session_dir(session.name)),
                 daemon_runtime_dir=str(self._paths.runtime_dir),
                 daemon_state_dir=str(self._paths.state_dir),
             )
-            handle = await self._launcher_for(session).launch(args)
+            try:
+                handle = await self._launcher_for(session).launch(args)
+            except BaseException:
+                self._keys.revoke(session.name, keys.public)
+                self._keys.revoke_agent(session.name, agent_keys.public)
+                raise
             session.handle = handle
-            self._tg.start_soon(self._watch, session, handle)
+            self._tg.start_soon(self._watch, session, handle, keys.public, agent_keys.public)
             try:
                 with anyio.move_on_after(START_TIMEOUT) as scope:
                     await session.ready.wait()
@@ -1489,18 +1502,18 @@ class Daemon:
             if session.exited.is_set():
                 raise AidError("worker_exited", f"worker for {session.name!r} exited with {session.exit_code}")
 
-    async def _watch(self, session: _Session, handle: WorkerHandle) -> None:
+    async def _watch(self, session: _Session, handle: WorkerHandle, public_key: str, agent_key: str) -> None:
         # Shielded: shutdown cancels this task group, but `_stop_all` still waits on `exited`.
         # `_stop` kills a worker that does not exit, so the wait always ends.
         with anyio.CancelScope(shield=True):
             code = await handle.wait()
+            self._keys.revoke(session.name, public_key)
+            self._keys.revoke_agent(session.name, agent_key)
             log.info("worker_exited", session=session.name, pid=handle.pid, code=code)
             session.exit_code = code
             if session.handle is handle:
                 session.handle = None
                 session.peer = None
-                if session.key is not None:
-                    self._keys.revoke(session.name, session.key)
             for request_id, route in list(self._routes.items()):
                 if route.session == session.name:
                     del self._routes[request_id]
@@ -1550,6 +1563,17 @@ class Daemon:
             if not isinstance(name, str):
                 raise TypeError(f"User-Id is {name!r}")
             payload = frame.bytes
+            if name.startswith(AGENT_ID_PREFIX):
+                client = _Peer(self._worker_clients, peer.bytes, agent_key=name.removeprefix(AGENT_ID_PREFIX))
+                try:
+                    request = decode_request(payload)
+                except ValidationError:
+                    await client.send(encode(Failure(id="", code="invalid_request", message="invalid agent request")))
+                    continue
+                if self._tg is None:
+                    raise RuntimeError("daemon is not serving")
+                self._tg.start_soon(self._handle, client, request)
+                continue
             try:
                 reply = decode_reply(payload)
             except ValidationError:

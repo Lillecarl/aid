@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import multiprocessing
+import os
 from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import ValidationError
 
+from aid.control import ENV_AGENT_CONNECTION, AgentConnection
 from aid.launcher import PRELOAD, ForkserverLauncher, WorkerArgs, process_main
 from aid.paths import hook_socket
 from aid.spec import PydanticAISpec
@@ -46,6 +48,8 @@ def test_hook_socket_lives_beside_the_daemons_own() -> None:
 
 
 def test_process_main_hands_the_worker_its_hook_socket(tmp_path: Path, monkeypatch: MonkeyPatch) -> None:
+    monkeypatch.setattr(os, "environ", os.environ.copy())
+    monkeypatch.chdir(tmp_path)
     calls: list[tuple[str, ...]] = []
 
     def fake_main(*args: str) -> None:
@@ -58,9 +62,11 @@ def test_process_main_hands_the_worker_its_hook_socket(tmp_path: Path, monkeypat
         WorkerArgs(
             endpoint="ipc://workers.sock",
             trust_pem="",
-            server_key="s",
+            server_key="s" * 40,
             public_key="p",
             secret_key="q",
+            agent_public_key="a" * 40,
+            agent_secret_key="b" * 40,
             name="s1",
             spec_json=spec_json,
             state_dir=str(tmp_path),
@@ -72,7 +78,7 @@ def test_process_main_hands_the_worker_its_hook_socket(tmp_path: Path, monkeypat
         (
             "ipc://workers.sock",
             "",
-            "s",
+            "s" * 40,
             "p",
             "q",
             spec_json,
@@ -80,6 +86,10 @@ def test_process_main_hands_the_worker_its_hook_socket(tmp_path: Path, monkeypat
             "ipc:///run/aid/hook-s1.sock",
         )
     ]
+    connection = AgentConnection.model_validate_json(os.environ[ENV_AGENT_CONNECTION])
+    assert connection.endpoint == "ipc://workers.sock"
+    assert connection.public_key == "a" * 40
+    assert connection.secret_key == "b" * 40
 
 
 class _FakeContext:

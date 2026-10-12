@@ -25,6 +25,7 @@ import anyio.to_thread
 import structlog
 
 from aid import worker
+from aid.control import ENV_AGENT_CONNECTION, AgentConnection
 from aid.log import configure_logging
 from aid.paths import ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, hook_socket
 from aid.spec import AgentSpecAdapter
@@ -51,8 +52,10 @@ class WorkerArgs:
     """For a `wss://` endpoint: the CAs to check its certificate against, PEM; empty means the system's."""
     server_key: str
     public_key: str
-    secret_key: str
+    secret_key: str = dataclasses.field(repr=False)
     """CURVE keys, Z85: the daemon's public key, and the keypair the daemon issued to this worker."""
+    agent_public_key: str
+    agent_secret_key: str = dataclasses.field(repr=False)
     name: str
     spec_json: str
     state_dir: str
@@ -93,6 +96,13 @@ def process_main(args: WorkerArgs) -> None:
     os.environ[ENV_SESSION] = args.name
     os.environ[ENV_RUNTIME_DIR] = args.daemon_runtime_dir
     os.environ[ENV_STATE_DIR] = args.daemon_state_dir
+    os.environ[ENV_AGENT_CONNECTION] = AgentConnection(
+        endpoint=args.endpoint,
+        server_key=args.server_key,
+        public_key=args.agent_public_key,
+        secret_key=args.agent_secret_key,
+        trust_pem=args.trust_pem,
+    ).model_dump_json()
     worker.main(
         args.endpoint,
         args.trust_pem,

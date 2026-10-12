@@ -10,6 +10,7 @@ from pydantic import ValidationError
 
 import aid
 from aid.agents import ENV_AGENTS_PATH
+from aid.control import ENV_AGENT_CONNECTION, AgentConnection
 from aid.mcp import claude_config, from_claude_config
 from aid.paths import ENV_SESSION
 from aid.spec import AcpSpec, McpHttp, McpSse, McpStdio, PermissionMode
@@ -75,9 +76,18 @@ async def test_acp_agent_gets_the_servers_on_new_and_load(daemon: Paths, tmp_pat
     ]
     fresh_json, resumed_json = json.loads(fresh.text), json.loads(resumed.text)
     builtin = fresh_json["servers"].pop()
+    resumed_builtin = resumed_json["servers"].pop()
     env = {e["name"]: e["value"] for e in builtin["env"]}
+    resumed_env = {e["name"]: e["value"] for e in resumed_builtin["env"]}
+    fresh_connection = AgentConnection.model_validate_json(env.pop(ENV_AGENT_CONNECTION))
+    resumed_connection = AgentConnection.model_validate_json(resumed_env.pop(ENV_AGENT_CONNECTION))
     assert fresh_json == {"via": "new", "servers": expected}
-    assert resumed_json == {"via": "load", "servers": [*expected, builtin]}
+    assert resumed_json == {"via": "load", "servers": expected}
+    assert resumed_env == env
+    assert {k: v for k, v in resumed_builtin.items() if k != "env"} == {k: v for k, v in builtin.items() if k != "env"}
+    assert fresh_connection.endpoint == resumed_connection.endpoint == daemon.workers
+    assert fresh_connection.public_key != resumed_connection.public_key
+    assert fresh_connection.secret_key != resumed_connection.secret_key
     assert (builtin["name"], builtin["command"], builtin["args"]) == ("aid", sys.executable, ["-m", "aid.mcp_server"])
     assert env[ENV_SESSION] == "mcp"
     assert env[ENV_AGENTS_PATH] == "/agents"

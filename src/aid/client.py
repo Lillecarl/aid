@@ -8,6 +8,7 @@ async with aid.connect() as client:
 from __future__ import annotations
 
 import math
+import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, overload
@@ -18,8 +19,9 @@ import zmq.asyncio
 from pydantic import JsonValue, TypeAdapter
 
 from aid import events, zap
+from aid.control import ENV_AGENT_CONNECTION, AgentConnection
 from aid.history import MAX_PAGE
-from aid.paths import default_paths
+from aid.paths import ENV_SESSION, default_paths
 from aid.plugins import INPROC_PLUGIN_EVENTS, INPROC_PLUGINS, SECRET_FILE, Grant, PluginSpec
 from aid.protocol import (
     AddPlugin,
@@ -90,13 +92,14 @@ class Endpoints:
     control: str
     events: str
     curve: tuple[str, zap.Keypair] | None = None
-    """The daemon's public key and the plugin's keypair."""
+    """The daemon's public key and the caller's keypair."""
+    trust_pem: str = ""
 
     def connect(self, sock: zmq.asyncio.Socket, endpoint: str) -> None:
         if self.curve is None:
             sock.connect(endpoint)
         else:
-            zap.connect_curve(sock, endpoint, *self.curve)
+            zap.connect_curve(sock, endpoint, *self.curve, self.trust_pem)
 
 
 async def plugin_endpoints(paths: Paths, name: str) -> Endpoints:
@@ -181,9 +184,26 @@ async def register_plugin(
 
 @asynccontextmanager
 async def connect(paths: Paths | None = None, *, plugin: str | None = None) -> AsyncGenerator[Client]:
-    """A client of the daemon; with `plugin`, as that plugin, held to its grants (`aid.plugins`)."""
+    """Connect with launch credentials inside an agent, plugin grants with `plugin`, or local administrator access."""
     paths = paths or default_paths()
-    endpoints = await plugin_endpoints(paths, plugin) if plugin else Endpoints(paths.control, paths.events)
+    connection = os.environ.get(ENV_AGENT_CONNECTION)
+    if connection is not None:
+        if plugin is not None:
+            raise AidError("forbidden", "an agent connection cannot select a plugin identity")
+        try:
+            credentials = AgentConnection.model_validate_json(connection)
+        except ValueError:
+            raise AidError("unauthenticated", "invalid agent control credentials") from None
+        endpoints = Endpoints(
+            credentials.endpoint,
+            paths.events,
+            (credentials.server_key, zap.Keypair(public=credentials.public_key, secret=credentials.secret_key)),
+            credentials.trust_pem,
+        )
+    elif os.environ.get(ENV_SESSION):
+        raise AidError("unauthenticated", "agent control credentials are missing")
+    else:
+        endpoints = await plugin_endpoints(paths, plugin) if plugin else Endpoints(paths.control, paths.events)
     ctx = zmq.asyncio.Context()
     sock = ctx.socket(zmq.DEALER)
     endpoints.connect(sock, endpoints.control)
@@ -221,9 +241,10 @@ class Client:
         """A socket of its own on the daemon, while the block runs: `zmq.DEALER` on the control socket, `zmq.SUB`
         on the events. For a relay that speaks the protocol itself: this client neither routes its replies nor
         checks what it sends."""
-        sock = self._ctx.socket(socket_type)
         endpoints = self._endpoints
-        endpoints.connect(sock, endpoints.control if socket_type == zmq.DEALER else endpoints.events)
+        endpoint = endpoints.control if socket_type == zmq.DEALER else endpoints.events
+        sock = self._ctx.socket(socket_type)
+        endpoints.connect(sock, endpoint)
         self.sockets.add(sock)
         try:
             yield sock

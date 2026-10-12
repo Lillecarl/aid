@@ -10,6 +10,7 @@ from acp.schema import EnvVariable, HttpHeader, HttpMcpServer, McpServerStdio, S
 from pydantic import TypeAdapter
 
 from aid.agents import ENV_AGENTS_PATH, agents_path
+from aid.control import ENV_AGENT_CONNECTION
 from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, default_paths
 from aid.spec import BUILTIN_MCP_SERVER, AgentKind, McpHttp, McpServer, McpSse, McpStdio
 
@@ -40,6 +41,8 @@ def builtin_server(session: str, *, channel: bool) -> McpStdio:
     }
     if channel:
         env[ENV_CHANNEL] = "1"
+    if connection := os.environ.get(ENV_AGENT_CONNECTION):
+        env[ENV_AGENT_CONNECTION] = connection
     # The dev shell runs aid from src/ through PYTHONPATH; without it the server imports the venv's copy.
     if python_path := os.environ.get("PYTHONPATH"):
         env["PYTHONPATH"] = python_path

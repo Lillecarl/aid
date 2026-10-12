@@ -25,7 +25,7 @@ from aid.backends.claude_tty import (
     split_settings,
 )
 from aid.mcp import claude_config
-from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, hook_socket
+from aid.paths import hook_socket
 from aid.protocol import (
     AidError,
     Done,
@@ -433,16 +433,12 @@ async def test_mcp_servers_reach_claude(daemon: Paths, tmp_path: Path, pymux_soc
 
 @needs_pymux
 async def test_messages_reach_claude_through_its_channel(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
-    env = {
-        ENV_SESSION: "tty",
-        ENV_CHANNEL: "1",
-        ENV_RUNTIME_DIR: str(daemon.runtime_dir),
-        ENV_STATE_DIR: str(daemon.state_dir),
-    }
     command = [sys.executable, "-m", "aid.mcp_server"]
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            config = json.loads((daemon.session_dir("tty") / "mcp.json").read_text())
+            env = config["mcpServers"]["aid"]["env"]
             async with await anyio.open_process(command, env={**os.environ, **env}) as server:
                 assert server.stdin is not None
                 assert server.stdout is not None

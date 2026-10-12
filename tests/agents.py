@@ -30,7 +30,7 @@ from pydantic_ai.models.function import (
 from pydantic_ai.models.test import TestModel
 
 import aid
-from aid.protocol import Goal
+from aid.protocol import AidError, Goal, decode_request
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -208,6 +208,19 @@ async def _planned_stream(messages: list[ModelMessage], info: AgentInfo) -> Asyn
 
 # Its answer is every tool result of the plan, joined by =====.
 coder = Agent(FunctionModel(_planned, stream_function=_planned_stream), toolsets=[aid.coding_tools])
+
+
+async def control_call(request: dict[str, JsonValue]) -> str:
+    """Call the daemon through this agent's normal connector and return the result or refusal code."""
+    try:
+        async with aid.connect() as client:
+            result = await client.call(decode_request(json.dumps(request).encode()))
+        return json.dumps(result)
+    except AidError as error:
+        return json.dumps({"error": error.code})
+
+
+control_probe = Agent(FunctionModel(_planned, stream_function=_planned_stream), tools=[control_call])
 
 
 def _watcher(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

@@ -11,6 +11,7 @@ import zmq.asyncio
 import zmq.utils.z85
 
 from aid import zap
+from aid.control import AGENT_ID_PREFIX
 from aid.plugins import Grant, PluginSpec
 
 if TYPE_CHECKING:
@@ -131,3 +132,30 @@ def test_a_plugin_key_names_the_plugin_and_events_want_read() -> None:
     assert keys.user_id(zap.DOMAIN, reader.public) is None
     assert keys.user_id(zap.PLUGINS_DOMAIN, session.public) is None
     assert keys.user_id(zap.PLUGINS_DOMAIN, zap.Keypair.new().public) is None
+
+
+async def test_agent_keys_authenticate_a_distinct_control_role(endpoint: str) -> None:
+    keys = zap.Keys()
+    agent = keys.issue_agent("alice")
+    async with _daemon_side(endpoint, keys) as (ctx, router):
+        sock = _worker(ctx, router, keys.server.public, agent)
+        sock.routing_id = b"bob"
+        await sock.send(b"hello")
+        assert await _user_id(router) == AGENT_ID_PREFIX + agent.public
+    assert keys.agent_session(agent.public) == "alice"
+    assert keys.user_id(zap.PLUGINS_DOMAIN, agent.public) is None
+    assert keys.user_id(zap.PLUGIN_EVENTS_DOMAIN, agent.public) is None
+
+
+def test_agent_key_rotation_and_revocation_preserve_a_newer_launch() -> None:
+    keys = zap.Keys()
+    worker = keys.issue("alice")
+    old = keys.issue_agent("alice")
+    fresh = keys.issue_agent("alice")
+    keys.revoke_agent("alice", old.public)
+    assert keys.agent_session(old.public) is None
+    assert keys.agent_session(worker.public) is None
+    assert keys.agent_session(fresh.public) == "alice"
+    assert keys.user_id(zap.DOMAIN, worker.public) == "alice"
+    keys.revoke_agent("alice", fresh.public)
+    assert keys.user_id(zap.DOMAIN, fresh.public) is None
