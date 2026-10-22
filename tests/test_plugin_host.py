@@ -11,17 +11,20 @@ import pytest
 import zmq.asyncio
 
 import aid
+from aid import daemon as daemon_module
 from aid import plugin_host
 from aid.client import local_plugin_endpoints, register_plugin
 from aid.daemon import Daemon
 from aid.discovery import Catalog
 from aid.plugins import INPROC_PLUGIN_EVENTS, INPROC_PLUGINS, Grant, PluginSpec
-from aid.protocol import AidError, MessageEntry
+from aid.protocol import AidError, CallPlugin, CallResult, MessageEntry, ServeCalls
 from tests.conftest import py_spec
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
     from pathlib import Path
+
+    from pydantic import JsonValue
 
     from aid.launcher import ForkserverLauncher
     from aid.paths import Paths
@@ -101,6 +104,86 @@ async def test_a_local_plugin_granted_read_follows_what_is_published(
                         break
     assert seen[0] == []
     assert seen[-1] == ["echo"]
+
+
+class Answering(aid.Plugin):
+    async def run(self, client: aid.Client) -> None:
+        await anyio.sleep_forever()
+
+    async def call(self, caller: str | None, method: str, args: dict[str, JsonValue]) -> JsonValue:
+        match method:
+            case "echo":
+                return {"caller": caller, "args": args}
+            case "refuse":
+                raise AidError("not_yours", f"{caller} may not")
+            case "crash":
+                raise RuntimeError("bug")
+            case "hang":
+                await anyio.sleep_forever()
+            case _:
+                pass
+        raise AidError("unknown_method", method)
+
+
+@asynccontextmanager
+async def _answering(daemon: Daemon, name: str) -> AsyncGenerator[aid.Client]:
+    async with daemon.plugin_client(name) as client, anyio.create_task_group() as tg:
+        tg.start_soon(plugin_host.run, Answering(), client)
+        yield client
+        tg.cancel_scope.cancel()
+
+
+async def _called(control: aid.Client, plugin: str, method: str, **args: JsonValue) -> JsonValue:
+    """Call once the plugin serves: its first `ServeCalls` races the test's first call."""
+    while True:
+        try:
+            return await control.call_plugin(plugin, method, **args)
+        except AidError as error:
+            if error.code != "no_plugin":
+                raise
+            await anyio.sleep(0.01)
+
+
+async def test_a_plugin_answers_calls_for_the_caller_the_daemon_names(
+    paths: Paths, launcher: ForkserverLauncher, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(daemon_module, "PLUGIN_CALL_TIMEOUT", 0.2)
+    with anyio.fail_after(TIMEOUT):
+        async with _serving(paths, launcher) as daemon, aid.connect(paths) as control:
+            await register_plugin(control, paths, "answering", frozenset())
+            async with _answering(daemon, "answering"):
+                assert await _called(control, "answering", "echo", n=1) == {"caller": None, "args": {"n": 1}}
+                as_boss = CallPlugin(plugin="answering", method="echo", caller="boss")
+                assert await control.call(as_boss) == {"caller": "boss", "args": {}}
+                with pytest.raises(AidError, match="not_yours: boss may not"):
+                    await control.call(CallPlugin(plugin="answering", method="refuse", caller="boss"))
+                with pytest.raises(AidError, match="plugin_failed: RuntimeError: bug"):
+                    await control.call_plugin("answering", "crash")
+                with pytest.raises(AidError, match="plugin_timeout"):
+                    await control.call_plugin("answering", "hang")
+                await control.remove_plugin("answering")
+                with pytest.raises(AidError, match="no_plugin"):
+                    await control.call_plugin("answering", "echo")
+
+
+async def test_only_the_called_plugin_answers_a_call(paths: Paths, launcher: ForkserverLauncher) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with _serving(paths, launcher) as daemon, aid.connect(paths) as control:
+            await register_plugin(control, paths, "answering", frozenset())
+            await register_plugin(control, paths, "other", frozenset())
+            async with _answering(daemon, "answering"), daemon.plugin_client("other") as other:
+                await _called(control, "answering", "echo")
+                async with anyio.create_task_group() as tg:
+                    tg.start_soon(control.call_plugin, "answering", "hang")
+                    await anyio.sleep(0.1)
+                    [call] = daemon._calls  # pyright: ignore[reportPrivateUsage]
+                    with pytest.raises(AidError, match="unknown_call"):
+                        await other.call(CallResult(call=call, data="forged"))
+                    with pytest.raises(AidError, match="only a plugin serves calls"):
+                        await control.call(ServeCalls())
+                    tg.cancel_scope.cancel()
+                with pytest.raises(AidError, match="no_plugin"):
+                    await control.call_plugin("other", "echo")
 
 
 STUB_PLUGIN = '''"""A stub hosted plugin: pings, then falls over."""

@@ -37,6 +37,8 @@ from aid.protocol import (
     AidError,
     AnswerPermission,
     AnswerSupervisedPermission,
+    CallPlugin,
+    CallResult,
     Cancel,
     CancelSupervised,
     CompactSession,
@@ -56,6 +58,7 @@ from aid.protocol import (
     GoalState,
     Hello,
     Hook,
+    Invocation,
     ListAgents,
     ListPlugins,
     ListSessions,
@@ -72,6 +75,7 @@ from aid.protocol import (
     RemovePlugin,
     SearchResults,
     SendMessage,
+    ServeCalls,
     SessionInfo,
     SessionInfosAdapter,
     SessionStatus,
@@ -113,6 +117,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Sequence
 
     from anyio.abc import TaskGroup, TaskStatus
+    from anyio.streams.memory import MemoryObjectSendStream
+    from pydantic import JsonValue
 
     from aid.client import Client
     from aid.launcher import Launcher, WorkerHandle
@@ -126,6 +132,8 @@ log = structlog.get_logger(__name__)
 START_TIMEOUT: Final = 60.0
 START_ERROR_GRACE: Final = 0.5
 STOP_TIMEOUT: Final = 10.0
+PLUGIN_CALL_TIMEOUT: Final = 30.0
+"""Seconds a `CallPlugin` waits for the plugin's answer: a plugin gone mid-call never sends one."""
 SPEC_FILE: Final = "spec.json"
 # A spec holds env values and MCP headers, which are often credentials.
 SESSION_DIR_MODE: Final = 0o700
@@ -510,6 +518,10 @@ class Daemon:
         """True while the task group runs its loops: no wakes or firings during shutdown."""
         self._backstops: dict[str, tuple[str, anyio.CancelScope]] = {}
         """Permission backstops still waiting, by request id: the supervised session and their cancel scope."""
+        self._call_targets: dict[str, _Peer] = {}
+        """The connection each plugin serves its calls on, from its latest `ServeCalls`."""
+        self._calls: dict[str, tuple[str, MemoryObjectSendStream[CallResult]]] = {}
+        """Calls waiting on a plugin's answer, by invocation id: the plugin and where its answer goes."""
 
     async def serve(self, *, task_status: TaskStatus[None] = anyio.TASK_STATUS_IGNORED) -> None:
         await anyio.Path(self._paths.runtime_dir).mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -971,6 +983,7 @@ class Daemon:
                 await plugin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                 await (plugin_dir / PLUGIN_FILE).write_text(request.spec.model_dump_json())
                 self._keys.plugins[request.spec.name] = request.spec
+                self._call_targets.pop(request.spec.name, None)
                 await self._reconcile_plugins()
                 return Done(id=request.id)
             case ListPlugins():
@@ -978,6 +991,7 @@ class Daemon:
             case RemovePlugin():
                 if self._keys.plugins.pop(request.name, None) is None:
                     raise AidError("not_found", f"no plugin named {request.name!r}")
+                self._call_targets.pop(request.name, None)
                 await anyio.to_thread.run_sync(shutil.rmtree, self._paths.plugin_dir(request.name), True)
                 await self._reconcile_plugins()
                 return Done(id=request.id)
@@ -992,6 +1006,42 @@ class Daemon:
                         await session.history.wait_after(request.after)
                 page = await session.history.page(before=request.before, after=request.after, limit=request.limit)
                 return Done(id=request.id, data=page.model_dump(mode="json"))
+            case CallPlugin():
+                return Done(id=request.id, data=await self._call_plugin(request))
+            case ServeCalls():
+                if client.plugin is None:
+                    raise AidError("forbidden", "only a plugin serves calls")
+                self._call_targets[client.plugin] = client
+                return Done(id=request.id)
+            case CallResult():
+                waiting = self._calls.get(request.call)
+                if waiting is None or waiting[0] != client.plugin:
+                    raise AidError("unknown_call", f"no call {request.call!r} waits on this plugin")
+                del self._calls[request.call]
+                waiting[1].send_nowait(request)
+                return Done(id=request.id)
+
+    async def _call_plugin(self, request: CallPlugin) -> JsonValue:
+        target = self._call_targets.get(request.plugin)
+        if target is None or request.plugin not in self._keys.plugins:
+            raise AidError("no_plugin", f"no plugin {request.plugin!r} serves calls")
+        call = uuid.uuid4().hex
+        send, receive = anyio.create_memory_object_stream[CallResult](1)
+        self._calls[call] = (request.plugin, send)
+        try:
+            invocation = Invocation(id=call, caller=request.caller, method=request.method, args=request.args)
+            await target.send(encode(invocation))
+            with anyio.fail_after(PLUGIN_CALL_TIMEOUT):
+                result = await receive.receive()
+        except TimeoutError:
+            raise AidError("plugin_timeout", f"plugin {request.plugin!r} did not answer {request.method!r}") from None
+        finally:
+            self._calls.pop(call, None)
+            send.close()
+            receive.close()
+        if result.code is not None:
+            raise AidError(result.code, result.message)
+        return result.data
 
     def _new_session(self, name: str, spec: AgentSpec) -> _Session:
         history = HistoryLog(
@@ -1635,6 +1685,8 @@ class Daemon:
                         await self._record(route, reply)
                         reason = "done" if isinstance(reply, Done) else reply.code
                         await self._end_turn(route.session, reply.id, reason)
+                case Invocation():
+                    log.warning("worker_sent_invocation", worker=name)
             # A turn streams many deltas a second, and they change no status.
             if not (isinstance(reply, Event) and isinstance(reply.event, TextDelta | ThoughtDelta)):
                 await self._publish_changes()

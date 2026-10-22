@@ -24,7 +24,7 @@ import structlog
 from aid.catalog import listing
 from aid.client import spawn_plugin_client
 from aid.discovery import Catalog, discover
-from aid.plugins import plugins_path
+from aid.plugins import plugins_path, serves_calls
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 
     import zmq.asyncio
 
+    from aid.client import Client
     from aid.plugins import Grant, Plugin, PluginSpec
     from aid.protocol import AgentCatalog
 
@@ -89,6 +90,17 @@ def _grant_flags(grants: frozenset[Grant]) -> str:
     return " ".join(f"--grant {grant.value}" for grant in sorted(grants, key=lambda grant: grant.value))
 
 
+async def run(plugin: Plugin, client: Client) -> None:
+    """Run `plugin` on `client`, serving its calls beside `run` when it answers any (`Plugin.call`)."""
+    if not serves_calls(plugin):
+        await plugin.run(client)
+        return
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(client.serve_calls, plugin.call)
+        await plugin.run(client)
+        tg.cancel_scope.cancel()
+
+
 async def supervise(ctx: zmq.asyncio.Context, name: str, plugin: Plugin) -> None:
     """Run `plugin` until cancelled, restarting after `RESTART_DELAY` on failure; give up after `MAX_FAILURES`
     failures in `FAIL_WINDOW`, loudly. A `run` that returns counts as a failure: loops run forever."""
@@ -97,7 +109,7 @@ async def supervise(ctx: zmq.asyncio.Context, name: str, plugin: Plugin) -> None
     while True:
         try:
             async with spawn_plugin_client(ctx, name) as client:
-                await plugin.run(client)
+                await run(plugin, client)
         except anyio.get_cancelled_exc_class():
             raise
         except BaseException as error:

@@ -18,6 +18,7 @@ from aid.paths import ENV_SESSION
 from aid.protocol import (
     AddGoal,
     AidError,
+    CallPlugin,
     Cancel,
     GetGoals,
     GetHistory,
@@ -216,7 +217,19 @@ def test_external_agent_environment_preserves_issued_credentials(
 
 @pytest.mark.parametrize(
     "op",
-    ["prompt", "cancel", "start", "stop", "delete", "answer_permission", "add_plugin", "plugins", "remove_plugin"],
+    [
+        "prompt",
+        "cancel",
+        "start",
+        "stop",
+        "delete",
+        "answer_permission",
+        "add_plugin",
+        "plugins",
+        "remove_plugin",
+        "serve_calls",
+        "call_result",
+    ],
 )
 def test_agent_requests_cannot_use_administrator_authority(op: str) -> None:
     bodies = {
@@ -229,7 +242,14 @@ def test_agent_requests_cannot_use_administrator_authority(op: str) -> None:
         "add_plugin": {"spec": {"name": "actor", "public_key": "a" * 40, "grants": ["manage"]}},
         "plugins": {},
         "remove_plugin": {"name": "actor"},
+        "serve_calls": {},
+        "call_result": {"call": "someone else's"},
     }
     request = RequestAdapter.validate_python({"op": op, **bodies[op]})
     with pytest.raises(AidError, match="forbidden"):
         authorize(request, "actor")
+
+
+def test_an_agents_plugin_call_names_its_own_session() -> None:
+    claimed = CallPlugin(plugin="supervision", method="goals", caller="someone else")
+    assert authorize(claimed, "actor") == claimed.model_copy(update={"caller": "actor"})

@@ -38,7 +38,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, ClassVar, Final
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -86,6 +86,8 @@ NEEDS: Final[dict[str, Grant]] = {
 }
 """The grant each request needs, by op. No grant covers the rest: a worker's (`hook`), a channel's (`receive`), the
 pane's (`screen`, `pane`) and the registry's own."""
+SERVING: Final = frozenset({"serve_calls", "call_result"})
+"""Ops every registered plugin may send: serving its own calls needs no grant."""
 
 
 class PluginSpec(BaseModel):
@@ -98,7 +100,7 @@ class PluginSpec(BaseModel):
 
     def allows(self, op: str) -> bool:
         need = NEEDS.get(op)
-        return need is not None and need in self.grants
+        return op in SERVING or (need is not None and need in self.grants)
 
 
 ENV_PLUGINS_PATH: Final = "AID_PLUGINS_PATH"
@@ -142,6 +144,16 @@ class Plugin(ABC):
         """Drive aid as this plugin, against the grants it registered. Runs in the daemon as a task (over the
         inproc sockets) or in its own process (`aid plugin run`); the client speaks the same protocol either
         way, and is shared across whatever loops it starts."""
+
+    async def call(self, caller: str | None, method: str, args: dict[str, JsonValue]) -> JsonValue:
+        """Answer `method`, which a session's tool or the operator called (`Client.call_plugin`) while `run` runs.
+        `caller` is the calling session as the daemon names it, or None for the operator: authorize by it. Raise
+        `aid.AidError` to fail with its code. Only a plugin that overrides this serves calls."""
+        raise NotImplementedError
+
+
+def serves_calls(plugin: Plugin) -> bool:
+    return type(plugin).call is not Plugin.call
 
 
 def plugins_path(env: Mapping[str, str] | None = None) -> list[Path]:

@@ -8,6 +8,7 @@ from aid.protocol import (
     AddGoal,
     AidError,
     AnswerSupervisedPermission,
+    CallPlugin,
     CancelSupervised,
     CompactSession,
     GetGoals,
@@ -52,6 +53,8 @@ def authorize(request: Request, session: str) -> Request:
             return request
         case SendMessage():
             return request.model_copy(update={"sender": session})
+        case CallPlugin():
+            return request.model_copy(update={"caller": session})
         case (
             SupervisedHistory()
             | SupervisedSearch()

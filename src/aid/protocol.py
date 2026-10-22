@@ -202,6 +202,36 @@ class RemovePlugin(_Request):
     name: str
 
 
+class CallPlugin(_Request):
+    """Call a method a plugin serves (`Plugin.call`). The daemon names the caller: an agent's own session; on the
+    control socket, the session the request names, or None for the operator. Done's data is the plugin's answer;
+    a plugin's failure arrives as its own code."""
+
+    op: Literal["call_plugin"] = "call_plugin"
+    plugin: str
+    method: str
+    args: dict[str, JsonValue] = Field(default_factory=dict[str, JsonValue])
+    caller: str | None = None
+
+
+class ServeCalls(_Request):
+    """From a plugin: deliver its calls to this connection, as `Invocation`s, until another of its connections asks.
+    A restarted daemon knows no connection, so a serving plugin sends this again periodically."""
+
+    op: Literal["serve_calls"] = "serve_calls"
+
+
+class CallResult(_Request):
+    """From a plugin: its answer to an `Invocation`. A `code` means the call failed with `message`."""
+
+    op: Literal["call_result"] = "call_result"
+    call: str
+    """The `Invocation`'s id."""
+    data: JsonValue = None
+    code: str | None = None
+    message: str = ""
+
+
 class GoalState(StrEnum):
     OPEN = "open"
     DONE = "done"
@@ -380,7 +410,10 @@ type Request = Annotated[
     | GetGoals
     | AddGoal
     | SetGoal
-    | AnswerSupervisedPermission,
+    | AnswerSupervisedPermission
+    | CallPlugin
+    | ServeCalls
+    | CallResult,
     Field(discriminator="op"),
 ]
 
@@ -901,8 +934,20 @@ class Notify(_Message):
     text: str
 
 
+class Invocation(_Message):
+    """From the daemon to a plugin serving calls (`ServeCalls`), unasked: a `CallPlugin` to answer with a
+    `CallResult`. The id is the daemon's, never the caller's request id."""
+
+    reply: Literal["invocation"] = "invocation"
+    id: str
+    caller: str | None
+    method: str
+    args: dict[str, JsonValue]
+
+
 type Reply = Annotated[
-    Event | Done | Failure | Hello | StartFailed | Observed | Activity | Notify, Field(discriminator="reply")
+    Event | Done | Failure | Hello | StartFailed | Observed | Activity | Notify | Invocation,
+    Field(discriminator="reply"),
 ]
 
 RequestAdapter: TypeAdapter[Request] = TypeAdapter(Request)

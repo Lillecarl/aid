@@ -28,6 +28,8 @@ from aid.protocol import (
     AgentCatalog,
     AidError,
     AnswerPermission,
+    CallPlugin,
+    CallResult,
     Cancel,
     CompactSession,
     CreateSession,
@@ -42,6 +44,7 @@ from aid.protocol import (
     GetSummary,
     HistoryEntry,
     HistoryPage,
+    Invocation,
     ListAgents,
     ListPlugins,
     ListSessions,
@@ -54,6 +57,7 @@ from aid.protocol import (
     RemovePlugin,
     Reply,
     SendMessage,
+    ServeCalls,
     SessionInfo,
     SessionInfosAdapter,
     SessionStatus,
@@ -66,7 +70,7 @@ from aid.protocol import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
 
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
@@ -165,6 +169,12 @@ async def daemon_call[T](call: Awaitable[T], *, name: str = "aid") -> T:
         raise SystemExit(f"{name}: the daemon answered nothing for 30s") from None
 
 
+SERVE_RENEW: Final = 30.0
+"""Seconds between a serving plugin's `ServeCalls`: a restarted daemon routes its calls again within this."""
+
+type CallHandler = Callable[[str | None, str, dict[str, JsonValue]], Awaitable[JsonValue]]
+
+
 async def register_plugin(
     client: Client, paths: Paths, name: str, grants: frozenset[Grant], *, public_key: str | None = None
 ) -> str:
@@ -234,6 +244,7 @@ class Client:
         self._endpoints = endpoints
         self._send_lock = anyio.Lock()
         self._pending: dict[str, MemoryObjectSendStream[Reply]] = {}
+        self._invocations: MemoryObjectSendStream[Invocation] | None = None
         self.sockets: set[zmq.asyncio.Socket] = set()
 
     @asynccontextmanager
@@ -292,6 +303,38 @@ class Client:
             reply = decode_reply(await self._sock.recv())
             if isinstance(reply, Event | Done | Failure) and (stream := self._pending.get(reply.id)) is not None:
                 stream.send_nowait(reply)
+            elif isinstance(reply, Invocation) and self._invocations is not None:
+                self._invocations.send_nowait(reply)
+
+    async def serve_calls(self, handler: CallHandler) -> None:
+        """As a plugin, answer the calls the daemon routes to it with `handler`, each in a task of its own, until
+        cancelled. A handler's `AidError` fails the call with its code; any other exception, as `plugin_failed`."""
+        send, receive = anyio.create_memory_object_stream[Invocation](math.inf)
+        self._invocations = send
+        try:
+            async with anyio.create_task_group() as tg, receive:
+                tg.start_soon(self._renew_serving)
+                async for invocation in receive:
+                    tg.start_soon(self._answer, handler, invocation)
+        finally:
+            self._invocations = None
+            send.close()
+
+    async def _renew_serving(self) -> None:
+        while True:
+            await daemon_call(self.call(ServeCalls()))
+            await anyio.sleep(SERVE_RENEW)
+
+    async def _answer(self, handler: CallHandler, invocation: Invocation) -> None:
+        try:
+            result = CallResult(
+                call=invocation.id, data=await handler(invocation.caller, invocation.method, invocation.args)
+            )
+        except AidError as error:
+            result = CallResult(call=invocation.id, code=error.code, message=error.message)
+        except Exception as error:
+            result = CallResult(call=invocation.id, code="plugin_failed", message=f"{type(error).__name__}: {error}")
+        await daemon_call(self.call(result))
 
     @asynccontextmanager
     async def _exchange(self, request: Request) -> AsyncGenerator[MemoryObjectReceiveStream[Reply]]:
@@ -354,6 +397,10 @@ class Client:
         """Leave a message for session `to`; the daemon wakes it. `sender` names the session it is from, or None
         for a person. Returns once the message is recorded, not answered."""
         await self.call(SendMessage(to=to, text=text, sender=sender))
+
+    async def call_plugin(self, plugin: str, method: str, /, **args: JsonValue) -> JsonValue:
+        """Call `method` on `plugin` (`Plugin.call`), as this connection's session, or as the operator."""
+        return await self.call(CallPlugin(plugin=plugin, method=method, args=args))
 
     async def receive_messages(self, session: str, *, wait: float = 25) -> list[MessageEntry]:
         """Take the messages waiting for interactive Claude session `session`, waiting up to `wait` seconds."""

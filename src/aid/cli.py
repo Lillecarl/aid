@@ -14,7 +14,7 @@ import anyio
 import anyio.to_thread
 import structlog
 
-from aid import daemon, guard, speech
+from aid import daemon, guard, plugin_host, speech
 from aid.client import connect, register_plugin
 from aid.discovery import discover
 from aid.launcher import PRELOAD, CommandLauncher, ForkserverLauncher, WorkerArgs, process_main
@@ -622,7 +622,7 @@ async def _run_plugin(name: str) -> None:
         )
     try:
         async with connect(plugin=name) as client:
-            await plugin.run(client)
+            await plugin_host.run(plugin, client)
     except AidError as error:
         if error.code != "forbidden":
             raise
