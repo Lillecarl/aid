@@ -32,6 +32,7 @@ from aid.protocol import (
     PermissionRequest,
     PromptEntry,
     RemoteControl,
+    SessionInfo,
     Started,
     TextDelta,
     ThoughtDelta,
@@ -117,7 +118,8 @@ def _parser() -> argparse.ArgumentParser:
         "credentials: only where session creators are trusted)",
     )
     sub.add_parser("worker", help="run one worker; `aid daemon --worker-command` starts it and sends its arguments")
-    sub.add_parser("list", help="list sessions")
+    sessions = sub.add_parser("list", help="list sessions")
+    sessions.add_argument("--json", action="store_true", help="one session JSON object per line")
 
     web = sub.add_parser(
         "web",
@@ -477,6 +479,16 @@ def _history_line(entry: HistoryEntry, titles: dict[str, str]) -> str:
     return f"{entry.seq:>6}  {body}"
 
 
+def _session_line(info: SessionInfo) -> str:
+    """Attention goes last: it is free text, and may hold tabs."""
+    parts = [info.name, info.kind, "working" if info.working else "running" if info.running else "stopped"]
+    if info.permissions:
+        parts.append(f"{info.permissions} permission{'s' if info.permissions != 1 else ''}")
+    if info.attention:
+        parts.append(info.attention)
+    return "\t".join(parts)
+
+
 def _permission_line(item: PermissionRequest | PermissionDecision) -> str:
     match item:
         case PermissionRequest():
@@ -499,7 +511,7 @@ async def _client_command(args: argparse.Namespace) -> None:
                 print(args.name)
             case "list":
                 for info in await client.sessions():
-                    print(f"{info.name}\t{info.kind}\t{'running' if info.running else 'stopped'}")
+                    print(info.model_dump_json() if args.json else _session_line(info))
             case "summary":
                 print((await client.session(args.name).summary()).model_dump_json(indent=2))
             case "history":

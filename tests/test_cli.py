@@ -9,13 +9,14 @@ import pytest
 from aid.cli import (
     _parser,  # pyright: ignore[reportPrivateUsage]
     _preload,  # pyright: ignore[reportPrivateUsage]
+    _session_line,  # pyright: ignore[reportPrivateUsage]
     _spec,  # pyright: ignore[reportPrivateUsage]
     _split_agent_command,  # pyright: ignore[reportPrivateUsage]
     _tool_line,  # pyright: ignore[reportPrivateUsage]
 )
 from aid.launcher import PRELOAD
-from aid.protocol import ToolCall
-from aid.spec import ClaudeSdkSpec, ClaudeTtySpec, LiteLMSpec, McpHttp, McpStdio, PermissionMode
+from aid.protocol import SessionInfo, ToolCall
+from aid.spec import AgentKind, ClaudeSdkSpec, ClaudeTtySpec, LiteLMSpec, McpHttp, McpStdio, PermissionMode
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -139,3 +140,26 @@ def test_tool_line_names_updates_by_their_start() -> None:
     line = _tool_line(failed, titles)
     assert line.startswith("[tool] shell failed exit 1: xxx") and line.endswith("…")
     assert _tool_line(ToolCall(tool_call_id="other", status="completed"), titles) == "[tool] other completed"
+
+
+@pytest.mark.parametrize(
+    ("info", "line"),
+    [
+        (SessionInfo(name="a", kind=AgentKind.LITELM, running=False), "a\tlitelm\tstopped"),
+        (SessionInfo(name="a", kind=AgentKind.LITELM, running=True), "a\tlitelm\trunning"),
+        (
+            SessionInfo(name="a", kind=AgentKind.LITELM, running=True, working=True, permissions=1),
+            "a\tlitelm\tworking\t1 permission",
+        ),
+        (
+            SessionInfo(name="a", kind=AgentKind.LITELM, running=True, permissions=2, attention="look\there"),
+            "a\tlitelm\trunning\t2 permissions\tlook\there",
+        ),
+    ],
+)
+def test_session_line(info: SessionInfo, line: str) -> None:
+    assert _session_line(info) == line
+
+
+def test_list_json() -> None:
+    assert _parser().parse_args(["list", "--json"]).json is True
