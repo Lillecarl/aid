@@ -1,4 +1,4 @@
-"""`@aid.mcptool`: a function in a module on the agents path, offered to every session as a tool.
+"""`@aid.mcptool`: a function in a plugin package, offered to every session as a tool.
 
     import aid
 

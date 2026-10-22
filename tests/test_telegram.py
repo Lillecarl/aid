@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -14,8 +13,9 @@ import pytest
 
 import aid
 from aid.client import daemon_call, register_plugin
+from aid.discovery import discover
 from aid.mutes import Mutes
-from aid.plugins import Grant, discover
+from aid.plugins import Grant
 from aid.protocol import AidError
 from aid.settle import Tracker, route_topic
 from plugins.telegram.bot import (
@@ -49,10 +49,14 @@ CHAT = 1234
 PLUGINS_ROOT = Path(__file__).resolve().parents[1] / "plugins"
 
 
-def test_discovers_telegram_on_import(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "path", list(sys.path))
-    telegram = discover([PLUGINS_ROOT]).plugins["telegram"]
-    assert (telegram.version, telegram.grants) == ("0.1.0", frozenset({Grant.READ, Grant.MESSAGE}))
+def test_discovers_telegram_on_import() -> None:
+    catalog = discover([PLUGINS_ROOT], only=["telegram"])
+    telegram = catalog.plugins["telegram"]
+    assert (catalog.roots["telegram"].manifest.version, telegram.grants) == (
+        "0.1.0",
+        frozenset({Grant.READ, Grant.MESSAGE}),
+    )
+    assert telegram.plugin_name() == "telegram"
 
 
 def test_read_config_drops_secrets_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:

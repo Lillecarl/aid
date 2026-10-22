@@ -11,7 +11,6 @@ class Alpha(aid.Plugin):
     This second paragraph is not part of the description.
     """
 
-    version = "1.2.3"
     grants = frozenset({aid.Grant.READ, aid.Grant.MESSAGE})
 
     async def run(self, client: aid.Client) -> None: ...

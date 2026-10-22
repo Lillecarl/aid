@@ -10,10 +10,10 @@ import pytest
 from pydantic import BaseModel, Field
 
 from aid.agent import Agent, ModelRetry, Tool
-from aid.agents import Catalog
 from aid.backends.litelm import DEFAULT_DESIRED_MAX, LiteLMBackend, UsageLimitExceeded, aid_toolset
 from aid.backends.permissions import PermissionWaits
 from aid.coding import Coding, coding_tools
+from aid.discovery import Catalog
 from aid.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,

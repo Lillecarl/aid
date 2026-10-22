@@ -1,4 +1,4 @@
-"""aid's own tools, offered to every session beside the ones on the agents path."""
+"""aid's own tools, offered to every session beside the ones on the plugins path."""
 
 from __future__ import annotations
 

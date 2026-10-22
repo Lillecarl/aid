@@ -49,7 +49,7 @@
     }
   }
 
-  // Asked each time the kind turns to litelm: the catalog reflects the agents path as it is now.
+  // Asked each time the kind turns to litelm: the catalog reflects the plugins path as it is now.
   $effect(() => {
     if (kind === "litelm") void loadAgents();
   });
@@ -109,7 +109,7 @@
     </label>
     {#if chosen?.description}<p class="hint">{chosen.description}</p>{/if}
     {#if catalog !== null && catalog.agents.length === 0}
-      <p class="hint">No agents on the daemon's agents path.</p>
+      <p class="hint">No agents on the daemon's plugins path.</p>
     {/if}
     {#each catalog?.problems ?? [] as problem (problem)}
       <p class="error">{problem}</p>

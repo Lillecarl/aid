@@ -6,7 +6,6 @@ import contextlib
 import difflib
 import shlex
 import shutil
-import sys
 import time
 import uuid
 from collections import deque
@@ -22,6 +21,7 @@ import zmq.asyncio
 from pydantic import ValidationError
 
 from aid import events, plugin_host, plugins, zap
+from aid.catalog import listing
 from aid.client import spawn_plugin_client
 from aid.control import AGENT_ID_PREFIX, authorize
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
@@ -34,7 +34,6 @@ from aid.protocol import (
     Activity,
     AddGoal,
     AddPlugin,
-    AgentCatalog,
     AidError,
     AnswerPermission,
     AnswerSupervisedPermission,
@@ -126,7 +125,6 @@ log = structlog.get_logger(__name__)
 
 START_TIMEOUT: Final = 60.0
 START_ERROR_GRACE: Final = 0.5
-CATALOG_TIMEOUT: Final = 60.0
 STOP_TIMEOUT: Final = 10.0
 SPEC_FILE: Final = "spec.json"
 # A spec holds env values and MCP headers, which are often credentials.
@@ -674,7 +672,12 @@ class Daemon:
     async def _reconcile_plugins_locked(self) -> None:
         if self._tg is None:
             raise RuntimeError("daemon is not serving")
-        catalog = plugin_host.discover_hosted(self._plugin_dirs)
+        try:
+            catalog = await plugin_host.hosted(self._plugin_dirs)
+        except (AidError, TimeoutError) as error:
+            # Running tasks keep running: a failed listing says nothing about them.
+            log.error("plugin_catalog_failed", error=f"{type(error).__name__}: {error}")
+            return
         for problem in catalog.problems:
             log.warning("plugin_problem", problem=problem)
         for name, reason in catalog.declined.items():
@@ -779,7 +782,7 @@ class Daemon:
                 infos = [s.info() for s in self._sessions.values()]
                 return Done(id=request.id, data=[info.model_dump(mode="json") for info in infos])
             case ListAgents():
-                return Done(id=request.id, data=(await list_agents()).model_dump(mode="json"))
+                return Done(id=request.id, data=(await listing()).model_dump(mode="json"))
             case Prompt():
                 session = self._session(request.session)
                 if session.turn is not None:
@@ -1672,15 +1675,6 @@ class Daemon:
                 await self._arm_backstop(route.session, reply.event)
             elif isinstance(reply.event, PermissionDecision):
                 self._disarm_backstop(reply.event.request_id)
-
-
-async def list_agents() -> AgentCatalog:
-    """Discover agents in a fresh process: agent modules are user code, and edits since the last call count."""
-    with anyio.fail_after(CATALOG_TIMEOUT):
-        result = await anyio.run_process([sys.executable, "-m", "aid.catalog"], check=False)
-    if result.returncode != 0:
-        raise AidError("catalog_failed", result.stderr.decode(errors="replace").strip()[-2000:])
-    return AgentCatalog.model_validate_json(result.stdout)
 
 
 async def run(

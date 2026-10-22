@@ -264,7 +264,7 @@ export async function readFile(name: string, path: string): Promise<FileView> {
 
 // The daemon's answers, typed. -------------------------------------------------------------------------------------
 
-/** The agents on the daemon's agents path. Each call imports them afresh, so edits show up. */
+/** The agents on the daemon's plugins path. Each call imports them afresh, so edits show up. */
 export const agents = async (): Promise<AgentCatalog> =>
   (await call({ op: "agents" })) as AgentCatalog;
 

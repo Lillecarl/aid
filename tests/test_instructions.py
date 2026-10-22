@@ -14,12 +14,14 @@ import pytest
 
 import aid
 from aid.agent import Agent
-from aid.agents import ENV_AGENTS_PATH, Catalog, Instruction, InstructionsContext, InstructionsProvider, discover
+from aid.agents import Instruction, InstructionsContext, InstructionsProvider
 from aid.backends.litelm import LiteLMBackend, open_litelm
 from aid.backends.permissions import PermissionWaits
 from aid.coding import CODING, Coding, compact
+from aid.discovery import Catalog, discover
 from aid.instructions import compose
 from aid.messages import ModelRequest, ModelResponse, SystemPromptPart, TextPart, UserPromptPart
+from aid.plugins import ENV_PLUGINS_PATH
 from aid.protocol import AgentCatalog, Started
 from aid.spec import LiteLMSpec, PermissionMode
 from tests.conftest import TESTS
@@ -34,11 +36,11 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.anyio
 
 PROVIDER_DIR = Path(__file__).parent / "provider_dir"
-EXAMPLE_FILE = Path(__file__).parents[1] / "examples" / "file_instructions.py"
+EXAMPLE_FILE = Path(__file__).parents[1] / "examples" / "file_instructions" / "__init__.py"
 
 
 def file_instructions() -> Any:
-    """The `examples/file_instructions.py` module, loaded from its file."""
+    """The `examples/file_instructions` plugin, loaded from its file."""
     name = "aid_example_file_instructions"
     if name not in sys.modules:
         spec = importlib.util.spec_from_file_location(name, EXAMPLE_FILE)
@@ -80,8 +82,7 @@ def test_naming_defaults_to_snake_case() -> None:
     assert Ok.description() == "Two instructions."
 
 
-def test_discovers_providers_and_lists_problems(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "path", list(sys.path))
+def test_discovers_providers_and_lists_problems() -> None:
     found = discover([PROVIDER_DIR, PROVIDER_DIR / "missing"])
     assert sorted(found.providers) == ["briefing", "custom-provider", "dup"]
     assert found.providers["briefing"].description() == "A short project brief."
@@ -92,8 +93,7 @@ def test_discovers_providers_and_lists_problems(monkeypatch: pytest.MonkeyPatch)
     assert any("dup_a" in problem and "dup_b" in problem for problem in found.problems)
 
 
-def test_describe_rows_validate_as_agent_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "path", list(sys.path))
+def test_describe_rows_validate_as_agent_catalog() -> None:
     described = AgentCatalog.model_validate(discover([PROVIDER_DIR]).describe())
     assert [(provider.name, provider.module) for provider in described.providers] == [
         ("briefing", "briefing"),
@@ -169,22 +169,19 @@ def test_compose_names_the_session(tmp_path: Path) -> None:
 
 def write_wired_provider(agents: Path) -> None:
     """A provider that reads its brief from disk at every load, so a rewrite shows at the next compose."""
-    agents.mkdir(exist_ok=True)
-    # Every test writes its own provider module under the same name: drop the cached one so discovery
-    # imports this test's.
-    sys.modules.pop("prov", None)
-    (agents / "prov.py").write_text(
+    (agents / "prov").mkdir(parents=True, exist_ok=True)
+    (agents / "prov" / "__init__.py").write_text(
         "from __future__ import annotations\n\nfrom pathlib import Path\n\nimport aid\n\n\n"
         "class Prov(aid.InstructionsProvider):\n"
         '    """Test provider."""\n\n'
         "    def load(self, context):\n"
-        "        brief = Path(__file__.replace('prov.py', 'brief.txt')).read_text()\n"
+        "        brief = (Path(__file__).parent / 'brief.txt').read_text()\n"
         "        return [\n"
         "            aid.Instruction(name='brief', text=brief),\n"
         "            aid.Instruction(name='who', text='session ' + context.session_name),\n"
         "        ]\n"
     )
-    (agents / "brief.txt").write_text("Ship it.")
+    (agents / "prov" / "brief.txt").write_text("Ship it.")
 
 
 def emit_to(events: list[SessionEvent]) -> Any:
@@ -198,9 +195,9 @@ def emit_to(events: list[SessionEvent]) -> Any:
 async def wired_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, **spec_kwargs: Any
 ) -> AsyncGenerator[LiteLMBackend]:
-    """The test provider on the agents path, and an open backend wired to it."""
+    """The test provider on the plugins path, and an open backend wired to it."""
     write_wired_provider(tmp_path / "agents")
-    monkeypatch.setenv(ENV_AGENTS_PATH, str(tmp_path / "agents"))
+    monkeypatch.setenv(ENV_PLUGINS_PATH, str(tmp_path / "agents"))
     monkeypatch.syspath_prepend(str(TESTS))  # pyright: ignore[reportUnknownMemberType] -- pytest leaves the path untyped
     spec = LiteLMSpec(cwd=str(tmp_path), target=target, permission=PermissionMode.DENY, **spec_kwargs)
     state = anyio.Path(tmp_path / "s1")
@@ -259,7 +256,7 @@ async def test_compact_recomposes_instructions_from_disk(tmp_path: Path, monkeyp
     async with wired_backend(tmp_path, monkeypatch, "agents:steady") as backend:
         await backend.prompt("hi", emit_to([]))
         await backend.prompt("again", emit_to([]))
-        (tmp_path / "agents" / "brief.txt").write_text("Ship it, twice.")
+        (tmp_path / "agents" / "prov" / "brief.txt").write_text("Ship it, twice.")
         await backend.compact("the work")
     stored = (tmp_path / "s1" / "history.json").read_text()
     assert system_prompt(stored).startswith("# brief\n\nShip it, twice.\n\n# who\n\nsession s1")

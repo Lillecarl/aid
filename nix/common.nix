@@ -36,13 +36,14 @@ in
       description = "Environment for the daemon. Workers and ACP agents inherit it unless a session opts out.";
     };
 
-    agentsPath = lib.mkOption {
+    pluginsPath = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      example = [ "/home/me/aid-agents" ];
+      example = [ "/home/me/aid-plugins" ];
       description = ''
-        Directories whose modules define `aid.AgentDefinition` subclasses; they become AID_AGENTS_PATH. Empty
-        leaves aid's default, `$XDG_CONFIG_HOME/aid/agents`. Changes to the modules need no restart.
+        Directories of plugins (agents, instructions, tools, skills, daemon tasks), searched before
+        `$XDG_CONFIG_HOME/aid/plugins` and the bundled plugins; they become AID_PLUGINS_PATH. Changes to agents,
+        instructions and tools need no restart; a daemon task loads at daemon start.
       '';
     };
 
@@ -154,7 +155,7 @@ in
   service = cfg: {
     path = [ cfg.pymuxPackage ] ++ cfg.extraPackages;
     environment =
-      lib.optionalAttrs (cfg.agentsPath != [ ]) { AID_AGENTS_PATH = lib.concatStringsSep ":" cfg.agentsPath; }
+      lib.optionalAttrs (cfg.pluginsPath != [ ]) { AID_PLUGINS_PATH = lib.concatStringsSep ":" cfg.pluginsPath; }
       // cfg.environment;
     serviceConfig = {
       Type = "exec";

@@ -74,7 +74,7 @@ class _Spec(BaseModel):
     cwd: str
     env: dict[str, str] = Field(default_factory=dict[str, str])
     aid_tools: bool = True
-    """Offer the `@aid.mcptool` functions on the agents path: as the MCP server `aid`, or in-process to a
+    """Offer the `@aid.mcptool` functions on the plugins path: as the MCP server `aid`, or in-process to a
     LiteLM agent."""
     worker_command: Annotated[list[str], Field(min_length=1)] | None = None
     """Start this session's worker by running this command instead of forking it. It must run `aid worker`,
@@ -171,7 +171,7 @@ class AcpSpec(_Spec):
 
 
 class LiteLMSpec(_Spec):
-    """A LiteLM agent: `agent`, the name of an `aid.AgentDefinition` on the agents path, or `target`, a
+    """A LiteLM agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, or `target`, a
     `package.module:attribute` that is an agent itself. Exactly one of them."""
 
     kind: Literal[AgentKind.LITELM, AgentKind.PYDANTIC_AI] = AgentKind.LITELM
@@ -190,7 +190,7 @@ class LiteLMSpec(_Spec):
     """Optional model-request budget per turn. None means unlimited, never the engine's implicit default.
     Resource budgets are not loop detection: a supervisor judges suspected non-progress separately."""
     instruction_providers: list[str] | None = None
-    """Providers that load this session's instructions, in order. None runs every provider the agents path offers,
+    """Providers that load this session's instructions, in order. None runs every provider the plugins path offers,
     in catalog order."""
     skip_instructions: list[str] = Field(default_factory=list[str])
     """Instruction names to drop after loading: `skill:<name>` opts out of one skill."""

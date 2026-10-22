@@ -21,6 +21,11 @@ export type McpServers = McpServer[];
 export type PermissionMode = "allow" | "deny" | "ask";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "Grant".
+ */
+export type Grant = "read" | "prompt" | "message" | "permissions" | "manage";
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "AgentKind".
  */
 export type AgentKind = "acp" | "litelm" | "pydantic-ai" | "claude-tty" | "claude-sdk";
@@ -193,6 +198,7 @@ export interface McpSse {
  */
 export interface AgentCatalog {
   agents: AgentInfo[];
+  plugins: PluginInfo[];
   problems: string[];
   providers: ProviderInfo[];
   tools: ToolInfo[];
@@ -205,6 +211,19 @@ export interface AgentInfo {
   description: string;
   module: string;
   name: string;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "PluginInfo".
+ */
+export interface PluginInfo {
+  declined: string | null;
+  description: string;
+  grants: Grant[] | null;
+  name: string;
+  path: string;
+  requires: string[];
+  version: string;
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -225,7 +244,7 @@ export interface ToolInfo {
   name: string;
 }
 /**
- * A LiteLM agent: `agent`, the name of an `aid.AgentDefinition` on the agents path, or `target`, a
+ * A LiteLM agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, or `target`, a
  * `package.module:attribute` that is an agent itself. Exactly one of them.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -710,7 +729,7 @@ export interface HistoryPage {
   total: number;
 }
 /**
- * The `aid.AgentDefinition`s on the daemon's agents path.
+ * The `aid.AgentDefinition`s on the daemon's plugins path.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "ListAgents".

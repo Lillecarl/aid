@@ -334,7 +334,7 @@ class Client:
         return SessionInfosAdapter.validate_python(await self.call(ListSessions()))
 
     async def agents(self) -> AgentCatalog:
-        """The `aid.AgentDefinition`s on the daemon's agents path, and what failed to load."""
+        """The `aid.AgentDefinition`s on the daemon's plugins path, and what failed to load."""
         return AgentCatalog.model_validate(await self.call(ListAgents()))
 
     def session(self, name: str) -> Session:

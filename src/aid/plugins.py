@@ -12,8 +12,7 @@ the runtime directory (Lillecarl/aid#4). A plugin elsewhere, which reaches only 
 The events socket cannot drop one subscriber: a plugin that loses `read` still hears what is published until it
 reconnects.
 
-A plugin's code lives outside core, in a module on the plugins path that registers itself on import by
-subclassing `Plugin`:
+A plugin's task lives in a plugin package on the plugins path (`aid.discovery`), as its one `Plugin` subclass:
 
     import aid
 
@@ -28,33 +27,22 @@ subclassing `Plugin`:
 The plugins path is AID_PLUGINS_PATH, directories joined with `:`, then `$XDG_CONFIG_HOME/aid/plugins`,
 then the installed set's directory from AID_PLUGINS_DIST (which the installed `aid` wrapper sets, and which is
 empty elsewhere): explicit choice first, the user's own directory next, shipped stock last.
-Discovery imports every top-level module there, so it runs the modules' code: call it in a process that may run
-user code (`aid plugin run`, `python -m aid.plugin_catalog`), never the daemon. A plugin plugs into aid, agent
-sessions, or both: `run` drives aid as a client over the plugin sockets, while `@aid.mcptool` functions in its
-module are offered to agent sessions as tools, beside the agents path's own.
 """
 
 from __future__ import annotations
 
-import importlib
 import inspect
 import os
-import re
-import sys
 from abc import ABC, abstractmethod
-from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, ClassVar, Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from aid.tools import McpTool, tool_of
-
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Mapping
 
-    from aid.agents import InstructionsProvider
     from aid.client import Client
 
 PLUGIN_FILE: Final = "plugin.json"
@@ -124,26 +112,23 @@ def sender(name: str) -> str:
 
 
 class Plugin(ABC):
-    """The interface: subclass it in a module on the plugins path, declare its grants, and drive aid from `run`.
+    """The interface: subclass it once in a plugin package, declare its grants, and drive aid from `run`.
 
     The base gains only defaulted members: a subclass written today runs against tomorrow's base."""
 
-    name: ClassVar[str] = ""
-    """The name it registers and runs as. Empty means the class name in snake case."""
-    version: ClassVar[str] = ""
-    """The plugin's own version, free-form. Core compatibility is declared socially, never enforced."""
     grants: ClassVar[frozenset[Grant]] = frozenset()
     """What it asks of the daemon: `aid plugin add` grants exactly these."""
 
     @classmethod
     def plugin_name(cls) -> str:
-        return cls.name or re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", cls.__name__).lower()
+        """The name it registers and runs as: its plugin's, the top-level package that defines it."""
+        return cls.__module__.split(".")[0]
 
     @classmethod
     def description(cls) -> str:
         # `cls.__doc__`, not inspect.getdoc: that falls back to this base class's docstring.
         doc = cls.__doc__ or ""
-        return doc.split("\n\n")[0].replace("\n", " ") if doc else ""
+        return inspect.cleandoc(doc).split("\n\n")[0].replace("\n", " ") if doc else ""
 
     @classmethod
     def available(cls) -> str | None:
@@ -159,38 +144,6 @@ class Plugin(ABC):
         way, and is shared across whatever loops it starts."""
 
 
-@dataclass(frozen=True)
-class PluginCatalog:
-    plugins: dict[str, type[Plugin]] = field(default_factory=dict[str, "type[Plugin]"])
-    tools: dict[str, McpTool] = field(default_factory=dict[str, McpTool])
-    providers: dict[str, type[InstructionsProvider]] = field(default_factory=dict[str, "type[InstructionsProvider]"])
-    """Instruction providers a plugin module offers sessions, beside its tools."""
-    declined: dict[str, str] = field(default_factory=dict[str, str])
-    """Plugins that gated themselves out through `available`, by name with their reason: not applicable, not broken."""
-    problems: list[str] = field(default_factory=list[str])
-    """Modules that failed to import and names defined twice. A problem hides one plugin, not the catalog."""
-
-    def describe(self) -> dict[str, object]:
-        return {
-            "plugins": [
-                {
-                    "name": name,
-                    "description": cls.description(),
-                    "version": cls.version,
-                    "grants": sorted(grant.value for grant in cls.grants),
-                    "module": cls.__module__,
-                }
-                for name, cls in sorted(self.plugins.items())
-            ],
-            "tools": [
-                {"name": name, "description": tool.summary(), "module": tool.fn.__module__}
-                for name, tool in sorted(self.tools.items())
-            ],
-            "declined": {name: self.declined[name] for name in sorted(self.declined)},
-            "problems": self.problems,
-        }
-
-
 def plugins_path(env: Mapping[str, str] | None = None) -> list[Path]:
     env = os.environ if env is None else env
     paths = [Path(part).expanduser() for part in env.get(ENV_PLUGINS_PATH, "").split(":") if part]
@@ -199,81 +152,3 @@ def plugins_path(env: Mapping[str, str] | None = None) -> list[Path]:
     if dist := env.get(ENV_PLUGINS_DIST):
         paths.append(Path(dist))
     return paths
-
-
-def discover(paths: Sequence[Path]) -> PluginCatalog:
-    """Import every module on `paths` and collect the plugins and tools each registers. Imports run the modules'
-    code: call it in a process that may run user code (`aid plugin run`, `python -m aid.plugin_catalog`), or in
-    the daemon at startup, where each module loads guarded and a failure becomes a problem, never a refusal."""
-    # Not at module level: aid.agents imports aid.builtin_tools, which imports aid.client, which imports this.
-    from aid.agents import InstructionsProvider  # noqa: PLC0415
-
-    catalog = PluginCatalog()
-    seen: dict[str, str] = {}
-    seen_tools: dict[str, str] = {}
-    for directory in paths:
-        if not directory.is_dir():
-            continue
-        if str(directory) not in sys.path:
-            sys.path.insert(0, str(directory))
-        for module_name in _module_names(directory):
-            try:
-                module = importlib.import_module(module_name)
-            except Exception as error:
-                catalog.problems.append(f"{directory / module_name}: {type(error).__name__}: {error}")
-                continue
-            for obj in vars(module).values():
-                if (tool := tool_of(obj)) is not None:
-                    _add_tool(catalog, seen_tools, module.__name__, f"{module.__name__} in {directory}", tool)
-                    continue
-                if isinstance(obj, type) and issubclass(obj, InstructionsProvider):
-                    if obj.__module__ == module.__name__ and not inspect.isabstract(obj):
-                        name = obj.provider_name()
-                        if (other := catalog.providers.get(name)) is not None and other is not obj:
-                            catalog.problems.append(f"provider {name}: {obj.__module__} loses to {other.__module__}")
-                        else:
-                            catalog.providers[name] = obj
-                    continue
-                if not (isinstance(obj, type) and issubclass(obj, Plugin)):
-                    continue
-                if obj.__module__ != module.__name__ or inspect.isabstract(obj):
-                    continue
-                name = obj.plugin_name()
-                origin = f"{module.__name__} in {directory}"
-                if (other := catalog.plugins.get(name)) is not None and other is not obj:
-                    catalog.problems.append(f"plugin {name}: {origin} loses to {seen[name]}")
-                    continue
-                try:
-                    reason = obj.available()
-                except Exception as error:
-                    catalog.problems.append(f"plugin {name}: available() raised {type(error).__name__}: {error}")
-                    continue
-                seen[name] = origin
-                if reason is not None:
-                    catalog.declined[name] = reason
-                    continue
-                catalog.plugins[name] = obj
-    return catalog
-
-
-def _module_names(directory: Path) -> list[str]:
-    names: list[str] = []
-    for entry in sorted(directory.iterdir()):
-        if entry.name.startswith(("_", ".")):
-            continue
-        if entry.suffix == ".py" and entry.is_file():
-            names.append(entry.stem)
-        elif (entry / "__init__.py").is_file():
-            names.append(entry.name)
-    return names
-
-
-def _add_tool(catalog: PluginCatalog, seen: dict[str, str], module: str, origin: str, tool: McpTool) -> None:
-    # A tool imported from another module on the path is that module's to offer.
-    if tool.fn.__module__ != module:
-        return
-    if (other := catalog.tools.get(tool.name)) is not None and other is not tool:
-        catalog.problems.append(f"tool {tool.name}: {origin} loses to {seen[tool.name]}")
-        return
-    seen[tool.name] = origin
-    catalog.tools[tool.name] = tool

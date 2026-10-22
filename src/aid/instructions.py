@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from aid.agents import Catalog, InstructionsContext
+from aid.agents import InstructionsContext
+from aid.discovery import Catalog
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

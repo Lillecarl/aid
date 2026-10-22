@@ -209,7 +209,7 @@ def usage_of(response: PromptResponse, context: UsageUpdate | None, model: str |
 
 
 def permission_for(spec: AcpSpec, tool_name: str | None) -> PermissionMode:
-    """aid's own tools are approved: whoever put them on the agents path chose them."""
+    """aid's own tools are approved: whoever put their plugins on the path chose them."""
     if spec.aid_tools and tool_name is not None and tool_name.startswith(AID_TOOL_PREFIX):
         return PermissionMode.ALLOW
     return spec.permission

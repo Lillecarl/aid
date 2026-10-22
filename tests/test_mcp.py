@@ -9,10 +9,10 @@ import pytest
 from pydantic import ValidationError
 
 import aid
-from aid.agents import ENV_AGENTS_PATH
 from aid.control import ENV_AGENT_CONNECTION, AgentConnection
 from aid.mcp import claude_config, from_claude_config
 from aid.paths import ENV_SESSION
+from aid.plugins import ENV_PLUGINS_PATH
 from aid.spec import AcpSpec, McpHttp, McpSse, McpStdio, PermissionMode
 from tests.conftest import acp_spec
 
@@ -53,7 +53,7 @@ def test_names_are_unique_and_plain() -> None:
 
 @pytest.mark.anyio
 async def test_acp_agent_gets_the_servers_on_new_and_load(daemon: Paths, tmp_path: Path) -> None:
-    spec = acp_spec(tmp_path, AID_AGENTS_PATH="/agents").model_copy(update={"mcp_servers": SERVERS})
+    spec = acp_spec(tmp_path, AID_PLUGINS_PATH="/plugins").model_copy(update={"mcp_servers": SERVERS})
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             session = await client.create("mcp", spec)
@@ -90,7 +90,7 @@ async def test_acp_agent_gets_the_servers_on_new_and_load(daemon: Paths, tmp_pat
     assert fresh_connection.secret_key != resumed_connection.secret_key
     assert (builtin["name"], builtin["command"], builtin["args"]) == ("aid", sys.executable, ["-m", "aid.mcp_server"])
     assert env[ENV_SESSION] == "mcp"
-    assert env[ENV_AGENTS_PATH] == "/agents"
+    assert env[ENV_PLUGINS_PATH].split(":")[0] == "/plugins"
 
 
 @pytest.mark.anyio

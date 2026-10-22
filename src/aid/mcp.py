@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING, Any, Final
 from acp.schema import EnvVariable, HttpHeader, HttpMcpServer, McpServerStdio, SseMcpServer
 from pydantic import TypeAdapter
 
-from aid.agents import ENV_AGENTS_PATH, agents_path
 from aid.control import ENV_AGENT_CONNECTION
 from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, default_paths
+from aid.plugins import ENV_PLUGINS_PATH, plugins_path
 from aid.spec import BUILTIN_MCP_SERVER, AgentKind, McpHttp, McpServer, McpSse, McpStdio
 
 if TYPE_CHECKING:
@@ -34,7 +34,7 @@ def builtin_server(session: str, *, channel: bool) -> McpStdio:
     """
     paths = default_paths()
     env = {
-        ENV_AGENTS_PATH: ":".join(str(p) for p in agents_path()),
+        ENV_PLUGINS_PATH: ":".join(str(p) for p in plugins_path()),
         ENV_SESSION: session,
         ENV_RUNTIME_DIR: str(paths.runtime_dir),
         ENV_STATE_DIR: str(paths.state_dir),

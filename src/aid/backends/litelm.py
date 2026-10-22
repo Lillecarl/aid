@@ -19,7 +19,6 @@ from pydantic import ValidationError
 from pydantic_core import to_jsonable_python
 
 from aid.agent import Agent, ModelRetry, Tool, Toolset
-from aid.agents import ENV_AGENTS_PATH, Catalog
 from aid.backends.permissions import PermissionWaits
 from aid.catalog import session_catalog
 from aid.coding import CODING, OUTPUTS_DIR, Coding
@@ -55,6 +54,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
 
     from aid.backends.base import Emit, Notifier
+    from aid.discovery import Catalog
     from aid.spec import LiteLMSpec
 
 log = structlog.get_logger(__name__)
@@ -203,7 +203,7 @@ def load_named(catalog: Catalog, name: str) -> Agent:
     if (cls := catalog.agents.get(name)) is None:
         known = ", ".join(sorted(catalog.agents)) or "none"
         problems = "".join(f"\n  {problem}" for problem in catalog.problems)
-        raise LookupError(f"no agent {name!r} on {ENV_AGENTS_PATH} (found: {known}){problems}")
+        raise LookupError(f"no agent {name!r} on the plugins path (found: {known}){problems}")
     return cls().build()
 
 

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -8,7 +7,8 @@ import anyio
 import pytest
 
 import aid
-from aid.agents import ENV_AGENTS_PATH, agents_path, discover
+from aid.discovery import discover
+from aid.plugins import ENV_PLUGINS_PATH
 from aid.protocol import AgentInfo
 from aid.spec import LiteLMSpec
 
@@ -19,8 +19,7 @@ AGENT_DIR = Path(__file__).parent / "agent_dir"
 TIMEOUT = 30
 
 
-def test_discover(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "path", list(sys.path))
+def test_discover() -> None:
     catalog = discover([AGENT_DIR, AGENT_DIR / "missing"])
     assert sorted(catalog.agents) == ["custom-name", "shouter"]
     assert catalog.agents["shouter"].description() == "Repeats the prompt in capitals."
@@ -28,11 +27,6 @@ def test_discover(monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(catalog.problems) == 1
     assert "broken" in catalog.problems[0]
     assert "ModuleNotFoundError" in catalog.problems[0]
-
-
-def test_agents_path() -> None:
-    assert agents_path({ENV_AGENTS_PATH: "/a::/b"}) == [Path("/a"), Path("/b")]
-    assert agents_path({"XDG_CONFIG_HOME": "/cfg"}) == [Path("/cfg/aid/agents")]
 
 
 def test_spec_needs_exactly_one_source() -> None:
@@ -45,8 +39,8 @@ def test_spec_needs_exactly_one_source() -> None:
 @pytest.mark.anyio
 async def test_daemon_lists_and_runs_agents(daemon: Paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The catalog runs in a subprocess of this process; workers take the path from the spec.
-    monkeypatch.setenv(ENV_AGENTS_PATH, str(AGENT_DIR))
-    spec = LiteLMSpec(cwd=str(tmp_path), agent="shouter", env={ENV_AGENTS_PATH: str(AGENT_DIR)})
+    monkeypatch.setenv(ENV_PLUGINS_PATH, str(AGENT_DIR))
+    spec = LiteLMSpec(cwd=str(tmp_path), agent="shouter", env={ENV_PLUGINS_PATH: str(AGENT_DIR)})
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             catalog = await client.agents()

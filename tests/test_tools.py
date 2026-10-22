@@ -9,8 +9,9 @@ import anyio
 import pytest
 
 import aid
-from aid.agents import ENV_AGENTS_PATH, discover
+from aid.discovery import discover
 from aid.paths import ENV_SESSION
+from aid.plugins import ENV_PLUGINS_PATH
 from aid.protocol import Output, ToolCall, ToolInfo
 from tests.conftest import py_spec
 from tests.test_agents import AGENT_DIR
@@ -27,8 +28,7 @@ pytestmark = pytest.mark.anyio
 TIMEOUT = 30
 
 
-async def test_discover_finds_tools(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "path", list(sys.path))
+async def test_discover_finds_tools() -> None:
     described = discover([AGENT_DIR]).describe()["tools"]
     assert described == [
         {"name": "add", "description": "Add two numbers.", "module": "tooling"},
@@ -76,7 +76,7 @@ class Rpc:
 
 
 async def test_mcp_server_serves_the_tools() -> None:
-    env = {ENV_AGENTS_PATH: str(AGENT_DIR), ENV_SESSION: "s1"}
+    env = {ENV_PLUGINS_PATH: str(AGENT_DIR), ENV_SESSION: "s1"}
     command = [sys.executable, "-m", "aid.mcp_server"]
     with anyio.fail_after(TIMEOUT):
         async with await anyio.open_process(command, env={**os.environ, **env}) as process:
@@ -98,8 +98,8 @@ async def test_mcp_server_serves_the_tools() -> None:
 
 
 async def test_litelm_session_calls_the_tools(daemon: Paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv(ENV_AGENTS_PATH, str(AGENT_DIR))
-    spec = py_spec(tmp_path, "agents:tool_caller", AID_AGENTS_PATH=str(AGENT_DIR))
+    monkeypatch.setenv(ENV_PLUGINS_PATH, str(AGENT_DIR))
+    spec = py_spec(tmp_path, "agents:tool_caller", AID_PLUGINS_PATH=str(AGENT_DIR))
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             catalog = await client.agents()

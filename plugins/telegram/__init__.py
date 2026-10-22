@@ -27,7 +27,6 @@ if TYPE_CHECKING:
 class Telegram(aid.Plugin):
     """Report settled turn ends to Telegram, and take basic commands back."""
 
-    version = "0.1.0"
     grants = frozenset({aid.Grant.READ, aid.Grant.MESSAGE})
 
     async def run(self, client: Client) -> None:

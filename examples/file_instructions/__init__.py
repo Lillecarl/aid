@@ -1,6 +1,6 @@
 """File-based instructions: a global file and the nearest AGENTS.md.
 
-Copy this module onto AID_AGENTS_PATH and it offers the `file_instructions` provider. For the session's
+Copy this directory into `~/.config/aid/plugins` and it offers the `file_instructions` provider. For the session's
 directory it loads, in this order:
 
 - the global instructions file (`AID_INSTRUCTIONS_FILE`, default `~/.config/aid/instructions.md`) as `global`,

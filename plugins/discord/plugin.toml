@@ -1,0 +1,2 @@
+version = "0.1.0"
+description = "Session channels in a Discord guild, with settled turn ends and commands back."

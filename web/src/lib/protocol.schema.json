@@ -138,6 +138,12 @@
           },
           "type": "array"
         },
+        "plugins": {
+          "items": {
+            "$ref": "#/$defs/PluginInfo"
+          },
+          "type": "array"
+        },
         "problems": {
           "items": {
             "type": "string"
@@ -161,6 +167,7 @@
         "agents",
         "tools",
         "providers",
+        "plugins",
         "problems"
       ],
       "title": "AgentCatalog",
@@ -987,6 +994,17 @@
       "title": "GetSummary",
       "type": "object"
     },
+    "Grant": {
+      "enum": [
+        "read",
+        "prompt",
+        "message",
+        "permissions",
+        "manage"
+      ],
+      "title": "Grant",
+      "type": "string"
+    },
     "HistoryEntry": {
       "additionalProperties": false,
       "properties": {
@@ -1178,7 +1196,7 @@
     },
     "ListAgents": {
       "additionalProperties": false,
-      "description": "The `aid.AgentDefinition`s on the daemon's agents path.",
+      "description": "The `aid.AgentDefinition`s on the daemon's plugins path.",
       "properties": {
         "id": {
           "type": "string"
@@ -1215,7 +1233,7 @@
     },
     "LiteLMSpec": {
       "additionalProperties": false,
-      "description": "A LiteLM agent: `agent`, the name of an `aid.AgentDefinition` on the agents path, or `target`, a\n`package.module:attribute` that is an agent itself. Exactly one of them.",
+      "description": "A LiteLM agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, or `target`, a\n`package.module:attribute` that is an agent itself. Exactly one of them.",
       "properties": {
         "agent": {
           "anyOf": [
@@ -1857,6 +1875,63 @@
         "options"
       ],
       "title": "PermissionRequest",
+      "type": "object"
+    },
+    "PluginInfo": {
+      "additionalProperties": false,
+      "properties": {
+        "declined": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "grants": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/Grant"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "requires": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "version",
+        "description",
+        "path",
+        "requires",
+        "grants",
+        "declined"
+      ],
+      "title": "PluginInfo",
       "type": "object"
     },
     "Prompt": {

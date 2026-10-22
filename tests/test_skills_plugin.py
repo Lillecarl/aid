@@ -8,7 +8,8 @@ from typing import Any
 import pytest
 
 import aid
-from aid.plugins import discover as discover_plugins
+from aid.discovery import discover
+from aid.plugins import ENV_PLUGINS_PATH
 
 PLUGINS = Path(__file__).parents[1] / "plugins"
 
@@ -93,6 +94,26 @@ def test_nearest_directory_wins_a_name(tmp_path: Path, home: Path, monkeypatch: 
     }
 
 
+def test_plugins_offer_skills_after_the_global_dirs(
+    tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tier = tmp_path / "plugins"
+    (tier / "kit").mkdir(parents=True)
+    (tier / "kit" / "plugin.toml").write_text('description = "Skills only."\n')
+    write_skill(tier / "kit" / "skills", "kit-skill", "From the kit plugin.")
+    write_skill(tier / "kit" / "skills", "shared", "From the kit plugin.")
+    (tier / "unresolved").mkdir()
+    (tier / "unresolved" / "plugin.toml").write_text('requires = ["absent"]\n')
+    write_skill(tier / "unresolved" / "skills", "orphaned")
+    write_skill(home / ".claude" / "skills", "shared", "The user's own.")
+    monkeypatch.setenv(ENV_PLUGINS_PATH, str(tier))
+    found = skills().discover(tmp_path)
+    assert {name: s.description for name, s in found.items()} == {
+        "shared": "The user's own.",
+        "kit-skill": "From the kit plugin.",
+    }
+
+
 def test_a_broken_skill_is_left_out(tmp_path: Path, home: Path) -> None:
     write_skill(home / ".claude" / "skills", "good")
     (home / ".claude" / "skills" / "bad").mkdir()
@@ -131,8 +152,7 @@ def test_skill_tool_loads_body_and_files(tmp_path: Path, home: Path, monkeypatch
         skills().skill("absent")
 
 
-def test_plugin_discovery_offers_the_provider_and_tool(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "path", list(sys.path))
-    catalog = discover_plugins([PLUGINS])
+def test_plugin_discovery_offers_the_provider_and_tool() -> None:
+    catalog = discover([PLUGINS])
     assert catalog.providers["skills"].__module__ == "skills"
     assert catalog.tools["skill"].fn.__module__ == "skills"

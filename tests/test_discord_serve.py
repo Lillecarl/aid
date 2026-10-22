@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import sys
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -12,8 +11,9 @@ import anyio
 import pytest
 
 import aid
+from aid.discovery import discover
 from aid.mutes import Mutes
-from aid.plugins import Grant, discover
+from aid.plugins import Grant
 from aid.protocol import AidError, MessageEntry
 from plugins.discord.channels import CHANNELS_FILE, ChannelMap
 from plugins.discord.rest import GuildChannel, Rest, action_rows
@@ -49,10 +49,14 @@ GUILD = "g1"
 PLUGINS_ROOT = Path(__file__).resolve().parents[1] / "plugins"
 
 
-def test_discovers_discord_on_import(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, "path", list(sys.path))
-    discord = discover([PLUGINS_ROOT]).plugins["discord"]
-    assert (discord.version, discord.grants) == ("0.1.0", frozenset({Grant.READ, Grant.MESSAGE}))
+def test_discovers_discord_on_import() -> None:
+    catalog = discover([PLUGINS_ROOT], only=["discord"])
+    discord = catalog.plugins["discord"]
+    assert (catalog.roots["discord"].manifest.version, discord.grants) == (
+        "0.1.0",
+        frozenset({Grant.READ, Grant.MESSAGE}),
+    )
+    assert discord.plugin_name() == "discord"
 
 
 def test_read_config_drops_secrets_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,4 +1,4 @@
-"""Providers for the catalog tests, on a test-only AID_AGENTS_PATH."""
+"""Providers for the catalog tests, on a test-only AID_PLUGINS_PATH."""
 
 from __future__ import annotations
 

@@ -12,7 +12,7 @@ import pytest
 
 import aid.backends.litelm as native_backend
 from aid.agent import Agent
-from aid.agents import Catalog
+from aid.discovery import Catalog
 from aid.messages import (
     ModelMessagesTypeAdapter,
     ModelRequest,

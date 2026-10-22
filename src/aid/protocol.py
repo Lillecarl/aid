@@ -16,7 +16,7 @@ from typing import Annotated, Final, Literal, cast
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
-from aid.plugins import PluginSpec
+from aid.plugins import Grant, PluginSpec
 from aid.spec import AgentKind, AgentSpec
 
 PROTOCOL_VERSION = 1
@@ -94,7 +94,7 @@ class DeleteSession(_Request):
 
 
 class ListAgents(_Request):
-    """The `aid.AgentDefinition`s on the daemon's agents path."""
+    """The `aid.AgentDefinition`s on the daemon's plugins path."""
 
     op: Literal["agents"] = "agents"
 
@@ -403,10 +403,23 @@ class ProviderInfo(_Message):
     module: str
 
 
+class PluginInfo(_Message):
+    name: str
+    version: str
+    description: str
+    path: str
+    requires: list[str]
+    grants: list[Grant] | None
+    """What its daemon task asks for; None when it has no task."""
+    declined: str | None
+    """Why its task declined to load (`aid.Plugin.available`)."""
+
+
 class AgentCatalog(_Message):
     agents: list[AgentInfo]
     tools: list[ToolInfo] = Field(default_factory=list[ToolInfo])
     providers: list[ProviderInfo] = Field(default_factory=list[ProviderInfo])
+    plugins: list[PluginInfo] = Field(default_factory=list[PluginInfo])
     problems: list[str]
 
 

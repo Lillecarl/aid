@@ -18,10 +18,13 @@ import time
 from typing import TYPE_CHECKING, Final
 
 import anyio
+import anyio.to_thread
 import structlog
 
+from aid.catalog import listing
 from aid.client import spawn_plugin_client
-from aid.plugins import discover, plugins_path
+from aid.discovery import Catalog, discover
+from aid.plugins import plugins_path
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -29,7 +32,8 @@ if TYPE_CHECKING:
 
     import zmq.asyncio
 
-    from aid.plugins import Grant, Plugin, PluginCatalog, PluginSpec
+    from aid.plugins import Grant, Plugin, PluginSpec
+    from aid.protocol import AgentCatalog
 
 log = structlog.get_logger(__name__)
 
@@ -41,13 +45,25 @@ MAX_FAILURES: Final = 5
 """Failures in one window before the task stops until the next daemon start."""
 
 
-def discover_hosted(dirs: Sequence[Path] | None) -> PluginCatalog:
-    """The plugins path's catalog: the daemon's explicit dirs, or the standard tiers. Each module loads
-    guarded: a failure becomes a problem the daemon logs, never a refusal to serve."""
-    return discover(list(dirs) if dirs is not None else plugins_path())
+async def hosted(dirs: Sequence[Path] | None) -> Catalog:
+    """The daemon's explicit dirs, or the standard tiers, as the daemon may load them: a subprocess lists the
+    plugins, and only those that define a task load here, with what they require. The rest, agents and tools among
+    them, stay out of the daemon. Each loads guarded: a failure becomes a problem the daemon logs, never a refusal
+    to serve. Raises what `aid.catalog.listing` raises."""
+    if dirs is not None and not dirs:
+        return Catalog()
+    listed = await listing(dirs)
+    catalog = await anyio.to_thread.run_sync(load_hosted, dirs, listed)
+    catalog.problems[:] = dict.fromkeys([*listed.problems, *catalog.problems])
+    return catalog
 
 
-def enabled(catalog: PluginCatalog, registered: dict[str, PluginSpec]) -> list[tuple[str, type[Plugin]]]:
+def load_hosted(dirs: Sequence[Path] | None, listed: AgentCatalog) -> Catalog:
+    tasks = [plugin.name for plugin in listed.plugins if plugin.grants is not None and plugin.declined is None]
+    return discover(list(dirs) if dirs is not None else plugins_path(), only=tasks)
+
+
+def enabled(catalog: Catalog, registered: dict[str, PluginSpec]) -> list[tuple[str, type[Plugin]]]:
     """Plugin classes eligible to host, without construction: selection has no instance lifecycle effects.
     The host constructs only missing tasks. Anything else logs why it stays outside: unregistered at info
     (add it), under-granted at warning (add it again)."""

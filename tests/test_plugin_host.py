@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
@@ -13,7 +14,8 @@ import aid
 from aid import plugin_host
 from aid.client import local_plugin_endpoints, register_plugin
 from aid.daemon import Daemon
-from aid.plugins import INPROC_PLUGIN_EVENTS, INPROC_PLUGINS, Grant, PluginCatalog, PluginSpec
+from aid.discovery import Catalog
+from aid.plugins import INPROC_PLUGIN_EVENTS, INPROC_PLUGINS, Grant, PluginSpec
 from aid.protocol import AidError, MessageEntry
 from tests.conftest import py_spec
 
@@ -119,13 +121,31 @@ class Stub(aid.Plugin):
 '''
 
 
+AGENT_PLUGIN = '''"""An agent plugin, with no task: the daemon must not import it."""
+
+import os
+
+import aid
+
+with open("{marker}", "a") as marker:
+    marker.write(f"{{os.getpid()}}\\n")
+
+
+class Agentish(aid.AgentDefinition):
+    def build(self):
+        raise NotImplementedError
+'''
+
+
 async def test_hosted_plugins_start_on_registration_and_stop_on_removal(
     paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(plugin_host, "RESTART_DELAY", 0.05)
     plugindir = tmp_path / "plugindir"
-    plugindir.mkdir()
-    (plugindir / "stubbed.py").write_text(STUB_PLUGIN)
+    (plugindir / "stub").mkdir(parents=True)
+    (plugindir / "stub" / "__init__.py").write_text(STUB_PLUGIN)
+    (plugindir / "agentish").mkdir()
+    (plugindir / "agentish" / "__init__.py").write_text(AGENT_PLUGIN.format(marker=tmp_path / "imported-by"))
     with anyio.fail_after(TIMEOUT):
         async with _serving(paths, launcher, [plugindir]), aid.connect(paths) as control:
             await control.create("echo", py_spec(tmp_path, "agents:echo"))
@@ -143,6 +163,9 @@ async def test_hosted_plugins_start_on_registration_and_stop_on_removal(
             assert await pings() == before
             history = await control.session("echo").history()
     assert {e.item.sender for e in history.entries if isinstance(e.item, MessageEntry)} == {"plugin:stub"}
+    # The catalog subprocess imported the agent plugin; the daemon, in this process, never did.
+    importers = (tmp_path / "imported-by").read_text().split()
+    assert importers and str(os.getpid()) not in importers
 
 
 async def test_supervise_gives_up_after_repeated_failures(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -217,7 +240,7 @@ def test_enabled_runs_registered_and_covered_only() -> None:
 
         async def run(self, client: aid.Client) -> None: ...
 
-    catalog = PluginCatalog(plugins={"full": Full, "short": Short, "stranger": Stranger})
+    catalog = Catalog(plugins={"full": Full, "short": Short, "stranger": Stranger})
     registered = {
         "full": PluginSpec(name="full", public_key="x" * 40, grants=frozenset({Grant.READ})),
         "short": PluginSpec(name="short", public_key="y" * 40, grants=frozenset({Grant.READ})),
@@ -242,12 +265,12 @@ async def test_reconciliation_does_not_reconstruct_a_running_plugin(
             started.set()
             await anyio.sleep_forever()
 
-    catalog = PluginCatalog(plugins={"resident": Resident})
+    catalog = Catalog(plugins={"resident": Resident})
 
-    def discover(_dirs: Sequence[Path] | None) -> PluginCatalog:
+    async def hosted(_dirs: Sequence[Path] | None) -> Catalog:
         return catalog
 
-    monkeypatch.setattr(plugin_host, "discover_hosted", discover)
+    monkeypatch.setattr(plugin_host, "hosted", hosted)
     with anyio.fail_after(TIMEOUT):
         async with _serving(paths, launcher), aid.connect(paths) as control:
             await register_plugin(control, paths, "resident", frozenset())
@@ -271,12 +294,12 @@ async def test_unrelated_registry_changes_do_not_restart_a_disabled_plugin(
             failed.set()
             raise RuntimeError("broken")
 
-    catalog = PluginCatalog(plugins={"broken": Broken})
+    catalog = Catalog(plugins={"broken": Broken})
 
-    def discover(_dirs: Sequence[Path] | None) -> PluginCatalog:
+    async def hosted(_dirs: Sequence[Path] | None) -> Catalog:
         return catalog
 
-    monkeypatch.setattr(plugin_host, "discover_hosted", discover)
+    monkeypatch.setattr(plugin_host, "hosted", hosted)
     with anyio.fail_after(TIMEOUT):
         async with _serving(paths, launcher), aid.connect(paths) as control:
             await register_plugin(control, paths, "broken", frozenset())

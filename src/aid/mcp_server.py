@@ -1,4 +1,4 @@
-"""`python -m aid.mcp_server`: aid's tools and the `@aid.mcptool` functions on the agents path, as a stdio MCP
+"""`python -m aid.mcp_server`: aid's tools and the `@aid.mcptool` functions on the plugins path, as a stdio MCP
 server.
 
 Sessions start it as their built-in `aid` MCP server (`aid.mcp.builtin_server`). It imports agent modules, so
@@ -25,10 +25,9 @@ from mcp.server.stdio import stdio_server
 from mcp.shared.message import SessionMessage
 from mcp.types import JSONRPCMessage, JSONRPCNotification
 
-from aid.agents import agents_path, discover
 from aid.client import connect
+from aid.discovery import discover
 from aid.paths import ENV_CHANNEL, ENV_SESSION
-from aid.plugins import discover as discover_plugins
 from aid.plugins import plugins_path
 from aid.protocol import AidError
 
@@ -60,9 +59,8 @@ def channel_params(message: MessageEntry) -> dict[str, Any]:
 
 
 def build(channel_session: str | None) -> FastMCP:
-    catalog = discover(agents_path())
-    plugins = discover_plugins(plugins_path())
-    for problem in (*catalog.problems, *plugins.problems):
+    catalog = discover(plugins_path())
+    for problem in catalog.problems:
         # stdout carries the protocol.
         print(f"aid.mcp_server: {problem}", file=sys.stderr)
     server = FastMCP(
@@ -70,8 +68,7 @@ def build(channel_session: str | None) -> FastMCP:
         instructions=instructions(channel_session) if channel_session else None,
         log_level="WARNING",
     )
-    # On a name clash the agents path wins: it is the established tool source.
-    for tool in {**plugins.tools, **catalog.tools}.values():
+    for tool in catalog.tools.values():
         server.add_tool(tool.fn, name=tool.name, description=tool.description)
     return server
 

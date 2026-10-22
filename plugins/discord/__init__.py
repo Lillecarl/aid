@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 class Discord(aid.Plugin):
     """Session channels with settled turn ends, commands back."""
 
-    version = "0.1.0"
     grants = frozenset({aid.Grant.READ, aid.Grant.MESSAGE})
 
     async def run(self, client: Client) -> None:

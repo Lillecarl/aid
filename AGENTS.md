@@ -99,8 +99,18 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `register_plugin`. Grants bind only what arrives on the plugin sockets: a same-user local plugin can open
   control.sock, which checks nothing, until confined (Lillecarl/aid#4). The events PUB cannot drop a subscriber: a
   plugin losing `read` hears events until it reconnects.
-- `src/aid/plugin_host.py` — in-process plugins: registered plugins whose code is on the daemon's `plugin_dirs`
-  (None means the standard tiers) run as supervised tasks speaking the same protocol over
+- `src/aid/discovery.py` — the plugins path (`AID_PLUGINS_PATH`, `~/.config/aid/plugins`, `AID_PLUGINS_DIST`):
+  a plugin is a directory named as an import name, with `__init__.py` and/or optional `plugin.toml` (`name` = dir,
+  `version`, `description`, `requires`). `resolve` reads manifests only (first tier wins a name; missing requirement
+  or cycle drops dependents); `discover` imports packages in dependency order, under their own names, never via
+  `sys.path`, and sorts by interface: `AgentDefinition`, `InstructionsProvider`, `@aid.mcptool`, `Plugin` (≤1 per
+  plugin; `plugin_name()` = top-level package). Data-only plugins (`skills/`) need no `__init__.py`. Workers and
+  `aid.mcp_server` import everything; the daemon never imports a plugin without a task (below).
+- `src/aid/catalog.py` — `python -m aid.catalog [--path DIR]`, the catalog as JSON (`AgentCatalog`, plugins
+  included); `listing()` runs it as a subprocess for the daemon. `session_catalog()` is what a session gets.
+- `src/aid/plugin_host.py` — in-process plugins: `hosted()` lists the daemon's `plugin_dirs` (None means the standard
+  tiers) in a subprocess and imports only plugins with a task, plus what they require. Registered ones run as
+  supervised tasks speaking the same protocol over
   `inproc://aid-plugins` / `inproc://aid-plugin-events`, through the same loop (identity is the DEALER name the
   daemon set). `_reconcile_plugins` runs at startup and after every registry change: unregistered, under-granted
   and declined code stays outside with a log; removal stops the task at once. Failures restart after
@@ -117,13 +127,12 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `action:session` directly (100 bytes); Discord messages clip at 1900/2000.
 - `plugins/skills/` — Agent Skills, bundled: an `InstructionsProvider` lists each skill's name and description, the
   `skill` tool loads a body or file. Spec-checked frontmatter (YAML); project `.aid|.agents|.claude/skills` up to the
-  git root, then `AID_SKILLS_PATH`, then the global dirs. Plugin modules may offer providers and tools; sessions get
-  them through `aid.catalog.session_catalog` (agents path wins a name).
+  git root, then `AID_SKILLS_PATH`, then the global dirs, then each resolved plugin's `skills/`.
 - `src/aid/backends/` — `acp.py`, `litelm.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON,
   plus the built-in `aid` server (`session_servers`). claude-agent-acp restarts its query when `session/load` gets
   servers other than `session/new` did.
-- `src/aid/tools.py` — `@aid.mcptool`, a marker attribute; `agents.discover` collects the marked functions.
+- `src/aid/tools.py` — `@aid.mcptool`, a marker attribute; `discovery.discover` collects the marked functions.
   Keep it free of `mcp` imports: every worker and the daemon import it.
 - `src/aid/mcp_server.py` — `python -m aid.mcp_server`, the tools as a stdio MCP server. The agent starts it; it
   imports user code, so never the daemon. LiteLM sessions get the same functions in-process as a toolset.
@@ -145,9 +154,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - claude-tty follows its transcript for the worker's life (`FollowingBackend.follow`): a turn aid's `prompt()` waits
   for is aid's; any other (typed into the pane, woken by a channel event) goes to the daemon as `Observed` entries
   under a turn id of its own.
-- `src/aid/agents.py` — `aid.AgentDefinition`, the interface agent modules implement, and discovery on
-  AID_AGENTS_PATH. `catalog.py` runs discovery in a subprocess for the daemon; never import agent modules
-  in the daemon itself.
+- `src/aid/agents.py` — `aid.AgentDefinition` and `aid.InstructionsProvider`, interfaces plugins implement. Never
+  import agent plugins in the daemon itself: it asks `aid.catalog` in a subprocess.
 - `src/aid/env.py` — agent environments, minus the markers of the Claude session that started us.
 - `src/aid/client.py` — public API: `aid.connect()`, `Client`, `Session.run/stream`.
 - `src/aid/client.py:daemon_call` — what hosted loops await daemon calls through: silence past

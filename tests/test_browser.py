@@ -232,7 +232,7 @@ async def test_prompt_ctrl_a_stays_select_all(page: Page, session_daemon: Paths,
 
 
 async def test_tool_calls_share_a_row(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
-    await seed_session(session_daemon, tmp_path, "tooling", "agents:tool_caller", AID_AGENTS_PATH=str(AGENT_DIR))
+    await seed_session(session_daemon, tmp_path, "tooling", "agents:tool_caller", AID_PLUGINS_PATH=str(AGENT_DIR))
     await open_session(page, "tooling")
     await send_chat(page, "go")
     boxes = page.get_by_test_id("tool-box")

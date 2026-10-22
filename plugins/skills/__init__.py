@@ -7,7 +7,8 @@ Where skills come from, the first directory with a name winning:
 - the session's project: `.aid/skills`, `.agents/skills` and `.claude/skills` in the session's directory and each
   parent up to the git root, nearest first,
 - `AID_SKILLS_PATH`, directories joined with `:`,
-- `~/.config/aid/skills` (XDG_CONFIG_HOME), `~/.agents/skills`, `~/.claude/skills`.
+- `~/.config/aid/skills` (XDG_CONFIG_HOME), `~/.agents/skills`, `~/.claude/skills`,
+- each plugin's `skills/` directory, in plugins path order.
 
 Frontmatter follows the spec: `name` (1-64 lowercase letters, digits and single hyphens, equal to the directory's
 name) and `description` (1-1024 characters) are required. A skill that breaks either is left out and logged.
@@ -27,6 +28,8 @@ import structlog
 import yaml
 
 import aid
+from aid.discovery import resolve
+from aid.plugins import plugins_path
 
 log = structlog.get_logger(__name__)
 
@@ -60,6 +63,7 @@ def search_dirs(cwd: Path, env: dict[str, str] | None = None) -> list[Path]:
     config = Path(env.get("XDG_CONFIG_HOME") or Path.home() / ".config")
     home = Path(env.get("HOME") or Path.home())
     dirs.extend([config / "aid" / "skills", home / ".agents" / "skills", home / ".claude" / "skills"])
+    dirs.extend(root.path / "skills" for root in resolve(plugins_path(env)).roots)
     return dirs
 
 

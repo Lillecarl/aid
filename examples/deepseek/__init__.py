@@ -1,6 +1,7 @@
 """An aid agent on DeepSeek. The provider reads DEEPSEEK_API_KEY from the worker's environment.
 
-Put this directory on AID_AGENTS_PATH and it shows up as `deep_seek`:
+Put `examples` on AID_PLUGINS_PATH, or copy this directory into `~/.config/aid/plugins`, and it shows up as
+`deep_seek`:
 
     aid agents
     aid new-py deepseek deep_seek

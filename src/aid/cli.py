@@ -16,12 +16,12 @@ import structlog
 
 from aid import daemon, guard, speech
 from aid.client import connect, register_plugin
+from aid.discovery import discover
 from aid.launcher import PRELOAD, CommandLauncher, ForkserverLauncher, WorkerArgs, process_main
 from aid.log import configure_logging
 from aid.mcp import from_claude_config
 from aid.paths import default_paths
 from aid.plugins import ENV_PLUGINS_PATH, Grant, plugins_path
-from aid.plugins import discover as discover_plugins
 from aid.protocol import (
     AidError,
     Lifecycle,
@@ -257,7 +257,7 @@ def _parser() -> argparse.ArgumentParser:
     sdk.add_argument("--claude", default="claude", help="the claude executable")
 
     sub.add_parser(
-        "agents", help="list the aid.AgentDefinition classes and @aid.mcptool functions on the daemon's agents path"
+        "agents", help="list the aid.AgentDefinition classes and @aid.mcptool functions on the daemon's plugins path"
     )
 
     sub.add_parser(
@@ -591,7 +591,7 @@ async def _plugin_command(client: Client, args: argparse.Namespace) -> None:
 def _declared_grants(name: str) -> frozenset[Grant]:
     """The grants the plugins path's `name` declares. Explicit --grant stays for plugins registered from
     elsewhere, whose code lives on another host."""
-    found = discover_plugins(plugins_path()).plugins.get(name)
+    found = discover(plugins_path(), only=[name]).plugins.get(name)
     if found is None:
         raise SystemExit(
             f"aid plugin add: no plugin {name!r} on the plugins path: pass --grant, or set {ENV_PLUGINS_PATH}"
@@ -605,7 +605,7 @@ def _grant_flags(grants: frozenset[Grant]) -> str:
 
 async def _run_plugin(name: str) -> None:
     """Run the plugin the plugins path names, connected as its registered name."""
-    found = discover_plugins(plugins_path()).plugins.get(name)
+    found = discover(plugins_path(), only=[name]).plugins.get(name)
     if found is None:
         raise SystemExit(f"aid plugin run: no plugin {name!r} on the plugins path")
     plugin = found()
