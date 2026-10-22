@@ -21,10 +21,11 @@ import anyio
 import anyio.to_thread
 import structlog
 
+from aid import zap
 from aid.catalog import listing
 from aid.client import spawn_plugin_client
 from aid.discovery import Catalog, discover
-from aid.plugins import plugins_path, serves_calls
+from aid.plugins import PluginSpec, plugins_path, serves_calls
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
     import zmq.asyncio
 
     from aid.client import Client
-    from aid.plugins import Grant, Plugin, PluginSpec
+    from aid.plugins import Grant, Plugin
     from aid.protocol import AgentCatalog
 
 log = structlog.get_logger(__name__)
@@ -62,6 +63,16 @@ async def hosted(dirs: Sequence[Path] | None) -> Catalog:
 def load_hosted(dirs: Sequence[Path] | None, listed: AgentCatalog) -> Catalog:
     tasks = [plugin.name for plugin in listed.plugins if plugin.grants is not None and plugin.declined is None]
     return discover(list(dirs) if dirs is not None else plugins_path(), only=tasks)
+
+
+def autostart(catalog: Catalog) -> dict[str, PluginSpec]:
+    """Registrations for the task plugins whose manifest asks to run unregistered: their declared grants, and a
+    fresh key nobody holds, since a hosted task needs none."""
+    return {
+        name: PluginSpec(name=name, public_key=zap.Keypair.new().public, grants=cls.grants)
+        for name, cls in catalog.plugins.items()
+        if (root := catalog.roots.get(name)) is not None and root.manifest.autostart
+    }
 
 
 def enabled(catalog: Catalog, registered: dict[str, PluginSpec]) -> list[tuple[str, type[Plugin]]]:

@@ -446,6 +446,8 @@ class PluginInfo(_Message):
     """What its daemon task asks for; None when it has no task."""
     declined: str | None
     """Why its task declined to load (`aid.Plugin.available`)."""
+    autostart: bool = False
+    """The daemon hosts its task without `aid plugin add`, with the grants it declares."""
 
 
 class AgentCatalog(_Message):

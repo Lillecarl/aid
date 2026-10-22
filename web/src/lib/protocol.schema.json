@@ -1880,6 +1880,10 @@
     "PluginInfo": {
       "additionalProperties": false,
       "properties": {
+        "autostart": {
+          "default": false,
+          "type": "boolean"
+        },
         "declined": {
           "anyOf": [
             {
@@ -1929,7 +1933,8 @@
         "path",
         "requires",
         "grants",
-        "declined"
+        "declined",
+        "autostart"
       ],
       "title": "PluginInfo",
       "type": "object"

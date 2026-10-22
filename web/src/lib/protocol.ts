@@ -217,6 +217,7 @@ export interface AgentInfo {
  * via the `definition` "PluginInfo".
  */
 export interface PluginInfo {
+  autostart: boolean;
   declined: string | null;
   description: string;
   grants: Grant[] | null;

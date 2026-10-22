@@ -8,6 +8,7 @@ A plugin is a directory on the plugins path (`aid.plugins.plugins_path`): a Pyth
     version = "0.1.0"
     description = "Coding agents on the spark models."
     requires = ["skills"]        # plugins that must load first
+    autostart = true             # the daemon runs its task with the grants it declares, unregistered
 
 `resolve` reads the manifests and imports nothing: the first tier holding a name wins, a missing requirement or a
 cycle drops the plugin and everything that needs it, and the rest come back in dependency order. A directory needs
@@ -61,6 +62,7 @@ class Manifest(BaseModel):
     version: str = ""
     description: str = ""
     requires: list[str] = Field(default_factory=list[str])
+    autostart: bool = False
 
 
 @dataclass(frozen=True)
@@ -254,6 +256,7 @@ class Catalog:
                     "description": self.descriptions.get(name, ""),
                     "path": str(root.path),
                     "requires": root.manifest.requires,
+                    "autostart": root.manifest.autostart,
                     "grants": task(name),
                     "declined": self.declined.get(name),
                 }

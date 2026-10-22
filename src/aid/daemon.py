@@ -487,6 +487,10 @@ class Daemon:
         self._hosted: dict[str, anyio.CancelScope] = {}
         """Supervised plugin tasks running now, by name: removing the registration cancels the scope."""
         self._disabled_plugins: set[str] = set()
+        self._autostarted: set[str] = set()
+        """Plugins registered from their manifest's `autostart`, in memory only: each start registers them anew."""
+        self._unwanted: set[str] = set()
+        """Autostart plugins removed this daemon's lifetime: they stay off until added again."""
         """Plugins exhausting their restart budget stay disabled for this daemon's lifetime."""
         self._plugin_lock = anyio.Lock()
         self._sessions: dict[str, _Session] = {}
@@ -694,6 +698,10 @@ class Daemon:
             log.warning("plugin_problem", problem=problem)
         for name, reason in catalog.declined.items():
             log.info("plugin_declined", plugin=name, reason=reason)
+        for name, spec in plugin_host.autostart(catalog).items():
+            if name not in self._keys.plugins and name not in self._unwanted:
+                self._keys.plugins[name] = spec
+                self._autostarted.add(name)
         wanted = dict(plugin_host.enabled(catalog, self._keys.plugins))
         for name in self._hosted.keys() - wanted.keys():
             log.info("plugin_stopped", plugin=name)
@@ -983,6 +991,8 @@ class Daemon:
                 await plugin_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
                 await (plugin_dir / PLUGIN_FILE).write_text(request.spec.model_dump_json())
                 self._keys.plugins[request.spec.name] = request.spec
+                self._autostarted.discard(request.spec.name)
+                self._unwanted.discard(request.spec.name)
                 self._call_targets.pop(request.spec.name, None)
                 await self._reconcile_plugins()
                 return Done(id=request.id)
@@ -991,6 +1001,9 @@ class Daemon:
             case RemovePlugin():
                 if self._keys.plugins.pop(request.name, None) is None:
                     raise AidError("not_found", f"no plugin named {request.name!r}")
+                if request.name in self._autostarted:
+                    self._autostarted.discard(request.name)
+                    self._unwanted.add(request.name)
                 self._call_targets.pop(request.name, None)
                 await anyio.to_thread.run_sync(shutil.rmtree, self._paths.plugin_dir(request.name), True)
                 await self._reconcile_plugins()

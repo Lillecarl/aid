@@ -251,6 +251,35 @@ async def test_hosted_plugins_start_on_registration_and_stop_on_removal(
     assert importers and str(os.getpid()) not in importers
 
 
+async def test_an_autostart_plugin_runs_unregistered_until_removed(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(plugin_host, "RESTART_DELAY", 0.05)
+    plugindir = tmp_path / "plugindir"
+    (plugindir / "stub").mkdir(parents=True)
+    (plugindir / "stub" / "__init__.py").write_text(STUB_PLUGIN)
+    (plugindir / "stub" / "plugin.toml").write_text("autostart = true\n")
+    with anyio.fail_after(TIMEOUT):
+        async with _serving(paths, launcher, [plugindir]), aid.connect(paths) as control:
+            await control.create("echo", py_spec(tmp_path, "agents:echo"))
+
+            async def pings() -> int:
+                history = await control.session("echo").history()
+                return sum(1 for e in history.entries if isinstance(e.item, MessageEntry))
+
+            await anyio.sleep(1)  # Falls over every RESTART_DELAY, pinging each time it starts.
+            assert await pings() >= 2
+            [spec] = await control.plugins()
+            assert (spec.name, spec.grants) == ("stub", frozenset({Grant.READ, Grant.MESSAGE}))
+            await control.remove_plugin("stub")
+            await register_plugin(control, paths, "other", frozenset())  # Reconciles again.
+            before = await pings()
+            await anyio.sleep(0.3)
+            assert await pings() == before
+            assert [s.name for s in await control.plugins()] == ["other"]
+    assert not (paths.plugin_dir("stub")).exists()
+
+
 async def test_supervise_gives_up_after_repeated_failures(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(plugin_host, "RESTART_DELAY", 0.01)
     monkeypatch.setattr(plugin_host, "MAX_FAILURES", 3)

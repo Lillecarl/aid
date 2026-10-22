@@ -60,6 +60,7 @@ def test_describe_names_versions_grants_and_declined() -> None:
         "description": "Plugins for the catalog tests, on a test-only AID_PLUGINS_PATH.",
         "path": str(PLUGIN_DIR / "alpha"),
         "requires": [],
+        "autostart": False,
         "grants": ["message", "read"],
         "declined": None,
     }
