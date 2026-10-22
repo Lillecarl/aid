@@ -263,91 +263,11 @@ class Goal(_Message):
 GoalsAdapter: TypeAdapter[list[Goal]] = TypeAdapter(list[Goal])
 
 
-class SupervisedHistory(_Request):
-    """A supervised session's recent history, for its supervisor. The daemon refuses anyone the session did
-    not name: supervisors read only their own. Done's data is a `HistoryPage`."""
-
-    op: Literal["supervised_history"] = "supervised_history"
-    supervisor: str
-    """The calling session, which the supervised session names in its spec."""
-    session: str
-    limit: Annotated[int, Field(ge=1, le=1000)] = 100
-
-
-class SupervisedSearch(_Request):
-    """History entries of a supervised session matching a case-insensitive substring, oldest first, for its
-    supervisor. Done's data is `SearchResults`."""
-
-    op: Literal["supervised_search"] = "supervised_search"
-    supervisor: str
-    """The calling session, which the supervised session names in its spec."""
-    session: str
-    query: str
-    limit: Annotated[int, Field(ge=1, le=100)] = 20
-
-
-class CancelSupervised(_Request):
-    """Interrupt exactly the turn a supervisor reviewed. The daemon checks the supervision link and the
-    worker checks the turn again, so a delayed decision cannot cancel a newer turn."""
-
-    op: Literal["cancel_supervised"] = "cancel_supervised"
-    supervisor: str
-    session: str
-    turn: str
-
-
 class SearchResults(_Message):
     entries: list[HistoryEntry]
     """The newest matches first, capped at the request's limit."""
     total: int
     """Matches in the whole history."""
-
-
-class GetGoals(_Request):
-    """Every goal of a supervised session, for its supervisor. Done's data is a list of `Goal`."""
-
-    op: Literal["goals"] = "goals"
-    supervisor: str
-    """The calling session, which the supervised session names in its spec."""
-    session: str
-
-
-class AddGoal(_Request):
-    """Name a goal for a supervised session, as its supervisor. Done's data is the `Goal`."""
-
-    op: Literal["goal_add"] = "goal_add"
-    supervisor: str
-    """The calling session, which the supervised session names in its spec."""
-    session: str
-    text: str
-
-
-class SetGoal(_Request):
-    """Mark a supervised session's goal done or dropped, as its supervisor. Done's data is the `Goal`."""
-
-    op: Literal["goal_set"] = "goal_set"
-    supervisor: str
-    """The calling session, which the supervised session names in its spec."""
-    session: str
-    goal_id: str
-    state: Literal[GoalState.DONE, GoalState.DROPPED]
-
-
-class AnswerSupervisedPermission(_Request):
-    """Answer a supervised session's waiting permission request, as its supervisor. The daemon refuses anyone
-    the session did not name, tools outside its allow-list, and requests nobody waits on any more: the first
-    resolution wins, so a person answering first reads here as `no_pending`."""
-
-    op: Literal["answer_supervised_permission"] = "answer_supervised_permission"
-    supervisor: str
-    """The calling session, which the supervised session names in its spec."""
-    session: str
-    request_id: str
-    option_id: str | None
-    """One of the request's options, or None to cancel it."""
-    text: str | None = None
-    """The supervisor's own words: with an option, alongside the pick; alone, the whole answer, which only
-    an `ask_user` question takes."""
 
 
 class SupervisionFiring(_Message):
@@ -439,13 +359,6 @@ type Request = Annotated[
     | AddPlugin
     | ListPlugins
     | RemovePlugin
-    | SupervisedHistory
-    | SupervisedSearch
-    | CancelSupervised
-    | GetGoals
-    | AddGoal
-    | SetGoal
-    | AnswerSupervisedPermission
     | CallPlugin
     | ServeCalls
     | CallResult

@@ -171,10 +171,14 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `DAEMON_CALL_TIMEOUT` exits loudly, so the supervisor restarts into a fresh baseline.
 - `src/aid/settle.py` — settled turn ends, platform-agnostic: `Tracker` fed by turn and supervision events,
   `settled_turns` calling back per settled episode. Both chat plugins share it.
-- `src/aid/loops.py` — bounded exact tool-call/cycle signals during aid-started turns. The daemon sends
-  suspicions to the supervisor's reliable inbox; detection never cancels. `supervisor_tools.interrupt`
-  uses `CancelSupervised`, checked against the supervision link and against the reviewed turn id again
-  in the worker. Missing telemetry is not unchanged work. Embedding signals remain future work.
+- `plugins/supervision/` — supervision, bundled, `autostart` (read, message, prompt, permissions, supervise). Follows each
+  supervised session's history (gap-filled), from the last entry before it started: turn ends (`Output`,
+  `TurnError`, once per turn) message the supervisor as the supervised session with tail/goals/loop score;
+  `loops.py` exact tool-call/cycle suspicions (never cancels); permission backstops; stuck episode → attention;
+  nudge budget via the `message` hook. Goals in its plugin dir (`goals/<session>.json`, legacy session-dir
+  `goals.json` read). `aid.supervisor_tools` (core) call it via `CallPlugin`; it authorizes by `caller`.
+  `interrupt` = `Cancel(turn=…)`, the worker rechecks the turn. Daemon keeps only `spec.supervisor` links and
+  their validation (`supervision_cycle`). State is in memory: a restart starts a fresh episode.
 - `src/aid/mutes.py` — runtime mutes per chat plugin, on disk beside the registration.
 - `src/aid/events.py` — the daemon's PUB socket (`Paths.events`): `[topic, JSON]` for the session list, each
   status, each history entry. The daemon compares state with what it last published after every request,

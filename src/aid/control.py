@@ -5,13 +5,9 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict, Field
 
 from aid.protocol import (
-    AddGoal,
     AidError,
-    AnswerSupervisedPermission,
     CallPlugin,
-    CancelSupervised,
     CompactSession,
-    GetGoals,
     GetHistory,
     GetPane,
     GetScreen,
@@ -22,9 +18,6 @@ from aid.protocol import (
     ListSessions,
     ReceiveMessages,
     SendMessage,
-    SetGoal,
-    SupervisedHistory,
-    SupervisedSearch,
 )
 
 if TYPE_CHECKING:
@@ -55,16 +48,6 @@ def authorize(request: Request, session: str) -> Request:
             return request.model_copy(update={"sender": session})
         case CallPlugin():
             return request.model_copy(update={"caller": session})
-        case (
-            SupervisedHistory()
-            | SupervisedSearch()
-            | CancelSupervised()
-            | GetGoals()
-            | AddGoal()
-            | SetGoal()
-            | AnswerSupervisedPermission()
-        ) if request.supervisor == session:
-            return request
         case CompactSession() | ReceiveMessages() | Hook() if request.session == session:
             return request
         case _:

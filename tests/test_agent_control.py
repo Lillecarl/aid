@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -16,20 +15,16 @@ from aid.env import agent_environment
 from aid.launcher import WorkerArgs
 from aid.paths import ENV_SESSION
 from aid.protocol import (
-    AddGoal,
     AidError,
     CallPlugin,
     Cancel,
-    GetGoals,
     GetHistory,
-    GetStatus,
     Hello,
     ListSessions,
     MessageEntry,
     ReceiveMessages,
     RequestAdapter,
     Started,
-    SupervisedHistory,
     decode_reply,
     encode,
 )
@@ -93,10 +88,6 @@ async def test_agent_identity_rejects_supervisor_spoofing_and_administration(
             async with agent_client(args) as client:
                 patch.setenv(ENV_SESSION, "boss")
                 with pytest.raises(AidError, match="forbidden"):
-                    await client.call(AddGoal(supervisor="boss", session="worker", text="spoofed"))
-                with pytest.raises(AidError, match="forbidden"):
-                    await client.call(SupervisedHistory(supervisor="boss", session="worker"))
-                with pytest.raises(AidError, match="forbidden"):
                     await client.call(Cancel(session="worker"))
                 await client.call(GetHistory(session="worker"))
                 with pytest.raises(AidError, match="forbidden"):
@@ -111,47 +102,10 @@ async def test_agent_identity_rejects_supervisor_spoofing_and_administration(
                 async with client.open_socket(zmq.SUB):
                     pass
             patch.delenv(ENV_SESSION)
-            assert await control.call(GetGoals(supervisor="boss", session="worker")) == []
             entries = (await control.session("worker").history()).entries
             messages = [entry.item for entry in entries if isinstance(entry.item, MessageEntry)]
             assert messages == [MessageEntry(sender="intruder", text="authored by the intruder")]
             assert (await intruder.status()).agent != "forged"
-            result = await intruder.run(
-                json.dumps(
-                    [
-                        [
-                            "control_call",
-                            {
-                                "request": {
-                                    "op": "goal_add",
-                                    "supervisor": "boss",
-                                    "session": "worker",
-                                    "text": "spoofed",
-                                }
-                            },
-                        ]
-                    ]
-                )
-            )
-            assert json.loads(str(result.output)) == {"error": "forbidden"}
-
-
-async def test_supervisor_credentials_allow_only_its_supervision_links(
-    server: tuple[Paths, RecordingLauncher], tmp_path: Path
-) -> None:
-    paths, launcher = server
-    with anyio.fail_after(30):
-        async with aid.connect(paths) as control:
-            await control.create("boss", py_spec(tmp_path, "agents:echo"))
-            args = launcher.launches[-1]
-            await control.create("worker", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "boss"}))
-            await control.create("other", py_spec(tmp_path, "agents:echo"))
-            async with agent_client(args) as client:
-                goal = await client.call(AddGoal(supervisor="boss", session="worker", text="authorized"))
-                assert isinstance(goal, dict) and goal["text"] == "authorized"
-                with pytest.raises(AidError, match="not_supervised"):
-                    await client.call(AddGoal(supervisor="boss", session="other", text="unauthorized"))
-                await client.call(GetStatus(session="boss"))
 
 
 async def test_revocation_rejects_an_existing_connection_after_worker_restart(

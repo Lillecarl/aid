@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import anyio
@@ -10,23 +11,11 @@ import pytest
 
 import aid
 from aid import events
-from aid.daemon import (
-    SUPERVISION_ITEM_CHARS,
-    SUPERVISION_LOOP_THRESHOLD,
-    add_goal,
-    loop_score,
-    nudge_repeats,
-    permission_backstop_text,
-    set_goal,
-    supervision_cycle,
-    supervision_stuck,
-    supervision_text,
-)
+from aid.daemon import Daemon, supervision_cycle
+from aid.paths import ENV_STATE_DIR
 from aid.protocol import (
-    AddGoal,
-    AnswerSupervisedPermission,
+    CallPlugin,
     Cancel,
-    CancelSupervised,
     Goal,
     GoalState,
     HistoryEntry,
@@ -39,19 +28,31 @@ from aid.protocol import (
     PermissionRequest,
     PromptEntry,
     SendMessage,
-    SetGoal,
-    SupervisedHistory,
     TextDelta,
     ToolCall,
     Usage,
 )
 from aid.spec import PermissionMode
+from plugins.supervision.policy import (
+    SUPERVISION_ITEM_CHARS,
+    SUPERVISION_LOOP_THRESHOLD,
+    add_goal,
+    loop_score,
+    nudge_repeats,
+    permission_backstop_text,
+    set_goal,
+    supervision_stuck,
+    supervision_text,
+)
 from tests.conftest import py_spec
 from tests.test_events import subscribed
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    from collections.abc import AsyncIterator
 
+    from pydantic import JsonValue
+
+    from aid.launcher import ForkserverLauncher
     from aid.paths import Paths
     from aid.protocol import HistoryItem
     from aid.spec import LiteLMSpec
@@ -59,6 +60,31 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.anyio
 
 TIMEOUT = int(os.environ.get("AID_TEST_TIMEOUT", "30"))
+PLUGINS = Path(__file__).parent.parent / "plugins"
+
+
+@pytest.fixture
+async def daemon(paths: Paths, launcher: ForkserverLauncher, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Paths]:
+    """A daemon hosting the bundled plugins, supervision serving before the test starts."""
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    async with anyio.create_task_group() as tg:
+        await tg.start(Daemon(paths, launcher, plugin_dirs=[PLUGINS]).serve)
+        async with aid.connect(paths) as client:
+            with anyio.fail_after(TIMEOUT):
+                while True:
+                    try:
+                        await client.call_plugin("supervision", "goals", session="")
+                    except aid.AidError as error:
+                        if error.code != "no_plugin":
+                            break
+                    await anyio.sleep(0.05)
+        yield paths
+        tg.cancel_scope.cancel()
+
+
+async def sup(client: aid.Client, caller: str, method: str, **args: JsonValue) -> JsonValue:
+    """A supervisor tool's call, as session `caller`."""
+    return await client.call(CallPlugin(plugin="supervision", method=method, args=args, caller=caller))
 
 
 def test_supervision_cycle() -> None:
@@ -157,17 +183,17 @@ async def test_live_loop_wakes_supervisor_once_and_can_be_interrupted(daemon: Pa
                         # Notification did not cancel the worker; only the supervisor's explicit decision does.
                         assert (await worker.status()).busy
                         with pytest.raises(aid.AidError, match="not_supervised"):
-                            await client.call(CancelSupervised(supervisor="other", session="worker", turn=reviewed))
+                            await sup(client, "other", "interrupt", session="worker", turn=reviewed)
                         with pytest.raises(aid.AidError, match="stale_turn"):
-                            await client.call(CancelSupervised(supervisor="boss", session="worker", turn="old"))
-                        await client.call(CancelSupervised(supervisor="boss", session="worker", turn=reviewed))
+                            await sup(client, "boss", "interrupt", session="worker", turn="old")
+                        await sup(client, "boss", "interrupt", session="worker", turn=reviewed)
                 elif isinstance(event, Output):
                     final = event
             assert reviewed is not None
             assert final is not None and final.stop_reason == "cancelled"
             assert (await worker.run("continue")).output == "continued"
             with pytest.raises(aid.AidError, match="stale_turn"):
-                await client.call(CancelSupervised(supervisor="boss", session="worker", turn=reviewed))
+                await sup(client, "boss", "interrupt", session="worker", turn=reviewed)
             messages = [
                 entry.item
                 for entry in (await boss.history(limit=1000)).entries
@@ -329,17 +355,17 @@ async def test_supervision_ops_refuse_strangers(daemon: Paths, tmp_path: Path) -
             await client.create("boss", py_spec(tmp_path, "agents:echo"))
             await client.create("coder", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "boss"}))
             with pytest.raises(aid.AidError, match="not_supervised"):
-                await client.call(SupervisedHistory(supervisor="stranger", session="coder"))
+                await sup(client, "stranger", "history", session="coder")
             with pytest.raises(aid.AidError, match="not_supervised"):
-                await client.call(AddGoal(supervisor="coder", session="coder", text="self-dealing"))
+                await sup(client, "coder", "goal_add", session="coder", text="self-dealing")
             with pytest.raises(aid.AidError, match="empty_goal"):
-                await client.call(AddGoal(supervisor="boss", session="coder", text="  "))
+                await sup(client, "boss", "goal_add", session="coder", text="  ")
             with pytest.raises(aid.AidError, match="unknown_goal"):
-                await client.call(SetGoal(supervisor="boss", session="coder", goal_id="nope", state=GoalState.DONE))
+                await sup(client, "boss", "goal_set", session="coder", goal_id="nope", state=GoalState.DONE)
 
 
 def read_goals(paths: Paths, name: str) -> list[dict[str, Any]]:
-    return json.loads((paths.session_dir(name) / "goals.json").read_bytes())
+    return json.loads((paths.plugin_dir("supervision") / "goals" / f"{name}.json").read_bytes())
 
 
 async def test_supervisor_reads_history_and_tracks_goals(daemon: Paths, tmp_path: Path) -> None:
@@ -521,10 +547,13 @@ async def test_unlisted_tool_stays_human(daemon: Paths, tmp_path: Path) -> None:
                 events.append(event)
                 if isinstance(event, PermissionRequest):
                     with pytest.raises(aid.AidError, match="unlisted_tool"):
-                        await client.call(
-                            AnswerSupervisedPermission(
-                                supervisor="boss", session="coder", request_id=event.request_id, option_id="0"
-                            )
+                        await sup(
+                            client,
+                            "boss",
+                            "answer_permission",
+                            session="coder",
+                            request_id=event.request_id,
+                            option_id="0",
                         )
             assert isinstance(events[-1], Output)
             assert "Nobody answered; proceed with your best judgment." in str(events[-1].output)
@@ -576,13 +605,9 @@ async def test_supervised_answer_refuses_strangers_and_gone(daemon: Paths, tmp_p
             await client.create("boss", py_spec(tmp_path, "agents:echo"))
             await client.create("coder", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "boss"}))
             with pytest.raises(aid.AidError, match="not_supervised"):
-                await client.call(
-                    AnswerSupervisedPermission(supervisor="stranger", session="coder", request_id="x", option_id=None)
-                )
+                await sup(client, "stranger", "answer_permission", session="coder", request_id="x", option_id=None)
             with pytest.raises(aid.AidError, match="no_pending"):
-                await client.call(
-                    AnswerSupervisedPermission(supervisor="boss", session="coder", request_id="x", option_id=None)
-                )
+                await sup(client, "boss", "answer_permission", session="coder", request_id="x", option_id=None)
 
 
 def test_nudge_repeats() -> None:
@@ -695,11 +720,34 @@ async def test_supervision_goals_are_published(daemon: Paths, tmp_path: Path) ->
             await client.create("boss", py_spec(tmp_path, "agents:echo"))
             await client.create("coder", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "boss"}))
             topic = events.supervision_topic("coder")
-            goal = await client.call(AddGoal(supervisor="boss", session="coder", text="ship it"))
+            goal = await sup(client, "boss", "goal_add", session="coder", text="ship it")
             assert isinstance(goal, dict)
             goal_id = str(goal["id"])
             added = await sub.until(topic, lambda p: p.get("goals") and p["goals"]["action"] == "added")
             assert added["goals"]["goal"]["id"] == goal_id
-            await client.call(SetGoal(supervisor="boss", session="coder", goal_id=goal_id, state=GoalState.DONE))
+            await sup(client, "boss", "goal_set", session="coder", goal_id=goal_id, state=GoalState.DONE)
             done = await sub.until(topic, lambda p: p.get("goals") and p["goals"]["action"] == "done")
             assert done["goals"]["goal"]["state"] == "done"
+
+
+def call_plan(**request: JsonValue) -> str:
+    return json.dumps([["control_call", {"request": request}]])
+
+
+async def test_a_session_calls_supervision_only_as_itself(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:control_probe"))
+            await client.create("worker", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "boss"}))
+            await client.create("other", py_spec(tmp_path, "agents:echo"))
+            intruder = await client.create("intruder", py_spec(tmp_path, "agents:control_probe"))
+            add: dict[str, JsonValue] = {"op": "call_plugin", "plugin": "supervision", "method": "goal_add"}
+            authorized = await boss.run(call_plan(**add, args={"session": "worker", "text": "authorized"}))
+            unsupervised = await boss.run(call_plan(**add, args={"session": "other", "text": "unauthorized"}))
+            spoofed = await intruder.run(call_plan(**add, caller="boss", args={"session": "worker", "text": "spoofed"}))
+            goals = await sup(client, "boss", "goals", session="worker")
+    assert json.loads(str(authorized.output))["text"] == "authorized"
+    assert json.loads(str(unsupervised.output)) == {"error": "not_supervised"}
+    assert json.loads(str(spoofed.output)) == {"error": "not_supervised"}
+    assert isinstance(goals, list)
+    assert [goal["text"] for goal in goals if isinstance(goal, dict)] == ["authorized"]

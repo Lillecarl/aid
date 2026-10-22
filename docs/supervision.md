@@ -14,11 +14,13 @@ questions when no person is around.
 
 ## Firing
 
-- The daemon fires the supervisor at every supervised turn end, from `_end_turn`, and on live tool-loop
-  suspicions. Delivery reuses the accept→inbox→wake path (idle: new turn, live: next turn).
+- The bundled `supervision` plugin (`plugins/supervision/`) follows each supervised session's history and
+  fires the supervisor at every turn end it records (`Output` or `TurnError`), and on live tool-loop
+  suspicions. It messages the supervisor as the supervised session, so delivery is the accept→inbox→wake
+  path (idle: new turn, live: next turn), and a reply is a nudge.
 - Payload is small by design (cheap model): last-N history items clipped (order ~10 items / few k
   chars), open goals only, loop score as one line (difflib ratio over recent normalized Outputs,
-   threshold ~0.85 — advisory, computed daemon-side at turn end). Silence ("nothing to
+   threshold ~0.85 — advisory, computed by the plugin at turn end). Silence ("nothing to
   do, no nudge") is a valid supervisor verdict.
 - Turn-end similarity compares the latest two completed answers, separately from the clipped review tail.
   Tool-heavy turns do not hide the previous answer. Cancelled/missing answers reset the signal; an old
@@ -26,21 +28,21 @@ questions when no person is around.
 
 ## Live loop review
 
-- `aid.loops.ToolLoopDetector` watches the reliable worker tool events during an aid-started turn. Three
+- `supervision.loops.ToolLoopDetector` watches the tool calls the session's history records. Three
   identical completed calls, or three cycles of a short sequence (up to eight calls), raise a suspicion.
   Arguments, status and recorded output must all match; missing telemetry breaks the sequence rather than
   being interpreted as an unchanged result. The detector retains 24 completed steps and at most 128 pending
   calls. A repeated episode notifies once, including across rotations of an A/B cycle.
-- The daemon immediately messages the supervisor with the live turn id, the repeated sequence and tool
+- The plugin immediately messages the supervisor with the live turn id, the repeated sequence and tool
   call ids for history inspection. `supervision/` publishes `reason=suspected_tool_loop` for observation;
   the reliable inbox drives review. The detector never cancels a turn or claims repetition proves a loop.
 - The supervisor may leave useful repetition running, use `interrupt(session, turn)` when it judges the
   agent stuck, and use `send_message` for corrective instructions. A message alone waits until turn end.
-  `CancelSupervised` checks the supervision link and the daemon's current turn; the worker checks the turn
-  again. A delayed review cannot cancel newer work.
+  The plugin checks the supervision link and that the session is busy; the worker checks the turn again
+  (`Cancel(turn=…)`). A delayed review cannot cancel newer work.
 - Semantic/embedding signals are not implemented yet. A bounded per-session vector window can complement
   exact fingerprints without requiring a vector database. This first detector needs tool telemetry; it does
-  not detect silent model stalls or observe interactive turns started outside aid.
+  not detect silent model stalls.
 - No model-request budget is imposed by default. An explicit `max_requests` is a resource budget, not a
   loop detector. The LiteLM backend preserves available history and usage on failure/cancellation,
   closing unanswered tool calls as interrupted without replaying their potentially applied effects.
@@ -48,17 +50,17 @@ questions when no person is around.
 ## Supervisor session
 
 - Always LiteLM, pinned cheap model, short verdicts, dedicated `supervisor_tools`:
-  `supervised_history(session, limit)`, `supervised_search(session, query)` (new worker→daemon
-  `SearchSessionHistory` request; daemon enforces the supervision link), `goals(session)`,
+  `supervised_history(session, limit)`, `supervised_search(session, query)`, `goals(session)`,
   `goal_add` / `goal_done` / `goal_drop`, `answer_permission(request_id, option, text)`, plus the
   turn-scoped `interrupt(session, turn)` and builtin `send_message` for nudges. Each firing names its
-  subject, so one supervisor watches N.
+  subject, so one supervisor watches N. The tools call the plugin (`CallPlugin`); the daemon names the
+  caller from the session's connection, and the plugin enforces the supervision link.
 - Nudges ride `send_message`: attributed, replyable, zero new transport.
 
 ## Goals
 
-- `goals.json` beside the supervised session's `history.jsonl`. Daemon reads open items into every
-  firing payload; supervisor tools mutate. Goals are the source of done-ness; a DONE-style token in
+- `goals/<session>.json` in the plugin's directory. The plugin reads open items into every firing payload;
+  supervisor tools mutate. Goals are the source of done-ness; a DONE-style token in
   supervised output is a hint the supervisor verifies, never an event.
 
 ## Permission backstop

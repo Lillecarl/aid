@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from aid.loops import REPETITIONS, WINDOW, ToolLoopDetector
 from aid.protocol import ToolCall
+from plugins.supervision.loops import REPETITIONS, WINDOW, ToolLoopDetector
 
 
 def complete(detector: ToolLoopDetector, number: int, title: str = "read", *, output: str = "unchanged") -> bool:

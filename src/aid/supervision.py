@@ -6,50 +6,36 @@ permission requests its allow-list names when the person does not.
 
     boss = Agent("...", toolsets=[aid.supervisor_tools])
 
-A supervisor names its subjects in their specs (`supervisor`); the tools take the supervised session's name,
-and the daemon refuses any session its caller does not supervise. The caller is the worker's own session, from
-its environment — like `aid.send_message`, these tools work only in an aid LiteLM session.
+A supervisor names its subjects in their specs (`supervisor`); the tools take the supervised session's name and
+call the bundled `supervision` plugin, which refuses any session its caller does not supervise. The daemon names
+the caller from the session's own connection, so these tools work only inside an aid session.
 """
 
 from __future__ import annotations
 
 import functools
 import json
-import os
 from typing import TYPE_CHECKING, Final
 
 from aid.agent import ModelRetry, Toolset
 from aid.client import connect
-from aid.paths import ENV_SESSION
-from aid.protocol import (
-    AddGoal,
-    AidError,
-    AnswerSupervisedPermission,
-    CancelSupervised,
-    GetGoals,
-    GoalState,
-    HistoryPage,
-    SearchResults,
-    SetGoal,
-    SupervisedHistory,
-    SupervisedSearch,
-    history_line,
-)
+from aid.protocol import AidError, GoalState, HistoryPage, SearchResults, history_line
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from pydantic import JsonValue
+
     from aid.protocol import HistoryEntry
 
+PLUGIN: Final = "supervision"
 SUPERVISION_LINE_CHARS: Final = 400
 """Characters of one history line a supervision tool returns; longer lines clip with their excess counted."""
 
 
-def _supervisor() -> str:
-    name = os.environ.get(ENV_SESSION)
-    if not name:
-        raise AidError("no_supervision", "supervision tools work only in an aid LiteLM session")
-    return name
+async def _call(method: str, **args: JsonValue) -> JsonValue:
+    async with connect() as client:
+        return await client.call_plugin(PLUGIN, method, **args)
 
 
 def _lines(entries: list[HistoryEntry]) -> str:
@@ -66,10 +52,7 @@ def _lines(entries: list[HistoryEntry]) -> str:
 async def supervised_history(session: str, limit: int = 50) -> str:
     """The supervised session's recent history, newest last, one line per entry. Read this when a firing's
     clipped tail leaves questions open."""
-    async with connect() as client:
-        page = HistoryPage.model_validate(
-            await client.call(SupervisedHistory(supervisor=_supervisor(), session=session, limit=limit))
-        )
+    page = HistoryPage.model_validate(await _call("history", session=session, limit=limit))
     lines = _lines(page.entries)
     if page.total > len(page.entries):
         lines += f"\n… {page.total - len(page.entries)} older entries"
@@ -78,10 +61,7 @@ async def supervised_history(session: str, limit: int = 50) -> str:
 
 async def supervised_search(session: str, query: str, limit: int = 20) -> str:
     """History entries of the supervised session holding `query`, newest first, one line per entry."""
-    async with connect() as client:
-        results = SearchResults.model_validate(
-            await client.call(SupervisedSearch(supervisor=_supervisor(), session=session, query=query, limit=limit))
-        )
+    results = SearchResults.model_validate(await _call("search", session=session, query=query, limit=limit))
     lines = _lines(results.entries)
     if results.total > len(results.entries):
         lines += f"\n… {results.total - len(results.entries)} older matches"
@@ -90,8 +70,7 @@ async def supervised_search(session: str, query: str, limit: int = 20) -> str:
 
 async def goals(session: str) -> str:
     """Every goal of the supervised session, with ids and states, as JSON."""
-    async with connect() as client:
-        return json.dumps(await client.call(GetGoals(supervisor=_supervisor(), session=session)), indent=2)
+    return json.dumps(await _call("goals", session=session), indent=2)
 
 
 async def interrupt(session: str, turn: str) -> str:
@@ -99,8 +78,7 @@ async def interrupt(session: str, turn: str) -> str:
     judging a suspected loop; send_message can give the next turn corrective instructions. A stale review
     does not stop newer work. Only your own supervised sessions are eligible."""
     try:
-        async with connect() as client:
-            await client.call(CancelSupervised(supervisor=_supervisor(), session=session, turn=turn))
+        await _call("interrupt", session=session, turn=turn)
     except AidError as error:
         if error.code == "stale_turn":
             return "The reviewed turn is no longer running; newer work was left alone."
@@ -110,30 +88,17 @@ async def interrupt(session: str, turn: str) -> str:
 
 async def goal_add(session: str, text: str) -> str:
     """Name a goal for the supervised session. Returns the goal, with its id, as JSON."""
-    async with connect() as client:
-        return json.dumps(await client.call(AddGoal(supervisor=_supervisor(), session=session, text=text)), indent=2)
+    return json.dumps(await _call("goal_add", session=session, text=text), indent=2)
 
 
 async def goal_done(session: str, goal_id: str) -> str:
     """Mark the supervised session's goal done. Returns the goal as JSON."""
-    async with connect() as client:
-        return json.dumps(
-            await client.call(
-                SetGoal(supervisor=_supervisor(), session=session, goal_id=goal_id, state=GoalState.DONE)
-            ),
-            indent=2,
-        )
+    return json.dumps(await _call("goal_set", session=session, goal_id=goal_id, state=GoalState.DONE), indent=2)
 
 
 async def goal_drop(session: str, goal_id: str) -> str:
     """Drop the supervised session's goal. Returns the goal as JSON."""
-    async with connect() as client:
-        return json.dumps(
-            await client.call(
-                SetGoal(supervisor=_supervisor(), session=session, goal_id=goal_id, state=GoalState.DROPPED)
-            ),
-            indent=2,
-        )
+    return json.dumps(await _call("goal_set", session=session, goal_id=goal_id, state=GoalState.DROPPED), indent=2)
 
 
 async def answer_permission(
@@ -144,16 +109,7 @@ async def answer_permission(
     only an `ask_user` question takes. The first resolution wins: when a person answered first, the
     request is gone, and this says so instead of failing."""
     try:
-        async with connect() as client:
-            await client.call(
-                AnswerSupervisedPermission(
-                    supervisor=_supervisor(),
-                    session=session,
-                    request_id=request_id,
-                    option_id=option_id,
-                    text=text,
-                )
-            )
+        await _call("answer_permission", session=session, request_id=request_id, option_id=option_id, text=text)
     except AidError as error:
         if error.code == "no_pending":
             return "The request is gone: a person answered it first, or the turn moved on."

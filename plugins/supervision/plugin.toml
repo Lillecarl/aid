@@ -1,0 +1,3 @@
+version = "0.1.0"
+description = "Supervisors for sessions that name one: turn-end reviews, tool-loop suspicions, permission backstops, goals and nudge budgets."
+autostart = true
