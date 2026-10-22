@@ -148,13 +148,15 @@ async def test_a_revoked_hook_connection_fails_open_without_waiting_for_permissi
     server: tuple[Paths, RecordingLauncher], tmp_path: Path
 ) -> None:
     paths, launcher = server
-    with anyio.fail_after(5):
+    with anyio.fail_after(30):
         async with aid.connect(paths) as control:
             session = await control.create("agent", py_spec(tmp_path, "agents:echo"))
             old = launcher.launches[-1]
             await session.stop()
             async with agent_client(old):
-                code, output, _ = await run_hook(paths.control, "agent", "PermissionRequest")
+                # The bound is the claim: waiting on a permission would outlast it.
+                with anyio.fail_after(5):
+                    code, output, _ = await run_hook(paths.control, "agent", "PermissionRequest")
                 assert (code, output) == (0, "")
 
 

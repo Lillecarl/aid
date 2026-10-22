@@ -79,7 +79,10 @@ let
         # (pyedit's) fails to import with no certificates at all: give both a real bundle.
         export SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt
         # One run tests one browser; the sandbox runs chromium, developers repeat with --browser firefox.
-        python -m pytest -q -p no:cacheprovider --browser chromium ${lib.escapeShellArgs testArgs}
+        # One test worker per build core; NIX_BUILD_CORES=0 means all of them.
+        workers=''${NIX_BUILD_CORES:-0}
+        [ "$workers" -gt 0 ] || workers=auto
+        python -m pytest -q -p no:cacheprovider -n "$workers" --browser chromium ${lib.escapeShellArgs testArgs}
         touch $out
       '';
 in

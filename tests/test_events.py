@@ -137,7 +137,7 @@ class _OwnEvents(Paths):
 
 async def test_a_dropped_entry_is_fetched(daemon: Paths, tmp_path: Path) -> None:
     # A PUB drops what a slow reader cannot take; here the test publishes around a gap on purpose.
-    paths = _OwnEvents(daemon.runtime_dir, daemon.state_dir, fake=f"ipc://{tmp_path / 'fake-events.sock'}")
+    paths = _OwnEvents(daemon.runtime_dir, daemon.state_dir, fake=f"ipc://{daemon.runtime_dir / 'fake-events.sock'}")
     ctx = zmq.asyncio.Context()
     publisher = ctx.socket(zmq.PUB)
     publisher.bind(paths.events)

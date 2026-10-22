@@ -42,6 +42,8 @@ if TYPE_CHECKING:
 
 pytestmark = [
     pytest.mark.anyio,
+    # One worker under xdist: the run's one browser and one dex login, as the harness intends.
+    pytest.mark.xdist_group("browser"),
     needs_dex,
     pytest.mark.skipif(ASSETS is None, reason="AID_WEB_ASSETS is not set"),
 ]

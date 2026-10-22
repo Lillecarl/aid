@@ -218,7 +218,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
 
 ```sh
 nix develop --file . shell --command sh -c 'ruff format src tests plugins && ruff check src tests plugins && pyright'
-nix develop --file . shell --command python -m pytest -p no:cacheprovider
+nix develop --file . shell --command python -m pytest -p no:cacheprovider -n auto  # ~2 min; serial ~10
 nix build --file . tests      # the same suite in the sandbox, against a real pymux
 nix run --file . pyrefly -- check   # project mode: files and import roots come from pyrefly.toml
 ```

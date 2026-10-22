@@ -46,7 +46,7 @@ dependencies = [
 [project.optional-dependencies]
 # playwright drives the web UI through real browsers in tests/test_browser.py; the browsers themselves come
 # from nixpkgs (PLAYWRIGHT_BROWSERS_PATH), never from a download.
-test = ["playwright", "pytest", "trustme", "websockets"]
+test = ["playwright", "pytest", "pytest-xdist", "trustme", "websockets"]
 
 [project.scripts]
 aid = "aid.cli:main"
@@ -56,6 +56,7 @@ packages = ["src/aid"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--dist loadgroup"
 filterwarnings = ["error"]
 
 [tool.pyright]
