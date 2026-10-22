@@ -1194,7 +1194,12 @@ def _sees_disk[**P](tool: Callable[P, Awaitable[str]]) -> Callable[P, Awaitable[
         await coding.edit(lambda s: s.prune_unchanged())
         if not (staged := sorted({coding.edits.relpath(p) for p in coding.edits.staged()})):
             return result
-        return f"[not applied: staged edits to {', '.join(staged)} are not on disk, so this ran without them]\n{result}"
+        # pyedit keeps files it read in the same map, so a file changed on disk since it was read lands here
+        # too; only its base map (Lillecarl/pyedit#27) can tell the two apart.
+        return (
+            f"[not on disk: {', '.join(staged)} differs from what you staged or last read; this ran against the"
+            " disk. If you edited it, apply_edits; if not, something else changed it since you read it.]\n" + result
+        )
 
     return wrapper
 

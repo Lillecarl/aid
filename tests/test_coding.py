@@ -885,7 +885,25 @@ async def test_programs_say_when_staged_edits_are_not_on_disk(daemon: Paths, tmp
                 )
             )
     _read, clean, _edited, unapplied, _applied, applied = str(result.output).split("\n=====\n")
-    assert not clean.startswith("[not applied")
-    assert unapplied.startswith("[not applied: staged edits to b.py are not on disk")
+    assert not clean.startswith("[not on disk")
+    assert unapplied.startswith("[not on disk: b.py differs from what you staged or last read")
     assert "B = 1" in unapplied
-    assert not applied.startswith("[not applied") and "B = 2" in applied
+    assert not applied.startswith("[not on disk") and "B = 2" in applied
+
+
+async def test_programs_say_when_a_read_file_changed_on_disk(daemon: Paths, tmp_path: Path) -> None:
+    """pyedit keeps read files beside staged ones, so a file a formatter rewrote reads as differing too. The note
+    must not claim the agent edited it (Lillecarl/pyedit#27 is what can tell the two apart)."""
+    (tmp_path / "c.py").write_text("C=1\n")
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(
+                    ("read", {"path": "c.py"}),
+                    ("shell", {"command": "printf 'C = 1\\n' > c.py && cat c.py"}),
+                )
+            )
+    _read, changed = str(result.output).split("\n=====\n")
+    assert changed.startswith("[not on disk: c.py differs from what you staged or last read")
+    assert "if not, something else changed it since you read it" in changed
