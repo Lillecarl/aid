@@ -78,8 +78,12 @@ def wire_messages(messages: Sequence[ModelMessage], *, anthropic: bool = False) 
                         )
                 if text:
                     content.append({"type": "text", "text": text})
-            item: dict[str, Any] = {"role": "assistant", "content": content}
             calls = [p for p in message.parts if isinstance(p, ToolCallPart)]
+            if not content and not calls:
+                # Providers refuse an assistant message with neither (DeepSeek: 400). A failed request could
+                # store one, and that stored history must still send.
+                continue
+            item: dict[str, Any] = {"role": "assistant", "content": content}
             if calls:
                 item["tool_calls"] = [
                     {

@@ -140,9 +140,12 @@ def without_metadata(history: list[ModelMessage]) -> list[ModelMessage]:
 
 
 def interrupted_messages(messages: list[ModelMessage]) -> list[ModelMessage]:
-    """Close unanswered calls without replaying them. A failed or cancelled tool can already have effects."""
+    """Close unanswered calls without replaying them. A failed or cancelled tool can already have effects.
+    A response the provider never started is dropped: there is nothing in it to keep."""
     normalized: list[ModelMessage] = []
     for message in messages:
+        if isinstance(message, ModelResponse) and not message.parts:
+            continue
         calls = [part for part in message.parts if isinstance(part, ToolCallPart)]
         ids = [call.tool_call_id for call in calls]
         if calls and (any(not identity for identity in ids) or len(ids) != len(set(ids))):

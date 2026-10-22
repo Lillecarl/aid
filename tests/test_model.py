@@ -410,3 +410,14 @@ async def test_anthropic_stream_closes_clients_on_cancellation_and_failure(
     finally:
         for client in clients:
             await client.close()
+
+
+@pytest.mark.parametrize("anthropic", [False, True])
+def test_wire_skips_an_empty_assistant_message(anthropic: bool) -> None:
+    """Histories stored before failed requests stopped leaving one must still send."""
+    messages = [
+        ModelRequest(parts=[UserPromptPart("go")]),
+        ModelResponse(parts=[]),
+        ModelRequest(parts=[UserPromptPart("again")]),
+    ]
+    assert [item["role"] for item in wire_messages(messages, anthropic=anthropic)] == ["user", "user"]

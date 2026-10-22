@@ -364,3 +364,24 @@ async def test_in_turn_compaction_survives_turn_end(tmp_path: Path, cancel_after
     assert result.stop_reason == ("cancelled" if cancel_after_compaction else "end_turn")
     prompts = [part.content for m in await stored(tmp_path) for part in m.parts if isinstance(part, UserPromptPart)]
     assert prompts == ["[Summary of earlier work]\ndecisions kept", "second", "compact now"]
+
+
+async def test_a_request_that_fails_before_output_stores_no_empty_response(tmp_path: Path) -> None:
+    """A provider refusal (missing key, 400) leaves no assistant message behind: an empty one would be sent on
+    every later turn, and DeepSeek refuses those, so the session could never answer again."""
+
+    class RefusingModel(TestModel):
+        async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
+            raise RuntimeError("missing credentials")
+            yield StreamDelta()  # pragma: no cover -- makes this a generator
+
+    async def emit(event: SessionEvent) -> None:
+        pass
+
+    async with backend(tmp_path, Agent(RefusingModel())) as session:
+        with pytest.raises(RuntimeError, match="missing credentials"):
+            await session.prompt("go", emit)
+    history = await stored(tmp_path)
+    assert not any(isinstance(m, ModelResponse) and not m.parts for m in history)
+    async with backend(tmp_path, Agent(TestModel(call_tools=[])), history=history) as resumed:
+        assert (await resumed.prompt("again", emit)).stop_reason == "end_turn"
