@@ -11,8 +11,10 @@ from aid.cli import (
     _preload,  # pyright: ignore[reportPrivateUsage]
     _spec,  # pyright: ignore[reportPrivateUsage]
     _split_agent_command,  # pyright: ignore[reportPrivateUsage]
+    _tool_line,  # pyright: ignore[reportPrivateUsage]
 )
 from aid.launcher import PRELOAD
+from aid.protocol import ToolCall
 from aid.spec import ClaudeSdkSpec, ClaudeTtySpec, LiteLMSpec, McpHttp, McpStdio, PermissionMode
 
 if TYPE_CHECKING:
@@ -125,3 +127,15 @@ def test_mcp_config_files(tmp_path: Path) -> None:
         McpStdio(name="files", command=["mcp-files", "/"]),
         McpHttp(name="web", url="http://x/mcp"),
     ]
+
+
+def test_tool_line_names_updates_by_their_start() -> None:
+    """An update carries only the call id; the line still names the tool, and a failure shows why."""
+    titles: dict[str, str] = {}
+    start = ToolCall(tool_call_id="c1", title="shell", status="in_progress", input={"command": "ruff  check\nsrc"})
+    assert _tool_line(start, titles) == '[tool] shell in_progress {"command": "ruff check\\nsrc"}'
+    assert _tool_line(ToolCall(tool_call_id="c1", status="completed", output="ok"), titles) == "[tool] shell completed"
+    failed = ToolCall(tool_call_id="c1", status="failed", output="exit 1:\n" + "x" * 200)
+    line = _tool_line(failed, titles)
+    assert line.startswith("[tool] shell failed exit 1: xxx") and line.endswith("…")
+    assert _tool_line(ToolCall(tool_call_id="other", status="completed"), titles) == "[tool] other completed"

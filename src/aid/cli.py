@@ -271,6 +271,7 @@ def _parser() -> argparse.ArgumentParser:
     prompt = sub.add_parser("prompt", help="send a prompt and stream the answer")
     prompt.add_argument("name")
     prompt.add_argument("text", help="prompt text, or - to read stdin")
+    prompt.add_argument("-v", "--verbose", action="store_true", help="tool calls on stderr as they start and end")
 
     message = sub.add_parser("message", help="leave a message for a session, which wakes it")
     message.add_argument("name")
@@ -424,7 +425,24 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
     )
 
 
-def _history_line(entry: HistoryEntry) -> str:
+BRIEF = 120
+
+
+def _tool_line(call: ToolCall, titles: dict[str, str]) -> str:
+    """Updates carry only the call id, so `titles` keeps each call's name from its first event."""
+    if call.title:
+        titles[call.tool_call_id] = call.title
+    parts = ["[tool]", titles.get(call.tool_call_id, call.tool_call_id)]
+    if call.status:
+        parts.append(call.status)
+    detail = call.output if call.status == "failed" else call.input
+    if detail is not None:
+        text = " ".join((detail if isinstance(detail, str) else json.dumps(detail)).split())
+        parts.append(text if len(text) <= BRIEF else text[: BRIEF - 1] + "…")
+    return " ".join(parts)
+
+
+def _history_line(entry: HistoryEntry, titles: dict[str, str]) -> str:
     item = entry.item
     match item:
         case PromptEntry():
@@ -434,7 +452,7 @@ def _history_line(entry: HistoryEntry) -> str:
         case ThoughtDelta():
             body = f"(thinking) {item.text}"
         case ToolCall():
-            body = f"[tool] {item.title or item.tool_call_id} {item.status or ''}".rstrip()
+            body = _tool_line(item, titles)
         case Output():
             body = (
                 f"[{item.stop_reason}]"
@@ -488,8 +506,9 @@ async def _client_command(args: argparse.Namespace) -> None:
                 page = await client.session(args.name).history(before=args.before, limit=args.limit)
                 if page.has_older and not args.json:
                     print(f"… {page.entries[0].seq if page.entries else page.total} older entries", file=sys.stderr)
+                titles: dict[str, str] = {}
                 for entry in page.entries:
-                    print(entry.model_dump_json() if args.json else _history_line(entry))
+                    print(entry.model_dump_json() if args.json else _history_line(entry, titles))
             case "agents":
                 catalog = await client.agents()
                 for agent in catalog.agents:
@@ -500,9 +519,20 @@ async def _client_command(args: argparse.Namespace) -> None:
                     print(f"problem: {problem}", file=sys.stderr)
             case "prompt":
                 text = sys.stdin.read() if args.text == "-" else args.text
+                titles: dict[str, str] = {}
+                written = after_tool = False
                 async for event in client.session(args.name).stream(text):
                     if isinstance(event, TextDelta):
+                        # Each model response streams its own text: without a break they run together.
+                        if written and after_tool:
+                            print("\n", flush=True)
                         print(event.text, end="", flush=True)
+                        written, after_tool = True, False
+                    elif isinstance(event, ToolCall):
+                        if args.verbose:
+                            lead = "\n" if written and not after_tool else ""
+                            print(lead + _tool_line(event, titles), file=sys.stderr, flush=True)
+                        after_tool = True
                     elif isinstance(event, PermissionRequest | PermissionDecision):
                         print(f"\n{_permission_line(event)}", file=sys.stderr, flush=True)
                     elif isinstance(event, Output):
