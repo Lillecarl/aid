@@ -169,8 +169,8 @@ class AnswerPermission(_Request):
     plugin: str | None = None
     """The plugin answering. The daemon sets it from the connection's key, whatever the sender put here."""
     supervisor: str | None = None
-    """The supervisor answering. The daemon sets it from the verified supervision link, whatever the sender
-    put here: a worker never claims it, the same rule as `plugin`."""
+    """The supervisor answering, which only a plugin granted `supervise` names: the daemon clears it for anyone
+    else."""
 
 
 class Hook(_Request):
@@ -219,6 +219,18 @@ class ServeCalls(_Request):
     A restarted daemon knows no connection, so a serving plugin sends this again periodically."""
 
     op: Literal["serve_calls"] = "serve_calls"
+    hooks: list[Literal["message"]] = Field(default_factory=list[Literal["message"]])
+    """What the daemon asks this plugin before doing it (needs `supervise`). `message`: each `SendMessage`, before
+    it is accepted; failing the invocation refuses the message with the plugin's code. A plugin that times out or
+    is gone lets the message through."""
+
+
+class MessageHook(_Message):
+    """A `message` hook invocation's args: the message the daemon is about to accept."""
+
+    to: str
+    sender: str | None
+    text: str
 
 
 class CallResult(_Request):
@@ -382,6 +394,29 @@ class SupervisionEvent(_Message):
     goals: SupervisionGoals | None = None
 
 
+class GetSpec(_Request):
+    """A session's spec. Specs hold env values and headers, often credentials: only `supervise` reads them. Done's
+    data is the spec."""
+
+    op: Literal["spec"] = "spec"
+    session: str
+
+
+class SetAttention(_Request):
+    """Set what a session asks a person to look at, or clear it with None."""
+
+    op: Literal["attention"] = "attention"
+    session: str
+    text: str | None
+
+
+class PublishSupervision(_Request):
+    """Publish `event` on its session's supervision topic (`aid.events.supervision_topic`)."""
+
+    op: Literal["publish_supervision"] = "publish_supervision"
+    event: SupervisionEvent
+
+
 type Request = Annotated[
     GetStatus
     | GetScreen
@@ -413,7 +448,10 @@ type Request = Annotated[
     | AnswerSupervisedPermission
     | CallPlugin
     | ServeCalls
-    | CallResult,
+    | CallResult
+    | GetSpec
+    | SetAttention
+    | PublishSupervision,
     Field(discriminator="op"),
 ]
 
@@ -945,6 +983,8 @@ class Invocation(_Message):
     caller: str | None
     method: str
     args: dict[str, JsonValue]
+    hook: Literal["message"] | None = None
+    """Set for a hook (`ServeCalls.hooks`): args are its model, such as `MessageHook`, and there is no caller."""
 
 
 type Reply = Annotated[

@@ -29,7 +29,7 @@ from aid.inbox import INBOX_FILE, Inbox
 from aid.launcher import CommandLauncher, WorkerArgs
 from aid.loops import LoopEvidence, ToolLoopDetector
 from aid.paths import hook_socket
-from aid.plugins import PLUGIN_FILE, PluginSpec
+from aid.plugins import PLUGIN_FILE, Grant, PluginSpec
 from aid.protocol import (
     Activity,
     AddGoal,
@@ -51,6 +51,7 @@ from aid.protocol import (
     GetHistory,
     GetPane,
     GetScreen,
+    GetSpec,
     GetStatus,
     GetSummary,
     Goal,
@@ -63,6 +64,7 @@ from aid.protocol import (
     ListPlugins,
     ListSessions,
     MessageEntry,
+    MessageHook,
     Notify,
     Observed,
     Output,
@@ -71,6 +73,7 @@ from aid.protocol import (
     PermissionEvent,
     PermissionRequest,
     Prompt,
+    PublishSupervision,
     ReceiveMessages,
     RemovePlugin,
     SearchResults,
@@ -79,6 +82,7 @@ from aid.protocol import (
     SessionInfo,
     SessionInfosAdapter,
     SessionStatus,
+    SetAttention,
     SetGoal,
     Started,
     StartFailed,
@@ -101,6 +105,7 @@ from aid.protocol import (
     decode_request,
     encode,
     history_line,
+    to_json,
 )
 from aid.spec import (
     BUILTIN_MCP_SERVER,
@@ -524,6 +529,8 @@ class Daemon:
         """Permission backstops still waiting, by request id: the supervised session and their cancel scope."""
         self._call_targets: dict[str, _Peer] = {}
         """The connection each plugin serves its calls on, from its latest `ServeCalls`."""
+        self._hooks: dict[str, frozenset[str]] = {}
+        """What each serving plugin hooks, from its latest `ServeCalls`."""
         self._calls: dict[str, tuple[str, MemoryObjectSendStream[CallResult]]] = {}
         """Calls waiting on a plugin's answer, by invocation id: the plugin and where its answer goes."""
 
@@ -764,7 +771,7 @@ class Daemon:
                 message = f"plugin {name!r} may not send {request.op!r}"
                 await client.send(encode(Failure(id=request.id, code="forbidden", message=message)))
                 continue
-            if isinstance(request, SendMessage):
+            if isinstance(request, SendMessage) and not (request.sender and Grant.SUPERVISE in spec.grants):
                 request = request.model_copy(update={"sender": plugins.sender(name)})
             self._tg.start_soon(self._handle, client, request)
 
@@ -889,8 +896,9 @@ class Daemon:
                 session = self._session(request.session)
                 pending = self._checked_pending(session, request.request_id, request.option_id, request.text)
                 self._routes[request.id] = _Route(client, session.name)
+                supervisor = request.supervisor if self._granted(client, Grant.SUPERVISE) else None
                 await self._send_worker(
-                    session, request.model_copy(update={"plugin": client.plugin, "supervisor": None})
+                    session, request.model_copy(update={"plugin": client.plugin, "supervisor": supervisor})
                 )
                 return None
             case AnswerSupervisedPermission():
@@ -994,6 +1002,7 @@ class Daemon:
                 self._autostarted.discard(request.spec.name)
                 self._unwanted.discard(request.spec.name)
                 self._call_targets.pop(request.spec.name, None)
+                self._hooks.pop(request.spec.name, None)
                 await self._reconcile_plugins()
                 return Done(id=request.id)
             case ListPlugins():
@@ -1005,6 +1014,7 @@ class Daemon:
                     self._autostarted.discard(request.name)
                     self._unwanted.add(request.name)
                 self._call_targets.pop(request.name, None)
+                self._hooks.pop(request.name, None)
                 await anyio.to_thread.run_sync(shutil.rmtree, self._paths.plugin_dir(request.name), True)
                 await self._reconcile_plugins()
                 return Done(id=request.id)
@@ -1024,7 +1034,21 @@ class Daemon:
             case ServeCalls():
                 if client.plugin is None:
                     raise AidError("forbidden", "only a plugin serves calls")
+                if request.hooks and not self._granted(client, Grant.SUPERVISE):
+                    raise AidError("forbidden", f"plugin {client.plugin!r} hooks nothing without supervise")
                 self._call_targets[client.plugin] = client
+                self._hooks[client.plugin] = frozenset(request.hooks)
+                return Done(id=request.id)
+            case GetSpec():
+                return Done(id=request.id, data=to_json(self._session(request.session).spec))
+            case SetAttention():
+                self._session(request.session).attention = request.text
+                return Done(id=request.id)
+            case PublishSupervision():
+                self._session(request.event.session)
+                await self._publish(
+                    events.supervision_topic(request.event.session), request.event.model_dump_json().encode()
+                )
                 return Done(id=request.id)
             case CallResult():
                 waiting = self._calls.get(request.call)
@@ -1034,20 +1058,46 @@ class Daemon:
                 waiting[1].send_nowait(request)
                 return Done(id=request.id)
 
+    def _granted(self, client: _Peer, grant: Grant) -> bool:
+        spec = self._keys.plugins.get(client.plugin) if client.plugin is not None else None
+        return spec is not None and grant in spec.grants
+
     async def _call_plugin(self, request: CallPlugin) -> JsonValue:
-        target = self._call_targets.get(request.plugin)
-        if target is None or request.plugin not in self._keys.plugins:
-            raise AidError("no_plugin", f"no plugin {request.plugin!r} serves calls")
+        return await self._invoke(
+            request.plugin, Invocation(id="", caller=request.caller, method=request.method, args=request.args)
+        )
+
+    async def _gate_message(self, request: SendMessage) -> None:
+        """Ask every plugin hooking messages before accepting `request`: one refusal refuses it. A plugin that is
+        gone or silent lets it through, so a broken plugin never stops messages."""
+        hook = MessageHook(to=request.to, sender=request.sender, text=request.text)
+        for plugin, hooked in list(self._hooks.items()):
+            if "message" not in hooked:
+                continue
+            invocation = Invocation(
+                id="", caller=None, method="message", args=hook.model_dump(mode="json"), hook="message"
+            )
+            try:
+                await self._invoke(plugin, invocation)
+            except AidError as error:
+                if error.code not in {"no_plugin", "plugin_timeout"}:
+                    raise
+                log.warning("message_hook_skipped", plugin=plugin, error=error.message)
+
+    async def _invoke(self, plugin: str, invocation: Invocation) -> JsonValue:
+        """Send `invocation` to `plugin` under a fresh id and wait for its answer."""
+        target = self._call_targets.get(plugin)
+        if target is None or plugin not in self._keys.plugins:
+            raise AidError("no_plugin", f"no plugin {plugin!r} serves calls")
         call = uuid.uuid4().hex
         send, receive = anyio.create_memory_object_stream[CallResult](1)
-        self._calls[call] = (request.plugin, send)
+        self._calls[call] = (plugin, send)
         try:
-            invocation = Invocation(id=call, caller=request.caller, method=request.method, args=request.args)
-            await target.send(encode(invocation))
+            await target.send(encode(invocation.model_copy(update={"id": call})))
             with anyio.fail_after(PLUGIN_CALL_TIMEOUT):
                 result = await receive.receive()
         except TimeoutError:
-            raise AidError("plugin_timeout", f"plugin {request.plugin!r} did not answer {request.method!r}") from None
+            raise AidError("plugin_timeout", f"plugin {plugin!r} did not answer {invocation.method!r}") from None
         finally:
             self._calls.pop(call, None)
             send.close()
@@ -1109,6 +1159,7 @@ class Daemon:
             raise AidError("to_self", f"{session.name!r} cannot message itself")
         if session.uses_channel and not session.spec.aid_tools:
             raise AidError("cannot_receive", f"{session.name!r} has aid_tools off, so nothing reads its messages")
+        await self._gate_message(request)
         nudge = request.sender is not None and session.spec.supervisor == request.sender
         if nudge:
             self._check_nudge(session, request.text)

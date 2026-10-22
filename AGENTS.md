@@ -89,7 +89,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   A `wss://` worker sets WSS_HOSTNAME: without it libzmq accepts a trusted certificate for any name. Domains:
   workers, plugins, plugin events (wants `read`).
 - `src/aid/plugins.py` — plugins: a registered CURVE public key + grants (`read`, `prompt`, `message`,
-  `permissions`, `manage`; `NEEDS` maps op → grant, unlisted ops no plugin may send). Sockets `plugins.sock`
+  `permissions`, `manage`, `supervise`; `NEEDS` maps op → grant, unlisted ops no plugin may send). Sockets `plugins.sock`
   (ROUTER) and `plugin-events.sock` (PUB), both CURVE; `_plugin_loop` checks each request against the grants as they
   are now → `forbidden`. The daemon stamps what a plugin cannot claim: a message's sender is `plugin:<name>`,
   `AnswerPermission.plugin` is the connection's (None on control) → `PermissionDecision.by=plugin` + name.
@@ -97,7 +97,11 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `ServeCalls` renewed every `SERVE_RENEW`, no grant needed); `CallPlugin` from a session tool or control gets
   `caller` stamped (agent connection → its session; control → as sent, None = operator), goes out as an
   `Invocation` under a daemon id, answered by `CallResult` from that plugin only, bounded by `PLUGIN_CALL_TIMEOUT`.
-  Plugins themselves may not send `CallPlugin`. The plugin authorizes by `caller`.
+  Plugins themselves may not send `CallPlugin`. The plugin authorizes by `caller`. `supervise` (trusted: watching
+  over sessions) adds `spec`, `attention`, `publish_supervision`, the `message` hook (`Plugin.on_message`, asked
+  before each `SendMessage` is accepted; refusal = its code, silence/absence = pass), a kept `SendMessage.sender`
+  and `AnswerPermission.supervisor`. plugin.toml `autostart = true`: hosted with declared grants, registered in
+  memory each start; removal keeps it off for the daemon's lifetime.
   Registry ops (`add_plugin`, `plugins`, `remove_plugin`) only on control.sock, never in `PageRequest`. State:
   `state_dir/plugins/<name>/plugin.json` + `secret` (0600, `aid plugin add` makes it); the daemon writes its public
   key to `runtime_dir/server.key` at start (new each start). Client: `aid.connect(plugin=NAME)`,

@@ -23,7 +23,7 @@ export type PermissionMode = "allow" | "deny" | "ask";
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Grant".
  */
-export type Grant = "read" | "prompt" | "message" | "permissions" | "manage";
+export type Grant = "read" | "prompt" | "message" | "permissions" | "manage" | "supervise";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "AgentKind".

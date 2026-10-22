@@ -36,7 +36,7 @@ import os
 from abc import ABC, abstractmethod
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, ClassVar, Final
+from typing import TYPE_CHECKING, Annotated, ClassVar, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
@@ -67,6 +67,9 @@ class Grant(StrEnum):
     """Answer a session's permission requests; the history names the plugin."""
     MANAGE = "manage"
     """Create, start, stop and delete sessions."""
+    SUPERVISE = "supervise"
+    """Watch over sessions: read their specs, gate messages to them, set their attention, publish on their
+    supervision topic, answer permissions and send messages as a session it names."""
 
 
 NEEDS: Final[dict[str, Grant]] = {
@@ -83,6 +86,9 @@ NEEDS: Final[dict[str, Grant]] = {
     "start": Grant.MANAGE,
     "stop": Grant.MANAGE,
     "delete": Grant.MANAGE,
+    "spec": Grant.SUPERVISE,
+    "attention": Grant.SUPERVISE,
+    "publish_supervision": Grant.SUPERVISE,
 }
 """The grant each request needs, by op. No grant covers the rest: a worker's (`hook`), a channel's (`receive`), the
 pane's (`screen`, `pane`) and the registry's own."""
@@ -151,9 +157,19 @@ class Plugin(ABC):
         `aid.AidError` to fail with its code. Only a plugin that overrides this serves calls."""
         raise NotImplementedError
 
+    async def on_message(self, to: str, sender: str | None, text: str) -> None:
+        """Before the daemon accepts a message for session `to`: raise `aid.AidError` to refuse it with that code.
+        Needs `supervise`. Only a plugin that overrides this is asked."""
+        return
+
 
 def serves_calls(plugin: Plugin) -> bool:
     return type(plugin).call is not Plugin.call
+
+
+def hooks(plugin: Plugin) -> list[Literal["message"]]:
+    """The hooks `plugin` overrides (`ServeCalls.hooks`)."""
+    return ["message"] if type(plugin).on_message is not Plugin.on_message else []
 
 
 def plugins_path(env: Mapping[str, str] | None = None) -> list[Path]:

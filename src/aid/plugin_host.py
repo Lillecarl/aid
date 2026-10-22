@@ -25,17 +25,19 @@ from aid import zap
 from aid.catalog import listing
 from aid.client import spawn_plugin_client
 from aid.discovery import Catalog, discover
-from aid.plugins import PluginSpec, plugins_path, serves_calls
+from aid.plugins import PluginSpec, hooks, plugins_path, serves_calls
+from aid.protocol import MessageHook
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
 
     import zmq.asyncio
+    from pydantic import JsonValue
 
     from aid.client import Client
     from aid.plugins import Grant, Plugin
-    from aid.protocol import AgentCatalog
+    from aid.protocol import AgentCatalog, Invocation
 
 log = structlog.get_logger(__name__)
 
@@ -102,12 +104,24 @@ def _grant_flags(grants: frozenset[Grant]) -> str:
 
 
 async def run(plugin: Plugin, client: Client) -> None:
-    """Run `plugin` on `client`, serving its calls beside `run` when it answers any (`Plugin.call`)."""
-    if not serves_calls(plugin):
+    """Run `plugin` on `client`, serving its calls and hooks beside `run` when it overrides any (`Plugin.call`,
+    `Plugin.on_message`)."""
+    hooked = hooks(plugin)
+    if not serves_calls(plugin) and not hooked:
         await plugin.run(client)
         return
+
+    async def answer(invocation: Invocation) -> JsonValue:
+        match invocation.hook:
+            case "message":
+                message = MessageHook.model_validate(invocation.args)
+                await plugin.on_message(message.to, message.sender, message.text)
+                return None
+            case None:
+                return await plugin.call(invocation.caller, invocation.method, invocation.args)
+
     async with anyio.create_task_group() as tg:
-        tg.start_soon(client.serve_calls, plugin.call)
+        tg.start_soon(client.serve_calls, answer, hooked)
         await plugin.run(client)
         tg.cancel_scope.cancel()
 

@@ -11,7 +11,7 @@ import math
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, overload
+from typing import TYPE_CHECKING, Final, Literal, overload
 
 import anyio
 import zmq
@@ -70,7 +70,7 @@ from aid.protocol import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
 
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
@@ -172,7 +172,7 @@ async def daemon_call[T](call: Awaitable[T], *, name: str = "aid") -> T:
 SERVE_RENEW: Final = 30.0
 """Seconds between a serving plugin's `ServeCalls`: a restarted daemon routes its calls again within this."""
 
-type CallHandler = Callable[[str | None, str, dict[str, JsonValue]], Awaitable[JsonValue]]
+type CallHandler = Callable[[Invocation], Awaitable[JsonValue]]
 
 
 async def register_plugin(
@@ -306,30 +306,29 @@ class Client:
             elif isinstance(reply, Invocation) and self._invocations is not None:
                 self._invocations.send_nowait(reply)
 
-    async def serve_calls(self, handler: CallHandler) -> None:
-        """As a plugin, answer the calls the daemon routes to it with `handler`, each in a task of its own, until
-        cancelled. A handler's `AidError` fails the call with its code; any other exception, as `plugin_failed`."""
+    async def serve_calls(self, handler: CallHandler, hooks: Sequence[Literal["message"]] = ()) -> None:
+        """As a plugin, answer the calls and `hooks` the daemon routes to it with `handler`, each in a task of its
+        own, until cancelled. A handler's `AidError` fails the call with its code; any other exception, as
+        `plugin_failed`."""
         send, receive = anyio.create_memory_object_stream[Invocation](math.inf)
         self._invocations = send
         try:
             async with anyio.create_task_group() as tg, receive:
-                tg.start_soon(self._renew_serving)
+                tg.start_soon(self._renew_serving, list(hooks))
                 async for invocation in receive:
                     tg.start_soon(self._answer, handler, invocation)
         finally:
             self._invocations = None
             send.close()
 
-    async def _renew_serving(self) -> None:
+    async def _renew_serving(self, hooks: list[Literal["message"]]) -> None:
         while True:
-            await daemon_call(self.call(ServeCalls()))
+            await daemon_call(self.call(ServeCalls(hooks=hooks)))
             await anyio.sleep(SERVE_RENEW)
 
     async def _answer(self, handler: CallHandler, invocation: Invocation) -> None:
         try:
-            result = CallResult(
-                call=invocation.id, data=await handler(invocation.caller, invocation.method, invocation.args)
-            )
+            result = CallResult(call=invocation.id, data=await handler(invocation))
         except AidError as error:
             result = CallResult(call=invocation.id, code=error.code, message=error.message)
         except Exception as error:

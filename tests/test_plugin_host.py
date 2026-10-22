@@ -17,7 +17,7 @@ from aid.client import local_plugin_endpoints, register_plugin
 from aid.daemon import Daemon
 from aid.discovery import Catalog
 from aid.plugins import INPROC_PLUGIN_EVENTS, INPROC_PLUGINS, Grant, PluginSpec
-from aid.protocol import AidError, CallPlugin, CallResult, MessageEntry, ServeCalls
+from aid.protocol import AidError, CallPlugin, CallResult, GetSpec, MessageEntry, ServeCalls, SetAttention
 from tests.conftest import py_spec
 
 if TYPE_CHECKING:
@@ -184,6 +184,57 @@ async def test_only_the_called_plugin_answers_a_call(paths: Paths, launcher: For
                     tg.cancel_scope.cancel()
                 with pytest.raises(AidError, match="no_plugin"):
                     await control.call_plugin("other", "echo")
+
+
+class Gate(aid.Plugin):
+    async def run(self, client: aid.Client) -> None:
+        await anyio.sleep_forever()
+
+    async def on_message(self, to: str, sender: str | None, text: str) -> None:
+        if text == "refuse me":
+            raise AidError("gated", f"{sender} may not tell {to} that")
+
+
+async def test_a_supervising_plugin_gates_messages_and_watches_sessions(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path
+) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with _serving(paths, launcher) as daemon, aid.connect(paths) as control:
+            await control.create("echo", py_spec(tmp_path, "agents:echo"))
+            await register_plugin(control, paths, "gate", frozenset({Grant.SUPERVISE, Grant.MESSAGE}))
+            async with daemon.plugin_client("gate") as gate, anyio.create_task_group() as tg:
+                tg.start_soon(plugin_host.run, Gate(), gate)
+                while not daemon._hooks.get("gate"):  # pyright: ignore[reportPrivateUsage]  # noqa: ASYNC110
+                    await anyio.sleep(0.01)
+                with pytest.raises(AidError, match="gated: boss may not tell echo that"):
+                    await control.send_message("echo", "refuse me", sender="boss")
+                await control.send_message("echo", "fine", sender="boss")
+                await gate.send_message("echo", "as the boss", sender="boss")
+                spec = await gate.call(GetSpec(session="echo"))
+                assert isinstance(spec, dict)
+                assert spec["target"] == "agents:echo"
+                await gate.call(SetAttention(session="echo", text="look here"))
+                assert (await control.session("echo").status()).attention == "look here"
+                tg.cancel_scope.cancel()
+            history = await control.session("echo").history()
+    messages = [(e.item.sender, e.item.text) for e in history.entries if isinstance(e.item, MessageEntry)]
+    assert messages == [("boss", "fine"), ("boss", "as the boss")]
+
+
+async def test_only_supervise_hooks_messages_or_reads_specs(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path
+) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with _serving(paths, launcher) as daemon, aid.connect(paths) as control:
+            await control.create("echo", py_spec(tmp_path, "agents:echo"))
+            await register_plugin(control, paths, "reader", frozenset({Grant.READ, Grant.MESSAGE}))
+            async with daemon.plugin_client("reader") as reader:
+                with pytest.raises(AidError, match="hooks nothing without supervise"):
+                    await reader.call(ServeCalls(hooks=["message"]))
+                with pytest.raises(AidError, match="may not send 'spec'"):
+                    await reader.call(GetSpec(session="echo"))
+                with pytest.raises(AidError, match="may not send 'attention'"):
+                    await reader.call(SetAttention(session="echo", text="x"))
 
 
 STUB_PLUGIN = '''"""A stub hosted plugin: pings, then falls over."""
