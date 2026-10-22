@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import structlog
 
@@ -24,6 +24,9 @@ from aid.paths import ENV_LOG_JSON
 
 if TYPE_CHECKING:
     from structlog.typing import Processor
+
+QUIET: Final = ("httpx", "httpcore")
+"""Loggers held to warnings: httpx logs each request URL at info, and Telegram's carry the bot token."""
 
 
 def configure_logging(level: int = logging.INFO) -> None:
@@ -57,6 +60,8 @@ def configure_logging(level: int = logging.INFO) -> None:
     if not any(isinstance(h.formatter, structlog.stdlib.ProcessorFormatter) for h in root.handlers):
         root.addHandler(handler)
     root.setLevel(level)
+    for name in QUIET:
+        logging.getLogger(name).setLevel(max(level, logging.WARNING))
     structlog.configure(
         processors=shared,
         logger_factory=structlog.stdlib.LoggerFactory(),
