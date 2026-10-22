@@ -102,6 +102,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   on list changes), `serve.py` (bare text in session channels as messages, `!`-commands everywhere,
   taps as new messages or in-place rewrites, settled notices to session channels). Custom ids hold
   `action:session` directly (100 bytes); Discord messages clip at 1900/2000.
+- `plugins/skills/` — Agent Skills, bundled: an `InstructionsProvider` lists each skill's name and description, the
+  `skill` tool loads a body or file. Spec-checked frontmatter (YAML); project `.aid|.agents|.claude/skills` up to the
+  git root, then `AID_SKILLS_PATH`, then the global dirs. Plugin modules may offer providers and tools; sessions get
+  them through `aid.catalog.session_catalog` (agents path wins a name).
 - `src/aid/backends/` — `acp.py`, `litelm.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON,
   plus the built-in `aid` server (`session_servers`). claude-agent-acp restarts its query when `session/load` gets

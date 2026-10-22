@@ -19,8 +19,9 @@ from pydantic import ValidationError
 from pydantic_core import to_jsonable_python
 
 from aid.agent import Agent, ModelRetry, Tool, Toolset
-from aid.agents import ENV_AGENTS_PATH, Catalog, agents_path, discover
+from aid.agents import ENV_AGENTS_PATH, Catalog
 from aid.backends.permissions import PermissionWaits
+from aid.catalog import session_catalog
 from aid.coding import CODING, OUTPUTS_DIR, Coding
 from aid.instructions import compose, environment
 from aid.messages import (
@@ -37,8 +38,6 @@ from aid.messages import (
     UserPromptPart,
 )
 from aid.model import LiteLMModel, Model, ModelInfo, RequestUsage, accumulate
-from aid.plugins import discover as discover_plugins
-from aid.plugins import plugins_path
 from aid.protocol import (
     AidError,
     Output,
@@ -197,13 +196,7 @@ def load_target(target: str) -> Agent:
 
 
 def _session_catalog() -> Catalog:
-    catalog = discover(agents_path())
-    plugins = discover_plugins(plugins_path())
-    catalog.problems.extend(plugins.problems)
-    for name, tool in plugins.tools.items():
-        # On a name clash the agents path wins: it is the established tool source.
-        catalog.tools.setdefault(name, tool)
-    return catalog
+    return session_catalog()
 
 
 def load_named(catalog: Catalog, name: str) -> Agent:

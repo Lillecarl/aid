@@ -54,6 +54,7 @@ from aid.tools import McpTool, tool_of
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from aid.agents import InstructionsProvider
     from aid.client import Client
 
 PLUGIN_FILE: Final = "plugin.json"
@@ -162,6 +163,8 @@ class Plugin(ABC):
 class PluginCatalog:
     plugins: dict[str, type[Plugin]] = field(default_factory=dict[str, "type[Plugin]"])
     tools: dict[str, McpTool] = field(default_factory=dict[str, McpTool])
+    providers: dict[str, type[InstructionsProvider]] = field(default_factory=dict[str, "type[InstructionsProvider]"])
+    """Instruction providers a plugin module offers sessions, beside its tools."""
     declined: dict[str, str] = field(default_factory=dict[str, str])
     """Plugins that gated themselves out through `available`, by name with their reason: not applicable, not broken."""
     problems: list[str] = field(default_factory=list[str])
@@ -202,6 +205,9 @@ def discover(paths: Sequence[Path]) -> PluginCatalog:
     """Import every module on `paths` and collect the plugins and tools each registers. Imports run the modules'
     code: call it in a process that may run user code (`aid plugin run`, `python -m aid.plugin_catalog`), or in
     the daemon at startup, where each module loads guarded and a failure becomes a problem, never a refusal."""
+    # Not at module level: aid.agents imports aid.builtin_tools, which imports aid.client, which imports this.
+    from aid.agents import InstructionsProvider  # noqa: PLC0415
+
     catalog = PluginCatalog()
     seen: dict[str, str] = {}
     seen_tools: dict[str, str] = {}
@@ -219,6 +225,14 @@ def discover(paths: Sequence[Path]) -> PluginCatalog:
             for obj in vars(module).values():
                 if (tool := tool_of(obj)) is not None:
                     _add_tool(catalog, seen_tools, module.__name__, f"{module.__name__} in {directory}", tool)
+                    continue
+                if isinstance(obj, type) and issubclass(obj, InstructionsProvider):
+                    if obj.__module__ == module.__name__ and not inspect.isabstract(obj):
+                        name = obj.provider_name()
+                        if (other := catalog.providers.get(name)) is not None and other is not obj:
+                            catalog.problems.append(f"provider {name}: {obj.__module__} loses to {other.__module__}")
+                        else:
+                            catalog.providers[name] = obj
                     continue
                 if not (isinstance(obj, type) and issubclass(obj, Plugin)):
                     continue

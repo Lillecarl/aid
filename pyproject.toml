@@ -39,6 +39,8 @@ dependencies = [
   # aid web's highlighter. The grammars come from AID_TREE_SITTER_GRAMMARS (nix/tree-sitter-grammars.nix).
   "tree-sitter>=0.25",
   "watchfiles>=1.0",
+  # The skills plugin: SKILL.md frontmatter is YAML (Agent Skills).
+  "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
