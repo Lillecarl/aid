@@ -10,7 +10,8 @@ import pytest
 from pydantic import BaseModel, Field
 
 from aid.agent import Agent, ModelRetry, Tool
-from aid.backends.litelm import DEFAULT_DESIRED_MAX, LiteLMBackend, UsageLimitExceeded
+from aid.agents import Catalog
+from aid.backends.litelm import DEFAULT_DESIRED_MAX, LiteLMBackend, UsageLimitExceeded, aid_toolset
 from aid.backends.permissions import PermissionWaits
 from aid.coding import Coding, coding_tools
 from aid.messages import (
@@ -27,6 +28,7 @@ from aid.messages import (
 from aid.model import ModelInfo, StreamDelta
 from aid.protocol import AidError, Output, SessionEvent, Started, TextDelta, ToolCall, Usage
 from aid.spec import PermissionMode
+from aid.tools import McpTool
 from tests.agents import coder, echo
 from tests.models import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel, TestModel
 from tests.test_coding import plan
@@ -385,3 +387,22 @@ async def test_a_request_that_fails_before_output_stores_no_empty_response(tmp_p
     assert not any(isinstance(m, ModelResponse) and not m.parts for m in history)
     async with backend(tmp_path, Agent(TestModel(call_tools=[])), history=history) as resumed:
         assert (await resumed.prompt("again", emit)).stop_reason == "end_turn"
+
+
+async def test_catalog_tool_errors_go_back_to_the_model(tmp_path: Path) -> None:
+    """An `@aid.mcptool` failing over MCP answers the model with the error; in-process it must too, not end the
+    turn. An agent's own tools keep ending it (test_failed_tool_preserves_original_error_...)."""
+
+    def fail() -> str:
+        raise RuntimeError("no such session")
+
+    [tool] = aid_toolset(Catalog(tools={"fail": McpTool(fail, "fail", None)})).tools
+    assert isinstance(tool, Tool) and tool.errors_to_model
+
+    async def emit(event: SessionEvent) -> None:
+        pass
+
+    async with backend(tmp_path, Agent(TestModel(call_tools=["fail"]), tools=[tool])) as session:
+        assert (await session.prompt("go", emit)).stop_reason == "end_turn"
+    retries = [p for m in await stored(tmp_path) for p in m.parts if isinstance(p, RetryPromptPart)]
+    assert [p.content for p in retries] == ["RuntimeError: no such session"]

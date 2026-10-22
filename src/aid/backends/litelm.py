@@ -215,7 +215,10 @@ def load_named(catalog: Catalog, name: str) -> Agent:
 
 
 def aid_toolset(catalog: Catalog) -> Toolset:
-    tools = [Tool(t.fn, takes_ctx=False, name=t.name, description=t.description) for t in catalog.tools.values()]
+    tools = [
+        Tool(t.fn, takes_ctx=False, name=t.name, description=t.description, errors_to_model=True)
+        for t in catalog.tools.values()
+    ]
     return Toolset(tools)
 
 

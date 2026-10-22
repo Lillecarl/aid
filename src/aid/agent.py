@@ -33,6 +33,9 @@ class Tool:
     kind: str | None = None
     """ACP's tool kind (`read`, `edit`, `delete`, `move`, `search`, `execute`, …): the web UI labels the call by it,
     and session summaries count a call of a write kind as writing its `path`."""
+    errors_to_model: bool = False
+    """Any exception goes back to the model as a retry, as an MCP server answers a failing tool. Otherwise only
+    `ModelRetry` does, and other exceptions end the turn."""
     arguments: type[BaseModel] = field(init=False)
 
     def __post_init__(self) -> None:
@@ -67,9 +70,16 @@ class Tool:
             raise ModelRetry(str(error)) from error
         kwargs = {name: getattr(validated, name) for name in type(validated).model_fields}
         positional = (RunContext(call_id),) if self.takes_ctx else ()
-        if inspect.iscoroutinefunction(self.fn):
-            return await self.fn(*positional, **kwargs)
-        return await anyio.to_thread.run_sync(lambda: self.fn(*positional, **kwargs))
+        try:
+            if inspect.iscoroutinefunction(self.fn):
+                return await self.fn(*positional, **kwargs)
+            return await anyio.to_thread.run_sync(lambda: self.fn(*positional, **kwargs))
+        except ModelRetry:
+            raise
+        except Exception as error:
+            if not self.errors_to_model:
+                raise
+            raise ModelRetry(f"{type(error).__name__}: {error}") from error
 
 
 @dataclass
