@@ -216,7 +216,7 @@ def aid_toolset(catalog: Catalog) -> Toolset:
     return Toolset(tools)
 
 
-def to_event(part: ToolCallPart | ToolReturnPart | RetryPromptPart) -> ToolCall:
+def to_event(part: ToolCallPart | ToolReturnPart | RetryPromptPart, kind: str | None = None) -> ToolCall:
     if isinstance(part, ToolCallPart):
         try:
             args = part.args_as_dict()
@@ -224,12 +224,14 @@ def to_event(part: ToolCallPart | ToolReturnPart | RetryPromptPart) -> ToolCall:
             return ToolCall(
                 tool_call_id=part.tool_call_id,
                 title=part.tool_name,
+                kind=kind,
                 status="in_progress",
                 input=part.args_as_json_str(),
             )
         return ToolCall(
             tool_call_id=part.tool_call_id,
             title=part.tool_name,
+            kind=kind,
             status="in_progress",
             input=to_json(args),
             paths=tool_paths(args),
@@ -403,9 +405,9 @@ class LiteLMBackend:
                         raise AidError("invalid_tool_call", "response has missing or duplicate tool-call identities")
                     for call in calls:
                         try:
-                            await emit(to_event(call))
-                            await checkpoint()
                             tool = self._tools.get(call.tool_name)
+                            await emit(to_event(call, tool.kind if tool is not None else None))
+                            await checkpoint()
                             if tool is None:
                                 raise ModelRetry(f"unknown tool {call.tool_name!r}")
                             try:

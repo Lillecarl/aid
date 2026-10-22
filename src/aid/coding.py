@@ -43,9 +43,18 @@ from pyedit.syntax.nodes import NodeInfo  # pyright: ignore[reportMissingTypeStu
 from shellous import ResultError, Runner, sh
 
 import pyrun
-from aid.agent import ModelRetry, RunContext, Toolset
+from aid.agent import ModelRetry, RunContext, Tool, Toolset
 from aid.confine import inside
-from aid.protocol import AidError, PermissionChoice, PermissionDecider, PermissionDecision, PermissionRequest, clip
+from aid.protocol import (
+    AidError,
+    PermissionChoice,
+    PermissionDecider,
+    PermissionDecision,
+    PermissionRequest,
+    ToolCall,
+    ToolDiff,
+    clip,
+)
 from aid.spec import PermissionMode, match_hook
 from pyrun.host import run_script
 from pyrun.scope import Scope
@@ -779,9 +788,28 @@ async def apply_edits(ctx: RunContext) -> str:
     )
     if not allowed:
         return "not allowed: the edits stay staged"
-    await coding.edit(lambda s: s.apply())  # pyright: ignore[reportUnknownMemberType] -- `paths` is unannotated
+    diffs = await coding.edit(_apply)
     coding.edits = EditSession(root=coding.cwd)
+    if coding.emit is not None and diffs:
+        await coding.emit(ToolCall(tool_call_id=ctx.tool_call_id, diffs=diffs))
     return f"wrote {', '.join(files)}"
+
+
+def _apply(session: EditSession) -> list[ToolDiff]:
+    """Write what is staged, and say what each text file held before and holds now. A deletion is new text ""."""
+    diffs: list[ToolDiff] = []
+    for path, new in session.staged().items():
+        if isinstance(new, bytes):
+            continue
+        old: str | None = None
+        if path.is_file():
+            try:
+                old = path.read_text()
+            except UnicodeDecodeError:
+                continue
+        diffs.append(ToolDiff(path=session.relpath(path), old=old, new=new or ""))
+    session.apply()  # pyright: ignore[reportUnknownMemberType] -- `paths` is unannotated
+    return diffs
 
 
 async def ask_user(
@@ -1175,26 +1203,27 @@ def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[
     return wrapper
 
 
+# Staging tools carry no write kind: nothing reaches disk until apply_edits, which reports its diffs.
 coding_tools: Toolset = Toolset(
     [
-        _retrying(ls),
-        _retrying(read),
+        Tool(_retrying(ls), kind="read"),
+        Tool(_retrying(read), kind="read"),
         _retrying(edit),
         _retrying(write),
         _retrying(delete),
         _retrying(rename),
         _retrying(rename_symbol),
         _retrying(apply_patch),
-        _retrying(outline),
+        Tool(_retrying(outline), kind="read"),
         _retrying(show_edits),
         _retrying(discard_edits),
         _retrying(compact),
-        _retrying(apply_edits),
+        Tool(_retrying(apply_edits), kind="edit"),
         _retrying(ask_user),
-        _retrying(python),
-        _retrying(shell),
+        Tool(_retrying(python), kind="execute"),
+        Tool(_retrying(shell), kind="execute"),
         _retrying(shell_restart),
-        _retrying(background),
+        Tool(_retrying(background), kind="execute"),
         _retrying(task_output),
         _retrying(task_stop),
         _retrying(tasks),

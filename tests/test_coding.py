@@ -21,6 +21,7 @@ from aid.protocol import (
     PermissionDecision,
     PermissionRequest,
     Started,
+    ToolCall,
 )
 from aid.spec import Hook, PermissionMode
 from tests.conftest import py_spec
@@ -197,14 +198,21 @@ async def test_apply_writes_only_what_changed(daemon: Paths, tmp_path: Path) -> 
                     ("read", {"path": "a.py"}),
                     ("show_edits", {}),
                     ("edit", {"path": "b.py", "old": "B = 1", "new": "B = 2"}),
+                    ("write", {"path": "c.py", "content": "C = 1\n"}),
                     ("apply_edits", {}),
                 )
             )
-    _read, shown, _edited, applied = str(result.output).split("\n=====\n")
+            summary = await session.summary()
+            history = (await session.history()).entries
+    _read, shown, _edited, _written, applied = str(result.output).split("\n=====\n")
     assert shown == "nothing is staged"
-    assert applied == "wrote b.py"
+    assert applied == "wrote b.py, c.py"
     assert (tmp_path / "a.py").stat().st_mtime_ns == read_only
     assert (tmp_path / "b.py").read_text() == "B = 2\n"
+    # What reached disk, from the diffs apply_edits reports: staging alone writes nothing.
+    diffs = [d for e in history if isinstance(e.item, ToolCall) for d in e.item.diffs]
+    assert sorted((d.path, d.old, d.new) for d in diffs) == [("b.py", "B = 1\n", "B = 2\n"), ("c.py", None, "C = 1\n")]
+    assert {(f.path, f.reads, f.writes) for f in summary.files} == {("a.py", 1, 0), ("b.py", 0, 1), ("c.py", 0, 1)}
 
 
 async def test_python_asks_for_each_program(daemon: Paths, tmp_path: Path) -> None:

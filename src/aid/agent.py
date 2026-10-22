@@ -30,6 +30,9 @@ class Tool:
     name: str | None = None
     description: str | None = None
     takes_ctx: bool | None = None
+    kind: str | None = None
+    """ACP's tool kind (`read`, `edit`, `delete`, `move`, `search`, `execute`, …): the web UI labels the call by it,
+    and session summaries count a call of a write kind as writing its `path`."""
     arguments: type[BaseModel] = field(init=False)
 
     def __post_init__(self) -> None:
