@@ -75,6 +75,8 @@ async def login_ui(page: Page, web: Web) -> None:
         print(f"Login page: {page.url.split('?')[0]}")
         print(f"Page errors: {errors}")
         print(await page.locator("body").inner_text())
+        if web.dex_log is not None:
+            print("dex log:", *web.dex_log.read_text().splitlines()[-20:], sep="\n")
         raise
     finally:
         page.remove_listener("pageerror", record_error)

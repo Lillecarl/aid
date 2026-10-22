@@ -54,6 +54,8 @@ def free_port() -> int:
 @dataclass(frozen=True)
 class Web:
     url: str
+    dex_log: Path | None = None
+    """Where dex writes: a failed login reads it, since the sandbox keeps no temp files."""
 
 
 def dex_config(port: int, web_url: str) -> dict[str, Any]:
@@ -92,6 +94,7 @@ async def wait_for(url: str) -> None:
 @dataclass(frozen=True)
 class Dex:
     issuer: str
+    log: Path
 
 
 @asynccontextmanager
@@ -106,7 +109,7 @@ async def running_dex(tmp_path: Path, web_url: str) -> AsyncGenerator[Dex]:
         try:
             with anyio.fail_after(TIMEOUT):
                 await wait_for(f"{issuer}/.well-known/openid-configuration")
-            yield Dex(issuer)
+            yield Dex(issuer, tmp_path / "dex.log")
         finally:
             dex.terminate()
             log.close()
@@ -140,7 +143,7 @@ async def running_web(
             tg.start_soon(lambda: serve(app, f"127.0.0.1:{web_port}", shutdown=shutdown))
             with anyio.fail_after(TIMEOUT):
                 await wait_for(f"{web_url}/healthz")
-            yield Web(web_url)
+            yield Web(web_url, dex_server.log)
             shutdown.set()
 
 
