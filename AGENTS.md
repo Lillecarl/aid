@@ -4,6 +4,19 @@ AI server for persistent, cooperating agent sessions, with separate execution en
 Runs external ACP agents (`claude-agent-acp`, `opencode acp`, …), `litelm` agents, and Claude Code through
 terminal and SDK backends, behind an async Python API, CLI and web UI.
 
+## Architecture stance
+
+Fixed: a plugin architecture, async (anyio). Everything else is a current shape, not a decision to defend.
+
+- aid is agent glue. The daemon does as little as possible: sessions, routing, delivery, authorization. Behaviour
+  that can live in an agent, a backend or a plugin goes there. Before adding to the daemon, ask what could own it.
+- What can reasonably be a plugin is one, bundled and on by default where it matters (skills, chat bridges).
+- Essential conventions (Agent Skills, AGENTS.md, MCP) follow the common baseline other harnesses share; go beyond
+  it, never around it.
+- Re-evaluate the architecture as work lands; each layer built on a weak shape makes it costlier to change. A better
+  way found is a way taken: change the code, then this file.
+- Architectural suggestions go to User before building them: what, why, cost, recommendation.
+
 ## Working method — read first
 
 The goal is reliable agent work, not merely code that passes a happy-path test. Use this sequence:
