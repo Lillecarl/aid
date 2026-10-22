@@ -135,8 +135,41 @@ def test_default_provider_reads_global_agents_and_skills(tmp_path: Path, monkeyp
     assert [(item.name, item.text) for item in loaded] == [
         ("global", "Be kind."),
         ("agents", "Use tabs."),
-        ("skill:codereview", "Review carefully.\nCheck every diff."),
+        ("skills", module.SKILLS_HEADER),
+        ("skill:codereview", "Review carefully."),
     ]
+
+
+def test_skills_index_by_description_and_load_on_demand(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Only descriptions reach the prompt; the `skill` tool returns a body and the skill's other files. Skill
+    directories are often symlinks into a store, and an earlier directory wins a name."""
+    module = file_instructions()
+    store = tmp_path / "store" / "jj"
+    (store / "references").mkdir(parents=True)
+    (store / "SKILL.md").write_text('---\nname: jj\ndescription: "Jujutsu version control."\n---\n\n# jj\n\nUse jj.\n')
+    (store / "references" / "split.md").write_text("Split by file.")
+    first, second = tmp_path / "first", tmp_path / "second"
+    first.mkdir()
+    (first / "jj").symlink_to(store)
+    (second / "jj").mkdir(parents=True)
+    (second / "jj" / "SKILL.md").write_text("Shadowed.")
+    (second / "nix").mkdir()
+    (second / "nix" / "SKILL.md").write_text("# Run nix\n\nBody.")
+    monkeypatch.setenv(module.ENV_INSTRUCTIONS_FILE, str(tmp_path / "missing.md"))
+    monkeypatch.setenv(module.ENV_SKILLS_DIR, f"{first}:{second}")
+    loaded = module.FileInstructions().load(aid.InstructionsContext(cwd=tmp_path, session_name="demo"))
+    assert [(item.name, item.text) for item in loaded][1:] == [
+        ("skill:jj", "Jujutsu version control."),
+        ("skill:nix", "Run nix"),
+    ]
+    body = module.skill("jj")
+    assert body.startswith("---\nname: jj") and "Use jj." in body
+    assert "references/split.md" in body
+    assert module.skill("jj", file="references/split.md") == "Split by file."
+    with pytest.raises(aid.ModelRetry, match="not a file of skill"):
+        module.skill("jj", file="../../second/nix/SKILL.md")
+    with pytest.raises(aid.ModelRetry, match="the skills are: jj, nix"):
+        module.skill("absent")
 
 
 def test_default_provider_prefers_the_nearest_agents_md(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
