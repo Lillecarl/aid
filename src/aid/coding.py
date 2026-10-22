@@ -1183,6 +1183,22 @@ async def monitors() -> str:
     return "\n".join(lines)
 
 
+def _sees_disk[**P](tool: Callable[P, Awaitable[str]]) -> Callable[P, Awaitable[str]]:
+    """Programs read the disk, not the staging area. Measured 2026-10 on DeepSeek V4.1 Flash: an agent ran its
+    tests without apply_edits, `read` showed its edits, and it concluded something reverted them."""
+
+    @functools.wraps(tool)
+    async def wrapper(*args: P.args, **kwargs: P.kwargs) -> str:
+        result = await tool(*args, **kwargs)
+        coding = _coding()
+        await coding.edit(lambda s: s.prune_unchanged())
+        if not (staged := sorted({coding.edits.relpath(p) for p in coding.edits.staged()})):
+            return result
+        return f"[not applied: staged edits to {', '.join(staged)} are not on disk, so this ran without them]\n{result}"
+
+    return wrapper
+
+
 def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     """A tool's failure goes back to the model as a retry with the reason: an exception would end the run.
     Oversize text results spill to a file, so no turn carries more than a head plus a path."""
@@ -1220,10 +1236,10 @@ coding_tools: Toolset = Toolset(
         _retrying(compact),
         Tool(_retrying(apply_edits), kind="edit"),
         _retrying(ask_user),
-        Tool(_retrying(python), kind="execute"),
-        Tool(_retrying(shell), kind="execute"),
+        Tool(_retrying(_sees_disk(python)), kind="execute"),
+        Tool(_retrying(_sees_disk(shell)), kind="execute"),
         _retrying(shell_restart),
-        Tool(_retrying(background), kind="execute"),
+        Tool(_retrying(_sees_disk(background)), kind="execute"),
         _retrying(task_output),
         _retrying(task_stop),
         _retrying(tasks),

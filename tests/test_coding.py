@@ -865,3 +865,27 @@ async def test_correctable_tool_failures_do_not_end_the_turn(daemon: Paths, tmp_
             result = await session.run(plan(*[("read", {"path": "missing.txt"})] * 5, ("ls", {})))
     assert result.stop_reason == "end_turn"
     assert len(str(result.output).split("\n=====\n")) == 6
+
+
+async def test_programs_say_when_staged_edits_are_not_on_disk(daemon: Paths, tmp_path: Path) -> None:
+    """`read` shows staged text, programs read the disk: without the note an agent that forgot apply_edits
+    reads the difference as its edits being reverted."""
+    (tmp_path / "b.py").write_text("B = 1\n")
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(
+                    ("read", {"path": "b.py"}),
+                    ("shell", {"command": "cat b.py"}),
+                    ("edit", {"path": "b.py", "old": "B = 1", "new": "B = 2"}),
+                    ("shell", {"command": "cat b.py"}),
+                    ("apply_edits", {}),
+                    ("shell", {"command": "cat b.py"}),
+                )
+            )
+    _read, clean, _edited, unapplied, _applied, applied = str(result.output).split("\n=====\n")
+    assert not clean.startswith("[not applied")
+    assert unapplied.startswith("[not applied: staged edits to b.py are not on disk")
+    assert "B = 1" in unapplied
+    assert not applied.startswith("[not applied") and "B = 2" in applied
