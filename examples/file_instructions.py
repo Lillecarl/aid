@@ -5,7 +5,7 @@ directory it loads, in this order:
 
 - the global instructions file (`AID_INSTRUCTIONS_FILE`, default `~/.config/aid/instructions.md`) as `global`,
 - the nearest `AGENTS.md` walking up from the session's directory (the directory itself, then each parent)
-  as `agents`,
+  as `agents`; a directory without one offers its `CLAUDE.md` instead,
 - every `SKILL.md` directly under a directory of the skills directory (`AID_SKILLS_DIR`, default
   `~/.config/aid/skills`) as `skill:<name>`: the skills directory holds one directory per skill, each with a
   `SKILL.md` whose first line describes it in one line. The whole file becomes the instruction's text.
@@ -23,6 +23,8 @@ import aid
 
 ENV_INSTRUCTIONS_FILE: Final = "AID_INSTRUCTIONS_FILE"
 ENV_SKILLS_DIR: Final = "AID_SKILLS_DIR"
+# Per directory, in this order: a repository written for Claude Code keeps its rules in CLAUDE.md.
+PROJECT_FILES: Final = ("AGENTS.md", "CLAUDE.md")
 
 
 def _global_file() -> Path:
@@ -46,8 +48,9 @@ def _read(path: Path) -> str | None:
 
 def _nearest_agents(cwd: Path) -> Path | None:
     for directory in (cwd, *cwd.parents):
-        if (candidate := directory / "AGENTS.md").is_file():
-            return candidate
+        for name in PROJECT_FILES:
+            if (candidate := directory / name).is_file():
+                return candidate
     return None
 
 

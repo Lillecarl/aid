@@ -335,3 +335,19 @@ async def test_compact_keeps_the_head_without_a_refresher(tmp_path: Path) -> Non
     [head] = stored[0]["parts"]
     assert (head["part_kind"], head["content"]) == ("system-prompt", "# brief\n\nStale.")
     assert stored[1]["parts"][0]["content"].startswith("[Summary of earlier work]\nkept")
+
+
+def test_default_provider_falls_back_to_claude_md(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A repository written for Claude Code keeps its rules in CLAUDE.md; AGENTS.md wins in the same directory."""
+    module = file_instructions()
+    (tmp_path / "AGENTS.md").write_text("Root.")
+    cwd = tmp_path / "repo"
+    cwd.mkdir()
+    (cwd / "CLAUDE.md").write_text("Claude rules.")
+    monkeypatch.setenv(module.ENV_INSTRUCTIONS_FILE, str(tmp_path / "missing.md"))
+    monkeypatch.setenv(module.ENV_SKILLS_DIR, str(tmp_path / "missing-skills"))
+    [agents] = module.FileInstructions().load(aid.InstructionsContext(cwd=cwd, session_name="demo"))
+    assert (agents.name, agents.text) == ("agents", "Claude rules.")
+    (cwd / "AGENTS.md").write_text("Agents rules.")
+    [agents] = module.FileInstructions().load(aid.InstructionsContext(cwd=cwd, session_name="demo"))
+    assert agents.text == "Agents rules."
