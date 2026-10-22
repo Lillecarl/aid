@@ -14,8 +14,8 @@
     type = "github";
     owner = "Lillecarl";
     repo = "pyedit";
-    rev = "0910a2436bcbbbef6889be7c10d96520593e9578";
-    narHash = "sha256-AO0LvZeEB/kUNxym2tgpXOU2FpEq3kUWNTnUP8rHBus=";
+    rev = "a0a555a0314e84cc7cf187023144c4efcd9d7e9a";
+    narHash = "sha256-V1ZEvMoraFjoVhPvM+Q+kYwuUnd6JDcu5+k4A6yEUIw=";
   },
   # shellous, the asyncio subprocess library: v0.42.0, the latest release.
   shellous ? builtins.fetchTree {
@@ -96,11 +96,14 @@ let
     "bash"
     "c"
     "cpp"
+    "css"
+    "fish"
     "go"
     "java"
     "javascript"
     "json"
     "lua"
+    "markdown"
     "nix"
     "python"
     "ruby"
@@ -111,6 +114,21 @@ let
     "yaml"
     "zig"
   ];
+  # nixpkgs pins svelte to the superseded Himujjal grammar; pyedit binds the maintained fork, so aid does too.
+  svelteGrammar = pkgs.tree-sitter.buildGrammar {
+    language = "svelte";
+    version = "1.0.2";
+    src = pkgs.fetchFromGitHub {
+      owner = "tree-sitter-grammars";
+      repo = "tree-sitter-svelte";
+      rev = "v1.0.2";
+      hash = "sha256-mkw3s0pZQ6ry+fiTk2fJeKVA7Nqyv2Z2R1AFZknzpFM=";
+    };
+  };
+  svelteBinding = python.pkgs.callPackage "${pkgs.path}/pkgs/development/python-modules/tree-sitter-grammars" {
+    name = "tree-sitter-svelte";
+    grammarDrv = svelteGrammar;
+  };
   python = pkgs.python3.override {
     self = python;
     packageOverrides = final: prev: {
@@ -194,12 +212,16 @@ let
             "openai"
             "anthropic"
             "pre-commit"
+            # pyedit's `jj` extra, for `-r`: aid never amends revisions through it.
+            "pyjj"
             "re-ver"
             "runthis-sphinxext"
           ]
-          ++ grammarsByName;
+          ++ grammarsByName
+          ++ [ "tree-sitter-svelte" ];
       }
-      ++ map (name: python.pkgs.tree-sitter-grammars.${name}) grammarsByName;
+      ++ map (name: python.pkgs.tree-sitter-grammars.${name}) grammarsByName
+      ++ [ svelteBinding ];
     overlay = lib.composeExtensions p.overlay (
       final: _prev: {
         openai = final.callPackage ./nix/model-sdk.nix {

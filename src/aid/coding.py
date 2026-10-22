@@ -39,7 +39,6 @@ import anyio
 import anyio.to_thread
 import structlog
 from pyedit.session import EditSession  # pyright: ignore[reportMissingTypeStubs] -- annotated, no py.typed
-from pyedit.syntax.nodes import NodeInfo  # pyright: ignore[reportMissingTypeStubs]
 from shellous import ResultError, Runner, sh
 
 import pyrun
@@ -745,7 +744,7 @@ async def outline(path: str) -> str:
     target = coding.resolve(path)
     if await anyio.Path(target).is_dir():
         raise AidError("is_dir", f"{path} is a directory; outline reads a single file")
-    nodes = cast(list[NodeInfo], await coding.edit(lambda s: s.outline(target)))  # pyright: ignore[reportUnknownMemberType, reportUnknownLambdaType] -- pyedit names the type as a string it does not import
+    nodes = await coding.edit(lambda s: s.outline(target))
     return "\n".join(f"{n.start_line}-{n.end_line}\t{n.kind}\t{n.name}" for n in nodes) or f"{path} defines nothing"
 
 
@@ -1194,12 +1193,7 @@ def _sees_disk[**P](tool: Callable[P, Awaitable[str]]) -> Callable[P, Awaitable[
         await coding.edit(lambda s: s.prune_unchanged())
         if not (staged := sorted({coding.edits.relpath(p) for p in coding.edits.staged()})):
             return result
-        # pyedit keeps files it read in the same map, so a file changed on disk since it was read lands here
-        # too; only its base map (Lillecarl/pyedit#27) can tell the two apart.
-        return (
-            f"[not on disk: {', '.join(staged)} differs from what you staged or last read; this ran against the"
-            " disk. If you edited it, apply_edits; if not, something else changed it since you read it.]\n" + result
-        )
+        return f"[not applied: staged edits to {', '.join(staged)} are not on disk, so this ran without them]\n{result}"
 
     return wrapper
 
