@@ -283,9 +283,10 @@ async def test_zws_events_carry_turns_from_other_clients(web: Web, tmp_path: Pat
     with anyio.fail_after(TIMEOUT):
         headers = await zws_cookie(web)
         async with aid.connect(daemon) as other, zws_connect(web, "/api/zws/events", headers) as events_ws:
-            session = await other.create("echo", py_spec(tmp_path, "agents:echo"))
+            # Subscribed before the create: the worker publishes `started` as soon as it is up.
             await events_ws.send(b"\x00\x01session/echo/history/")
             await anyio.sleep(0.1)  # A subscription reaches the daemon a moment after it is sent.
+            session = await other.create("echo", py_spec(tmp_path, "agents:echo"))
             await session.run("elsewhere")
             seen: list[tuple[int, str]] = []
             while not seen or seen[-1][1] != "output":
