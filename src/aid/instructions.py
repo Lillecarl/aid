@@ -6,6 +6,7 @@ that fails is skipped loudly, never fatally: one broken provider must not keep a
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -19,6 +20,25 @@ if TYPE_CHECKING:
     from aid.agents import InstructionsProvider
 
 log = structlog.get_logger(__name__)
+
+
+def environment(cwd: Path | str, session_name: str) -> str:
+    """Facts every session needs and no provider owns. Static, so the prompt cache holds: the time travels in
+    each request's metadata instead.
+
+    Measured 2026-10 on DeepSeek V4.1 Flash: an agent that `cd`ed its shell elsewhere did not know its own
+    directory, searched `/` for a pyproject.toml, and worked in another checkout of the same repository.
+    """
+    return "\n".join(
+        [
+            "# environment",
+            "",
+            f"- Working directory: {Path(cwd).resolve()}. Relative paths in file tools resolve against it, and the"
+            " shell starts there; return to it with this absolute path.",
+            f"- aid session: {session_name}",
+            f"- Platform: {sys.platform}",
+        ]
+    )
 
 
 def compose(

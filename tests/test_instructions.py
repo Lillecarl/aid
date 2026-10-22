@@ -236,19 +236,31 @@ def contents(stored: str) -> list[str]:
     ]
 
 
+def system_prompt(stored: str) -> str:
+    return contents(stored)[0]
+
+
 async def test_wiring_prepends_composed_instructions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stored = await open_wired(tmp_path, monkeypatch, "agents:echo")
-    assert "# brief\n\nShip it.\n\n# who\n\nsession s1" in contents(stored)
+    assert system_prompt(stored).startswith("# brief\n\nShip it.\n\n# who\n\nsession s1\n\n# environment")
+
+
+async def test_wiring_names_the_working_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Without it an agent that `cd`ed away cannot find its way back."""
+    stored = await open_wired(tmp_path, monkeypatch, "agents:echo", instruction_providers=[])
+    cwd = await anyio.Path(tmp_path).resolve()
+    assert system_prompt(stored).startswith(f"# environment\n\n- Working directory: {cwd}.")
+    assert "- aid session: s1" in system_prompt(stored)
 
 
 async def test_wiring_skip_drops_named_instructions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stored = await open_wired(tmp_path, monkeypatch, "agents:echo", skip_instructions=["brief"])
-    assert not any(content.startswith("# brief") for content in contents(stored))
-    assert "# who\n\nsession s1" in contents(stored)
+    assert system_prompt(stored).startswith("# who\n\nsession s1\n\n# environment")
 
 
 async def test_wiring_unknown_provider_starts_bare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stored = await open_wired(tmp_path, monkeypatch, "agents:echo", instruction_providers=["nope"])
+    assert system_prompt(stored).startswith("# environment")
     assert not any("# brief" in content for content in contents(stored))
     assert any("echo hi" in content for content in contents(stored))
 
@@ -260,8 +272,8 @@ async def test_compact_recomposes_instructions_from_disk(tmp_path: Path, monkeyp
         (tmp_path / "agents" / "brief.txt").write_text("Ship it, twice.")
         await backend.compact("the work")
     stored = (tmp_path / "s1" / "history.json").read_text()
-    assert "# brief\n\nShip it, twice.\n\n# who\n\nsession s1" in contents(stored)
-    assert not any(content == "# brief\n\nShip it.\n\n# who\n\nsession s1" for content in contents(stored))
+    assert system_prompt(stored).startswith("# brief\n\nShip it, twice.\n\n# who\n\nsession s1")
+    assert not any("Ship it.\n" in content for content in contents(stored))
 
 
 def backend_with(tmp_path: Path, history: list[Any], refresh: Any, output: str = "kept") -> tuple[Coding, Any]:

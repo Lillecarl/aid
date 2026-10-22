@@ -22,7 +22,7 @@ from aid.agent import Agent, ModelRetry, Tool, Toolset
 from aid.agents import ENV_AGENTS_PATH, Catalog, agents_path, discover
 from aid.backends.permissions import PermissionWaits
 from aid.coding import CODING, OUTPUTS_DIR, Coding
-from aid.instructions import compose
+from aid.instructions import compose, environment
 from aid.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
@@ -542,7 +542,7 @@ async def open_litelm(spec: LiteLMSpec, state_dir: anyio.Path) -> AsyncGenerator
             skip=frozenset(spec.skip_instructions),
             session_name=state_dir.name,
         )
-        return "\n\n".join(filter(None, [agent.instructions, composed]))
+        return "\n\n".join(filter(None, [agent.instructions, composed, environment(spec.cwd, state_dir.name)]))
 
     if not history:
         composed = await anyio.to_thread.run_sync(refresh_instructions)
