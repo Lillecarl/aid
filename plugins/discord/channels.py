@@ -105,9 +105,11 @@ class ChannelMap:
         await path.write_text(json.dumps({"category": self.category_id, "channels": self.channels}))
 
 
-async def reconcile(client: Client, rest: Rest, guild_id: str, category_name: str, channel_map: ChannelMap) -> None:
+async def reconcile(
+    client: Client, rest: Rest, guild_id: str, category_name: str, channel_map: ChannelMap
+) -> frozenset[str]:
     """The category and one channel per session exist; mapped channels of gone sessions are deleted. A session
-    with a parent gets none: its results reach the parent's channel."""
+    with a parent gets none: its results reach the parent's channel. Returns the sessions it reconciled."""
     infos = [info for info in await daemon_call(client.sessions()) if info.parent is None]
     living = await rest.guild_channels(guild_id)
     by_id = {channel.id: channel for channel in living}
@@ -137,3 +139,4 @@ async def reconcile(client: Client, rest: Rest, guild_id: str, category_name: st
             continue
         log.info("discord_channel_deleted", session=session, channel=channel_id)
     await channel_map.save()
+    return frozenset(info.name for info in infos)

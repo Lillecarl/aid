@@ -17,7 +17,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict
 
 from aid.client import daemon_call
-from aid.protocol import AidError, Output, TurnError, tool_text
+from aid.protocol import AidError, Output, SessionInfosAdapter, TurnError, tool_text
 from aid.settle import IDLE_WINDOW, TICK_INTERVAL, VERDICT_TIMEOUT, describe_end, settled_turns
 
 from .channels import reconcile, state_word
@@ -345,9 +345,12 @@ async def dispatch(
 
 
 async def channel_loop(client: Client, rest: Rest, guild_id: str, category: str, channel_map: ChannelMap) -> None:
-    """Reconcile now, then on every session-list change; a failure logs and waits for the next change."""
+    """Reconcile now, then whenever the sessions that get a channel change; a failure logs and waits for the next
+    change. The list publishes on every status change too, and listing the guild's channels each time trips
+    Discord's rate limit."""
+    known: frozenset[str] | None = None
     try:
-        await reconcile(client, rest, guild_id, category, channel_map)
+        known = await reconcile(client, rest, guild_id, category, channel_map)
     except anyio.get_cancelled_exc_class():
         raise
     except Exception:
@@ -357,10 +360,14 @@ async def channel_loop(client: Client, rest: Rest, guild_id: str, category: str,
             if message is None:
                 continue  # The idle wakes only so cancellation lands cleanly; publishes arrive at once.
             try:
-                await reconcile(client, rest, guild_id, category, channel_map)
+                infos = SessionInfosAdapter.validate_json(message[1])
+                if frozenset(info.name for info in infos if info.parent is None) == known:
+                    continue
+                known = await reconcile(client, rest, guild_id, category, channel_map)
             except anyio.get_cancelled_exc_class():
                 raise
             except Exception:
+                known = None
                 log.exception("discord_reconcile_failed")
 
 

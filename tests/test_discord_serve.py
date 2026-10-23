@@ -100,9 +100,11 @@ class FakeRest(Rest):
         self.answered: list[tuple[str, str, str, bool, bool, JsonValue | None]] = []
         self.created: list[tuple[str, str, int, str | None, str | None]] = []
         self.deleted: list[str] = []
+        self.lists = 0
 
     async def guild_channels(self, guild_id: str) -> list[GuildChannel]:
         assert guild_id == GUILD
+        self.lists += 1
         return self.listing
 
     async def create_channel(
@@ -345,6 +347,10 @@ async def test_channel_loop_reconciles_on_list_changes(daemon: Paths, tmp_path: 
                 await anyio.sleep(0.3)  # The loop reconciles once, then follows the session list.
                 await control.create("echo", py_spec(tmp_path, "agents:echo"))
                 await anyio.sleep(1.0)  # The list change wakes the loop, which creates the channel.
+                lists = rest.lists
+                await control.session("echo").run("hi")  # Status changes publish the list, same sessions.
+                await anyio.sleep(0.5)
+                assert rest.lists == lists
                 tg.cancel_scope.cancel()
             assert channel_map.channels.keys() == {"echo"}
             assert rest.created == [("g1", "echo", 0, "cat", f"aid session echo: {await _topic_word(control, 'echo')}")]
