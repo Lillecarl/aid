@@ -1333,6 +1333,17 @@
           },
           "type": "array"
         },
+        "seed_history": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "skip_instructions": {
           "items": {
             "type": "string"

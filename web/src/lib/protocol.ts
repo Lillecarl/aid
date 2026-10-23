@@ -267,6 +267,7 @@ export interface LiteLMSpec {
   permission?: PermissionMode1;
   permission_timeout?: number;
   python_path?: string[];
+  seed_history?: string | null;
   skip_instructions?: string[];
   supervisor?: string | null;
   supervisor_nudge_budget?: number;

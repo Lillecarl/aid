@@ -194,6 +194,9 @@ class LiteLMSpec(_Spec):
     in catalog order."""
     skip_instructions: list[str] = Field(default_factory=list[str])
     """Instruction names to drop after loading: `skill:<name>` opts out of one skill."""
+    seed_history: str | None = None
+    """A history file, absolute, the session starts from when it has none of its own: a fork's copy of its
+    parent's conversation. Taken as is, instructions included, so the prompt-cache prefix stays the parent's."""
 
     @model_validator(mode="after")
     def _one_source(self) -> Self:

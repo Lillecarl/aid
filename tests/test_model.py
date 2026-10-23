@@ -208,6 +208,39 @@ async def test_open_litelm_reports_resume_only_for_stored_history(
         assert resumed.started().resumed is True
 
 
+async def test_a_seeded_session_starts_from_the_seed_until_it_has_its_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The seed is taken byte for byte, its instructions too, so a fork's requests share its parent's prefix."""
+    monkeypatch.setattr(native_backend, "_session_catalog", Catalog)
+
+    def load_target(target: str) -> Agent:
+        return Agent("openai/local", instructions="Composed instructions.")
+
+    monkeypatch.setattr(native_backend, "load_target", load_target)
+    seed = tmp_path / "seed.json"
+    seed.write_bytes(
+        ModelMessagesTypeAdapter.dump_json(
+            [ModelRequest(parts=[SystemPromptPart("Parent instructions.")]), ModelRequest(parts=[UserPromptPart("hi")])]
+        )
+    )
+    state = tmp_path / "fork"
+    state.mkdir()
+    spec = LiteLMSpec(
+        cwd=str(tmp_path), target="local:agent", instruction_providers=[], aid_tools=False, seed_history=str(seed)
+    )
+
+    async with native_backend.open_litelm(spec, anyio.Path(state)) as forked:
+        assert forked.started().resumed is False
+    assert (state / "history.json").read_bytes() == seed.read_bytes()
+
+    own = ModelMessagesTypeAdapter.dump_json([ModelRequest(parts=[UserPromptPart("its own")])])
+    (state / "history.json").write_bytes(own)
+    async with native_backend.open_litelm(spec, anyio.Path(state)) as resumed:
+        assert resumed.started().resumed is True
+    assert (state / "history.json").read_bytes() == own
+
+
 def test_signed_thinking_and_tool_identity_survive_anthropic_translation() -> None:
     messages = [
         ModelResponse(

@@ -553,7 +553,11 @@ async def open_litelm(spec: LiteLMSpec, state_dir: anyio.Path) -> AsyncGenerator
         )
         return "\n\n".join(filter(None, [agent.instructions, composed, environment(spec.cwd, state_dir.name)]))
 
-    if not history:
+    if not history and spec.seed_history is not None:
+        seed = await anyio.Path(spec.seed_history).read_bytes()
+        history = ModelMessagesTypeAdapter.validate_json(seed)
+        await _write_atomic(history_file, seed)
+    elif not history:
         composed = await anyio.to_thread.run_sync(refresh_instructions)
         if composed:
             history = [ModelRequest(parts=[SystemPromptPart(content=composed)])]
