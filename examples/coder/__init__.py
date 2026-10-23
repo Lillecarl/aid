@@ -40,4 +40,10 @@ class HaikuCoder(aid.AgentDefinition):
     """Reads, edits and runs code in its session's directory, on Claude Haiku."""
 
     def build(self) -> Agent:
-        return Agent("anthropic/claude-haiku-5-5", instructions=INSTRUCTIONS, toolsets=[aid.coding_tools])
+        return Agent(
+            "anthropic/claude-haiku-5-5",
+            instructions=INSTRUCTIONS,
+            toolsets=[aid.coding_tools],
+            # Haiku 5.5 thinks by default but returns no thinking text unless asked for summaries.
+            model_settings={"thinking": {"type": "adaptive", "display": "summarized"}},
+        )
