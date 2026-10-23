@@ -472,13 +472,13 @@ def test_wire_skips_an_empty_assistant_message() -> None:
 
 async def test_model_names_pick_the_sdk_and_credentials_fail_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(model_for("anthropic/claude-x"), AnthropicModel)
-    assert isinstance(model_for("deepseek/deepseek-chat"), OpenAIChatModel)
+    assert isinstance(model_for("deepseek/deepseek-flash"), OpenAIChatModel)
     assert isinstance(model_for("gpt-x"), OpenAIChatModel)
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     go: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart("go")])]
     for name, code, says in [
-        ("deepseek/deepseek-chat", "missing_credentials", "DEEPSEEK_API_KEY"),
+        ("deepseek/deepseek-flash", "missing_credentials", "DEEPSEEK_API_KEY"),
         ("anthropic/claude-x", "missing_credentials", "ANTHROPIC_API_KEY"),
         ("nowhere/model", "unknown_provider", "api_base"),
     ]:
@@ -596,7 +596,7 @@ async def test_openai_compatible_stream_keeps_reasoning_and_deepseek_cache_hits(
 
     monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
-    model = OpenAIChatModel("deepseek/deepseek-chat")
+    model = OpenAIChatModel("deepseek/deepseek-flash")
     usages: list[RequestUsage] = []
     response = ModelResponse(parts=[])
     indexes: dict[int, int] = {}

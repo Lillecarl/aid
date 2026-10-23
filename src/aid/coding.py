@@ -7,7 +7,7 @@
         \"\"\"Changes code in its session's directory.\"\"\"
 
         def build(self) -> Agent:
-            return Agent("deepseek/deepseek-chat", toolsets=[aid.coding_tools])
+            return Agent("deepseek/deepseek-flash", toolsets=[aid.coding_tools])
 
 Each aid session has one `Coding`: its directory, a pyedit session holding edits until `apply_edits`, a pyrun store
 for what `python` runs, a persistent shell for what `shell` runs, and the session's permission mode. The worker

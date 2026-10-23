@@ -8,7 +8,7 @@ Neither PydanticAI nor LiteLLM is a runtime dependency.
 import aid
 
 reviewer = aid.Agent(
-    "openrouter/deepseek/deepseek-chat",
+    "deepseek/deepseek-flash",
     instructions="Review the changes and report defects.",
     toolsets=[aid.coding_tools],
 )
@@ -30,6 +30,10 @@ tool effects.
 Anthropic requests default to `max_tokens` 32000 (4096 for `claude-3*`) and to automatic prompt caching
 (`cache_control: {"type": "ephemeral"}`). Beta features need only their `anthropic-beta` header in
 `extra_headers`.
+
+DeepSeek serves `deepseek-flash` and `deepseek-v4-pro`. Thinking is on by default at effort `high`.
+`reasoning_effort` (`low`, `high`, `max`) sets the depth; `extra_body: {"thinking": {"type": "disabled"}}` turns it
+off. The old names `deepseek-chat` and `deepseek-reasoner` route to `deepseek-flash` with thinking off and on.
 
 Tools are Python functions or `aid.Tool` objects. Group them with `aid.Toolset`.
 A tool can take `aid.RunContext` as its first argument to receive its tool-call identity.

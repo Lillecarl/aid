@@ -32,4 +32,4 @@ class Coder(aid.AgentDefinition):
     """Reads, edits and runs code in its session's directory, on DeepSeek."""
 
     def build(self) -> Agent:
-        return Agent("deepseek/deepseek-chat", instructions=INSTRUCTIONS, toolsets=[aid.coding_tools])
+        return Agent("deepseek/deepseek-flash", instructions=INSTRUCTIONS, toolsets=[aid.coding_tools])

@@ -15,7 +15,7 @@ from aid.agent import Agent
 
 
 class DeepSeek(aid.AgentDefinition):
-    """Short, plain answers from DeepSeek's chat model."""
+    """Short, plain answers from DeepSeek's flash model."""
 
     def build(self) -> Agent:
-        return Agent("deepseek/deepseek-chat", instructions="Answer briefly and plainly.")
+        return Agent("deepseek/deepseek-flash", instructions="Answer briefly and plainly.")

@@ -8,7 +8,7 @@ and `InstructionsProvider` in plugin packages (`aid.discovery`).
         \"\"\"Concise answers from DeepSeek.\"\"\"
 
         def build(self) -> Agent:
-            return Agent("deepseek/deepseek-chat")
+            return Agent("deepseek/deepseek-flash")
 
 Each concrete subclass a plugin defines is an agent (or provider), named after its class in snake case unless it
 sets `name`.
