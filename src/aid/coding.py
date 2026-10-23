@@ -293,6 +293,9 @@ class Coding:
     calls; it dies with the worker, or sooner on a timeout, which the next call reports as a reset."""
     compact: Callable[[str], Awaitable[str]] | None = None
     """Summarize the conversation into a digest; the worker sets it per session, and `compact` calls it."""
+    snapshot: Callable[[str], Awaitable[Path]] | None = None
+    """Write the conversation as it stands inside the running tool call, with the text as that call's return;
+    returns the file. The worker sets it per session; forks start from it."""
     _lock: anyio.Lock = field(default_factory=anyio.Lock)
 
     def __post_init__(self) -> None:

@@ -10,9 +10,9 @@ import pytest
 from pydantic import BaseModel, Field
 
 from aid.agent import Agent, ModelRetry, Tool
-from aid.backends.litelm import DEFAULT_DESIRED_MAX, LiteLMBackend, UsageLimitExceeded, aid_toolset
+from aid.backends.litelm import DEFAULT_DESIRED_MAX, NOT_FORKED, LiteLMBackend, UsageLimitExceeded, aid_toolset
 from aid.backends.permissions import PermissionWaits
-from aid.coding import Coding, coding_tools
+from aid.coding import CODING, Coding, coding_tools
 from aid.discovery import Catalog
 from aid.messages import (
     ModelMessage,
@@ -410,3 +410,48 @@ async def test_catalog_tool_errors_go_back_to_the_model(tmp_path: Path) -> None:
         assert (await session.prompt("go", emit)).stop_reason == "end_turn"
     retries = [p for m in await stored(tmp_path) for p in m.parts if isinstance(p, RetryPromptPart)]
     assert [p.content for p in retries] == ["RuntimeError: no such session"]
+
+
+async def test_snapshot_holds_the_turn_so_far_and_closes_later_calls(tmp_path: Path) -> None:
+    """A fork starts from inside a tool call: history.json lacks the running turn, the snapshot must not."""
+    snapshots: list[Path] = []
+
+    def look() -> str:
+        return "looked"
+
+    async def fork() -> str:
+        coding = CODING.get()
+        assert coding.snapshot is not None
+        snapshots.append(await coding.snapshot("you are the fork"))
+        return "forked"
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        if any(isinstance(p, ToolReturnPart) for m in messages for p in m.parts):
+            return ModelResponse([TextPart("done")])
+        return ModelResponse(
+            [ToolCallPart("look", "{}", "c1"), ToolCallPart("fork", "{}", "c2"), ToolCallPart("look", "{}", "c3")]
+        )
+
+    async def emit(event: SessionEvent) -> None:
+        pass
+
+    earlier = [ModelRequest(parts=[UserPromptPart("earlier")]), ModelResponse([TextPart("ok")])]
+    async with backend(tmp_path, Agent(FunctionModel(respond), tools=[look, fork]), history=earlier) as session:
+        await session.prompt("go", emit)
+        with pytest.raises(AidError, match="inside a tool call"):
+            await session.snapshot("outside")
+
+    [path] = snapshots
+    seed = ModelMessagesTypeAdapter.validate_json(path.read_bytes())
+    assert path.parent == tmp_path / "forks"
+    assert seed[:2] == earlier
+    assert [p.content for p in seed[2].parts if isinstance(p, UserPromptPart)] == ["go"]
+    assert [p.tool_call_id for p in seed[3].parts if isinstance(p, ToolCallPart)] == ["c1", "c2", "c3"]
+    assert [(p.tool_call_id, p.content) for p in seed[4].parts if isinstance(p, ToolReturnPart)] == [("c1", "looked")]
+    assert [(p.tool_call_id, p.content) for p in seed[5].parts if isinstance(p, ToolReturnPart)] == [
+        ("c2", "you are the fork"),
+        ("c3", NOT_FORKED),
+    ]
+    assert len(seed) == 6
+    returns = [p.tool_call_id for m in await stored(tmp_path) for p in m.parts if isinstance(p, ToolReturnPart)]
+    assert returns == ["c1", "c2", "c3"]

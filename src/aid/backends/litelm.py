@@ -6,6 +6,7 @@ import importlib
 import json
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -63,6 +64,11 @@ RUNS_DIR = "runs"
 """pyrun's store for what the session's `python` tool runs."""
 THOUGHT_LIMIT: Final = 500
 """Characters of a thinking part kept for replay: thought serves the turn, not the replay."""
+FORKS_DIR: Final = "forks"
+"""Snapshots `snapshot` writes for forks, under the session's state directory."""
+FORK_SNAPSHOTS: Final = 16
+"""Snapshots kept: a fork copies its seed when it opens, so only recent ones are still unread."""
+NOT_FORKED: Final = "Not run in this fork: the parent session runs it."
 DEFAULT_DESIRED_MAX: Final = 100_000
 """Tokens the context gauge assumes when the session names no `max_context`. Rule of thumb: half the model's
 window; unknown models err toward compacting early, which fails safe."""
@@ -288,7 +294,10 @@ class LiteLMBackend:
         self._max_requests = max_requests
         self._refresh_instructions = refresh_instructions
         self._history_lock = anyio.Lock()
+        self._turn: list[ModelMessage] | None = None
+        self._in_flight: tuple[list[ToolCallPart], int] | None = None
         coding.compact = self.compact
+        coding.snapshot = self.snapshot
 
     def started(self) -> Started:
         return self._started
@@ -333,6 +342,7 @@ class LiteLMBackend:
         retries = 0
         scope = anyio.CancelScope()
         self._scope = scope
+        self._turn = messages
         try:
             with scope:
                 while True:
@@ -410,7 +420,8 @@ class LiteLMBackend:
                     ids = [call.tool_call_id for call in calls]
                     if any(not call_id for call_id in ids) or len(ids) != len(set(ids)):
                         raise AidError("invalid_tool_call", "response has missing or duplicate tool-call identities")
-                    for call in calls:
+                    for index, call in enumerate(calls):
+                        self._in_flight = (calls, index)
                         try:
                             tool = self._tools.get(call.tool_name)
                             await emit(to_event(call, tool.kind if tool is not None else None))
@@ -431,6 +442,8 @@ class LiteLMBackend:
             return Output(output=to_jsonable_python(output), stop_reason="end_turn" if completed else "cancelled")
         finally:
             self._scope = None
+            self._turn = None
+            self._in_flight = None
             with anyio.CancelScope(shield=True):
                 if not completed:
                     messages = interrupted_messages(messages)
@@ -463,6 +476,29 @@ class LiteLMBackend:
         """The session's monitor loop, for the worker's life: the coding tools own the watches, this only
         hosts them where turns cannot end them."""
         await self._coding.watch(notify)
+
+    async def snapshot(self, reply: str) -> Path:
+        """Write the conversation as it stands inside the running tool call, for a fork to start from: the
+        stored history, this turn so far, `reply` as this call's return, and the sibling calls after it closed
+        as not run. Stored history alone lacks the turn: it is written when the turn ends."""
+        if self._turn is None or self._in_flight is None:
+            raise AidError("no_tool_call", "a snapshot is taken only inside a tool call")
+        calls, index = self._in_flight
+        call = calls[index]
+        returns = [
+            ToolReturnPart(call.tool_name, reply, call.tool_call_id),
+            *(ToolReturnPart(later.tool_name, NOT_FORKED, later.tool_call_id) for later in calls[index + 1 :]),
+        ]
+        async with self._history_lock:
+            messages = [*self._history, *self._turn, ModelRequest(parts=returns)]
+        forks = self._history_file.parent / FORKS_DIR
+        await forks.mkdir(exist_ok=True)
+        path = forks / f"{uuid.uuid4().hex[:12]}.json"
+        await _write_atomic(path, ModelMessagesTypeAdapter.dump_json(messages))
+        kept = sorted([((await old.stat()).st_mtime, str(old)) async for old in forks.glob("*.json")])
+        for _, old in kept[:-FORK_SNAPSHOTS]:
+            await anyio.Path(old).unlink(missing_ok=True)
+        return Path(path)
 
     async def compact(self, instructions: str) -> str:
         """Summarize the history into a digest focused by `instructions`, and replace everything before the
