@@ -195,6 +195,12 @@ async def test_button_calls_post_to_the_bot_api() -> None:
     ]
 
 
+async def test_send_takes_the_sent_message_telegram_answers() -> None:
+    sent = {"message_id": 1, "date": 0, "chat": {"id": 7, "type": "private"}, "text": "hi"}
+    async with httpx.AsyncClient(transport=_transport([], sent)) as http:
+        await Bot("tok", client=http).send(7, "hi")
+
+
 async def test_bot_api_failure_raises() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/bottok/sendMessage":

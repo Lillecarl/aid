@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import anyio
 import httpx
 import structlog
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 from aid.client import daemon_call
 from aid.protocol import (
@@ -182,9 +182,13 @@ class _UpdatesBody(_ApiBody):
 
 def _body[M: _ApiBody](model: type[M], response: httpx.Response) -> M:
     try:
-        body = model.model_validate(response.json())
+        data = response.json()
     except ValueError:
         raise BotError(response.status_code, "not Telegram JSON") from None
+    try:
+        body = model.model_validate(data)
+    except ValidationError as error:
+        raise BotError(response.status_code, f"unexpected Telegram answer: {error}") from None
     if not body.ok:
         raise BotError(response.status_code, body.description or "not ok", body.parameters)
     return body
@@ -254,7 +258,8 @@ class Bot:
         payload: dict[str, JsonValue] = {"chat_id": chat_id, "text": text}
         if (keyboard := _markup(markup)) is not None:
             payload["reply_markup"] = keyboard
-        _body(_SendBody, await self._client.post(f"{self._base}/sendMessage", json=payload))
+        # Answers the sent Message, not true.
+        _body(_ApiBody, await self._client.post(f"{self._base}/sendMessage", json=payload))
 
     async def edit(self, chat_id: int, message_id: int, text: str, markup: tuple[tuple[Button, ...], ...] = ()) -> None:
         """Rewrite a message the bot sent, buttons included. Answers a `Message`, not true, hence `_ApiBody`."""
