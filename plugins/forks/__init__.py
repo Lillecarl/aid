@@ -18,7 +18,7 @@ import anyio
 import structlog
 
 import aid
-from aid.protocol import AidError, GetSpec, Output, Usage
+from aid.protocol import AidError, GetSpec, Output, TurnError, Usage
 from aid.spec import AgentSpecAdapter, LiteLMSpec
 
 if TYPE_CHECKING:
@@ -41,6 +41,18 @@ PREAMBLE: Final = (
 
 def is_fork(name: str) -> bool:
     return FORK_NAME.search(name) is not None
+
+
+def answer_text(name: str, output: Output) -> str:
+    text = output.output if isinstance(output.output, str) else json.dumps(output.output)
+    if output.stop_reason != "end_turn":
+        return f"Fork {name} stopped ({output.stop_reason}) before it finished. Its last words:\n{text}"
+    return text or "(the fork answered with no text)"
+
+
+def parents_usage(name: str, usage: Usage) -> Usage:
+    """The fork's turn as its parent records it. Its context gauge measures the fork, not the parent."""
+    return usage.model_copy(update={"agent": f"fork {name}", "context_used": None, "context_size": None})
 
 
 @aid.mcptool
@@ -76,8 +88,7 @@ class Forks(aid.Plugin):
         self._client = client
         for info in await client.sessions():
             if info.parent is not None and is_fork(info.name):
-                log.info("fork_leftover_deleted", fork=info.name)
-                await client.session(info.name).delete()
+                await self._recover(info.parent, info.name)
         async with anyio.create_task_group() as tg:
             self._tg = tg
             await anyio.sleep_forever()
@@ -114,26 +125,54 @@ class Forks(aid.Plugin):
             async for event in client.session(name).stream(instructions):
                 match event:
                     case Usage():
-                        # Its context gauge measures the fork, not the parent that records this.
-                        update = {"agent": f"fork {name}", "context_used": None, "context_size": None}
-                        usage = event.model_copy(update=update)
-                    case Output(output=output, stop_reason=reason):
-                        text = output if isinstance(output, str) else json.dumps(output)
-                        if reason != "end_turn":
-                            text = f"Fork {name} stopped ({reason}) before it finished. Its last words:\n{text}"
+                        usage = parents_usage(name, event)
+                    case Output():
+                        text = answer_text(name, event)
                     case _:
                         pass
         except AidError as error:
             text = f"Fork {name} failed: {error.code}: {error.message}"
         finally:
             with anyio.move_on_after(CLEANUP_TIMEOUT, shield=True):
-                try:
-                    await client.send_message(
-                        parent, text or "(the fork answered with no text)", sender=name, usage=usage
-                    )
-                except AidError as error:
-                    log.warning("fork_answer_undelivered", fork=name, parent=parent, code=error.code)
-                try:
-                    await client.session(name).delete()
-                except AidError as error:
-                    log.warning("fork_delete_failed", fork=name, code=error.code)
+                await self._finish(parent, name, text, usage)
+
+    async def _recover(self, parent: str, name: str) -> None:
+        """A fork this plugin's last run left behind: the daemon or the plugin restarted while it ran, or before
+        its answer went out. Its recorded turn, if it ended, is still the answer; else the parent hears it is lost."""
+        client = self._client
+        assert client is not None
+        text = (
+            f"Fork {name} was lost: aid restarted before it answered. Whatever it did is unknown; "
+            "fork again if you still need the answer."
+        )
+        usage: Usage | None = None
+        ended = False
+        try:
+            entries = (await client.session(name).history(limit=1000)).entries
+        except AidError as error:
+            log.warning("fork_history_unread", fork=name, code=error.code)
+            entries = []
+        for entry in entries:
+            match entry.item:
+                case Usage(agent=None) as turn:
+                    usage = parents_usage(name, turn)
+                case Output() as output:
+                    text, ended = answer_text(name, output), True
+                case TurnError(code=code, message=message):
+                    text, ended = f"Fork {name} failed: {code}: {message}", True
+                case _:
+                    pass
+        log.info("fork_recovered", fork=name, parent=parent, ended=ended)
+        await self._finish(parent, name, text, usage)
+
+    async def _finish(self, parent: str, name: str, text: str, usage: Usage | None) -> None:
+        client = self._client
+        assert client is not None
+        try:
+            await client.send_message(parent, text, sender=name, usage=usage)
+        except AidError as error:
+            log.warning("fork_answer_undelivered", fork=name, parent=parent, code=error.code)
+        try:
+            await client.session(name).delete()
+        except AidError as error:
+            log.warning("fork_delete_failed", fork=name, code=error.code)

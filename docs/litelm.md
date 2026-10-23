@@ -66,7 +66,10 @@ task: a lookup, a file read, a check of one claim. The calling session keeps wor
 - A seeded session does not compose instructions. Its requests start with the parent's requests, so the provider's
   prompt cache covers the shared part. Thinking from the parent's running turn is trimmed in the fork, so the
   cache match can end at the first long thought of that turn.
-- A session with a `parent` cannot fork. A daemon restart deletes forks that were still running; their parents get no answer.
+- A session with a `parent` cannot fork.
+- When the plugin starts, it finishes the forks its last run left behind, for example after a daemon restart. A fork
+  whose turn ended sends its recorded answer and usage. Any other fork tells its parent it was lost. Then the plugin
+  deletes both.
 
 Stored `pydantic-ai` session kinds remain readable. Their workers use the LiteLM backend.
 The aliases `aid.PydanticAISpec` and `aid.PydanticAgent` refer to the native spec and definition contract.

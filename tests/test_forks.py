@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -17,7 +18,7 @@ from plugins.forks import PREAMBLE, is_fork
 from tests.conftest import py_spec
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator
 
     from pydantic import JsonValue
 
@@ -30,23 +31,30 @@ TIMEOUT = int(os.environ.get("AID_TEST_TIMEOUT", "30"))
 PLUGINS = Path(__file__).parent.parent / "plugins"
 
 
-@pytest.fixture
-async def daemon(paths: Paths, launcher: ForkserverLauncher, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Paths]:
-    """A daemon hosting the bundled plugins, forks serving before the test starts."""
-    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+@asynccontextmanager
+async def serving(paths: Paths, launcher: ForkserverLauncher, plugin_dirs: list[Path]) -> AsyncGenerator[Paths]:
+    """A daemon on `paths`; with the bundled plugins, forks serving before it yields."""
     async with anyio.create_task_group() as tg:
-        await tg.start(Daemon(paths, launcher, plugin_dirs=[PLUGINS]).serve)
-        async with aid.connect(paths) as client:
-            with anyio.fail_after(TIMEOUT):
-                while True:
-                    try:
-                        await client.call_plugin("forks", "probe")
-                    except aid.AidError as error:
-                        if error.code != "no_plugin":
-                            break
-                    await anyio.sleep(0.05)
+        await tg.start(Daemon(paths, launcher, plugin_dirs=plugin_dirs).serve)
+        if plugin_dirs:
+            async with aid.connect(paths) as client:
+                with anyio.fail_after(TIMEOUT):
+                    while True:
+                        try:
+                            await client.call_plugin("forks", "probe")
+                        except aid.AidError as error:
+                            if error.code != "no_plugin":
+                                break
+                        await anyio.sleep(0.05)
         yield paths
         tg.cancel_scope.cancel()
+
+
+@pytest.fixture
+async def daemon(paths: Paths, launcher: ForkserverLauncher, monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[Paths]:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    async with serving(paths, launcher, [PLUGINS]) as served:
+        yield served
 
 
 def forks_only(tmp_path: Path) -> str:
@@ -110,3 +118,31 @@ async def test_only_a_litelm_session_without_a_parent_may_fork(daemon: Paths, tm
         with pytest.raises(aid.AidError, match="cannot fork"):
             await fork("child")
         assert {info.name for info in await client.sessions()} == {"plain", "child"}
+
+
+async def test_a_restart_delivers_a_finished_forks_answer_and_reports_a_lost_one(
+    paths: Paths, launcher: ForkserverLauncher, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Forks the plugin's last run left behind: one whose turn ended still answers, with its usage; one that
+    never ended is reported lost. Both are deleted."""
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    child = py_spec(tmp_path, "agents:echo").model_copy(update={"parent": "parent"})
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher, []), aid.connect(paths) as client:
+            await client.create("parent", py_spec(tmp_path, "agents:echo"))
+            finished = await client.create("parent.fork-aaaaaa", child)
+            await client.create("parent.fork-bbbbbb", child)
+            await finished.run("look it up")
+        async with serving(paths, launcher, [PLUGINS]), aid.connect(paths) as client:
+            parent = client.session("parent")
+            while True:
+                entries = (await parent.history(limit=1000)).entries
+                names = {info.name for info in await client.sessions()}
+                if sum(isinstance(e.item, MessageEntry) for e in entries) == 2 and names == {"parent"}:
+                    break
+                await anyio.sleep(0.05)
+    messages = {e.item.sender: e.item.text for e in entries if isinstance(e.item, MessageEntry)}
+    assert messages["parent.fork-aaaaaa"] == "turn 1: echo look it up"
+    assert messages["parent.fork-bbbbbb"].startswith("Fork parent.fork-bbbbbb was lost")
+    [usage] = [e.item for e in entries if isinstance(e.item, Usage) and e.item.agent is not None]
+    assert usage.agent == "fork parent.fork-aaaaaa"
