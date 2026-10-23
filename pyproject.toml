@@ -58,7 +58,10 @@ packages = ["src/aid"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "--dist loadgroup"
+# xonsh (a dependency, for the python tool's xonsh mode) registers a pytest plugin that builds its parser tables
+# in a background thread at startup: ~2.7 s holding the GIL in every pytest process, enough to starve tests with
+# short deadlines. Nothing here collects xonsh tests.
+addopts = "--dist loadgroup -p no:xonsh"
 filterwarnings = ["error"]
 
 [tool.pyright]
