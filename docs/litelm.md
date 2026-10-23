@@ -49,6 +49,22 @@ sent to Anthropic. Chat Completions providers get reasoning text back as `reason
 Wire-only session metadata never enters stored history.
 Each model keeps one SDK client per configuration. Worker shutdown closes them.
 
+## Forks
+
+The bundled `forks` plugin gives every LiteLM session the `fork(instructions)` tool. Use it for a narrow side
+task: a lookup, a file read, a check of one claim. The calling session keeps working.
+
+- The backend writes a snapshot of the conversation inside the call (`Coding.snapshot`) to `forks/<id>.json` in
+  the session's state directory. The snapshot holds the running turn, which `history.json` does not hold yet.
+- The plugin creates `<parent>.fork-<hex>` from the parent's spec, with `seed_history` set to the snapshot and no
+  supervisor. It prompts the fork with the instructions.
+- The fork's final answer arrives at the parent as a message from the fork. The message wakes the parent. The
+  plugin then deletes the fork. A failed or cancelled fork also sends a message.
+- A seeded session does not compose instructions. Its requests start with the parent's requests, so the provider's
+  prompt cache covers the shared part. Thinking from the parent's running turn is trimmed in the fork, so the
+  cache match can end at the first long thought of that turn.
+- A fork cannot fork. A daemon restart deletes forks that were still running; their parents get no answer.
+
 Stored `pydantic-ai` session kinds remain readable. Their workers use the LiteLM backend.
 The aliases `aid.PydanticAISpec` and `aid.PydanticAgent` refer to the native spec and definition contract.
 Agent modules must replace PydanticAI imports with `aid.Agent` and use slash-separated model names.

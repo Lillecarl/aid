@@ -137,6 +137,11 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - `plugins/skills/` — Agent Skills, bundled: an `InstructionsProvider` lists each skill's name and description, the
   `skill` tool loads a body or file. Spec-checked frontmatter (YAML); project `.aid|.agents|.claude/skills` up to the
   git root, then `AID_SKILLS_PATH`, then the global dirs, then each resolved plugin's `skills/`.
+- `plugins/forks/` — short-lived forks, bundled, `autostart` (read, prompt, message, manage, supervise). Tool
+  `fork(instructions)`: `Coding.snapshot` writes the conversation inside the call (history.json lacks the running
+  turn) to `state_dir/forks/`; the plugin creates `<parent[:52]>.fork-<6hex>` from the parent's `LiteLMSpec` with
+  `seed_history` (a seeded session skips instruction composing: same cache prefix), prompts it, sends the answer
+  to the parent as the fork (wakes it), deletes it. Forks can't fork; leftovers deleted at plugin start.
 - `src/aid/backends/` — `acp.py`, `litelm.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/model.py` — the `litelm` backend's transports (no LiteLM library; the name stays): `model_for(name)`,
   `anthropic/` → `AnthropicModel` (Messages API, native blocks, `extra_headers` carry betas, automatic caching
