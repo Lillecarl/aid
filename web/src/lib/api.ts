@@ -10,6 +10,7 @@ import type {
   FileView,
   HistoryEntry,
   HistoryPage,
+  LiveChunk,
   PageReply,
   PageRequest,
   SessionEvent,
@@ -201,6 +202,18 @@ export const followHistory = (
     open: onopen,
   });
 
+/** Output the session's agent pipes through `usertee`, as it comes. `onopen` runs on each subscription: fetch what the
+ * daemon holds. Never recorded, so a chunk the relay dropped is gone. */
+export const followLive = (
+  name: string,
+  onchunk: (chunk: LiveChunk) => void,
+  onopen: () => void,
+) =>
+  listen(`session/${name}/live/`, {
+    message: (payload) => onchunk(JSON.parse(decoder.decode(payload)) as LiveChunk),
+    open: onopen,
+  });
+
 // Plain HTTP: what aid web answers itself. ------------------------------------------------------------------------
 
 let csrf = "";
@@ -287,6 +300,10 @@ export const history = async (
 
 export const summary = async (name: string): Promise<SessionSummary> =>
   (await call({ op: "summary", session: name })) as SessionSummary;
+
+/** The `usertee` output the daemon still holds for a session: the newest of its latest turn's. */
+export const live = async (name: string): Promise<LiveChunk> =>
+  (await call({ op: "live", session: name })) as LiveChunk;
 
 export async function control(
   name: string,

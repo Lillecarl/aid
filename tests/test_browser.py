@@ -12,6 +12,7 @@ isolated tab from its cookies. Tests seed their sessions on the shared session d
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, cast
 
 import anyio
@@ -321,6 +322,22 @@ async def test_fork_usage_names_the_fork(page: Page, session_daemon: Paths, tmp_
         await client.send_message("forker", "the answer", sender="forker.fork-abcdef", usage=usage)
     await expect_chat_text(page, "fork forker.fork-abcdef · local · 1.2k in")
     assert await page.get_by_test_id("chat-row").filter(has_text="subagent fork").count() == 0
+
+
+async def test_usertee_output_shows_live_until_the_turn_ends(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """What a command pipes through `usertee` shows while the turn runs, though `tail` keeps only its last line
+    from the agent, and goes when the turn ends: it is never recorded."""
+    gate = tmp_path / "tee-gate"
+    command = f"printf 'step 1\\nstep 2\\n' | usertee | tail -n 1; while [ ! -e {gate} ]; do sleep 0.1; done"
+    await seed_session(session_daemon, tmp_path, "teeing", "agents:coder", PermissionMode.ALLOW)
+    await open_session(page, "teeing")
+    await send_chat(page, json.dumps([["shell", {"command": command}]]))
+    block = page.get_by_test_id("live-output")
+    await block.wait_for(timeout=TIMEOUT * 1000)
+    assert "step 1\nstep 2" in (await block.locator("pre").text_content() or "")
+    await anyio.Path(gate).write_text("go")
+    await wait_for_idle(page)
+    await block.wait_for(state="detached", timeout=TIMEOUT * 1000)
 
 
 async def test_thinking_visible_until_done(page: Page, session_daemon: Paths, tmp_path: Path) -> None:

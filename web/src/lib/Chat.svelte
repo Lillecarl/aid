@@ -5,6 +5,7 @@
     HistoryEntry,
     HistoryItem,
     Lifecycle,
+    LiveChunk,
     PermissionDecision,
     PermissionRequest,
     SessionEvent,
@@ -46,6 +47,8 @@
 
   const PAGE = 100;
   const EDGE_PX = 200;
+  /** Lines of `usertee` output the live block keeps; the daemon holds its own newest 64K characters. */
+  const LIVE_LINES = 2000;
   const WINDOW_KEY = "aid.historyWindow";
   const THINKING_KEY = "aid.thinking";
 
@@ -68,6 +71,18 @@
   let busy = $state(false);
   let log: HTMLDivElement | undefined = $state();
   let liveCount = 0;
+  // What the agent pipes through `usertee` while a turn runs: shown live, never recorded, gone when the turn ends.
+  let live = $state<LiveChunk | null>(null);
+  let running = false;
+
+  function teed(chunk: LiveChunk): void {
+    if (!chunk.text) return;
+    const follow = nearBottom();
+    const text = live !== null && live.turn === chunk.turn ? live.text + chunk.text : chunk.text;
+    const lines = text.split("\n");
+    live = { turn: chunk.turn, text: lines.length > LIVE_LINES ? lines.slice(-LIVE_LINES).join("\n") : text };
+    if (follow) void toBottom();
+  }
 
   function rowsOf(item: HistoryItem, key: string, seq?: number): Row[] {
     const row = (kind: Kind, text: string): Row => ({ key, seq, kind, text });
@@ -511,6 +526,25 @@
         if (!busy && !loading) void reconcile().catch(() => undefined);
       });
     });
+    const unwatchStatus = api.followStatus(
+      name,
+      (status) => {
+        const now = status.busy || status.working;
+        if (running && !now) live = null;
+        running = now;
+      },
+      () => undefined,
+    );
+    // A page opened mid-command fetches what the daemon holds, but only while a turn runs: the rest is a finished
+    // turn's.
+    const unwatchLive = api.followLive(name, teed, () => {
+      api.live(name).then(
+        (chunk) => {
+          if (running) teed(chunk);
+        },
+        () => undefined,
+      );
+    });
     api.speechEnabled().then(
       (enabled) => (canDictate = enabled),
       () => (canDictate = false),
@@ -518,6 +552,8 @@
     return () => {
       mounted = false;
       unwatch?.();
+      unwatchStatus();
+      unwatchLive();
       void dictation?.stop();
     };
   });
@@ -576,6 +612,12 @@
     {#if !loading}<div class="more">No history yet.</div>{/if}
   {/each}
   {#if hasNewer}<div class="more">{loading ? "Loading…" : "Scroll down for newer entries"}</div>{/if}
+  {#if live !== null && !hasNewer}
+    <details class="live" data-testid="live-output" open>
+      <summary>Live output <span class="gist">{live.text.trimEnd().split("\n").at(-1)}</span></summary>
+      <pre>{live.text}</pre>
+    </details>
+  {/if}
 </div>
 <form onsubmit={send}>
   {#if slashOpen}
@@ -684,6 +726,26 @@
   .thought {
     color: var(--muted);
     font-size: 0.9em;
+  }
+  .live summary {
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 0.9em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .live[open] .gist {
+    display: none;
+  }
+  .live pre {
+    margin: 0.3rem 0 0;
+    max-height: 24em;
+    overflow: auto;
+    background: var(--code-bg);
+    padding: 0.4rem 0.6rem;
+    font-size: 0.85em;
+    white-space: pre-wrap;
   }
   .thought summary {
     cursor: pointer;
