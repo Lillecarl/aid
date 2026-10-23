@@ -10,7 +10,14 @@ import aid
 from aid.client import register_plugin
 from aid.discovery import discover
 from aid.plugins import ENV_PLUGINS_DIST, ENV_PLUGINS_PATH, Grant, PluginSpec, plugins_path
-from aid.protocol import AidError, MessageEntry, PermissionDecider, PermissionDecision, PermissionRequest
+from aid.protocol import (
+    AidError,
+    MessageEntry,
+    PermissionDecider,
+    PermissionDecision,
+    PermissionRequest,
+    Usage,
+)
 from aid.spec import PermissionMode
 from aid.zap import Keypair
 from tests.conftest import acp_spec, py_spec
@@ -102,10 +109,12 @@ async def test_a_plugins_message_names_the_plugin(daemon: Paths, tmp_path: Path)
             await control.create("echo", py_spec(tmp_path, "agents:echo"))
             await register_plugin(control, daemon, "notes", frozenset({Grant.MESSAGE}))
             async with aid.connect(daemon, plugin="notes") as notes:
-                await notes.send_message("echo", "hello", sender="echo")  # A claim the daemon replaces.
+                # Claims the daemon replaces and drops: only a supervise plugin names a sender or adds usage.
+                await notes.send_message("echo", "hello", sender="echo", usage=Usage(input_tokens=7))
             history = await control.session("echo").history()
     [message] = [e.item for e in history.entries if isinstance(e.item, MessageEntry)]
     assert message.sender == "plugin:notes"
+    assert not any(isinstance(e.item, Usage) and e.item.input_tokens == 7 for e in history.entries)
 
 
 async def test_a_plugin_granted_read_follows_what_is_published(daemon: Paths, tmp_path: Path) -> None:

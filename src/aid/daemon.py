@@ -600,7 +600,9 @@ class Daemon:
                 message = f"plugin {name!r} may not send {request.op!r}"
                 await client.send(encode(Failure(id=request.id, code="forbidden", message=message)))
                 continue
-            if isinstance(request, SendMessage) and not (request.sender and Grant.SUPERVISE in spec.grants):
+            if isinstance(request, SendMessage) and Grant.SUPERVISE not in spec.grants:
+                request = request.model_copy(update={"sender": plugins.sender(name), "usage": None})
+            elif isinstance(request, SendMessage) and not request.sender:
                 request = request.model_copy(update={"sender": plugins.sender(name)})
             self._tg.start_soon(self._handle, client, request)
 
@@ -904,7 +906,9 @@ class Daemon:
         if session.uses_channel and not session.spec.aid_tools:
             raise AidError("cannot_receive", f"{session.name!r} has aid_tools off, so nothing reads its messages")
         await self._gate_message(request)
-        await self._accept_message(session, MessageEntry(sender=request.sender, text=request.text), request.id)
+        await self._accept_message(
+            session, MessageEntry(sender=request.sender, text=request.text), request.id, request.usage
+        )
 
     async def _notify(self, session: _Session, reply: Notify) -> None:
         """A worker's watch fired: record its report and wake the session, like a message but from no person
@@ -913,12 +917,16 @@ class Daemon:
             session, MessageEntry(sender=f"{BACKGROUND_SENDER}{reply.task_id}", text=reply.text), uuid.uuid4().hex
         )
 
-    async def _accept_message(self, session: _Session, message: MessageEntry, turn: str) -> None:
+    async def _accept_message(
+        self, session: _Session, message: MessageEntry, turn: str, usage: Usage | None = None
+    ) -> None:
         """Record a message for the session and wake it: a turn of its own when idle, the next one when a
-        turn runs."""
+        turn runs. `usage`, the sender's tokens for it, follows the message in the history."""
         if self._tg is None:
             raise RuntimeError("daemon is not serving")
         await session.inbox.accept(message, turn)
+        if usage is not None:
+            await session.history.append(usage, turn)
         session.mail.set()
         # The sender is often an agent mid-turn, waiting on its tool call: it gets its answer before the wake.
         self._tg.start_soon(self._wake, session)

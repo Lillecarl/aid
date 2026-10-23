@@ -45,7 +45,7 @@ def authorize(request: Request, session: str) -> Request:
         case ListSessions() | ListAgents() | GetStatus() | GetHistory() | GetSummary() | GetScreen() | GetPane():
             return request
         case SendMessage():
-            return request.model_copy(update={"sender": session})
+            return request.model_copy(update={"sender": session, "usage": None})
         case CallPlugin():
             return request.model_copy(update={"caller": session})
         case CompactSession() | ReceiveMessages() | Hook() if request.session == session:

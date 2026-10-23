@@ -141,7 +141,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `fork(instructions)`: `Coding.snapshot` writes the conversation inside the call (history.json lacks the running
   turn) to `state_dir/forks/`; the plugin creates `<parent[:52]>.fork-<6hex>` from the parent's `LiteLMSpec` with
   `seed_history` (a seeded session skips instruction composing: same cache prefix) and `parent`, prompts it, sends
-  the answer to the parent as the fork (wakes it), deletes it. A session with a `parent` can't fork; leftovers
+  the answer to the parent as the fork with its turn `Usage` (`agent="fork <name>"`; `SendMessage.usage`, kept
+  only from control and `supervise` plugins, recorded after the message), deletes it. A session with a `parent` can't fork; leftovers
   deleted at plugin start. Spec `parent` (also on `SessionInfo`/`SessionStatus`): chat plugins skip such sessions
   (no Discord channel, no settled-turn notice, not in session lists).
 - `src/aid/backends/` — `acp.py`, `litelm.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.

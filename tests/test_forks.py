@@ -12,7 +12,7 @@ import aid
 from aid.daemon import Daemon
 from aid.paths import ENV_STATE_DIR
 from aid.plugins import ENV_PLUGINS_PATH
-from aid.protocol import CallPlugin, MessageEntry, Output
+from aid.protocol import CallPlugin, MessageEntry, Output, Usage
 from plugins.forks import PREAMBLE, is_fork
 from tests.conftest import py_spec
 
@@ -81,10 +81,16 @@ async def test_a_fork_answers_its_parent_and_is_deleted(daemon: Paths, tmp_path:
                 names = {info.name for info in await client.sessions()}
                 woken = messages and any(isinstance(e.item, Output) for e in entries if e.seq > messages[0].seq)
                 if woken and names == {"parent"}:
+                    summary = await parent.summary()
                     break
                 await anyio.sleep(0.05)
     [message] = [e.item for e in messages if isinstance(e.item, MessageEntry)]
     assert message.sender is not None and is_fork(message.sender)
+    # The fork's turn is recorded in the parent right after its answer, and the parent's totals count it.
+    after = next(e.item for e in entries if e.seq > messages[0].seq)
+    assert isinstance(after, Usage) and after.agent == f"fork {message.sender}"
+    assert after.requests == 1 and after.context_used is None
+    assert summary.requests == 3 + 1 + 1  # The parent's turn, the fork's, the parent's wake.
     assert "the answer is 42" in message.text
     assert PREAMBLE in message.text
 

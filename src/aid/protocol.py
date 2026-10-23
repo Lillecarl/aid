@@ -121,6 +121,10 @@ class SendMessage(_Request):
     to: str
     text: str
     sender: str | None = None
+    usage: Usage | None = None
+    """Tokens the sender's work for this message used, such as a fork's turn. The daemon records it in the
+    recipient's history after the message, so its summary counts it. Kept from the control socket and from a
+    `supervise` plugin; dropped from an agent or any other plugin."""
 
 
 class ReceiveMessages(_Request):
@@ -547,7 +551,8 @@ class Usage(_Message):
     context_size: int | None = None
     agent: str | None = None
     """Set for a subagent's tokens (interactive Claude): its type, or `subagent` where Claude names none. They
-    are the subagent's own, recorded when it stops, and not in the turn's Usage."""
+    are the subagent's own, recorded when it stops, and not in the turn's Usage. A fork's turn, recorded in its
+    parent after the fork's answer, is `fork <name>`."""
     session_cost: Cost | None = None
     """The agent's own running total for its session, not this turn's share: ACP's `usage_update` cost is
     cumulative. It restarts with the agent's session."""

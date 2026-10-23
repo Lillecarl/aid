@@ -24,7 +24,9 @@ from aid.protocol import (
     MessageEntry,
     ReceiveMessages,
     RequestAdapter,
+    SendMessage,
     Started,
+    Usage,
     decode_reply,
     encode,
 )
@@ -204,6 +206,11 @@ def test_agent_requests_cannot_use_administrator_authority(op: str) -> None:
     request = RequestAdapter.validate_python({"op": op, **bodies[op]})
     with pytest.raises(AidError, match="forbidden"):
         authorize(request, "actor")
+
+
+def test_an_agents_message_names_its_own_session_and_claims_no_usage() -> None:
+    claimed = SendMessage(to="other", text="hi", sender="someone else", usage=Usage(input_tokens=1))
+    assert authorize(claimed, "actor") == claimed.model_copy(update={"sender": "actor", "usage": None})
 
 
 def test_an_agents_plugin_call_names_its_own_session() -> None:

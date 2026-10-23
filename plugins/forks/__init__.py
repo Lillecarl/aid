@@ -18,7 +18,7 @@ import anyio
 import structlog
 
 import aid
-from aid.protocol import AidError, GetSpec
+from aid.protocol import AidError, GetSpec, Output, Usage
 from aid.spec import AgentSpecAdapter, LiteLMSpec
 
 if TYPE_CHECKING:
@@ -109,18 +109,28 @@ class Forks(aid.Plugin):
         client = self._client
         assert client is not None
         text = f"Fork {name} ended without an answer."
+        usage: Usage | None = None
         try:
-            result = await client.session(name).run(instructions)
-            output = result.output
-            text = output if isinstance(output, str) else json.dumps(output)
-            if result.stop_reason != "end_turn":
-                text = f"Fork {name} stopped ({result.stop_reason}) before it finished. Its last words:\n{text}"
+            async for event in client.session(name).stream(instructions):
+                match event:
+                    case Usage():
+                        # Its context gauge measures the fork, not the parent that records this.
+                        update = {"agent": f"fork {name}", "context_used": None, "context_size": None}
+                        usage = event.model_copy(update=update)
+                    case Output(output=output, stop_reason=reason):
+                        text = output if isinstance(output, str) else json.dumps(output)
+                        if reason != "end_turn":
+                            text = f"Fork {name} stopped ({reason}) before it finished. Its last words:\n{text}"
+                    case _:
+                        pass
         except AidError as error:
             text = f"Fork {name} failed: {error.code}: {error.message}"
         finally:
             with anyio.move_on_after(CLEANUP_TIMEOUT, shield=True):
                 try:
-                    await client.send_message(parent, text or "(the fork answered with no text)", sender=name)
+                    await client.send_message(
+                        parent, text or "(the fork answered with no text)", sender=name, usage=usage
+                    )
                 except AidError as error:
                     log.warning("fork_answer_undelivered", fork=name, parent=parent, code=error.code)
                 try:

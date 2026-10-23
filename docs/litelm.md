@@ -61,6 +61,8 @@ task: a lookup, a file read, a check of one claim. The calling session keeps wor
 - The chat plugins skip a session with a `parent`: it gets no Discord channel and no turn-end notice.
 - The fork's final answer arrives at the parent as a message from the fork. The message wakes the parent. The
   plugin then deletes the fork. A failed or cancelled fork also sends a message.
+- The fork's turn usage follows its message in the parent's history, as `Usage` with `agent` set to
+  `fork <name>`. The parent's summary counts it.
 - A seeded session does not compose instructions. Its requests start with the parent's requests, so the provider's
   prompt cache covers the shared part. Thinking from the parent's running turn is trimmed in the fork, so the
   cache match can end at the first long thought of that turn.
