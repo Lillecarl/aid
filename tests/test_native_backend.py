@@ -37,7 +37,7 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.model import ModelInfo, StreamDelta
+from aid.model import ModelInfo, RequestUsage, StreamDelta
 from aid.protocol import AidError, Output, SessionEvent, Started, TextDelta, ToolCall, Usage
 from aid.spec import PermissionMode
 from aid.tools import McpTool
@@ -314,6 +314,27 @@ async def test_continuing_stops_at_the_bound_and_without_text(tmp_path: Path) ->
         async with backend(tmp_path / name, Agent(model, max_continuations=limit)) as session:
             assert await session.prompt("go", emit) == Output(output=output, stop_reason="max_tokens"), name
         assert model.requests == requests, name
+
+
+@pytest.mark.parametrize("reasoning", [None, 5])
+async def test_uncounted_thinking_stays_unknown(tmp_path: Path, reasoning: int | None) -> None:
+    """Anthropic counts thinking inside `output_tokens` and reports no figure of its own: unknown, not zero."""
+
+    class Thinking(TestModel):
+        async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
+            yield StreamDelta(1, ThinkingPart("hmm"))
+            yield StreamDelta(0, TextPart("done"))
+            yield StreamDelta(usage=RequestUsage(input_tokens=3, output_tokens=7, reasoning_tokens=reasoning))
+
+    events: list[SessionEvent] = []
+
+    async def emit(event: SessionEvent) -> None:
+        events.append(event)
+
+    async with backend(tmp_path, Agent(Thinking())) as session:
+        await session.prompt("go", emit)
+    usage = next(event for event in events if isinstance(event, Usage))
+    assert (usage.output_tokens, usage.thought_tokens) == (7, reasoning)
 
 
 async def test_missing_usage_stays_unknown(tmp_path: Path) -> None:

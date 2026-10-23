@@ -60,7 +60,8 @@ class RequestUsage:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
-    reasoning_tokens: int = 0
+    reasoning_tokens: int | None = None
+    """None: the provider counts no thinking apart (Anthropic bills it inside `output_tokens`)."""
 
 
 @dataclass
@@ -308,7 +309,7 @@ def _openai_usage(usage: CompletionUsage) -> RequestUsage:
         input_tokens=usage.prompt_tokens or 0,
         output_tokens=usage.completion_tokens or 0,
         cache_read_tokens=cached,
-        reasoning_tokens=(completion and completion.reasoning_tokens) or 0,
+        reasoning_tokens=completion.reasoning_tokens if completion else None,
     )
 
 

@@ -439,11 +439,9 @@ class NativeBackend:
                                 if delta.usage is not None:
                                     usage_observed = True
                                     for name in RequestUsage.__dataclass_fields__:
-                                        setattr(
-                                            request_usage,
-                                            name,
-                                            max(getattr(request_usage, name), getattr(delta.usage, name)),
-                                        )
+                                        counts = [getattr(request_usage, name), getattr(delta.usage, name)]
+                                        known = [count for count in counts if count is not None]
+                                        setattr(request_usage, name, max(known) if known else None)
                                 if isinstance(delta.part, TextPart) and delta.part.content:
                                     if held is None:
                                         await emit(TextDelta(text=delta.part.content))
@@ -468,7 +466,9 @@ class NativeBackend:
                                     + request_usage.cache_read_tokens,
                                     "cache_write_tokens": (usage.cache_write_tokens or 0)
                                     + request_usage.cache_write_tokens,
-                                    "thought_tokens": (usage.thought_tokens or 0) + request_usage.reasoning_tokens,
+                                    "thought_tokens": usage.thought_tokens
+                                    if request_usage.reasoning_tokens is None
+                                    else (usage.thought_tokens or 0) + request_usage.reasoning_tokens,
                                 }
                             )
                         resolved_model = response.model_name or self._model.model_name
