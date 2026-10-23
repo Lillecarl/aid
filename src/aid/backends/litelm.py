@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Any, Final
 
 import anyio
 import anyio.to_thread
-import litelm
 import structlog
 from anyio.lowlevel import checkpoint
 from pydantic import ValidationError
@@ -36,7 +35,7 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.model import LiteLMModel, Model, ModelInfo, RequestUsage, accumulate
+from aid.model import AnthropicModel, Model, ModelInfo, OpenAIChatModel, RequestUsage, accumulate, model_for
 from aid.protocol import (
     AidError,
     Output,
@@ -269,7 +268,11 @@ class LiteLMBackend:
         self._toolsets = toolsets
         self._started = started
         self._scope: anyio.CancelScope | None = None
-        self._model: Model = LiteLMModel(agent.model) if isinstance(agent.model, str) else agent.model
+        self._owned: OpenAIChatModel | AnthropicModel | None = None
+        model = agent.model
+        if isinstance(model, str):
+            model = self._owned = model_for(model)
+        self._model: Model = model
         tools: dict[str, Tool] = {}
         functions = [*agent.tools, *(fn for toolset in [*agent.toolsets, *toolsets] for fn in toolset.tools)]
         for fn in functions:
@@ -289,6 +292,11 @@ class LiteLMBackend:
 
     def started(self) -> Started:
         return self._started
+
+    async def aclose(self) -> None:
+        """Closes the SDK clients of a model built from the agent's name; a model object is its owner's."""
+        if self._owned is not None:
+            await self._owned.aclose()
 
     def _preserve_signed_thinking(self) -> bool:
         """Anthropic rejects a signed block whose signature the wire dropped, so keep them whole."""
@@ -561,8 +569,9 @@ async def open_litelm(spec: LiteLMSpec, state_dir: anyio.Path) -> AsyncGenerator
         hooks=tuple(spec.hooks),
         waits=PermissionWaits(),
     )
+    backend: LiteLMBackend | None = None
     try:
-        yield LiteLMBackend(
+        backend = LiteLMBackend(
             agent,
             history_file,
             history,
@@ -573,9 +582,11 @@ async def open_litelm(spec: LiteLMSpec, state_dir: anyio.Path) -> AsyncGenerator
             max_requests=spec.max_requests,
             refresh_instructions=refresh_instructions,
         )
+        yield backend
     finally:
         with anyio.CancelScope(shield=True):
             try:
                 await coding.close()
             finally:
-                await litelm.close_litelm_async_clients()
+                if backend is not None:
+                    await backend.aclose()

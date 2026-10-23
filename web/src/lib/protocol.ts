@@ -540,7 +540,8 @@ export interface PermissionDecision {
  * What "the turn" covers differs by agent (measured 2026-09):
  * - claude-agent-acp 0.75.1: every model call of the turn, subagents included.
  * - opencode 1.x: the turn's last model response only.
- * - LiteLM: the run, every request.
+ * - LiteLM: the run, every request. `input_tokens` follows the provider: Chat Completions counts cache reads
+ *   in it, Anthropic's Messages API does not.
  * - claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,
  *   which aid does not read.
  *

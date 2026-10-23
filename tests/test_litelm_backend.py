@@ -58,19 +58,23 @@ async def backend(
         timeout=10,
         waits=PermissionWaits(),
     )
+    session = LiteLMBackend(
+        agent,
+        anyio.Path(directory / "history.json"),
+        history or [],
+        [],
+        Started(pid=1, agent="test", model="local"),
+        coding,
+        max_requests=max_requests,
+        desired_max=desired_max,
+    )
     try:
-        yield LiteLMBackend(
-            agent,
-            anyio.Path(directory / "history.json"),
-            history or [],
-            [],
-            Started(pid=1, agent="test", model="local"),
-            coding,
-            max_requests=max_requests,
-            desired_max=desired_max,
-        )
+        yield session
     finally:
-        await coding.close()
+        try:
+            await session.aclose()
+        finally:
+            await coding.close()
 
 
 async def stored(directory: Path) -> list[ModelMessage]:
