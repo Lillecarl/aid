@@ -73,14 +73,20 @@
   let liveCount = 0;
   // What the agent pipes through `usertee` while a turn runs: shown live, never recorded, gone when the turn ends.
   let live = $state<LiveChunk | null>(null);
+  let livePre: HTMLPreElement | undefined = $state();
   let running = false;
 
-  function teed(chunk: LiveChunk): void {
+  async function teed(chunk: LiveChunk): Promise<void> {
     if (!chunk.text) return;
+    // Each box follows its own bottom: the log, and the live block's own scroll area, kept at the end while it is
+    // there and left alone once the person scrolls up in it.
     const follow = nearBottom();
+    const followPre = !livePre || livePre.scrollHeight - livePre.scrollTop - livePre.clientHeight < EDGE_PX / 4;
     const text = live !== null && live.turn === chunk.turn ? live.text + chunk.text : chunk.text;
     const lines = text.split("\n");
     live = { turn: chunk.turn, text: lines.length > LIVE_LINES ? lines.slice(-LIVE_LINES).join("\n") : text };
+    await tick();
+    if (followPre && livePre) livePre.scrollTop = livePre.scrollHeight;
     if (follow) void toBottom();
   }
 
@@ -537,10 +543,10 @@
     );
     // A page opened mid-command fetches what the daemon holds, but only while a turn runs: the rest is a finished
     // turn's.
-    const unwatchLive = api.followLive(name, teed, () => {
+    const unwatchLive = api.followLive(name, (chunk) => void teed(chunk), () => {
       api.live(name).then(
         (chunk) => {
-          if (running) teed(chunk);
+          if (running) void teed(chunk);
         },
         () => undefined,
       );
@@ -615,7 +621,7 @@
   {#if live !== null && !hasNewer}
     <details class="live" data-testid="live-output" open>
       <summary>Live output <span class="gist">{live.text.trimEnd().split("\n").at(-1)}</span></summary>
-      <pre>{live.text}</pre>
+      <pre bind:this={livePre}>{live.text}</pre>
     </details>
   {/if}
 </div>

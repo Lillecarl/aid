@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
 
-    from playwright.async_api import Page
+    from playwright.async_api import Locator, Page
 
     from aid.paths import Paths
 
@@ -338,6 +338,36 @@ async def test_usertee_output_shows_live_until_the_turn_ends(page: Page, session
     await anyio.Path(gate).write_text("go")
     await wait_for_idle(page)
     await block.wait_for(state="detached", timeout=TIMEOUT * 1000)
+
+
+async def test_live_output_follows_its_end_until_scrolled_up(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """The live block's own scroll area keeps to its last line while it is there, and stays where the person
+    scrolled once they scroll up."""
+    first, second = tmp_path / "first", tmp_path / "second"
+    wait = "while [ ! -e {} ]; do sleep 0.1; done"
+    command = (
+        f"seq 1 300 | usertee >/dev/null; {wait.format(first)}; seq 301 400 | usertee >/dev/null; {wait.format(second)}"
+    )
+    await seed_session(session_daemon, tmp_path, "scroller", "agents:coder", PermissionMode.ALLOW)
+    await open_session(page, "scroller")
+    await send_chat(page, json.dumps([["shell", {"command": command}]]))
+    pre = page.get_by_test_id("live-output").locator("pre")
+    await expect_text(pre, "300")
+    assert await pre.evaluate("p => p.scrollHeight - p.scrollTop - p.clientHeight") < 5
+    await pre.evaluate("p => { p.scrollTop = 0; }")
+    await anyio.Path(first).write_text("go")
+    await expect_text(pre, "400")
+    assert await pre.evaluate("p => p.scrollTop") == 0
+    await anyio.Path(second).write_text("go")
+    await wait_for_idle(page)
+
+
+async def expect_text(locator: Locator, text: str) -> None:
+    with anyio.fail_after(TIMEOUT):
+        while True:
+            if text in (await locator.text_content() or ""):
+                return
+            await anyio.sleep(0.05)
 
 
 async def test_thinking_visible_until_done(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
