@@ -1,7 +1,7 @@
 """Async Python API for the aid daemon.
 
 async with aid.connect() as client:
-    session = await client.create("reviewer", LiteLMSpec(cwd=".", target="agents:reviewer"))
+    session = await client.create("reviewer", NativeSpec(cwd=".", target="agents:reviewer"))
     result = await session.run("Review this diff", output_type=Review)
 """
 

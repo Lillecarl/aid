@@ -10,7 +10,7 @@ from pydantic import ValidationError
 from aid.control import ENV_AGENT_CONNECTION, AgentConnection
 from aid.launcher import PRELOAD, ForkserverLauncher, WorkerArgs, process_main
 from aid.paths import hook_socket
-from aid.spec import LiteLMSpec
+from aid.spec import NativeSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -28,12 +28,12 @@ def test_preload_keeps_worker_code_fresh() -> None:
 
 def test_worker_endpoint_needs_command(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="need worker_command"):
-        LiteLMSpec(cwd=str(tmp_path), target="agents:echo", worker_endpoint="ipc://x")
+        NativeSpec(cwd=str(tmp_path), target="agents:echo", worker_endpoint="ipc://x")
     with pytest.raises(ValidationError, match="need worker_command"):
-        LiteLMSpec(cwd=str(tmp_path), target="agents:echo", worker_ca="/ca.pem")
+        NativeSpec(cwd=str(tmp_path), target="agents:echo", worker_ca="/ca.pem")
     with pytest.raises(ValidationError, match="names no program"):
-        LiteLMSpec(cwd=str(tmp_path), target="agents:echo", worker_command=[""])
-    spec = LiteLMSpec(
+        NativeSpec(cwd=str(tmp_path), target="agents:echo", worker_command=[""])
+    spec = NativeSpec(
         cwd=str(tmp_path),
         target="agents:echo",
         worker_command=["aid", "worker"],
@@ -57,7 +57,7 @@ def test_process_main_hands_the_worker_its_hook_socket(tmp_path: Path, monkeypat
 
     monkeypatch.setattr("aid.worker.main", fake_main)
     monkeypatch.setattr("aid.launcher.configure_logging", lambda: None)
-    spec_json = LiteLMSpec(cwd=str(tmp_path), target="agents:echo").model_dump_json()
+    spec_json = NativeSpec(cwd=str(tmp_path), target="agents:echo").model_dump_json()
     process_main(
         WorkerArgs(
             endpoint="ipc://workers.sock",

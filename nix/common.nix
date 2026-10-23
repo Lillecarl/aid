@@ -4,7 +4,7 @@ let
 in
 {
   options = {
-    enable = lib.mkEnableOption "aid, the AI daemon that keeps ACP, LiteLM and interactive Claude agents running";
+    enable = lib.mkEnableOption "aid, the AI daemon that keeps ACP, native and interactive Claude agents running";
 
     package = lib.mkOption {
       type = lib.types.package;

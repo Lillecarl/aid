@@ -6,7 +6,7 @@ two things here; it no longer does.
 ## Process and session
 
 - **Daemon** — the long-lived aid process. Owns session state; routes clients, workers and plugins.
-- **Worker** — one process per session, forked per launch. Runs the agent backend (ACP, LiteLM,
+- **Worker** — one process per session, forked per launch. Runs the agent backend (ACP, native,
   claude-tty) and dies with the session.
 - **Session** — a named, persistent agent conversation: history, status, working directory, store.
 - **Spawn** — creating (or restarting) the worker subprocess. Process mechanics only; says nothing about
@@ -23,7 +23,7 @@ two things here; it no longer does.
 
 ## Waking, in two senses that must not mix
 
-- **Wake turn** — a daemon-started turn with no client (ACP and LiteLM get one after the running
+- **Wake turn** — a daemon-started turn with no client (ACP and native get one after the running
   turn; interactive Claude gets a channel event instead). Turn mechanics.
 - **Notify** — the worker→daemon message (`Notify`, wire `notify`): a fired monitor's task id plus the
   report text for the agent. This is what "a background task wakes" means.

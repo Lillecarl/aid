@@ -115,7 +115,7 @@ async def test_a_message_waits_for_the_running_turn(daemon: Paths, tmp_path: Pat
     assert items[-1] == Output(output=woken, stop_reason="end_turn")
 
 
-async def test_a_message_wakes_a_litelm_session(daemon: Paths, tmp_path: Path) -> None:
+async def test_a_message_wakes_a_native_session(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             session = await client.create("echo", py_spec(tmp_path, "agents:echo"))
@@ -255,7 +255,7 @@ async def test_refused_messages(daemon: Paths, tmp_path: Path) -> None:
                 await client.receive_messages("acp", wait=0)
 
 
-async def test_a_litelm_agent_messages_another_session(daemon: Paths, tmp_path: Path) -> None:
+async def test_a_native_agent_messages_another_session(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             recipient = await client.create("a", acp_spec(tmp_path))

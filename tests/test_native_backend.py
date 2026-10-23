@@ -1,4 +1,4 @@
-"""Turn lifecycle regressions against real LiteLM runs with deterministic local models."""
+"""Turn lifecycle regressions against real native runs with deterministic local models."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from aid.agent import Agent, ModelRetry, Tool
-from aid.backends.litelm import DEFAULT_DESIRED_MAX, NOT_FORKED, LiteLMBackend, UsageLimitExceeded, aid_toolset
+from aid.backends.native import DEFAULT_DESIRED_MAX, NOT_FORKED, NativeBackend, UsageLimitExceeded, aid_toolset
 from aid.backends.permissions import PermissionWaits
 from aid.coding import CODING, Coding, coding_tools
 from aid.discovery import Catalog
@@ -49,7 +49,7 @@ async def backend(
     history: list[ModelMessage] | None = None,
     max_requests: int | None = None,
     desired_max: int = DEFAULT_DESIRED_MAX,
-) -> AsyncGenerator[LiteLMBackend]:
+) -> AsyncGenerator[NativeBackend]:
     coding = Coding(
         cwd=directory,
         store=directory / "runs",
@@ -58,7 +58,7 @@ async def backend(
         timeout=10,
         waits=PermissionWaits(),
     )
-    session = LiteLMBackend(
+    session = NativeBackend(
         agent,
         anyio.Path(directory / "history.json"),
         history or [],
@@ -193,7 +193,7 @@ async def test_missing_usage_stays_unknown(tmp_path: Path) -> None:
 
 
 async def test_turn_reports_the_context_gauge(tmp_path: Path) -> None:
-    """LiteLM has no engine window to report, so a turn reports aid's estimate against the session's gauge."""
+    """The native backend has no engine window to report, so a turn reports aid's estimate against the session's gauge."""
     events: list[SessionEvent] = []
 
     async def emit(event: SessionEvent) -> None:

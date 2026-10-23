@@ -114,7 +114,7 @@ class GetHistory(_Request):
 
 
 class SendMessage(_Request):
-    """A message to another session. The daemon wakes it: a turn of its own for ACP and LiteLM, a channel
+    """A message to another session. The daemon wakes it: a turn of its own for ACP and native, a channel
     event for interactive Claude. `sender` is a session name, or None for a person."""
 
     op: Literal["send"] = "send"
@@ -526,12 +526,12 @@ class Usage(_Message):
     What "the turn" covers differs by agent (measured 2026-09):
     - claude-agent-acp 0.75.1: every model call of the turn, subagents included.
     - opencode 1.x: the turn's last model response only.
-    - LiteLM: the run, every request. `input_tokens` follows the provider: Chat Completions counts cache reads
+    - Native: the run, every request. `input_tokens` follows the provider: Chat Completions counts cache reads
       in it, Anthropic's Messages API does not.
     - claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,
       which aid does not read.
 
-    `context_used`/`context_size` come from the agent's own report for ACP and claude-tty. LiteLM sets them
+    `context_used`/`context_size` come from the agent's own report for ACP and claude-tty. The native backend sets them
     itself: `context_size` is the session's context gauge (`max_context`, half the model window by default) and
     `context_used` is aid's rough estimate of the send view, since the engine reports no window of its own.
     """
@@ -559,7 +559,7 @@ class Usage(_Message):
 
 
 class Output(_Message):
-    """Final event of a prompt. `output` is text for ACP and the agent's typed output for LiteLM."""
+    """Final event of a prompt. `output` is text for ACP and the agent's typed output for native."""
 
     type: Literal["output"] = "output"
     output: JsonValue
@@ -657,7 +657,7 @@ class Started(_Message):
     type: Literal["started"] = "started"
     pid: int
     agent_session: str | None = None
-    """The agent's own session id: ACP's, or Claude Code's (its transcript's name). None for LiteLM."""
+    """The agent's own session id: ACP's, or Claude Code's (its transcript's name). None for native."""
     resumed: bool = False
     """It carried on an earlier agent session rather than starting one."""
     agent: str | None = None
@@ -797,7 +797,7 @@ class SessionStatus(_Message):
     pid: int | None
     cwd: str
     runs: str
-    """The agent command, or the LiteLM agent's name or target."""
+    """The agent command, or the native agent's name or target."""
     mcp_servers: list[str]
     aid_tools: bool
     agent_session: str | None = None

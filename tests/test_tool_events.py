@@ -9,7 +9,7 @@ from acp.schema import (
     ToolCallStart,
 )
 
-from aid.backends import acp, litelm
+from aid.backends import acp, native
 from aid.messages import (
     RetryPromptPart,
     ToolCallPart,
@@ -68,20 +68,20 @@ def test_acp_raw_output_is_the_fallback_and_is_clipped() -> None:
     assert event.output.endswith("… 5 more characters")
 
 
-def test_litelm_tool_events() -> None:
+def test_native_tool_events() -> None:
     call = ToolCallPart(tool_name="add", args='{"a": 1}', tool_call_id="c1")
     done = ToolReturnPart(tool_name="add", content={"sum": 3}, tool_call_id="c1")
     retry = RetryPromptPart(tool_name="add", content="a must be even", tool_call_id="c2")
-    assert litelm.to_event(call) == ToolCall(tool_call_id="c1", title="add", status="in_progress", input={"a": 1})
-    assert litelm.to_event(done) == ToolCall(tool_call_id="c1", status="completed", output='{"sum":3}')
-    failed = litelm.to_event(retry)
+    assert native.to_event(call) == ToolCall(tool_call_id="c1", title="add", status="in_progress", input={"a": 1})
+    assert native.to_event(done) == ToolCall(tool_call_id="c1", status="completed", output='{"sum":3}')
+    failed = native.to_event(retry)
     assert isinstance(failed, ToolCall)
     assert (failed.status, "a must be even" in (failed.output or "")) == ("failed", True)
 
 
-def test_litelm_tool_call_carries_paths() -> None:
+def test_native_tool_call_carries_paths() -> None:
     call = ToolCallPart(tool_name="read", args='{"path": "a.py", "offset": 1}', tool_call_id="c1")
-    assert litelm.to_event(call) == ToolCall(
+    assert native.to_event(call) == ToolCall(
         tool_call_id="c1",
         title="read",
         status="in_progress",

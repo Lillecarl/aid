@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING
 from aid.backends.acp import open_acp
 from aid.backends.claude_sdk import open_sdk
 from aid.backends.claude_tty import open_claude_tty
-from aid.backends.litelm import open_litelm
-from aid.spec import AcpSpec, ClaudeSdkSpec, ClaudeTtySpec, LiteLMSpec
+from aid.backends.native import open_native
+from aid.spec import AcpSpec, ClaudeSdkSpec, ClaudeTtySpec, NativeSpec
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -24,8 +24,8 @@ async def open_backend(spec: AgentSpec, state_dir: anyio.Path) -> AsyncGenerator
         case AcpSpec():
             async with open_acp(spec, state_dir) as backend:
                 yield backend
-        case LiteLMSpec():
-            async with open_litelm(spec, state_dir) as backend:
+        case NativeSpec():
+            async with open_native(spec, state_dir) as backend:
                 yield backend
         case ClaudeTtySpec():
             async with open_claude_tty(spec, state_dir) as backend:

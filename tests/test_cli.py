@@ -16,7 +16,7 @@ from aid.cli import (
 )
 from aid.launcher import PRELOAD
 from aid.protocol import SessionInfo, ToolCall
-from aid.spec import AgentKind, ClaudeSdkSpec, ClaudeTtySpec, LiteLMSpec, McpHttp, McpStdio, PermissionMode
+from aid.spec import AgentKind, ClaudeSdkSpec, ClaudeTtySpec, McpHttp, McpStdio, NativeSpec, PermissionMode
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -66,7 +66,7 @@ def test_new_py_max_requests() -> None:
     args = _parser().parse_args(["new-py", "s", "agents:echo", "--max-requests", "150"])
     args.agent_command = []
     spec = _spec(args)
-    assert isinstance(spec, LiteLMSpec)
+    assert isinstance(spec, NativeSpec)
     assert spec.max_requests == 150
 
 
@@ -95,7 +95,7 @@ def test_new_py_worker_command(tmp_path: Path) -> None:
     args = _parser().parse_args(argv)
     args.agent_command = []
     spec = _spec(args)
-    assert isinstance(spec, LiteLMSpec)
+    assert isinstance(spec, NativeSpec)
     assert spec.worker_command == ["aid", "worker"]
     assert spec.worker_endpoint == "ipc://x"
     assert spec.worker_ca == "/ca.pem"
@@ -145,15 +145,15 @@ def test_tool_line_names_updates_by_their_start() -> None:
 @pytest.mark.parametrize(
     ("info", "line"),
     [
-        (SessionInfo(name="a", kind=AgentKind.LITELM, running=False), "a\tlitelm\tstopped"),
-        (SessionInfo(name="a", kind=AgentKind.LITELM, running=True), "a\tlitelm\trunning"),
+        (SessionInfo(name="a", kind=AgentKind.NATIVE, running=False), "a\tnative\tstopped"),
+        (SessionInfo(name="a", kind=AgentKind.NATIVE, running=True), "a\tnative\trunning"),
         (
-            SessionInfo(name="a", kind=AgentKind.LITELM, running=True, working=True, permissions=1),
-            "a\tlitelm\tworking\t1 permission",
+            SessionInfo(name="a", kind=AgentKind.NATIVE, running=True, working=True, permissions=1),
+            "a\tnative\tworking\t1 permission",
         ),
         (
-            SessionInfo(name="a", kind=AgentKind.LITELM, running=True, permissions=2, attention="look\there"),
-            "a\tlitelm\trunning\t2 permissions\tlook\there",
+            SessionInfo(name="a", kind=AgentKind.NATIVE, running=True, permissions=2, attention="look\there"),
+            "a\tnative\trunning\t2 permissions\tlook\there",
         ),
     ],
 )

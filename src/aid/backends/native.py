@@ -1,4 +1,4 @@
-"""Aid-owned agent execution over LiteLM transport."""
+"""Aid's own agent loop, over the OpenAI and Anthropic SDKs (`aid.model`)."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ if TYPE_CHECKING:
 
     from aid.backends.base import Emit, Notifier
     from aid.discovery import Catalog
-    from aid.spec import LiteLMSpec
+    from aid.spec import NativeSpec
 
 log = structlog.get_logger(__name__)
 
@@ -255,7 +255,7 @@ def model_name(agent: Agent) -> str | None:
     return model if isinstance(model, str) else model.model_name
 
 
-class LiteLMBackend:
+class NativeBackend:
     def __init__(
         self,
         agent: Agent,
@@ -561,7 +561,7 @@ async def _write_atomic(path: anyio.Path, data: bytes) -> None:
 
 
 @asynccontextmanager
-async def open_litelm(spec: LiteLMSpec, state_dir: anyio.Path) -> AsyncGenerator[LiteLMBackend]:
+async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator[NativeBackend]:
     # Imports and filesystem walks, run off the event loop. Instructions compose for every session: None
     # selects every provider, so the catalog is always needed.
     catalog = await anyio.to_thread.run_sync(_session_catalog)
@@ -609,9 +609,9 @@ async def open_litelm(spec: LiteLMSpec, state_dir: anyio.Path) -> AsyncGenerator
         hooks=tuple(spec.hooks),
         waits=PermissionWaits(),
     )
-    backend: LiteLMBackend | None = None
+    backend: NativeBackend | None = None
     try:
-        backend = LiteLMBackend(
+        backend = NativeBackend(
             agent,
             history_file,
             history,

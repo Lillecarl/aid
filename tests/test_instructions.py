@@ -15,7 +15,7 @@ import pytest
 import aid
 from aid.agent import Agent
 from aid.agents import Instruction, InstructionsContext, InstructionsProvider
-from aid.backends.litelm import LiteLMBackend, open_litelm
+from aid.backends.native import NativeBackend, open_native
 from aid.backends.permissions import PermissionWaits
 from aid.coding import CODING, Coding, compact
 from aid.discovery import Catalog, discover
@@ -23,7 +23,7 @@ from aid.instructions import compose
 from aid.messages import ModelRequest, ModelResponse, SystemPromptPart, TextPart, UserPromptPart
 from aid.plugins import ENV_PLUGINS_PATH
 from aid.protocol import AgentCatalog, Started
-from aid.spec import LiteLMSpec, PermissionMode
+from aid.spec import NativeSpec, PermissionMode
 from tests.conftest import TESTS
 from tests.models import TestModel
 
@@ -149,9 +149,9 @@ def test_default_provider_skips_absent_files(tmp_path: Path, monkeypatch: pytest
 
 
 def test_spec_instruction_fields() -> None:
-    assert LiteLMSpec(cwd="/", agent="briefing").instruction_providers is None
-    assert LiteLMSpec(cwd="/", agent="briefing").skip_instructions == []
-    spec = LiteLMSpec(
+    assert NativeSpec(cwd="/", agent="briefing").instruction_providers is None
+    assert NativeSpec(cwd="/", agent="briefing").skip_instructions == []
+    spec = NativeSpec(
         cwd="/", agent="briefing", instruction_providers=["file_instructions"], skip_instructions=["skill:x"]
     )
     assert spec.instruction_providers == ["file_instructions"]
@@ -194,15 +194,15 @@ def emit_to(events: list[SessionEvent]) -> Any:
 @asynccontextmanager
 async def wired_backend(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, **spec_kwargs: Any
-) -> AsyncGenerator[LiteLMBackend]:
+) -> AsyncGenerator[NativeBackend]:
     """The test provider on the plugins path, and an open backend wired to it."""
     write_wired_provider(tmp_path / "agents")
     monkeypatch.setenv(ENV_PLUGINS_PATH, str(tmp_path / "agents"))
     monkeypatch.syspath_prepend(str(TESTS))  # pyright: ignore[reportUnknownMemberType] -- pytest leaves the path untyped
-    spec = LiteLMSpec(cwd=str(tmp_path), target=target, permission=PermissionMode.DENY, **spec_kwargs)
+    spec = NativeSpec(cwd=str(tmp_path), target=target, permission=PermissionMode.DENY, **spec_kwargs)
     state = anyio.Path(tmp_path / "s1")
     await state.mkdir()
-    async with open_litelm(spec, state) as backend:
+    async with open_native(spec, state) as backend:
         yield backend
 
 
@@ -273,7 +273,7 @@ def backend_with(tmp_path: Path, history: list[Any], refresh: Any, output: str =
         timeout=60,
         waits=PermissionWaits(),
     )
-    backend = LiteLMBackend(
+    backend = NativeBackend(
         agent,
         anyio.Path(tmp_path / "history.json"),
         history,

@@ -30,8 +30,7 @@
         if (program === undefined) throw new Error("the command is empty");
         return { kind, cwd, command: [program, ...rest], permission };
       }
-      case "pydantic-ai":
-      case "litelm":
+      case "native":
         return { kind, cwd, agent, permission };
       case "claude-tty":
         return { kind, cwd, args: words(args), trust_cwd: trust };
@@ -49,9 +48,9 @@
     }
   }
 
-  // Asked each time the kind turns to litelm: the catalog reflects the plugins path as it is now.
+  // Asked each time the kind turns to native: the catalog reflects the plugins path as it is now.
   $effect(() => {
-    if (kind === "litelm") void loadAgents();
+    if (kind === "native") void loadAgents();
   });
 
   const chosen = $derived(catalog?.agents.find((a) => a.name === agent));
@@ -81,12 +80,12 @@
       <option value="claude-tty">Claude Code (interactive)</option>
       <option value="claude-sdk">Claude Code (streaming)</option>
       <option value="acp">ACP agent</option>
-      <option value="litelm">LiteLM agent</option>
+      <option value="native">Native agent</option>
     </select>
   </label>
   <label>Working directory <input bind:value={cwd} required placeholder="/home/me/project" /></label>
   {#if kind !== "claude-tty"}
-    <!-- ACP: the agent's own requests. litelm: aid.coding's commands and applied edits. -->
+    <!-- ACP: the agent's own requests. Native: aid.coding's commands and applied edits. -->
     <label>
       Tool permissions
       <select bind:value={permission}>
@@ -98,7 +97,7 @@
   {/if}
   {#if kind === "acp"}
     <label>Command <input bind:value={command} required /></label>
-  {:else if kind === "litelm"}
+  {:else if kind === "native"}
     <label>
       Agent
       <select bind:value={agent} required disabled={catalog === null}>

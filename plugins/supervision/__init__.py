@@ -47,7 +47,7 @@ from aid.protocol import (
     TurnError,
     clip,
 )
-from aid.spec import AcpSpec, AgentSpecAdapter, LiteLMSpec
+from aid.spec import AcpSpec, AgentSpecAdapter, NativeSpec
 
 from .loops import ToolLoopDetector
 from .policy import (
@@ -332,7 +332,7 @@ class Supervision(aid.Plugin):
         match spec:
             case AcpSpec(permission_timeout=timeout):
                 return timeout
-            case LiteLMSpec(permission_timeout=timeout, ask_autoselect_after=autoselect):
+            case NativeSpec(permission_timeout=timeout, ask_autoselect_after=autoselect):
                 if request.tool_name == "ask_user" and any(o.recommended for o in request.options):
                     return min(timeout, autoselect)
                 return timeout

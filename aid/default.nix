@@ -38,7 +38,7 @@ let
           inherit tests;
         };
         meta = rendered.meta // {
-          description = "AI daemon: persistent ACP, LiteLM and interactive Claude sessions behind an async API";
+          description = "AI daemon: persistent ACP, native and interactive Claude sessions behind an async API";
           homepage = "https://github.com/Lillecarl/aid";
           mainProgram = "aid";
           platforms = lib.platforms.linux;

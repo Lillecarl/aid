@@ -1,7 +1,7 @@
 # aid
 
 AI server for persistent, cooperating agent sessions, with separate execution engines and extension hosts.
-Runs external ACP agents (`claude-agent-acp`, `opencode acp`, …), `litelm` agents, and Claude Code through
+Runs external ACP agents (`claude-agent-acp`, `opencode acp`, …), native agents (aid's own loop), and Claude Code through
 terminal and SDK backends, behind an async Python API, CLI and web UI.
 
 ## Architecture stance
@@ -78,7 +78,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
 
 ## Layout
 
-- `src/aid/spec.py` — `AcpSpec` / `LiteLMSpec` / `ClaudeTtySpec` / `ClaudeSdkSpec`: what a session runs.
+- `src/aid/spec.py` — `AcpSpec` / `NativeSpec` / `ClaudeTtySpec` / `ClaudeSdkSpec`: what a session runs.
 - `src/aid/protocol.py` — pydantic messages on the zmq sockets; `AidError`.
 - `src/aid/daemon.py` — ROUTER for clients (`control.sock`), ROUTER for workers (`workers.sock`), session state.
 - `src/aid/launcher.py` — `Launcher` protocol; `ForkserverLauncher`.
@@ -139,14 +139,14 @@ on reusable decisions and current boundaries; put long investigations and dated 
   git root, then `AID_SKILLS_PATH`, then the global dirs, then each resolved plugin's `skills/`.
 - `plugins/forks/` — short-lived forks, bundled, `autostart` (read, prompt, message, manage, supervise). Tool
   `fork(instructions)`: `Coding.snapshot` writes the conversation inside the call (history.json lacks the running
-  turn) to `state_dir/forks/`; the plugin creates `<parent[:52]>.fork-<6hex>` from the parent's `LiteLMSpec` with
+  turn) to `state_dir/forks/`; the plugin creates `<parent[:52]>.fork-<6hex>` from the parent's `NativeSpec` with
   `seed_history` (a seeded session skips instruction composing: same cache prefix) and `parent`, prompts it, sends
   the answer to the parent as the fork with its turn `Usage` (`agent="fork <name>"`; `SendMessage.usage`, kept
   only from control and `supervise` plugins, recorded after the message), deletes it. A session with a `parent` can't fork. At plugin start, leftover forks
   answer from their recorded Output/TurnError (else "lost") and are deleted. Spec `parent` (also on `SessionInfo`/`SessionStatus`): chat plugins skip such sessions
   (no Discord channel, no settled-turn notice, not in session lists).
-- `src/aid/backends/` — `acp.py`, `litelm.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
-- `src/aid/model.py` — the `litelm` backend's transports (no LiteLM library; the name stays): `model_for(name)`,
+- `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
+- `src/aid/model.py` — the native backend's transports: `model_for(name)`,
   `anthropic/` → `AnthropicModel` (Messages API, native blocks, `extra_headers` carry betas, automatic caching
   on), else `OpenAIChatModel` (Chat Completions; `OPENAI_COMPATIBLE` maps prefix → base URL + key variable).
   `model_settings`: `api_key`/`api_base`/`max_retries` build the client, the rest goes into each request.
@@ -156,13 +156,13 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - `src/aid/tools.py` — `@aid.mcptool`, a marker attribute; `discovery.discover` collects the marked functions.
   Keep it free of `mcp` imports: every worker and the daemon import it.
 - `src/aid/mcp_server.py` — `python -m aid.mcp_server`, the tools as a stdio MCP server. The agent starts it; it
-  imports user code, so never the daemon. LiteLM sessions get the same functions in-process as a toolset.
+  imports user code, so never the daemon. Native sessions get the same functions in-process as a toolset.
   For interactive Claude it is also the session's channel (research preview): it long-polls the daemon for the
   session's messages and pushes `notifications/claude/channel`.
 - `src/aid/builtin_tools.py` — aid's own tools, in every session: `send_message`, `list_sessions`.
 - Request ids route replies across all clients: the daemon refuses an id in flight (`duplicate_id`); relays and
   plugins never pass a caller's id through unchecked.
-- Messages: `SendMessage` → recipient's history + inbox. ACP and LiteLM get a daemon-started wake turn after
+- Messages: `SendMessage` → recipient's history + inbox. ACP and native get a daemon-started wake turn after
   the running turn; interactive Claude gets a channel event. A wake turn has no client (`_Route.client` None).
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.
 - Recording: each turn ends with `Usage` (tokens, models, context, the agent's session cost) before `Output`; each
@@ -212,9 +212,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   web build's `types:check` fail on drift. After changing a model: regenerate both.
 - `web/` — the Svelte 5 UI (runes, TypeScript, Vite). `web/default.nix` builds it; `aid web` serves the result
   from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.
-- `src/aid/coding.py` — `aid.coding_tools`, a toolset LiteLM agents opt into: list and read, pyedit edits through its
+- `src/aid/coding.py` — `aid.coding_tools`, a toolset native agents opt into: list and read, pyedit edits through its
   library (`EditSession`, staged until `apply_edits`; no agent code runs in the worker), and `python` (pyrun
-  `run_script` in a child, each command asked of `LiteLMSpec.permission`). Results over `SPILL_LIMIT`
+  `run_script` in a child, each command asked of `NativeSpec.permission`). Results over `SPILL_LIMIT`
   spill to content-addressed files under the session, sent as a stable head plus the path. `compact`
   summarizes the history into a digest through a direct model call. One `Coding` per session, set per
   turn in the `CODING` contextvar; tool errors go back to the model as `ModelRetry`. pyedit is built into the
@@ -259,7 +259,7 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 - anyio only. ruff bans `asyncio` and `subprocess` (TID251). The asyncio seam lives inside the `acp` library.
 - Worker isolation is a process per session, forked from a forkserver that preloads only the transport
   (`launcher.PRELOAD`, default `zmq.asyncio`). Everything else — aid itself, the model SDKs, `acp` — imports fresh
-  in each worker, so restarting a worker picks up new code. `LiteLMSpec.python_path` is prepended per worker,
+  in each worker, so restarting a worker picks up new code. `NativeSpec.python_path` is prepended per worker,
   but a preloaded module and its dependencies win over it. `aid daemon --preload-module` shares more pages
   copy-on-write, `--no-preload` starts bare.
 - Keep workers subinterpreter-ready, for when pydantic-core and pyzmq load in more than one interpreter
@@ -269,7 +269,7 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   - The daemon depends on `Launcher`/`WorkerHandle`, never on multiprocessing.
 - ACP `session/update` must be read through the connection observer (`AcpBackend.observe`). The library runs
   `Client.session_update` as separate tasks, which can land after `prompt()` returns.
-- LiteLM: an unset `max_requests` explicitly disables the engine's default request cap. Turn cleanup
+- Native: an unset `max_requests` explicitly disables the engine's default request cap. Turn cleanup
   persists available new messages and usage on success, failure and cancellation. Compaction owns the old
   history prefix; finalization appends only the run's new messages, never overwrites that prefix. Unanswered
   tool calls are closed as interrupted, not replayed: their effects may already have happened.

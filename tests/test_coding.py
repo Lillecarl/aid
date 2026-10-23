@@ -9,7 +9,7 @@ import pytest
 
 import aid
 from aid.agent import Agent, ModelRetry
-from aid.backends.litelm import LiteLMBackend
+from aid.backends.native import NativeBackend
 from aid.backends.permissions import PermissionWaits
 from aid.coding import CODING, SPILL_LIMIT, Coding, Condition, Line, WatchView, compact, spill
 from aid.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
@@ -140,7 +140,7 @@ async def test_compact_replaces_past_with_digest(tmp_path: Path) -> None:
         timeout=60,
         waits=PermissionWaits(),
     )
-    LiteLMBackend(  # constructed for its side effect: wiring compact into coding
+    NativeBackend(  # constructed for its side effect: wiring compact into coding
         agent, anyio.Path(tmp_path / "history.json"), history, [], Started(pid=1, agent="t", model="m"), coding
     )
     token = CODING.set(coding)
@@ -166,7 +166,7 @@ async def test_compact_leaves_short_history(tmp_path: Path) -> None:
         timeout=60,
         waits=PermissionWaits(),
     )
-    LiteLMBackend(  # constructed for its side effect: wiring compact into coding
+    NativeBackend(  # constructed for its side effect: wiring compact into coding
         agent, anyio.Path(tmp_path / "history.json"), history, [], Started(pid=1, agent="t", model="m"), coding
     )
     token = CODING.set(coding)

@@ -287,7 +287,7 @@ async def test_a_request_id_in_flight_is_refused(daemon: Paths, tmp_path: Path) 
     assert refused.code == "duplicate_id"
 
 
-async def test_litelm_typed_output(daemon: Paths, tmp_path: Path) -> None:
+async def test_native_typed_output(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             session = await client.create("review", py_spec(tmp_path, "agents:reviewer"))
@@ -295,7 +295,7 @@ async def test_litelm_typed_output(daemon: Paths, tmp_path: Path) -> None:
     assert result.output == Review(verdict="approve", score=7)
 
 
-async def test_litelm_env_and_cwd(daemon: Paths, tmp_path: Path) -> None:
+async def test_native_env_and_cwd(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             session = await client.create("env", py_spec(tmp_path, "agents:echo", AID_TEST_VAR="py"))
@@ -303,7 +303,7 @@ async def test_litelm_env_and_cwd(daemon: Paths, tmp_path: Path) -> None:
     assert result.output == f"py {tmp_path}"
 
 
-async def test_litelm_cancel(daemon: Paths, tmp_path: Path) -> None:
+async def test_native_cancel(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             session = await client.create("slow", py_spec(tmp_path, "agents:echo"))
@@ -349,7 +349,7 @@ async def test_compact_refuses_a_running_turn(daemon: Paths, tmp_path: Path) -> 
     assert events[-1] == Output(output=None, stop_reason="cancelled")
 
 
-async def test_litelm_history_survives_daemon_restart(
+async def test_native_history_survives_daemon_restart(
     paths: Paths, launcher: ForkserverLauncher, tmp_path: Path
 ) -> None:
     with anyio.fail_after(TIMEOUT):

@@ -1,8 +1,8 @@
-# LiteLM agents
+# Native agents
 
 Aid owns the model/tool loop and the message translation. The OpenAI and Anthropic SDKs carry the requests.
 Pydantic validates tool arguments, session specs, protocol messages, and typed final output.
-Neither PydanticAI, LiteLLM nor LiteLM is a runtime dependency; the backend keeps the `litelm` name.
+Neither PydanticAI nor LiteLLM is a runtime dependency.
 
 ```python
 import aid
@@ -51,7 +51,7 @@ Each model keeps one SDK client per configuration. Worker shutdown closes them.
 
 ## Forks
 
-The bundled `forks` plugin gives every LiteLM session the `fork(instructions)` tool. Use it for a narrow side
+The bundled `forks` plugin gives every native session the `fork(instructions)` tool. Use it for a narrow side
 task: a lookup, a file read, a check of one claim. The calling session keeps working.
 
 - The backend writes a snapshot of the conversation inside the call (`Coding.snapshot`) to `forks/<id>.json` in
@@ -71,7 +71,5 @@ task: a lookup, a file read, a check of one claim. The calling session keeps wor
   whose turn ended sends its recorded answer and usage. Any other fork tells its parent it was lost. Then the plugin
   deletes both.
 
-Stored `pydantic-ai` session kinds remain readable. Their workers use the LiteLM backend.
-The aliases `aid.PydanticAISpec` and `aid.PydanticAgent` refer to the native spec and definition contract.
 Agent modules must replace PydanticAI imports with `aid.Agent` and use slash-separated model names.
 The backend reads supported legacy history parts without importing PydanticAI and retains their extra provider fields.

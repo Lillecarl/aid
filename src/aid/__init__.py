@@ -32,10 +32,7 @@ from aid.protocol import ToolCall as ToolCall
 from aid.spec import AcpSpec as AcpSpec
 from aid.spec import AgentSpec as AgentSpec
 from aid.spec import ClaudeSdkSpec as ClaudeSdkSpec
-from aid.spec import LiteLMSpec as LiteLMSpec
+from aid.spec import NativeSpec as NativeSpec
 from aid.spec import PermissionMode as PermissionMode
 from aid.supervision import supervisor_tools as supervisor_tools
 from aid.tools import mcptool as mcptool
-
-PydanticAgent = AgentDefinition
-PydanticAISpec = LiteLMSpec

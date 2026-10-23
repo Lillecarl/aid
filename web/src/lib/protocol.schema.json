@@ -208,8 +208,7 @@
     "AgentKind": {
       "enum": [
         "acp",
-        "litelm",
-        "pydantic-ai",
+        "native",
         "claude-tty",
         "claude-sdk"
       ],
@@ -222,8 +221,7 @@
           "acp": "#/$defs/AcpSpec",
           "claude-sdk": "#/$defs/ClaudeSdkSpec",
           "claude-tty": "#/$defs/ClaudeTtySpec",
-          "litelm": "#/$defs/LiteLMSpec",
-          "pydantic-ai": "#/$defs/LiteLMSpec"
+          "native": "#/$defs/NativeSpec"
         },
         "propertyName": "kind"
       },
@@ -232,7 +230,7 @@
           "$ref": "#/$defs/AcpSpec"
         },
         {
-          "$ref": "#/$defs/LiteLMSpec"
+          "$ref": "#/$defs/NativeSpec"
         },
         {
           "$ref": "#/$defs/ClaudeTtySpec"
@@ -1265,9 +1263,161 @@
       "title": "ListSessions",
       "type": "object"
     },
-    "LiteLMSpec": {
+    "McpHttp": {
       "additionalProperties": false,
-      "description": "A LiteLM agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, or `target`, a\n`package.module:attribute` that is an agent itself. Exactly one of them.",
+      "properties": {
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "pattern": "^[\\w-]+$",
+          "type": "string"
+        },
+        "type": {
+          "const": "http",
+          "default": "http",
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "url"
+      ],
+      "title": "McpHttp",
+      "type": "object"
+    },
+    "McpServer": {
+      "discriminator": {
+        "mapping": {
+          "http": "#/$defs/McpHttp",
+          "sse": "#/$defs/McpSse",
+          "stdio": "#/$defs/McpStdio"
+        },
+        "propertyName": "type"
+      },
+      "oneOf": [
+        {
+          "$ref": "#/$defs/McpStdio"
+        },
+        {
+          "$ref": "#/$defs/McpHttp"
+        },
+        {
+          "$ref": "#/$defs/McpSse"
+        }
+      ]
+    },
+    "McpServers": {
+      "items": {
+        "$ref": "#/$defs/McpServer"
+      },
+      "type": "array"
+    },
+    "McpSse": {
+      "additionalProperties": false,
+      "properties": {
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "pattern": "^[\\w-]+$",
+          "type": "string"
+        },
+        "type": {
+          "const": "sse",
+          "default": "sse",
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "url"
+      ],
+      "title": "McpSse",
+      "type": "object"
+    },
+    "McpStdio": {
+      "additionalProperties": false,
+      "properties": {
+        "command": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        },
+        "env": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "name": {
+          "pattern": "^[\\w-]+$",
+          "type": "string"
+        },
+        "type": {
+          "const": "stdio",
+          "default": "stdio",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "command"
+      ],
+      "title": "McpStdio",
+      "type": "object"
+    },
+    "MessageEntry": {
+      "additionalProperties": false,
+      "description": "A message another session, or a person, sent to this one.",
+      "properties": {
+        "sender": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "message",
+          "default": "message",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "sender",
+        "text"
+      ],
+      "title": "MessageEntry",
+      "type": "object"
+    },
+    "NativeSpec": {
+      "additionalProperties": false,
+      "description": "A native agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, or `target`, a\n`package.module:attribute` that is an agent itself. Exactly one of them.",
       "properties": {
         "agent": {
           "anyOf": [
@@ -1320,11 +1470,8 @@
           "default": null
         },
         "kind": {
-          "default": "litelm",
-          "enum": [
-            "litelm",
-            "pydantic-ai"
-          ],
+          "const": "native",
+          "default": "native",
           "type": "string"
         },
         "max_context": {
@@ -1480,164 +1627,12 @@
         "cwd",
         "kind"
       ],
-      "title": "LiteLMSpec",
-      "type": "object"
-    },
-    "McpHttp": {
-      "additionalProperties": false,
-      "properties": {
-        "headers": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": "object"
-        },
-        "name": {
-          "pattern": "^[\\w-]+$",
-          "type": "string"
-        },
-        "type": {
-          "const": "http",
-          "default": "http",
-          "type": "string"
-        },
-        "url": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "type",
-        "url"
-      ],
-      "title": "McpHttp",
-      "type": "object"
-    },
-    "McpServer": {
-      "discriminator": {
-        "mapping": {
-          "http": "#/$defs/McpHttp",
-          "sse": "#/$defs/McpSse",
-          "stdio": "#/$defs/McpStdio"
-        },
-        "propertyName": "type"
-      },
-      "oneOf": [
-        {
-          "$ref": "#/$defs/McpStdio"
-        },
-        {
-          "$ref": "#/$defs/McpHttp"
-        },
-        {
-          "$ref": "#/$defs/McpSse"
-        }
-      ]
-    },
-    "McpServers": {
-      "items": {
-        "$ref": "#/$defs/McpServer"
-      },
-      "type": "array"
-    },
-    "McpSse": {
-      "additionalProperties": false,
-      "properties": {
-        "headers": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": "object"
-        },
-        "name": {
-          "pattern": "^[\\w-]+$",
-          "type": "string"
-        },
-        "type": {
-          "const": "sse",
-          "default": "sse",
-          "type": "string"
-        },
-        "url": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "type",
-        "url"
-      ],
-      "title": "McpSse",
-      "type": "object"
-    },
-    "McpStdio": {
-      "additionalProperties": false,
-      "properties": {
-        "command": {
-          "items": {
-            "type": "string"
-          },
-          "minItems": 1,
-          "type": "array"
-        },
-        "env": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "type": "object"
-        },
-        "name": {
-          "pattern": "^[\\w-]+$",
-          "type": "string"
-        },
-        "type": {
-          "const": "stdio",
-          "default": "stdio",
-          "type": "string"
-        }
-      },
-      "required": [
-        "name",
-        "type",
-        "command"
-      ],
-      "title": "McpStdio",
-      "type": "object"
-    },
-    "MessageEntry": {
-      "additionalProperties": false,
-      "description": "A message another session, or a person, sent to this one.",
-      "properties": {
-        "sender": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "text": {
-          "type": "string"
-        },
-        "type": {
-          "const": "message",
-          "default": "message",
-          "type": "string"
-        }
-      },
-      "required": [
-        "type",
-        "sender",
-        "text"
-      ],
-      "title": "MessageEntry",
+      "title": "NativeSpec",
       "type": "object"
     },
     "Output": {
       "additionalProperties": false,
-      "description": "Final event of a prompt. `output` is text for ACP and the agent's typed output for LiteLM.",
+      "description": "Final event of a prompt. `output` is text for ACP and the agent's typed output for native.",
       "properties": {
         "output": {
           "$ref": "#/$defs/JsonValue"
@@ -2776,7 +2771,7 @@
     },
     "Usage": {
       "additionalProperties": false,
-      "description": "Tokens a turn used, as its agent reports them; sent just before the turn's Output. None where the agent\nsays nothing.\n\nWhat \"the turn\" covers differs by agent (measured 2026-09):\n- claude-agent-acp 0.75.1: every model call of the turn, subagents included.\n- opencode 1.x: the turn's last model response only.\n- LiteLM: the run, every request. `input_tokens` follows the provider: Chat Completions counts cache reads\n  in it, Anthropic's Messages API does not.\n- claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,\n  which aid does not read.\n\n`context_used`/`context_size` come from the agent's own report for ACP and claude-tty. LiteLM sets them\nitself: `context_size` is the session's context gauge (`max_context`, half the model window by default) and\n`context_used` is aid's rough estimate of the send view, since the engine reports no window of its own.",
+      "description": "Tokens a turn used, as its agent reports them; sent just before the turn's Output. None where the agent\nsays nothing.\n\nWhat \"the turn\" covers differs by agent (measured 2026-09):\n- claude-agent-acp 0.75.1: every model call of the turn, subagents included.\n- opencode 1.x: the turn's last model response only.\n- Native: the run, every request. `input_tokens` follows the provider: Chat Completions counts cache reads\n  in it, Anthropic's Messages API does not.\n- claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,\n  which aid does not read.\n\n`context_used`/`context_size` come from the agent's own report for ACP and claude-tty. The native backend sets them\nitself: `context_size` is the session's context gauge (`max_context`, half the model window by default) and\n`context_used` is aid's rough estimate of the send view, since the engine reports no window of its own.",
       "properties": {
         "agent": {
           "anyOf": [

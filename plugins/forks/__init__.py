@@ -1,4 +1,4 @@
-"""Forks: a LiteLM session calls `fork(instructions)` and goes on working; a copy of it does only what the
+"""Forks: a native session calls `fork(instructions)` and goes on working; a copy of it does only what the
 instructions ask, and its answer comes back to the session as a message, which wakes it.
 
 The copy is a session of its own, `<parent>.fork-<hex>`, seeded with the parent's conversation as it stands inside
@@ -19,7 +19,7 @@ import structlog
 
 import aid
 from aid.protocol import AidError, GetSpec, Output, TurnError, Usage
-from aid.spec import AgentSpecAdapter, LiteLMSpec
+from aid.spec import AgentSpecAdapter, NativeSpec
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup
@@ -66,9 +66,9 @@ async def fork(instructions: str) -> str:
     try:
         coding = CODING.get()
     except LookupError:
-        raise aid.ModelRetry("fork works only in an aid LiteLM session") from None
+        raise aid.ModelRetry("fork works only in an aid native session") from None
     if coding.snapshot is None:
-        raise aid.ModelRetry("fork works only in an aid LiteLM session")
+        raise aid.ModelRetry("fork works only in an aid native session")
     snapshot = await coding.snapshot(PREAMBLE)
     async with aid.connect() as client:
         name = await client.call_plugin(PLUGIN, "fork", snapshot=str(snapshot), instructions=instructions)
@@ -76,7 +76,7 @@ async def fork(instructions: str) -> str:
 
 
 class Forks(aid.Plugin):
-    """Short-lived forks of LiteLM sessions, from the `fork` tool."""
+    """Short-lived forks of native sessions, from the `fork` tool."""
 
     grants = frozenset({aid.Grant.READ, aid.Grant.PROMPT, aid.Grant.MESSAGE, aid.Grant.MANAGE, aid.Grant.SUPERVISE})
 
@@ -104,8 +104,8 @@ class Forks(aid.Plugin):
         if not isinstance(snapshot, str) or not isinstance(instructions, str) or not instructions.strip():
             raise AidError("bad_args", "fork takes a snapshot path and instructions")
         parent = AgentSpecAdapter.validate_python(await self._client.call(GetSpec(session=caller)))
-        if not isinstance(parent, LiteLMSpec):
-            raise AidError("unsupported", "only LiteLM sessions fork")
+        if not isinstance(parent, NativeSpec):
+            raise AidError("unsupported", "only native sessions fork")
         if parent.parent is not None:
             raise AidError("forbidden", "a session that works for another cannot fork")
         spec = parent.model_copy(

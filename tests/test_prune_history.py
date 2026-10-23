@@ -8,7 +8,7 @@ import anyio
 import pytest
 
 from aid.agent import Agent
-from aid.backends.litelm import (
+from aid.backends.native import (
     THOUGHT_LIMIT,
     _send_policy,  # pyright: ignore[reportPrivateUsage]
     prune_history,
@@ -25,7 +25,7 @@ from aid.messages import (
     UserPromptPart,
 )
 from tests.models import FunctionModel
-from tests.test_litelm_backend import backend
+from tests.test_native_backend import backend
 
 if TYPE_CHECKING:
     from pathlib import Path

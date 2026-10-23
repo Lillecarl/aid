@@ -8,7 +8,7 @@
         return a + b
 
 ACP and interactive Claude sessions reach the tools through `python -m aid.mcp_server`, an MCP server named
-`aid`; LiteLM sessions call them in-process. The input schema comes from the type hints, so a parameter
+`aid`; native sessions call them in-process. The input schema comes from the type hints, so a parameter
 type imported only under `TYPE_CHECKING` cannot resolve. The function may be sync or async.
 """
 

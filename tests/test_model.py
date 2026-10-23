@@ -9,7 +9,7 @@ import httpx2
 import openai
 import pytest
 
-import aid.backends.litelm as native_backend
+import aid.backends.native as native_backend
 from aid.agent import Agent, Tool
 from aid.discovery import Catalog
 from aid.messages import (
@@ -37,8 +37,8 @@ from aid.model import (
     wire_messages,
 )
 from aid.protocol import AidError, SessionEvent, Usage
-from aid.spec import AgentSpecAdapter, LiteLMSpec
-from tests.test_litelm_backend import backend
+from aid.spec import NativeSpec
+from tests.test_native_backend import backend
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -179,14 +179,14 @@ async def test_backend_shutdown_closes_cached_clients(tmp_path: Path, monkeypatc
     async def emit(item: SessionEvent) -> None:
         pass
 
-    spec = LiteLMSpec(cwd=str(tmp_path), target="local:agent", instruction_providers=[], aid_tools=False)
-    async with native_backend.open_litelm(spec, anyio.Path(tmp_path)) as session:
+    spec = NativeSpec(cwd=str(tmp_path), target="local:agent", instruction_providers=[], aid_tools=False)
+    async with native_backend.open_native(spec, anyio.Path(tmp_path)) as session:
         assert (await session.prompt("go", emit)).output == "done"
         assert clients and not clients[0].is_closed
     assert all(client.is_closed for client in clients)
 
 
-async def test_open_litelm_reports_resume_only_for_stored_history(
+async def test_open_native_reports_resume_only_for_stored_history(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A fresh session seeds its system prompt but has no stored conversation: it started, it did not resume."""
@@ -196,15 +196,15 @@ async def test_open_litelm_reports_resume_only_for_stored_history(
         return Agent("openai/local", instructions="You are a test agent.")
 
     monkeypatch.setattr(native_backend, "load_target", load_target)
-    spec = LiteLMSpec(cwd=str(tmp_path), target="local:agent", instruction_providers=[], aid_tools=False)
+    spec = NativeSpec(cwd=str(tmp_path), target="local:agent", instruction_providers=[], aid_tools=False)
 
-    async with native_backend.open_litelm(spec, anyio.Path(tmp_path)) as fresh:
+    async with native_backend.open_native(spec, anyio.Path(tmp_path)) as fresh:
         assert fresh.started().resumed is False
 
     (tmp_path / "history.json").write_bytes(
         ModelMessagesTypeAdapter.dump_json([ModelRequest(parts=[UserPromptPart("earlier")])])
     )
-    async with native_backend.open_litelm(spec, anyio.Path(tmp_path)) as resumed:
+    async with native_backend.open_native(spec, anyio.Path(tmp_path)) as resumed:
         assert resumed.started().resumed is True
 
 
@@ -226,17 +226,17 @@ async def test_a_seeded_session_starts_from_the_seed_until_it_has_its_own(
     )
     state = tmp_path / "fork"
     state.mkdir()
-    spec = LiteLMSpec(
+    spec = NativeSpec(
         cwd=str(tmp_path), target="local:agent", instruction_providers=[], aid_tools=False, seed_history=str(seed)
     )
 
-    async with native_backend.open_litelm(spec, anyio.Path(state)) as forked:
+    async with native_backend.open_native(spec, anyio.Path(state)) as forked:
         assert forked.started().resumed is False
     assert (state / "history.json").read_bytes() == seed.read_bytes()
 
     own = ModelMessagesTypeAdapter.dump_json([ModelRequest(parts=[UserPromptPart("its own")])])
     (state / "history.json").write_bytes(own)
-    async with native_backend.open_litelm(spec, anyio.Path(state)) as resumed:
+    async with native_backend.open_native(spec, anyio.Path(state)) as resumed:
         assert resumed.started().resumed is True
     assert (state / "history.json").read_bytes() == own
 
@@ -260,9 +260,7 @@ def test_signed_thinking_and_tool_identity_survive_anthropic_translation() -> No
     ]
 
 
-def test_legacy_session_kind_and_history_preserve_provider_fields() -> None:
-    spec = AgentSpecAdapter.validate_python({"kind": "pydantic-ai", "cwd": "/", "target": "agents:echo"})
-    assert isinstance(spec, LiteLMSpec)
+def test_legacy_history_preserves_provider_fields() -> None:
     history = b'[{"kind":"response","parts":[{"part_kind":"thinking","content":"thought","signature":"signed","provider_details":{"opaque":"keep"}}],"provider_response_id":"r1"}]'
     loaded = ModelMessagesTypeAdapter.validate_json(history)
     assert json.loads(ModelMessagesTypeAdapter.dump_json(loaded))[0]["provider_response_id"] == "r1"

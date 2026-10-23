@@ -88,7 +88,7 @@ async def test_the_daemon_publishes_changes(daemon: Paths, tmp_path: Path) -> No
     assert listed == [
         {
             "name": "echo",
-            "kind": "litelm",
+            "kind": "native",
             "running": True,
             "permissions": 0,
             "working": False,

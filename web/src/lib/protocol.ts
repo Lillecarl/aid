@@ -28,12 +28,12 @@ export type Grant = "read" | "prompt" | "message" | "permissions" | "manage" | "
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "AgentKind".
  */
-export type AgentKind = "acp" | "litelm" | "pydantic-ai" | "claude-tty" | "claude-sdk";
+export type AgentKind = "acp" | "native" | "claude-tty" | "claude-sdk";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "AgentSpec".
  */
-export type AgentSpec = AcpSpec | LiteLMSpec | ClaudeTtySpec | ClaudeSdkSpec;
+export type AgentSpec = AcpSpec | NativeSpec | ClaudeTtySpec | ClaudeSdkSpec;
 /**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
  */
@@ -246,13 +246,13 @@ export interface ToolInfo {
   name: string;
 }
 /**
- * A LiteLM agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, or `target`, a
+ * A native agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, or `target`, a
  * `package.module:attribute` that is an agent itself. Exactly one of them.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "LiteLMSpec".
+ * via the `definition` "NativeSpec".
  */
-export interface LiteLMSpec {
+export interface NativeSpec {
   agent?: string | null;
   aid_tools?: boolean;
   ask_autoselect_after?: number;
@@ -262,7 +262,7 @@ export interface LiteLMSpec {
   };
   hooks?: Hook[];
   instruction_providers?: string[] | null;
-  kind: "litelm" | "pydantic-ai";
+  kind: "native";
   max_context?: number | null;
   max_requests?: number | null;
   parent?: string | null;
@@ -545,12 +545,12 @@ export interface PermissionDecision {
  * What "the turn" covers differs by agent (measured 2026-09):
  * - claude-agent-acp 0.75.1: every model call of the turn, subagents included.
  * - opencode 1.x: the turn's last model response only.
- * - LiteLM: the run, every request. `input_tokens` follows the provider: Chat Completions counts cache reads
+ * - Native: the run, every request. `input_tokens` follows the provider: Chat Completions counts cache reads
  *   in it, Anthropic's Messages API does not.
  * - claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,
  *   which aid does not read.
  *
- * `context_used`/`context_size` come from the agent's own report for ACP and claude-tty. LiteLM sets them
+ * `context_used`/`context_size` come from the agent's own report for ACP and claude-tty. The native backend sets them
  * itself: `context_size` is the session's context gauge (`max_context`, half the model window by default) and
  * `context_used` is aid's rough estimate of the send view, since the engine reports no window of its own.
  *
@@ -572,7 +572,7 @@ export interface Usage {
   type: "usage";
 }
 /**
- * Final event of a prompt. `output` is text for ACP and the agent's typed output for LiteLM.
+ * Final event of a prompt. `output` is text for ACP and the agent's typed output for native.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Output".

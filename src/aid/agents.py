@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 
 class AgentDefinition(ABC):
-    """The interface: subclass it, give it a docstring, and return a LiteLM agent from `build`."""
+    """The interface: subclass it, give it a docstring, and return a native agent from `build`."""
 
     name: ClassVar[str] = ""
     """The name sessions use. Empty means the class name in snake case."""

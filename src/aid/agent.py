@@ -89,7 +89,7 @@ class Toolset:
 
 @dataclass
 class Agent:
-    """Configure a LiteLM model, instructions, tools, and optional Pydantic-validated output."""
+    """Configure a model, instructions, tools, and optional Pydantic-validated output."""
 
     model: str | Model
     instructions: str = ""
@@ -101,7 +101,7 @@ class Agent:
 
     def __post_init__(self) -> None:
         if isinstance(self.model, str) and ":" in self.model and "/" not in self.model:
-            raise ValueError("LiteLM models use provider/model, not provider:model")
+            raise ValueError("models use provider/model, not provider:model")
         if self.output_retries < 0:
             raise ValueError("output_retries must be nonnegative")
 

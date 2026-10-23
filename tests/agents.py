@@ -1,4 +1,4 @@
-"""LiteLM agents for tests. The daemon imports these by target, through `python_path`."""
+"""Native agents for tests. The daemon imports these by target, through `python_path`."""
 
 from __future__ import annotations
 

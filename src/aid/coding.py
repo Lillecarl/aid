@@ -1,4 +1,4 @@
-"""Tools for LiteLM agents that work on code: read files, edit them through pyedit, run processes through pyrun.
+"""Tools for native agents that work on code: read files, edit them through pyedit, run processes through pyrun.
 
     import aid
     from aid.agent import Agent
@@ -475,7 +475,7 @@ def _coding() -> Coding:
     try:
         return CODING.get()
     except LookupError:
-        raise AidError("no_coding", "aid's coding tools work only in an aid LiteLM session") from None
+        raise AidError("no_coding", "aid's coding tools work only in an aid native session") from None
 
 
 def _task(task_id: str) -> BackgroundTask:
@@ -762,7 +762,7 @@ async def compact(instructions: str) -> str:
     naming what the upcoming work needs. Returns the digest."""
     coding = _coding()
     if coding.compact is None:
-        raise AidError("no_compact", "compaction needs an aid LiteLM session")
+        raise AidError("no_compact", "compaction needs an aid native session")
     return await coding.compact(instructions)
 
 

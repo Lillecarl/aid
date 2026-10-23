@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "aid"
 version = "0.1.0"
-description = "AI daemon: persistent ACP and LiteLM agents behind a Pythonic async API."
+description = "AI daemon: persistent ACP and native agents behind a Pythonic async API."
 requires-python = ">=3.14"
 dependencies = [
   "agent-client-protocol>=0.12",
@@ -17,7 +17,7 @@ dependencies = [
   "libpymux",
   "mcp>=1.20",
   "numpy>=2.0",
-  # aid.model: the LiteLM backend's transports, built from pins in default.nix.
+  # aid.model: the native backend's transports, built from pins in default.nix.
   "anthropic",
   "openai",
   "pydantic>=2.11",
