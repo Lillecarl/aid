@@ -69,6 +69,9 @@ let
     pyrun = [ "test" ];
   };
   ui = pkgs.callPackage ./web { pymuxElement = p.pymux-element; };
+  # The shell's UI skips the check: a protocol change makes protocol.ts stale until `npm run types`, and that
+  # runs inside the shell. The package and the `tests` build keep the check.
+  shellUi = ui.overrideAttrs { doCheck = false; };
   speechModel = pkgs.callPackage ./nix/speech-model.nix { };
   grammars = pkgs.callPackage ./nix/tree-sitter-grammars.nix { };
   # The browsers the browser tests drive: chromium's headless shell for the sandbox run, firefox for a
@@ -365,7 +368,7 @@ in
     # serves the working copy instead.
     shellHook = ''
       export PYTHONPATH=${lib.escapeShellArg (toString ./src)}:${lib.escapeShellArg (toString ./pyrun/src)}''${PYTHONPATH:+:$PYTHONPATH}
-      export AID_WEB_ASSETS=${ui}
+      export AID_WEB_ASSETS=${shellUi}
       export AID_TEST_SPEECH_MODEL=${speechModel}
       export AID_TREE_SITTER_GRAMMARS=${grammars}
       export PLAYWRIGHT_BROWSERS_PATH=${browsers}
