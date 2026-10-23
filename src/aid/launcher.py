@@ -17,14 +17,16 @@ import dataclasses
 import json
 import multiprocessing
 import os
+import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Final, Protocol
 
 import anyio
 import anyio.to_thread
 import structlog
 
-from aid import worker
+from aid import usertee, worker
 from aid.control import ENV_AGENT_CONNECTION, AgentConnection
 from aid.log import configure_logging
 from aid.paths import ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, hook_socket
@@ -35,6 +37,8 @@ if TYPE_CHECKING:
     from multiprocessing.context import ForkServerProcess
 
     from anyio.abc import Process
+
+log = structlog.get_logger(__name__)
 
 PRELOAD: Final = ("zmq.asyncio",)
 """What the forkserver imports before forking workers. Only the transport: it is the daemon's side of the
@@ -86,6 +90,27 @@ class Launcher(Protocol):
     async def launch(self, args: WorkerArgs) -> WorkerHandle: ...
 
 
+def install_usertee(runtime_dir: str) -> str | None:
+    """Write the `usertee` command (`aid/usertee.py`) into `runtime_dir/bin`, for agents' pipelines, and return
+    that directory; None when it cannot be written, which costs agents the command, never the worker. A shim runs
+    the file with this interpreter, which has zmq; written whole and renamed, so a worker starting beside another
+    never runs half of one."""
+    directory = Path(runtime_dir) / "bin"
+    shim = directory / "usertee"
+    script = f'#!/bin/sh\nexec "{sys.executable}" "{usertee.__file__}" "$@"\n'
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        if not shim.exists() or shim.read_text() != script:
+            partial = directory / f".usertee.{os.getpid()}"
+            partial.write_text(script)
+            partial.chmod(0o755)
+            partial.replace(shim)
+    except OSError as error:
+        log.warning("usertee_not_installed", directory=str(directory), error=str(error))
+        return None
+    return str(directory)
+
+
 def process_main(args: WorkerArgs) -> None:
     """A worker process's entry: process-wide setup, then `worker.main`."""
     configure_logging()
@@ -96,6 +121,8 @@ def process_main(args: WorkerArgs) -> None:
     os.environ[ENV_SESSION] = args.name
     os.environ[ENV_RUNTIME_DIR] = args.daemon_runtime_dir
     os.environ[ENV_STATE_DIR] = args.daemon_state_dir
+    if (bin_dir := install_usertee(args.daemon_runtime_dir)) is not None:
+        os.environ["PATH"] = os.pathsep.join([bin_dir, os.environ.get("PATH", "")])
     os.environ[ENV_AGENT_CONNECTION] = AgentConnection(
         endpoint=args.endpoint,
         server_key=args.server_key,

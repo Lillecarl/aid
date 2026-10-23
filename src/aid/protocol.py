@@ -177,6 +177,14 @@ class AnswerPermission(_Request):
     else."""
 
 
+class GetLive(_Request):
+    """The `usertee` output the daemon still holds for a session, as a `LiveChunk`: the newest characters of the
+    turn it last came in. Never recorded, so gone with the daemon."""
+
+    op: Literal["live"] = "live"
+    session: str
+
+
 class Hook(_Request):
     """A Claude Code hook event of a claude-tty session, from `aid/hook.py`. Done's data is what the hook prints
     for Claude, or None. hook.py asks the worker's own hook socket first; this leg is its fallback, for hooks
@@ -356,6 +364,7 @@ type Request = Annotated[
     | ListAgents
     | GetHistory
     | GetSummary
+    | GetLive
     | SendMessage
     | ReceiveMessages
     | AnswerPermission
@@ -502,6 +511,15 @@ class ToolCall(_Message):
     diffs: list[ToolDiff] = Field(default_factory=list[ToolDiff])
     paths: list[str] = Field(default_factory=list[str])
     """Files the call touches, `path` or `path:line`."""
+
+
+class LiveChunk(_Message):
+    """Output an agent piped through `usertee` (`aid/usertee.py`), for a person to watch: published on its
+    session's live topic, and the answer to `GetLive`. `turn` is the turn it came in, None outside one. Advisory
+    and never recorded: a dropped chunk is gone."""
+
+    turn: str | None
+    text: str
 
 
 class ToolEvent(_Message):
@@ -897,6 +915,14 @@ class Notify(_Message):
     text: str
 
 
+class Live(_Message):
+    """From a worker, unasked: output its agent piped through `usertee`, for the daemon to show live. Never
+    recorded."""
+
+    reply: Literal["live"] = "live"
+    text: str
+
+
 class Invocation(_Message):
     """From the daemon to a plugin serving calls (`ServeCalls`), unasked: a `CallPlugin` to answer with a
     `CallResult`. The id is the daemon's, never the caller's request id."""
@@ -911,7 +937,7 @@ class Invocation(_Message):
 
 
 type Reply = Annotated[
-    Event | Done | Failure | Hello | StartFailed | Observed | Activity | Notify | Invocation,
+    Event | Done | Failure | Hello | StartFailed | Observed | Activity | Notify | Live | Invocation,
     Field(discriminator="reply"),
 ]
 

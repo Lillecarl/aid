@@ -93,6 +93,7 @@ export type PageRequest =
   | GetStatus
   | GetHistory
   | GetSummary
+  | GetLive
   | Prompt
   | Cancel
   | CompactSession
@@ -641,6 +642,18 @@ export interface GetHistory {
   wait?: number;
 }
 /**
+ * The `usertee` output the daemon still holds for a session, as a `LiveChunk`: the newest characters of the
+ * turn it last came in. Never recorded, so gone with the daemon.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "GetLive".
+ */
+export interface GetLive {
+  id?: string;
+  op: "live";
+  session: string;
+}
+/**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "GetStatus".
  */
@@ -754,6 +767,18 @@ export interface ListSessions {
   op: "list";
 }
 /**
+ * Output an agent piped through `usertee` (`aid/usertee.py`), for a person to watch: published on its
+ * session's live topic, and the answer to `GetLive`. `turn` is the turn it came in, None outside one. Advisory
+ * and never recorded: a dropped chunk is gone.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "LiveChunk".
+ */
+export interface LiveChunk {
+  text: string;
+  turn: string | null;
+}
+/**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Prompt".
  */
@@ -798,6 +823,7 @@ export interface Received {
   history_entry: HistoryEntry;
   history_item: HistoryItem;
   history_page: HistoryPage;
+  live_chunk: LiveChunk;
   page_reply: PageReply;
   session_event: SessionEvent;
   session_info: SessionInfo;

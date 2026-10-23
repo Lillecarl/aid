@@ -7,6 +7,7 @@ launcher owns process-wide setup.
 
 from __future__ import annotations
 
+import json
 import sys
 import uuid
 from contextlib import AsyncExitStack
@@ -41,6 +42,7 @@ from aid.protocol import (
     Hello,
     Hook,
     Lifecycle,
+    Live,
     Notify,
     Observed,
     Prompt,
@@ -122,6 +124,17 @@ async def serve(
         ctx.term()
 
 
+def usertee_text(data: bytes) -> str | None:
+    """The text of a `usertee` frame (`aid/usertee.py`), or None for any other frame. Its op is local to this
+    socket, never a daemon request."""
+    message: object = json.loads(data)
+    if not isinstance(message, dict):
+        return None
+    fields = cast(dict[str, object], message)
+    text = fields.get("text")
+    return text if fields.get("op") == "usertee" and isinstance(text, str) else None
+
+
 def describe(error: BaseException) -> str:
     """One line per underlying error. A task group's own message says only how many there were."""
     if isinstance(error, BaseExceptionGroup):
@@ -141,12 +154,16 @@ class _Worker:
         self._turn: str | None = None
 
     async def serve_hooks(self, sock: zmq.asyncio.Socket) -> None:
-        """Answer `aid/hook.py`'s fast path: Hook requests on the worker's own ROUTER, past the daemon.
+        """Answer `aid/hook.py`'s fast path: Hook requests on the worker's own ROUTER, past the daemon. Pass
+        `aid/usertee.py`'s output on to the daemon, answering nothing.
         A bad frame never kills the loop: hooks fail open downstream, and a dead loop would wedge them
         silently."""
         while True:
             try:
                 *route, data = await sock.recv_multipart()
+                if (text := usertee_text(data)) is not None:
+                    await self.send(Live(text=text))
+                    continue
                 request = decode_request(data)
             except Exception:
                 log.exception("hook_frame_dropped")
@@ -171,7 +188,7 @@ class _Worker:
     ) -> None:
         await self._hook_send(sock, route, await self._answer_hook(backend, request))
 
-    async def send(self, reply: Hello | Event | Done | Failure | Observed | Activity | Notify) -> None:
+    async def send(self, reply: Hello | Event | Done | Failure | Observed | Activity | Notify | Live) -> None:
         async with self._send_lock:
             await self._sock.send(encode(reply))
 

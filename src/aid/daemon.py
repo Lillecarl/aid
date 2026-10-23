@@ -41,6 +41,7 @@ from aid.protocol import (
     Event,
     Failure,
     GetHistory,
+    GetLive,
     GetPane,
     GetScreen,
     GetSpec,
@@ -52,6 +53,8 @@ from aid.protocol import (
     ListAgents,
     ListPlugins,
     ListSessions,
+    Live,
+    LiveChunk,
     MessageEntry,
     MessageHook,
     Notify,
@@ -116,6 +119,8 @@ START_ERROR_GRACE: Final = 0.5
 STOP_TIMEOUT: Final = 10.0
 PLUGIN_CALL_TIMEOUT: Final = 30.0
 """Seconds a `CallPlugin` waits for the plugin's answer: a plugin gone mid-call never sends one."""
+LIVE_LIMIT: Final = 65536
+"""Characters of `usertee` output a session keeps for a page opened mid-command (`GetLive`)."""
 SPEC_FILE: Final = "spec.json"
 # A spec holds env values and MCP headers, which are often credentials.
 SESSION_DIR_MODE: Final = 0o700
@@ -152,6 +157,9 @@ class _Session:
     """Requests the agent waits on, by request id."""
     working: bool = False
     """In a turn aid did not start, as the worker's Activity says."""
+    live: str = ""
+    """The newest `usertee` output, at most LIVE_LIMIT characters, of the turn `live_turn`."""
+    live_turn: str | None = None
     attention: str | None = None
 
     @property
@@ -764,6 +772,10 @@ class Daemon:
                 await anyio.to_thread.run_sync(shutil.rmtree, self._paths.plugin_dir(request.name), True)
                 await self._reconcile_plugins()
                 return Done(id=request.id)
+            case GetLive():
+                session = self._session(request.session)
+                chunk = LiveChunk(turn=session.live_turn, text=session.live)
+                return Done(id=request.id, data=chunk.model_dump(mode="json"))
             case GetSummary():
                 entries = await self._session(request.session).history.entries()
                 summary = await anyio.to_thread.run_sync(summarize, entries)
@@ -909,6 +921,15 @@ class Daemon:
         await self._accept_message(
             session, MessageEntry(sender=request.sender, text=request.text), request.id, request.usage
         )
+
+    async def _live(self, session: _Session, text: str) -> None:
+        """Hold the newest `usertee` output of the running turn and publish it. A new turn starts afresh: the
+        output a page opened mid-command needs is this turn's."""
+        if session.live_turn != session.turn:
+            session.live, session.live_turn = "", session.turn
+        session.live = (session.live + text)[-LIVE_LIMIT:]
+        chunk = LiveChunk(turn=session.turn, text=text)
+        await self._publish(events.live_topic(session.name), chunk.model_dump_json().encode())
 
     async def _notify(self, session: _Session, reply: Notify) -> None:
         """A worker's watch fired: record its report and wake the session, like a message but from no person
@@ -1204,6 +1225,9 @@ class Daemon:
                 case Notify():
                     if (session := self._sessions.get(name)) is not None:
                         await self._notify(session, reply)
+                case Live():
+                    if (session := self._sessions.get(name)) is not None:
+                        await self._live(session, reply.text)
                 case Event():
                     if (route := self._routes.get(reply.id)) is not None:
                         if route.client is not None:

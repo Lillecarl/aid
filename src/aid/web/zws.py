@@ -38,6 +38,7 @@ from aid.protocol import (
     Event,
     Failure,
     GetHistory,
+    GetLive,
     GetStatus,
     GetSummary,
     ListAgents,
@@ -78,6 +79,7 @@ type PageRequest = Annotated[
     | GetStatus
     | GetHistory
     | GetSummary
+    | GetLive
     | Prompt
     | Cancel
     | CompactSession

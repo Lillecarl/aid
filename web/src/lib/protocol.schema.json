@@ -981,6 +981,29 @@
       "title": "GetHistory",
       "type": "object"
     },
+    "GetLive": {
+      "additionalProperties": false,
+      "description": "The `usertee` output the daemon still holds for a session, as a `LiveChunk`: the newest characters of the\nturn it last came in. Never recorded, so gone with the daemon.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "live",
+          "default": "live",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session"
+      ],
+      "title": "GetLive",
+      "type": "object"
+    },
     "GetStatus": {
       "additionalProperties": false,
       "properties": {
@@ -1261,6 +1284,31 @@
         "op"
       ],
       "title": "ListSessions",
+      "type": "object"
+    },
+    "LiveChunk": {
+      "additionalProperties": false,
+      "description": "Output an agent piped through `usertee` (`aid/usertee.py`), for a person to watch: published on its\nsession's live topic, and the answer to `GetLive`. `turn` is the turn it came in, None outside one. Advisory\nand never recorded: a dropped chunk is gone.",
+      "properties": {
+        "text": {
+          "type": "string"
+        },
+        "turn": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "turn",
+        "text"
+      ],
+      "title": "LiveChunk",
       "type": "object"
     },
     "McpHttp": {
@@ -1686,6 +1734,7 @@
           "delete": "#/$defs/DeleteSession",
           "history": "#/$defs/GetHistory",
           "list": "#/$defs/ListSessions",
+          "live": "#/$defs/GetLive",
           "prompt": "#/$defs/Prompt",
           "start": "#/$defs/StartSession",
           "status": "#/$defs/GetStatus",
@@ -1712,6 +1761,9 @@
         },
         {
           "$ref": "#/$defs/GetSummary"
+        },
+        {
+          "$ref": "#/$defs/GetLive"
         },
         {
           "$ref": "#/$defs/Prompt"
@@ -2077,6 +2129,9 @@
         "history_page": {
           "$ref": "#/$defs/HistoryPage"
         },
+        "live_chunk": {
+          "$ref": "#/$defs/LiveChunk"
+        },
         "page_reply": {
           "$ref": "#/$defs/PageReply"
         },
@@ -2101,6 +2156,7 @@
         "history_item",
         "session_event",
         "session_summary",
+        "live_chunk",
         "agent_catalog",
         "file_entry",
         "file_view",

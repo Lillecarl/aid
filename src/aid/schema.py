@@ -21,6 +21,7 @@ from aid.protocol import (
     HistoryEntry,
     HistoryItem,
     HistoryPage,
+    LiveChunk,
     SessionEvent,
     SessionInfo,
     SessionStatus,
@@ -41,6 +42,7 @@ class Received(BaseModel):
     history_item: HistoryItem
     session_event: SessionEvent
     session_summary: SessionSummary
+    live_chunk: LiveChunk
     agent_catalog: AgentCatalog
     file_entry: Entry
     file_view: FileView

@@ -78,6 +78,7 @@ NEEDS: Final[dict[str, Grant]] = {
     "status": Grant.READ,
     "history": Grant.READ,
     "summary": Grant.READ,
+    "live": Grant.READ,
     "prompt": Grant.PROMPT,
     "cancel": Grant.PROMPT,
     "send": Grant.MESSAGE,
