@@ -27,6 +27,7 @@ from mcp.types import JSONRPCMessage, JSONRPCNotification
 
 from aid.client import connect
 from aid.discovery import discover
+from aid.instructions import USERTEE
 from aid.paths import ENV_CHANNEL, ENV_SESSION
 from aid.plugins import plugins_path
 from aid.protocol import AidError
@@ -65,7 +66,7 @@ def build(channel_session: str | None) -> FastMCP:
         print(f"aid.mcp_server: {problem}", file=sys.stderr)
     server = FastMCP(
         SERVER_NAME,
-        instructions=instructions(channel_session) if channel_session else None,
+        instructions=f"{instructions(channel_session)}\n\n{USERTEE}" if channel_session else USERTEE,
         log_level="WARNING",
     )
     for tool in catalog.tools.values():

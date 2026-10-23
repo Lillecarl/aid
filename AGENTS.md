@@ -173,6 +173,11 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - claude-tty hooks: `aid/hook.py` runs as a file (no aid import: 0.04 s against 0.2 s per event), sends a `hook`
   request, prints the answer, and fails open (exit 0, no output). The daemon routes it to the worker
   (`HookBackend.hook`); worker state goes back as `Activity` (working, attention). Events: `HOOK_EVENTS`.
+- `usertee` (`aid/usertee.py`, a file like hook.py, zmq only): agents pipe output through it so a person sees what
+  `tail` hides. `launcher.install_usertee` writes a shim to `runtime_dir/bin`, first on every worker's PATH (not the
+  venv's bin: its `python` would shadow the project's). Frames go to the worker's hook socket (`usertee_text`), on
+  to the daemon as `Live`, out on the live topic as `LiveChunk`; the daemon keeps `LIVE_LIMIT` of the current turn
+  for `GetLive`. Never recorded; fails open (cat). Agents learn of it from `instructions.USERTEE`.
 - claude-tty follows its transcript for the worker's life (`FollowingBackend.follow`): a turn aid's `prompt()` waits
   for is aid's; any other (typed into the pane, woken by a channel event) goes to the daemon as `Observed` entries
   under a turn id of its own.
