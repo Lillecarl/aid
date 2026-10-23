@@ -17,6 +17,7 @@ from aid.protocol import (
     PermissionRequest,
     RemoteControl,
     TextDelta,
+    ThoughtDelta,
 )
 from aid.spec import AgentKind, ClaudeSdkSpec, PermissionMode
 
@@ -85,6 +86,15 @@ case "$FAKE_CLAUDE_MODE" in
     echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi"}]}}'
     echo '{"type":"result","subtype":"success","result":"hi"}'
     ;;
+  stream)
+    echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"hmm"}}}'
+    echo '{"type":"stream_event","event":{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}}'
+    echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"hmm","signature":"s"}]}}'
+    echo '{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hi"}}}'
+    echo '{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" there"}}}'
+    echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi there"}]}}'
+    echo '{"type":"result","subtype":"success","result":"hi there"}'
+    ;;
   linger)
     echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}'
     echo '{"type":"result","subtype":"success","result":"done"}'
@@ -138,8 +148,31 @@ async def test_prompt_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert [event.text for event in events if isinstance(event, TextDelta)] == ["hi there"]
     assert "hello" in stdin_log.read_text()
     assert "--resume" not in argv_log.read_text()
+    assert "--include-partial-messages" in argv_log.read_text()
     assert "--model opus" in argv_log.read_text()
     assert (tmp_path / "state" / SESSION_ID_FILE).read_text() == FAKE_ID
+
+
+async def test_partial_messages_stream_text_and_thinking_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deltas stream as they come; the finished block's line adds the text to the output without repeating it, and
+    a thinking delta with no text (Haiku's display "updates") shows nothing."""
+    fake, _, _ = write_fake(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "stream")
+    state = anyio.Path(str(tmp_path / "state"))
+    await state.mkdir()
+    events: list[SessionEvent] = []
+
+    async def emit(event: SessionEvent) -> None:
+        events.append(event)
+
+    async with open_sdk(make_spec(tmp_path, fake), state) as backend:
+        output = await backend.prompt("hello", emit)
+    assert output.output == "hi there"
+    assert [(type(e).__name__, e.text) for e in events if isinstance(e, TextDelta | ThoughtDelta)] == [
+        ("ThoughtDelta", "hmm"),
+        ("TextDelta", "hi"),
+        ("TextDelta", " there"),
+    ]
 
 
 async def test_resume_argv_on_second_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

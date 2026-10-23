@@ -32,6 +32,7 @@ from aid.protocol import (
     RemoteControl,
     Started,
     TextDelta,
+    ThoughtDelta,
     to_json,
 )
 from aid.spec import PermissionMode
@@ -65,6 +66,7 @@ def sdk_argv(spec: ClaudeSdkSpec, *, resume: str | None) -> list[str]:
         "--verbose",
         "--output-format",
         "stream-json",
+        "--include-partial-messages",
         "--input-format",
         "stream-json",
         "--model",
@@ -87,6 +89,8 @@ class ClaudeSdkBackend:
         """The running prompt's process, for `cancel` to kill; one prompt runs at a time."""
         self._rc_id: str | None = None
         """The pending Remote Control enable's request id; its control_response carries the bridge URLs."""
+        self._streamed = False
+        """Text deltas streamed the content block whose finished `assistant` line comes next."""
 
     def started(self) -> Started:
         return self._started
@@ -219,7 +223,23 @@ class ClaudeSdkBackend:
                     await self._id_file.write_text(session_id)
                     self._started = self._started.model_copy(update={"agent_session": session_id})
                 return None
+            case "stream_event":
+                event = message.get("event")
+                delta = event.get("delta") if isinstance(event, dict) else None
+                if isinstance(delta, dict):
+                    match delta.get("type"), delta.get("text"), delta.get("thinking"):
+                        case "text_delta", str(text), _ if text:
+                            self._streamed = True
+                            await emit(TextDelta(text=text))
+                        # Claude Haiku 5.5 sends thinking deltas with no text (display "updates"): nothing to show.
+                        case "thinking_delta", _, str(thought) if thought:
+                            await emit(ThoughtDelta(text=thought))
+                        case _:
+                            pass
+                return None
             case "assistant":
+                # One line per finished content block, after that block's stream events: its text is the turn's
+                # output, and reaches the stream here only if no deltas carried it (an older Claude Code).
                 envelope = message.get("message")
                 content: JsonValue = envelope.get("content", []) if isinstance(envelope, dict) else []
                 for block in content if isinstance(content, list) else []:
@@ -229,7 +249,9 @@ class ClaudeSdkBackend:
                     if not isinstance(text, str):
                         continue
                     chunks.append(text)
-                    await emit(TextDelta(text=text))
+                    if not self._streamed:
+                        await emit(TextDelta(text=text))
+                self._streamed = False
                 return None
             case "control_request":
                 request = message.get("request", {})
