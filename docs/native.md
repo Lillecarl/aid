@@ -34,6 +34,8 @@ Anthropic requests default to `max_tokens` 32000 (4096 for `claude-3*`) and to a
 DeepSeek serves `deepseek-flash` and `deepseek-v4-pro`. Thinking is on by default at effort `high`.
 `reasoning_effort` (`low`, `high`, `max`) sets the depth; `extra_body: {"thinking": {"type": "disabled"}}` turns it
 off. The old names `deepseek-chat` and `deepseek-reasoner` route to `deepseek-flash` with thinking off and on.
+A provider can carry request defaults that `model_settings` override (`Provider.defaults` in `src/aid/model.py`).
+DeepSeek's is `max_tokens` 131072: unset, the API stops at 8K without thinking and 64K with it.
 
 Tools are Python functions or `aid.Tool` objects. Group them with `aid.Toolset`.
 A tool can take `aid.RunContext` as its first argument to receive its tool-call identity.

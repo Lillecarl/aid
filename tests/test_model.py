@@ -579,6 +579,29 @@ async def test_anthropic_request_is_native_and_passes_headers(monkeypatch: pytes
     ]
 
 
+async def test_provider_defaults_go_under_the_session_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[dict[str, Any]] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        sent.append(json.loads(request.content))
+        body = event({"content": "ok"}) + b"data: [DONE]\n\n"
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+
+    def make_client(**kwargs: Any) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
+
+    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
+    model = OpenAIChatModel("deepseek/deepseek-flash")
+    go: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart("go")])]
+    try:
+        await model.request(go, ModelInfo())
+        await model.request(go, ModelInfo(settings={"max_tokens": 5}))
+    finally:
+        await model.aclose()
+    assert [body["max_tokens"] for body in sent] == [131072, 5]
+
+
 async def test_openai_compatible_stream_keeps_reasoning_and_deepseek_cache_hits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -40,7 +40,7 @@ from aid.messages import (
 from aid.protocol import AidError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Sequence
+    from collections.abc import AsyncGenerator, Mapping, Sequence
 
     from openai.types import CompletionUsage
 
@@ -157,11 +157,14 @@ class Provider:
     key_env: str
     local: bool = False
     """An unauthenticated local server: a missing key is not an error."""
+    defaults: Mapping[str, Any] = field(default_factory=dict[str, Any])
+    """Request settings the session's `model_settings` override."""
 
 
 OPENAI_COMPATIBLE: Final[dict[str, Provider]] = {
     "openai": Provider(None, "OPENAI_API_KEY"),
-    "deepseek": Provider("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY"),
+    # Unset, max_tokens is 8K without thinking and 64K with it (128K at effort max); the API allows 384K.
+    "deepseek": Provider("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", defaults={"max_tokens": 131072}),
     "openrouter": Provider("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "groq": Provider("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
     "gemini": Provider("https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY"),
@@ -211,8 +214,9 @@ def _client_key(name: str, provider: Provider | None, settings: dict[str, Any]) 
     return _ClientKey(base_url, api_key, retries)
 
 
-def _request_settings(settings: dict[str, Any]) -> dict[str, Any]:
-    kwargs = {key: value for key, value in settings.items() if key not in CLIENT_SETTINGS}
+def _request_settings(settings: dict[str, Any], provider: Provider | None = None) -> dict[str, Any]:
+    kwargs = {**(provider.defaults if provider else {})}
+    kwargs.update((key, value) for key, value in settings.items() if key not in CLIENT_SETTINGS)
     kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
     return kwargs
 
@@ -245,7 +249,7 @@ class OpenAIChatModel:
 
     async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
         client = self._client(info.settings)
-        kwargs = _request_settings(info.settings)
+        kwargs = _request_settings(info.settings, self._provider)
         if info.tools:
             kwargs["tools"] = [tool.definition() for tool in info.tools]
         if info.output_type is not str:
