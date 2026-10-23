@@ -87,7 +87,8 @@ async def test_a_fork_answers_its_parent_and_is_deleted(daemon: Paths, tmp_path:
                 entries = (await parent.history(limit=1000)).entries
                 messages = [e for e in entries if isinstance(e.item, MessageEntry)]
                 names = {info.name for info in await client.sessions()}
-                woken = messages and any(isinstance(e.item, Output) for e in entries if e.seq > messages[0].seq)
+                # The fork can answer before the parent's own turn ends: the wake is the second Output.
+                woken = messages and sum(isinstance(e.item, Output) for e in entries) == 2
                 if woken and names == {"parent"}:
                     summary = await parent.summary()
                     break
