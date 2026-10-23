@@ -46,8 +46,9 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.anyio
 
 
-def event(delta: dict[str, Any], *, usage: dict[str, Any] | None = None) -> bytes:
-    chunk: dict[str, Any] = {"id": "response", "model": "local", "choices": [{"index": 0, "delta": delta}]}
+def event(delta: dict[str, Any], *, usage: dict[str, Any] | None = None, finish: str | None = None) -> bytes:
+    choice = {"index": 0, "delta": delta, "finish_reason": finish}
+    chunk: dict[str, Any] = {"id": "response", "model": "local", "choices": [choice]}
     if usage:
         chunk["usage"] = usage
     return f"data: {json.dumps(chunk)}\n\n".encode()
@@ -323,7 +324,7 @@ async def test_anthropic_stream_preserves_cache_usage_and_separate_signed_blocks
             {"type": "content_block_stop", "index": 2},
             {
                 "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "delta": {"stop_reason": "max_tokens", "stop_sequence": None},
                 "usage": {"output_tokens": 6},
             },
             {"type": "message_stop"},
@@ -349,6 +350,7 @@ async def test_anthropic_stream_preserves_cache_usage_and_separate_signed_blocks
     response = ModelResponse(parts=[])
     indexes: dict[int, int] = {}
     usages: list[RequestUsage] = []
+    truncated = False
     model = AnthropicModel("anthropic/claude-test")
     try:
         async for delta in model.stream(
@@ -356,8 +358,10 @@ async def test_anthropic_stream_preserves_cache_usage_and_separate_signed_blocks
             ModelInfo(settings={"api_key": "test-anthropic", "api_base": "https://example.test"}),
         ):
             accumulate(response, indexes, delta)
+            truncated = truncated or delta.truncated
             if delta.usage:
                 usages.append(delta.usage)
+        assert truncated
         assert [(p.content, p.signature) for p in response.parts if isinstance(p, ThinkingPart)][:2] == [
             ("first", "sig1"),
             ("second", "sig2"),
@@ -578,7 +582,7 @@ async def test_anthropic_request_is_native_and_passes_headers(monkeypatch: pytes
 async def test_openai_compatible_stream_keeps_reasoning_and_deepseek_cache_hits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    data = event({"reasoning_content": "hmm"}) + event({"content": "ok"})
+    data = event({"reasoning_content": "hmm"}) + event({"content": "ok"}) + event({}, finish="length")
     data += event(
         {},
         usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12, "prompt_cache_hit_tokens": 6},
@@ -600,12 +604,15 @@ async def test_openai_compatible_stream_keeps_reasoning_and_deepseek_cache_hits(
     usages: list[RequestUsage] = []
     response = ModelResponse(parts=[])
     indexes: dict[int, int] = {}
+    truncated = False
     try:
         async for delta in model.stream([ModelRequest(parts=[UserPromptPart("go")])], ModelInfo()):
             accumulate(response, indexes, delta)
+            truncated = truncated or delta.truncated
             if delta.usage:
                 usages.append(delta.usage)
     finally:
         await model.aclose()
+    assert truncated
     assert response.parts == [ThinkingPart("hmm"), TextPart("ok")]
     assert (usages[0].input_tokens, usages[0].cache_read_tokens) == (10, 6)

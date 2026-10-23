@@ -350,6 +350,7 @@ class NativeBackend:
         messages.append(ModelRequest(parts=[UserPromptPart(text)]))
         usage = Usage(requests=0, models=[])
         completed = False
+        stop_reason = "end_turn"
         output: Any = None
         retries = 0
         scope = anyio.CancelScope()
@@ -367,6 +368,7 @@ class NativeBackend:
                     indexes: dict[int, int] = {}
                     request_usage = RequestUsage()
                     usage_observed = False
+                    truncated = False
                     info = ModelInfo(list(self._tools.values()), self._agent.output_type, self._agent.model_settings)
                     wire = _send_policy(
                         max(0, len(self._history) - self._open_tail),
@@ -380,6 +382,7 @@ class NativeBackend:
                                 accumulate(response, indexes, delta)
                                 if delta.model_name:
                                     response.model_name = delta.model_name
+                                truncated = truncated or delta.truncated
                                 if delta.usage is not None:
                                     usage_observed = True
                                     for name in RequestUsage.__dataclass_fields__:
@@ -428,6 +431,8 @@ class NativeBackend:
                             messages.append(ModelRequest(parts=[RetryPromptPart(str(error))]))
                             continue
                         completed = True
+                        if truncated:
+                            stop_reason = "max_tokens"
                         break
                     ids = [call.tool_call_id for call in calls]
                     if any(not call_id for call_id in ids) or len(ids) != len(set(ids)):
@@ -443,6 +448,8 @@ class NativeBackend:
                             try:
                                 arguments = call.args_as_dict()
                             except ValueError as error:
+                                if truncated:
+                                    raise ModelRetry(f"{error}: the response hit its output token limit") from error
                                 raise ModelRetry(str(error)) from error
                             result = await tool.call(arguments, call.tool_call_id)
                         except ModelRetry as error:
@@ -451,7 +458,7 @@ class NativeBackend:
                             part = ToolReturnPart(call.tool_name, to_jsonable_python(result), call.tool_call_id)
                         messages.append(ModelRequest(parts=[part]))
                         await emit(to_event(part))
-            return Output(output=to_jsonable_python(output), stop_reason="end_turn" if completed else "cancelled")
+            return Output(output=to_jsonable_python(output), stop_reason=stop_reason if completed else "cancelled")
         finally:
             self._scope = None
             self._turn = None

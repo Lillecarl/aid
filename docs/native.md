@@ -47,6 +47,8 @@ An unset request budget is unlimited. Loop detection remains a separate supervis
 
 Each turn saves available conversation parts and emits usage on success, failure, and cancellation.
 Unavailable token counts remain unknown. Partial tool calls close as interrupted before resume.
+An answer the provider cut at its output limit ends the turn with `stop_reason` `max_tokens`. A tool call cut
+mid-arguments goes back to the model as a retry that names the limit.
 Compaction changes only the stored prefix. Turn completion appends only that turn's messages.
 Signed and redacted Anthropic thinking blocks remain intact for replay; thinking from another provider is not
 sent to Anthropic. Chat Completions providers get reasoning text back as `reasoning_content`.

@@ -183,6 +183,36 @@ async def test_typed_output_correction_is_validated_and_counted(tmp_path: Path) 
     assert next(event.requests for event in events if isinstance(event, Usage)) == 2
 
 
+async def test_a_response_cut_at_the_output_limit_says_so(tmp_path: Path) -> None:
+    """A cut-off answer ends the turn as `max_tokens`, not `end_turn`; a tool call cut mid-arguments goes back to
+    the model naming the limit."""
+
+    class CutModel(TestModel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.requests = 0
+
+        async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
+            self.requests += 1
+            if self.requests == 1:
+                yield StreamDelta(100, ToolCallPart("ls", '{"pa', "c1"))
+            else:
+                yield StreamDelta(0, TextPart("half an ans"))
+            yield StreamDelta(truncated=True)
+
+    async def emit(event: SessionEvent) -> None:
+        pass
+
+    def ls(path: str) -> str:
+        return path  # pragma: no cover -- its arguments never parse
+
+    async with backend(tmp_path, Agent(CutModel(), tools=[ls])) as session:
+        result = await session.prompt("go", emit)
+    assert result == Output(output="half an ans", stop_reason="max_tokens")
+    [retry] = [p for m in await stored(tmp_path) for p in m.parts if isinstance(p, RetryPromptPart)]
+    assert retry.content.endswith("the response hit its output token limit")
+
+
 async def test_missing_usage_stays_unknown(tmp_path: Path) -> None:
     class SilentModel(TestModel):
         async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:

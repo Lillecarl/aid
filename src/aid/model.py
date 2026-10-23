@@ -69,6 +69,8 @@ class StreamDelta:
     part: TextPart | ThinkingPart | ToolCallPart | None = None
     usage: RequestUsage | None = None
     model_name: str | None = None
+    truncated: bool = False
+    """The provider stopped the response at its output token limit."""
 
 
 class Model(Protocol):
@@ -264,6 +266,8 @@ class OpenAIChatModel:
                 if chunk.usage is not None:
                     yield StreamDelta(usage=_openai_usage(chunk.usage))
                 for choice in chunk.choices:
+                    if choice.finish_reason == "length":
+                        yield StreamDelta(truncated=True)
                     delta = choice.delta
                     if delta.content:
                         yield StreamDelta(0, TextPart(delta.content))
@@ -442,6 +446,8 @@ class AnthropicModel:
                         yield StreamDelta(usage=_anthropic_usage(event.message.usage))
                     case RawMessageDeltaEvent():
                         yield StreamDelta(usage=_anthropic_usage(event.usage))
+                        if event.delta.stop_reason == "max_tokens":
+                            yield StreamDelta(truncated=True)
                     case RawContentBlockStartEvent():
                         index, block = event.index, event.content_block
                         match block:
