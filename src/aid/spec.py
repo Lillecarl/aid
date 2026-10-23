@@ -105,6 +105,9 @@ class _Spec(BaseModel):
     the person instead. Zero never nudges, and escalates the first stuck turn."""
     hooks: list[Hook] = Field(default_factory=list[Hook])
     """Pre-tool gates: the first hook whose tool fits and whose match finds the call's text refuses it."""
+    parent: str | None = None
+    """The session this one works for, such as a fork's parent: its results reach the parent as messages.
+    Chat plugins leave such a session out; a person follows it through the parent."""
 
     @model_validator(mode="after")
     def _worker_launch_is_sane(self) -> Self:

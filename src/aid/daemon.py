@@ -186,6 +186,7 @@ class _Session:
             permissions=len(self.permissions),
             working=self.working or self.turn is not None,
             attention=self.attention,
+            parent=self.spec.parent,
         )
 
     @property
@@ -222,6 +223,7 @@ class _Session:
             permissions=list(self.permissions.values()),
             working=self.working or self.turn is not None,
             attention=self.attention,
+            parent=self.spec.parent,
             cost={**self.cost, **self.latest},
         )
 

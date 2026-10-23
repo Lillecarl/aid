@@ -775,6 +775,8 @@ class SessionInfo(_Message):
     """In a turn: aid's, or one typed into the pane."""
     attention: str | None = None
     """What the agent asks a person to look at, in its own words."""
+    parent: str | None = None
+    """The spec's `parent`: the session this one works for."""
 
 
 class SessionStatus(_Message):
@@ -804,6 +806,8 @@ class SessionStatus(_Message):
     """In a turn: aid's, or one typed into the pane."""
     attention: str | None = None
     """What the agent asks a person to look at, in its own words."""
+    parent: str | None = None
+    """The spec's `parent`: the session this one works for."""
     cost: dict[str, float] = Field(default_factory=dict[str, float])
     """Per currency, accumulated as SessionSummary.cost: the last cost each agent session reported, summed
     over the agent sessions. Safe here: amounts, never credentials."""

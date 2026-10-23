@@ -128,9 +128,13 @@ async def settled_turns(
     cancels the notice. Subscribes to the session topics, repairs dropped events by re-reading the list."""
     tracker = Tracker(idle_window=idle_window, verdict_timeout=verdict_timeout)
     reasons: dict[str, str | None] = {}
+    # Sessions with a parent: the parent hears their results, so their turns are no person's notice.
+    children: set[str] = set()
     async with client.subscribed(b"session/", idle=tick) as published:
         for info in await client.sessions():
             tracker.set_busy(info.name, info.working)
+            if info.parent is not None:
+                children.add(info.name)
         quiet = 0.0
         async for message in published:
             now = time.monotonic()
@@ -138,7 +142,9 @@ async def settled_turns(
                 quiet += tick
                 if quiet >= reconcile:
                     quiet = 0.0
-                    for info in await client.sessions():
+                    infos = await client.sessions()
+                    children = {info.name for info in infos if info.parent is not None}
+                    for info in infos:
                         tracker.set_busy(info.name, info.working)
             else:
                 quiet = 0.0
@@ -162,9 +168,14 @@ async def settled_turns(
                             if event.nudge is not None:
                                 tracker.nudge(event.session)
                         elif kind == "status":
-                            tracker.set_busy(name, SessionStatus.model_validate_json(payload).busy)
+                            status = SessionStatus.model_validate_json(payload)
+                            tracker.set_busy(name, status.busy)
+                            if status.parent is not None:
+                                children.add(name)
                 except Exception:
                     log.exception("settle_event_dropped")
                     continue
             for session in tracker.tick(now):
-                await on_settled(session, reasons.pop(session, None))
+                reason = reasons.pop(session, None)
+                if session not in children:
+                    await on_settled(session, reason)

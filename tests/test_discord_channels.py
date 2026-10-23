@@ -70,6 +70,8 @@ async def test_reconcile_creates_category_and_channels(daemon: Paths, tmp_path: 
         async with aid.connect(daemon) as control:
             await control.create("echo", py_spec(tmp_path, "agents:echo"))
             await control.create("otu", py_spec(tmp_path, "agents:echo"))
+            child = py_spec(tmp_path, "agents:echo").model_copy(update={"parent": "echo"})
+            await control.create("echo.fork-abcdef", child)
             await reconcile(control, rest, "g1", "aid sessions", channel_map)
             assert channel_map.category_id == "new-0"
             assert set(channel_map.channels) == {"echo", "otu"}

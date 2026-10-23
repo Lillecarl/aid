@@ -42,6 +42,17 @@
         "mcp_servers": {
           "$ref": "#/$defs/McpServers"
         },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "permission": {
           "$ref": "#/$defs/PermissionMode",
           "default": "deny"
@@ -377,6 +388,17 @@
         "model": {
           "type": "string"
         },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "permission": {
           "$ref": "#/$defs/PermissionMode",
           "default": "deny"
@@ -511,6 +533,17 @@
         },
         "mcp_servers": {
           "$ref": "#/$defs/McpServers"
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "pymux_command": {
           "items": {
@@ -1311,6 +1344,17 @@
             {
               "exclusiveMinimum": 0,
               "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "string"
             },
             {
               "type": "null"
@@ -2172,6 +2216,17 @@
         "name": {
           "type": "string"
         },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "permissions": {
           "default": 0,
           "type": "integer"
@@ -2190,7 +2245,8 @@
         "running",
         "permissions",
         "working",
-        "attention"
+        "attention",
+        "parent"
       ],
       "title": "SessionInfo",
       "type": "object"
@@ -2270,6 +2326,17 @@
         "name": {
           "type": "string"
         },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "pending": {
           "type": "integer"
         },
@@ -2317,6 +2384,7 @@
         "permissions",
         "working",
         "attention",
+        "parent",
         "cost"
       ],
       "title": "SessionStatus",

@@ -39,7 +39,7 @@ TIMEOUT = int(os.environ.get("AID_TEST_TIMEOUT", "30"))
 """Seconds a wait may take: the default assumes host speed, and a slow runner such as a UML guest
 sets AID_TEST_TIMEOUT higher."""
 ALLOWED = "admin@example.com"
-IDLE = {"permissions": 0, "working": False, "attention": None}
+IDLE = {"permissions": 0, "working": False, "attention": None, "parent": None}
 REFUSED = "other@example.com"
 # bcrypt of "password", from dex's example configuration.
 PASSWORD_HASH = "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"

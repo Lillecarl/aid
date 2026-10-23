@@ -106,8 +106,9 @@ class ChannelMap:
 
 
 async def reconcile(client: Client, rest: Rest, guild_id: str, category_name: str, channel_map: ChannelMap) -> None:
-    """The category and one channel per session exist; mapped channels of gone sessions are deleted."""
-    infos = await daemon_call(client.sessions())
+    """The category and one channel per session exist; mapped channels of gone sessions are deleted. A session
+    with a parent gets none: its results reach the parent's channel."""
+    infos = [info for info in await daemon_call(client.sessions()) if info.parent is None]
     living = await rest.guild_channels(guild_id)
     by_id = {channel.id: channel for channel in living}
     category = channel_map.category_id

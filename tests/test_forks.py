@@ -89,9 +89,11 @@ async def test_a_fork_answers_its_parent_and_is_deleted(daemon: Paths, tmp_path:
     assert PREAMBLE in message.text
 
 
-async def test_only_a_litelm_session_that_is_no_fork_may_fork(daemon: Paths, tmp_path: Path) -> None:
+async def test_only_a_litelm_session_without_a_parent_may_fork(daemon: Paths, tmp_path: Path) -> None:
     async with aid.connect(daemon) as client:
         await client.create("plain", py_spec(tmp_path, "agents:steady"))
+        child = py_spec(tmp_path, "agents:steady").model_copy(update={"parent": "plain"})
+        await client.create("child", child)
 
         async def fork(caller: str | None) -> None:
             args: dict[str, JsonValue] = {"snapshot": str(tmp_path / "seed.json"), "instructions": "look"}
@@ -100,5 +102,5 @@ async def test_only_a_litelm_session_that_is_no_fork_may_fork(daemon: Paths, tmp
         with pytest.raises(aid.AidError, match="only a session"):
             await fork(None)
         with pytest.raises(aid.AidError, match="cannot fork"):
-            await fork("plain.fork-abcdef")
-        assert {info.name for info in await client.sessions()} == {"plain"}
+            await fork("child")
+        assert {info.name for info in await client.sessions()} == {"plain", "child"}

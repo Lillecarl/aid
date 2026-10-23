@@ -140,8 +140,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - `plugins/forks/` — short-lived forks, bundled, `autostart` (read, prompt, message, manage, supervise). Tool
   `fork(instructions)`: `Coding.snapshot` writes the conversation inside the call (history.json lacks the running
   turn) to `state_dir/forks/`; the plugin creates `<parent[:52]>.fork-<6hex>` from the parent's `LiteLMSpec` with
-  `seed_history` (a seeded session skips instruction composing: same cache prefix), prompts it, sends the answer
-  to the parent as the fork (wakes it), deletes it. Forks can't fork; leftovers deleted at plugin start.
+  `seed_history` (a seeded session skips instruction composing: same cache prefix) and `parent`, prompts it, sends
+  the answer to the parent as the fork (wakes it), deletes it. A session with a `parent` can't fork; leftovers
+  deleted at plugin start. Spec `parent` (also on `SessionInfo`/`SessionStatus`): chat plugins skip such sessions
+  (no Discord channel, no settled-turn notice, not in session lists).
 - `src/aid/backends/` — `acp.py`, `litelm.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/model.py` — the `litelm` backend's transports (no LiteLM library; the name stays): `model_for(name)`,
   `anthropic/` → `AnthropicModel` (Messages API, native blocks, `extra_headers` carry betas, automatic caching

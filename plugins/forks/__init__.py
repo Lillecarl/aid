@@ -75,7 +75,7 @@ class Forks(aid.Plugin):
     async def run(self, client: aid.Client) -> None:
         self._client = client
         for info in await client.sessions():
-            if is_fork(info.name):
+            if info.parent is not None and is_fork(info.name):
                 log.info("fork_leftover_deleted", fork=info.name)
                 await client.session(info.name).delete()
         async with anyio.create_task_group() as tg:
@@ -89,15 +89,17 @@ class Forks(aid.Plugin):
             raise AidError("not_running", "forks is not running")
         if caller is None:
             raise AidError("forbidden", "only a session can fork itself")
-        if is_fork(caller):
-            raise AidError("forbidden", "a fork cannot fork")
         snapshot, instructions = args.get("snapshot"), args.get("instructions")
         if not isinstance(snapshot, str) or not isinstance(instructions, str) or not instructions.strip():
             raise AidError("bad_args", "fork takes a snapshot path and instructions")
         parent = AgentSpecAdapter.validate_python(await self._client.call(GetSpec(session=caller)))
         if not isinstance(parent, LiteLMSpec):
             raise AidError("unsupported", "only LiteLM sessions fork")
-        spec = parent.model_copy(update={"seed_history": snapshot, "supervisor": None, "supervisor_permissions": []})
+        if parent.parent is not None:
+            raise AidError("forbidden", "a session that works for another cannot fork")
+        spec = parent.model_copy(
+            update={"seed_history": snapshot, "parent": caller, "supervisor": None, "supervisor_permissions": []}
+        )
         name = f"{caller[:PARENT_CHARS]}.fork-{secrets.token_hex(3)}"
         await self._client.create(name, spec)
         self._tg.start_soon(self._answer, caller, name, instructions)

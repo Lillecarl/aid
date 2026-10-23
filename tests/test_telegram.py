@@ -493,6 +493,8 @@ async def test_watch_notifies_a_settled_turn(daemon: Paths, tmp_path: Path) -> N
         with anyio.fail_after(TIMEOUT):
             async with aid.connect(daemon) as control:
                 session = await control.create("echo", py_spec(tmp_path, "agents:echo"))
+                child = py_spec(tmp_path, "agents:echo").model_copy(update={"parent": "echo"})
+                fork = await control.create("echo.fork-abcdef", child)
                 await register_plugin(control, daemon, "telegram", frozenset({Grant.READ, Grant.MESSAGE}))
                 async with aid.connect(daemon, plugin="telegram") as plugin, anyio.create_task_group() as tg:
                     tg.start_soon(
@@ -507,6 +509,8 @@ async def test_watch_notifies_a_settled_turn(daemon: Paths, tmp_path: Path) -> N
                         )
                     )
                     await anyio.sleep(0.5)  # Time for the subscription to reach the daemon.
+                    await fork.run("unseen")
+                    await anyio.sleep(1.0)  # Past the idle window: a child's turn would have settled by now.
                     assert "echo hello" in (await session.run("hello")).text
                     await bot.got.wait()
                     tg.cancel_scope.cancel()

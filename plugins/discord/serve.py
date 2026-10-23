@@ -189,7 +189,7 @@ async def _notice_parts(session: Session, reason: str | None) -> tuple[str, list
 
 async def _sessions_reply(client: Client, mutes: Mutes) -> Reply:
     """The session list, each row tapping to its status, tail, and mute state."""
-    infos = await daemon_call(client.sessions())
+    infos = [info for info in await daemon_call(client.sessions()) if info.parent is None]
     if not infos:
         return Reply("no sessions")
     rows = tuple(

@@ -86,7 +86,15 @@ async def test_the_daemon_publishes_changes(daemon: Paths, tmp_path: Path) -> No
             await session.stop()
             stopped = await sub.until(events.SESSIONS, lambda infos: not infos[0]["running"])
     assert listed == [
-        {"name": "echo", "kind": "litelm", "running": True, "permissions": 0, "working": False, "attention": None}
+        {
+            "name": "echo",
+            "kind": "litelm",
+            "running": True,
+            "permissions": 0,
+            "working": False,
+            "attention": None,
+            "parent": None,
+        }
     ]
     assert idle["name"] == "echo"
     assert nothing_new

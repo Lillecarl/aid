@@ -131,6 +131,7 @@ export interface AcpSpec {
   inherit_env?: boolean;
   kind: "acp";
   mcp_servers?: McpServers;
+  parent?: string | null;
   permission?: PermissionMode;
   permission_timeout?: number;
   supervisor?: string | null;
@@ -264,6 +265,7 @@ export interface LiteLMSpec {
   kind: "litelm" | "pydantic-ai";
   max_context?: number | null;
   max_requests?: number | null;
+  parent?: string | null;
   permission?: PermissionMode1;
   permission_timeout?: number;
   python_path?: string[];
@@ -302,6 +304,7 @@ export interface ClaudeTtySpec {
   inherit_env?: boolean;
   kind: "claude-tty";
   mcp_servers?: McpServers;
+  parent?: string | null;
   /**
    * @minItems 1
    */
@@ -340,6 +343,7 @@ export interface ClaudeSdkSpec {
   inherit_env?: boolean;
   kind: "claude-sdk";
   model: string;
+  parent?: string | null;
   permission?: PermissionMode2;
   permission_timeout?: number;
   supervisor?: string | null;
@@ -808,6 +812,7 @@ export interface SessionInfo {
   attention: string | null;
   kind: AgentKind;
   name: string;
+  parent: string | null;
   permissions: number;
   running: boolean;
   working: boolean;
@@ -832,6 +837,7 @@ export interface SessionStatus {
   mcp_servers: string[];
   model: string | null;
   name: string;
+  parent: string | null;
   pending: number;
   permissions: PermissionRequest[];
   pid: number | null;
