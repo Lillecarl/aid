@@ -262,6 +262,7 @@ let
           webUi = ui;
           inherit speechModel grammars browsers;
           inherit (pkgs) cacert;
+          fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
           testArgs = lib.filter (arg: arg != "") (lib.splitString " " (builtins.getEnv "AID_TEST_ARGS"));
         };
       }

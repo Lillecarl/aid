@@ -25,7 +25,7 @@ from tests.web_harness import ALLOWED, TIMEOUT, Web
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from playwright.async_api import Browser, Locator, Page
+    from playwright.async_api import Browser, Locator, Page, Request, Response
 
     from aid.paths import Paths
 
@@ -60,10 +60,24 @@ async def login_ui(page: Page, web: Web) -> None:
     """Through dex's own form, as a person: email and password, then the app shell."""
     errors: list[str] = []
 
+    traffic: list[str] = []
+
     def record_error(error: object) -> None:
         errors.append(str(error))
 
+    def record_response(response: Response) -> None:
+        traffic.append(f"{response.status} {response.request.method} {response.url.split('?')[0]}")
+
+    def record_request(request: Request) -> None:
+        traffic.append(f"sent {request.method} {request.url.split('?')[0]}")
+
+    def record_failure(request: Request) -> None:
+        traffic.append(f"failed {request.method} {request.url.split('?')[0]}: {request.failure}")
+
     page.on("pageerror", record_error)
+    page.on("request", record_request)
+    page.on("response", record_response)
+    page.on("requestfailed", record_failure)
     try:
         with anyio.fail_after(TIMEOUT):
             await page.goto(f"{web.url}/")
@@ -74,12 +88,19 @@ async def login_ui(page: Page, web: Web) -> None:
     except Exception:
         print(f"Login page: {page.url.split('?')[0]}")
         print(f"Page errors: {errors}")
+        print("Requests:", *traffic, sep="\n")
+        print("Forms:", *[await form.evaluate("f => f.outerHTML") for form in await page.locator("form").all()])
+        fields = "[...document.querySelectorAll('input')].map(i => [i.name, i.value.length, i.validity.valid])"
+        print("Fields:", await page.evaluate(fields), "focus:", await page.evaluate("document.activeElement?.id"))
         print(await page.locator("body").inner_text())
         if web.dex_log is not None:
             print("dex log:", *web.dex_log.read_text().splitlines()[-20:], sep="\n")
         raise
     finally:
         page.remove_listener("pageerror", record_error)
+        page.remove_listener("request", record_request)
+        page.remove_listener("response", record_response)
+        page.remove_listener("requestfailed", record_failure)
 
 
 async def open_session(page: Page, name: str) -> None:

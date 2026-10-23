@@ -23,6 +23,8 @@
   browsers,
   # Certificates, which pygit2 needs to import and the sandbox lacks.
   cacert,
+  # A fontconfig file for the browsers: nixpkgs wraps chromium with one, but not the headless shell Playwright runs.
+  fontsConf,
   testArgs ? [ ],
 }:
 let
@@ -78,6 +80,7 @@ let
         # The sandbox sets it to /no-cert-file.crt. httpx loads it for every client, http:// ones too, and pygit2
         # (pyedit's) fails to import with no certificates at all: give both a real bundle.
         export SSL_CERT_FILE=${cacert}/etc/ssl/certs/ca-bundle.crt
+        export FONTCONFIG_FILE=${fontsConf}
         # One run tests one browser; the sandbox runs chromium, developers repeat with --browser firefox.
         # One test worker per build core; NIX_BUILD_CORES=0 means all of them.
         workers=''${NIX_BUILD_CORES:-0}
