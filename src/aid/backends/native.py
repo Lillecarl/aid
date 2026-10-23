@@ -89,8 +89,8 @@ SEAM_PUNCTUATION: Final = ",.;:!?\u2014"
 """Punctuation a space follows in prose, where `join_continued` restores one."""
 
 
-class _MetadataRequest(ModelRequest):
-    """Ephemeral per-request metadata: sent trailing every request, stripped before anything is stored."""
+METADATA: Final = "[Session metadata]"
+"""The header of the metadata part each turn's opening request carries."""
 
 
 def prune_history(
@@ -127,8 +127,8 @@ def estimate_tokens(messages: list[ModelMessage]) -> int:
 def context_tokens(history: list[ModelMessage], boundary: int, *, preserve_signed_thinking: bool = False) -> int:
     """How many tokens a request over `history` would carry, in the gauge's own unit.
 
-    Rough but monotonic, and the same estimate the per-request `context_pct` uses, so the number a turn
-    reports as `context_used` matches what its requests measured.
+    Rough but monotonic, and the same estimate a turn's `context_pct` uses, so the number a turn reports as
+    `context_used` matches what it opened with.
     """
     return estimate_tokens(prune_history(history, boundary, preserve_signed_thinking=preserve_signed_thinking))
 
@@ -186,29 +186,13 @@ def open_turn(history: list[ModelMessage]) -> int:
     return len(history) - starts[-1] if starts else 0
 
 
-def _send_policy(
-    boundary: int, desired_max: int, *, preserve_signed_thinking: bool = False
-) -> Callable[[list[ModelMessage]], list[ModelMessage]]:
-    """The send policy for one turn: `boundary` is where the stored history ended when the turn
-    started, so the turn's own thinking flows whole and everything before it rides pruned. A metadata message
-    trails every send; the backend strips those before storing."""
-
-    def policy(messages: list[ModelMessage]) -> list[ModelMessage]:
-        clean = [message for message in messages if not isinstance(message, _MetadataRequest)]
-        pruned = prune_history(clean, boundary, preserve_signed_thinking=preserve_signed_thinking)
-        used = estimate_tokens(pruned)
-        meta = {"context_pct": round(used / desired_max * 100), "unixtime": int(time.time())}
-        return [
-            *pruned,
-            _MetadataRequest(parts=[UserPromptPart(content=f"[Session metadata, not stored]\n{json.dumps(meta)}")]),
-        ]
-
-    return policy
-
-
-def without_metadata(history: list[ModelMessage]) -> list[ModelMessage]:
-    """The stored form: everything the run tracked, minus the ephemeral per-request metadata."""
-    return [message for message in history if not isinstance(message, _MetadataRequest)]
+def turn_metadata(used: int, desired_max: int) -> UserPromptPart:
+    """The metadata part of a turn's opening request, stored with it. Sent and stored once, never stripped: a
+    provider's prefix cache and Anthropic's binding of thinking to the conversation before it both need the
+    history to only grow (measured 2026-10-23 on claude-haiku-5-5: a stripped per-request part left the cache
+    unread and flagged the replayed thinking `prefix_binding_mismatch`)."""
+    meta = {"context_pct": round(used / desired_max * 100), "unixtime": int(time.time())}
+    return UserPromptPart(content=f"{METADATA}\n{json.dumps(meta)}")
 
 
 def interrupted_messages(messages: list[ModelMessage]) -> list[ModelMessage]:
@@ -408,7 +392,12 @@ class NativeBackend:
         messages: list[ModelMessage] = []
         if not self._history and self._agent.instructions:
             messages.append(ModelRequest(parts=[SystemPromptPart(self._agent.instructions)]))
-        messages.append(ModelRequest(parts=[UserPromptPart(text)]))
+        used = context_tokens(
+            [*self._history, *messages, ModelRequest(parts=[UserPromptPart(text)])],
+            max(0, len(self._history) - self._open_tail),
+            preserve_signed_thinking=self._preserve_signed_thinking(),
+        )
+        messages.append(ModelRequest(parts=[UserPromptPart(text), turn_metadata(used, self._desired_max)]))
         usage = Usage(requests=0, models=[])
         completed = False
         stop_reason = "end_turn"
@@ -433,11 +422,11 @@ class NativeBackend:
                     usage_observed = False
                     truncated = False
                     info = ModelInfo(list(self._tools.values()), self._agent.output_type, self._agent.model_settings)
-                    wire = _send_policy(
+                    wire = prune_history(
+                        [*self._history, *messages[:-1]],
                         max(0, len(self._history) - self._open_tail),
-                        self._desired_max,
                         preserve_signed_thinking=self._preserve_signed_thinking(),
-                    )([*self._history, *messages[:-1]])
+                    )
                     held = None if so_far is None else ""
                     try:
                         stream = self._model.stream(wire, info)

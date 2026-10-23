@@ -58,7 +58,10 @@ completion) is not used: it refuses any history holding a tool call.
 Compaction changes only the stored prefix. Turn completion appends only that turn's messages.
 Signed and redacted Anthropic thinking blocks remain intact for replay; thinking from another provider is not
 sent to Anthropic. Chat Completions providers get reasoning text back as `reasoning_content`.
-Wire-only session metadata never enters stored history.
+Each turn's prompt carries a `[Session metadata]` part (`context_pct`, `unixtime`), stored with it. Requests only
+ever grow the history: an edited one leaves a provider's prefix cache unread, and Anthropic flags replayed
+thinking as bound to a different conversation (a 400 on enforced accounts). Past unsigned thinking is the one
+exception: it is clipped once the next turn starts.
 Each model keeps one SDK client per configuration. Worker shutdown closes them.
 
 ## Forks

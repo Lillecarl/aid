@@ -13,6 +13,7 @@ from aid.agent import Agent, ModelRetry, Tool
 from aid.backends.native import (
     CONTINUE,
     DEFAULT_DESIRED_MAX,
+    METADATA,
     NOT_FORKED,
     THOUGHT_LIMIT,
     NativeBackend,
@@ -88,6 +89,16 @@ async def backend(
             await session.aclose()
         finally:
             await coding.close()
+
+
+def prompts_of(messages: list[ModelMessage]) -> list[str | Any]:
+    """The user prompts, without each turn's metadata part."""
+    return [
+        p.content
+        for m in messages
+        for p in m.parts
+        if isinstance(p, UserPromptPart) and not str(p.content).startswith(METADATA)
+    ]
 
 
 async def stored(directory: Path) -> list[ModelMessage]:
@@ -269,8 +280,7 @@ async def test_a_cut_answer_continues_and_joins_at_the_repeat(tmp_path: Path) ->
         assert await session.prompt("go", emit) == Output(
             output="part one, and so on, part two", stop_reason="end_turn"
         )
-    prompts = [p.content for m in await stored(tmp_path) for p in m.parts if isinstance(p, UserPromptPart)]
-    assert prompts == ["go", CONTINUE]
+    assert prompts_of(await stored(tmp_path)) == ["go", CONTINUE]
 
 
 @pytest.mark.parametrize("length", [10, 1000])
@@ -376,10 +386,13 @@ async def test_explicit_budget_preserves_history_usage_and_resume(tmp_path: Path
     usage = [event for event in events if isinstance(event, Usage)]
     assert len(usage) == 1
     assert usage[0].requests == 2
-    assert not any(
-        isinstance(part, UserPromptPart) and str(part.content).startswith("[Session metadata")
-        for message in history
-        for part in message.parts
+    assert (
+        sum(
+            isinstance(part, UserPromptPart) and str(part.content).startswith("[Session metadata]")
+            for message in history
+            for part in message.parts
+        )
+        == 1
     )
     async with backend(tmp_path, coder, history=history) as resumed:
         assert (await resumed.prompt(plan(("ls", {})), emit)).stop_reason == "end_turn"
@@ -502,7 +515,7 @@ async def test_in_turn_compaction_survives_turn_end(tmp_path: Path, cancel_after
         with anyio.fail_after(10):
             result = await session.prompt("compact now", emit)
     assert result.stop_reason == ("cancelled" if cancel_after_compaction else "end_turn")
-    prompts = [part.content for m in await stored(tmp_path) for part in m.parts if isinstance(part, UserPromptPart)]
+    prompts = prompts_of(await stored(tmp_path))
     assert prompts == ["[Summary of earlier work]\ndecisions kept", "second", "compact now"]
 
 
@@ -579,7 +592,7 @@ async def test_snapshot_holds_the_turn_so_far_and_closes_later_calls(tmp_path: P
     seed = ModelMessagesTypeAdapter.validate_json(path.read_bytes())
     assert path.parent == tmp_path / "forks"
     assert seed[:2] == earlier
-    assert [p.content for p in seed[2].parts if isinstance(p, UserPromptPart)] == ["go"]
+    assert prompts_of(seed[2:3]) == ["go"]
     assert [p.tool_call_id for p in seed[3].parts if isinstance(p, ToolCallPart)] == ["c1", "c2", "c3"]
     assert [(p.tool_call_id, p.content) for p in seed[4].parts if isinstance(p, ToolReturnPart)] == [("c1", "looked")]
     assert [(p.tool_call_id, p.content) for p in seed[5].parts if isinstance(p, ToolReturnPart)] == [

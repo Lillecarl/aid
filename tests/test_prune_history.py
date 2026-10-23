@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 import time
 from typing import TYPE_CHECKING, Any, cast
@@ -9,10 +10,10 @@ import pytest
 
 from aid.agent import Agent
 from aid.backends.native import (
+    METADATA,
     THOUGHT_LIMIT,
-    _send_policy,  # pyright: ignore[reportPrivateUsage]
     prune_history,
-    without_metadata,
+    turn_metadata,
 )
 from aid.messages import (
     ModelMessage,
@@ -21,6 +22,7 @@ from aid.messages import (
     ModelResponse,
     TextPart,
     ThinkingPart,
+    ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
@@ -123,44 +125,51 @@ async def test_policy_filters_wire_but_not_store(tmp_path: Path) -> None:
 
 
 def _metadata_of(messages: list[ModelMessage]) -> dict[str, Any]:
-    """The trailing metadata payload: the framework may merge it into the previous user message on the wire,
-    so find it by its header rather than by position."""
+    """The newest metadata payload, found by its header."""
     for message in reversed(messages):
         for part in reversed(message.parts):
-            if (
-                isinstance(part, UserPromptPart)
-                and isinstance(part.content, str)
-                and part.content.startswith("[Session metadata, not stored]")
-            ):
+            if isinstance(part, UserPromptPart) and isinstance(part.content, str) and part.content.startswith(METADATA):
                 _, _, payload = part.content.partition("\n")
                 loaded = json.loads(payload)
                 assert isinstance(loaded, dict)
                 return cast(dict[str, Any], loaded)
-    raise AssertionError("no metadata suffix on the wire")
+    raise AssertionError("no metadata on the wire")
 
 
-def test_send_policy_appends_ephemeral_suffix() -> None:
-    history: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart(content="hi")])]
+def test_turn_metadata_reports_the_gauge_and_the_time() -> None:
     before = time.time()
-    (*unchanged, suffix) = _send_policy(1, 100_000)(history)
-    after = time.time()
-    assert unchanged == history
-    meta = _metadata_of([suffix])
-    assert set(meta) == {"context_pct", "unixtime"}
-    assert isinstance(meta["context_pct"], int) and meta["context_pct"] >= 0
-    assert isinstance(meta["unixtime"], int) and int(before) <= meta["unixtime"] <= after
+    meta = _metadata_of([ModelRequest(parts=[turn_metadata(1000, 100_000)])])
+    assert meta == {"context_pct": 1, "unixtime": meta["unixtime"]}
+    assert int(before) <= meta["unixtime"] <= time.time()
+    assert _metadata_of([ModelRequest(parts=[turn_metadata(1000, 100)])])["context_pct"] == 1000
 
 
-def test_send_policy_pct_scales_with_desired_max() -> None:
-    history: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart(content="x" * 4000)])]
-    small = _metadata_of(_send_policy(1, 100_000)(history))
-    big = _metadata_of(_send_policy(1, 100)(history))
-    assert isinstance(small["context_pct"], int) and isinstance(big["context_pct"], int)
-    assert big["context_pct"] > small["context_pct"]
+async def test_sends_only_grow(tmp_path: Path) -> None:
+    """Each request's wire starts with the previous one, through a tool loop and across turns: a provider's
+    prefix cache and Anthropic's thinking binding both need it. The metadata rides once per turn, stored. (Past
+    unsigned thinking is the exception: `prune_history` clips it once the next turn starts.)"""
+    seen: list[list[ModelMessage]] = []
 
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(messages)
+        if any(isinstance(p, ToolReturnPart) for p in messages[-1].parts):
+            return ModelResponse(parts=[TextPart("done")])
+        return ModelResponse(parts=[ToolCallPart("now", "{}", f"c{len(seen)}")])
 
-def test_without_metadata_strips_only_markers() -> None:
-    history: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart(content="hi")])]
-    sent = _send_policy(1, 100_000)(history)
-    assert len(sent) == len(history) + 1
-    assert without_metadata(sent) == history
+    def now() -> str:
+        return "noon"
+
+    async def emit(event: Any) -> None:
+        pass
+
+    async with backend(tmp_path, Agent(FunctionModel(respond), tools=[now])) as session:
+        await session.prompt("first", emit)
+        await session.prompt("second", emit)
+    assert len(seen) == 4
+    for before, after in itertools.pairwise(seen):
+        assert after[: len(before)] == before
+    stored = ModelMessagesTypeAdapter.validate_json(await anyio.Path(tmp_path / "history.json").read_bytes())
+    metadata = [
+        p for m in stored for p in m.parts if isinstance(p, UserPromptPart) and str(p.content).startswith(METADATA)
+    ]
+    assert len(metadata) == 2

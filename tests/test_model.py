@@ -110,7 +110,7 @@ async def test_openai_transport_tool_loop_and_usage(tmp_path: Path, monkeypatch:
     history = ModelMessagesTypeAdapter.validate_json((tmp_path / "history.json").read_bytes())
     assert all(m.model_name == "local" for m in history if isinstance(m, ModelResponse))
     assert any(isinstance(p, ToolReturnPart) and p.content == 5 for m in history for p in m.parts)
-    assert b"Session metadata" not in (tmp_path / "history.json").read_bytes()
+    assert (tmp_path / "history.json").read_bytes().count(b"[Session metadata]") == 1
 
 
 async def test_openai_stream_cancellation_closes_transport(monkeypatch: pytest.MonkeyPatch) -> None:

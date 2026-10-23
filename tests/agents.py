@@ -39,9 +39,8 @@ if TYPE_CHECKING:
 
 
 def _is_note(content: object) -> bool:
-    # The send policy trails every request with session metadata; it is wire-only, and the plan and the turn
-    # count live in the real prompts.
-    return isinstance(content, str) and content.startswith("[Session metadata, not stored]")
+    # Each turn's prompt carries a session metadata part; the plan and the turn count live in the real prompts.
+    return isinstance(content, str) and content.startswith("[Session metadata]")
 
 
 def _last_prompt(messages: list[ModelMessage]) -> str:
