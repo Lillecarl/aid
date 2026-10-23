@@ -23,7 +23,7 @@ def test_preload_keeps_worker_code_fresh() -> None:
     worker restart picks up new code and `python_path` can override them."""
     assert PRELOAD == ("zmq.asyncio",)
     assert not any(name == "aid" or name.startswith("aid.") for name in PRELOAD)
-    assert not {"litelm", "acp"} & set(PRELOAD)
+    assert not {"openai", "anthropic", "acp"} & set(PRELOAD)
 
 
 def test_worker_endpoint_needs_command(tmp_path: Path) -> None:

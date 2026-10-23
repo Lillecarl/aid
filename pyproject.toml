@@ -17,7 +17,9 @@ dependencies = [
   "libpymux",
   "mcp>=1.20",
   "numpy>=2.0",
-  "litelm[anthropic]>=0.5.4",
+  # aid.model: the LiteLM backend's transports, built from pins in default.nix.
+  "anthropic",
+  "openai",
   "pydantic>=2.11",
   # aid.coding: agents edit through pyedit's library and run processes through pyrun (./pyrun).
   "pyedit",

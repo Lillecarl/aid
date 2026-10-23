@@ -36,13 +36,6 @@
   # Vivarium, the NixOS integration tests aid boots in UML guests. A local path, not a pin: one-man
   # project, and the checkout beside this one is what the tests run against.
   vivariumSrc ? ../nixidae/vivarium,
-  litelm ? builtins.fetchTree {
-    type = "github";
-    owner = "kennethwolters";
-    repo = "litelm";
-    rev = "3cae20176bbda16633da7238a75d33871abea189";
-    narHash = "sha256-1BGppa4gN3iVA8lDpCV5A8+bXv1kq8oG2U4GVFkqqrY=";
-  },
   openai ? builtins.fetchTree {
     type = "github";
     owner = "openai";
@@ -197,7 +190,6 @@ let
           pyedit
           shellous
           xonsh
-          litelm
           openai
           anthropic
         ];
@@ -208,7 +200,6 @@ let
             "pyrun"
             "pyedit"
             "shellous"
-            "litelm"
             "openai"
             "anthropic"
             "pre-commit"
@@ -231,10 +222,6 @@ let
         anthropic = final.callPackage ./nix/model-sdk.nix {
           inherit (p) mkProject;
           src = anthropic;
-        };
-        litelm = final.callPackage ./nix/litelm.nix {
-          inherit (p) mkProject;
-          src = litelm;
         };
         pyedit = final.callPackage ./nix/pyedit.nix {
           inherit (p) mkProject;

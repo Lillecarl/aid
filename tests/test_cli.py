@@ -42,7 +42,7 @@ def test_split_agent_command(argv: list[str], head: list[str], tail: list[str]) 
     ("argv", "expected"),
     [
         (["daemon"], [*PRELOAD]),
-        (["daemon", "--preload-module", "litelm"], [*PRELOAD, "litelm"]),
+        (["daemon", "--preload-module", "openai"], [*PRELOAD, "openai"]),
         (["daemon", "--no-preload"], []),
         (["daemon", "--no-preload", "--preload-module", "zmq.asyncio"], ["zmq.asyncio"]),
     ],

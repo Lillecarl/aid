@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 PRELOAD: Final = ("zmq.asyncio",)
 """What the forkserver imports before forking workers. Only the transport: it is the daemon's side of the
 worker channel, so it must work whatever a session puts on `python_path`. Everything else — aid itself,
-`litelm`, `acp` — imports fresh in each worker, so restarting a worker picks up new code. A worker cannot
+the model SDKs, `acp` — imports fresh in each worker, so restarting a worker picks up new code. A worker cannot
 bring its own version of a preloaded module; add one back only to share its pages with `--preload-module`."""
 
 

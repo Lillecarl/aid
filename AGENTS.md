@@ -138,6 +138,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `skill` tool loads a body or file. Spec-checked frontmatter (YAML); project `.aid|.agents|.claude/skills` up to the
   git root, then `AID_SKILLS_PATH`, then the global dirs, then each resolved plugin's `skills/`.
 - `src/aid/backends/` — `acp.py`, `litelm.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
+- `src/aid/model.py` — the `litelm` backend's transports (no LiteLM library; the name stays): `model_for(name)`,
+  `anthropic/` → `AnthropicModel` (Messages API, native blocks, `extra_headers` carry betas, automatic caching
+  on), else `OpenAIChatModel` (Chat Completions; `OPENAI_COMPATIBLE` maps prefix → base URL + key variable).
+  `model_settings`: `api_key`/`api_base`/`max_retries` build the client, the rest goes into each request.
 - `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON,
   plus the built-in `aid` server (`session_servers`). claude-agent-acp restarts its query when `session/load` gets
   servers other than `session/new` did.
@@ -246,7 +250,7 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   regenerate through the project's own commands, never by hand.
 - anyio only. ruff bans `asyncio` and `subprocess` (TID251). The asyncio seam lives inside the `acp` library.
 - Worker isolation is a process per session, forked from a forkserver that preloads only the transport
-  (`launcher.PRELOAD`, default `zmq.asyncio`). Everything else — aid itself, `litelm`, `acp` — imports fresh
+  (`launcher.PRELOAD`, default `zmq.asyncio`). Everything else — aid itself, the model SDKs, `acp` — imports fresh
   in each worker, so restarting a worker picks up new code. `LiteLMSpec.python_path` is prepended per worker,
   but a preloaded module and its dependencies win over it. `aid daemon --preload-module` shares more pages
   copy-on-write, `--no-preload` starts bare.
