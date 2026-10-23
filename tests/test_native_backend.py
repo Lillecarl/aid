@@ -10,7 +10,15 @@ import pytest
 from pydantic import BaseModel, Field
 
 from aid.agent import Agent, ModelRetry, Tool
-from aid.backends.native import DEFAULT_DESIRED_MAX, NOT_FORKED, NativeBackend, UsageLimitExceeded, aid_toolset
+from aid.backends.native import (
+    DEFAULT_DESIRED_MAX,
+    NOT_FORKED,
+    THOUGHT_LIMIT,
+    NativeBackend,
+    UsageLimitExceeded,
+    aid_toolset,
+    open_turn,
+)
 from aid.backends.permissions import PermissionWaits
 from aid.coding import CODING, Coding, coding_tools
 from aid.discovery import Catalog
@@ -21,6 +29,7 @@ from aid.messages import (
     ModelResponse,
     RetryPromptPart,
     TextPart,
+    ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
@@ -49,6 +58,7 @@ async def backend(
     history: list[ModelMessage] | None = None,
     max_requests: int | None = None,
     desired_max: int = DEFAULT_DESIRED_MAX,
+    open_tail: int = 0,
 ) -> AsyncGenerator[NativeBackend]:
     coding = Coding(
         cwd=directory,
@@ -67,6 +77,7 @@ async def backend(
         coding,
         max_requests=max_requests,
         desired_max=desired_max,
+        open_tail=open_tail,
     )
     try:
         yield session
@@ -455,3 +466,30 @@ async def test_snapshot_holds_the_turn_so_far_and_closes_later_calls(tmp_path: P
     assert len(seed) == 6
     returns = [p.tool_call_id for m in await stored(tmp_path) for p in m.parts if isinstance(p, ToolReturnPart)]
     assert returns == ["c1", "c2", "c3"]
+
+
+async def test_a_forks_first_turn_sends_its_parents_open_turn_unpruned(tmp_path: Path) -> None:
+    """The parent sent its running turn's thinking whole; the fork must too, or its prefix and cache part there."""
+    long = "x" * (THOUGHT_LIMIT * 2)
+    seed: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart("earlier")]),
+        ModelResponse([ThinkingPart(long), TextPart("ok")]),
+        ModelRequest(parts=[UserPromptPart("now")]),
+        ModelResponse([ThinkingPart(long), ToolCallPart("fork", "{}", "c1")]),
+        ModelRequest(parts=[ToolReturnPart("fork", "you are the fork", "c1")]),
+    ]
+    assert open_turn(seed) == 3
+    seen: list[list[int]] = []
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append([len(p.content) for m in messages for p in m.parts if isinstance(p, ThinkingPart)])
+        return ModelResponse([TextPart("done")])
+
+    async def emit(event: SessionEvent) -> None:
+        pass
+
+    async with backend(tmp_path, Agent(FunctionModel(respond)), history=seed, open_tail=open_turn(seed)) as session:
+        await session.prompt("the fork's instructions", emit)
+        await session.prompt("a later turn", emit)
+    assert seen[0] == [THOUGHT_LIMIT + 1, len(long)]
+    assert seen[1] == [THOUGHT_LIMIT + 1, THOUGHT_LIMIT + 1]

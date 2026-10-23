@@ -118,6 +118,13 @@ def context_tokens(history: list[ModelMessage], boundary: int, *, preserve_signe
     return estimate_tokens(prune_history(history, boundary, preserve_signed_thinking=preserve_signed_thinking))
 
 
+def open_turn(history: list[ModelMessage]) -> int:
+    """How many messages at the end of `history` belong to its last turn: from the last user prompt on. A turn's
+    first message is its prompt, a wake's included."""
+    starts = [i for i, message in enumerate(history) if any(p.part_kind == "user-prompt" for p in message.parts)]
+    return len(history) - starts[-1] if starts else 0
+
+
 def _send_policy(
     boundary: int, desired_max: int, *, preserve_signed_thinking: bool = False
 ) -> Callable[[list[ModelMessage]], list[ModelMessage]]:
@@ -267,6 +274,7 @@ class NativeBackend:
         desired_max: int = DEFAULT_DESIRED_MAX,
         max_requests: int | None = None,
         refresh_instructions: Callable[[], str] | None = None,
+        open_tail: int = 0,
     ) -> None:
         self._agent = agent
         self._history_file = history_file
@@ -293,6 +301,10 @@ class NativeBackend:
         self._desired_max = desired_max
         self._max_requests = max_requests
         self._refresh_instructions = refresh_instructions
+        # Messages at the history's end that the next turn sends unpruned: a fork's copy of the turn its parent was
+        # in, which the parent's own requests sent whole. Pruned, the fork's prefix would part from the parent's at
+        # the first long thought, and the prompt cache with it.
+        self._open_tail = open_tail
         self._history_lock = anyio.Lock()
         self._turn: list[ModelMessage] | None = None
         self._in_flight: tuple[list[ToolCallPart], int] | None = None
@@ -357,7 +369,7 @@ class NativeBackend:
                     usage_observed = False
                     info = ModelInfo(list(self._tools.values()), self._agent.output_type, self._agent.model_settings)
                     wire = _send_policy(
-                        len(self._history),
+                        max(0, len(self._history) - self._open_tail),
                         self._desired_max,
                         preserve_signed_thinking=self._preserve_signed_thinking(),
                     )([*self._history, *messages[:-1]])
@@ -449,6 +461,7 @@ class NativeBackend:
                     messages = interrupted_messages(messages)
                 async with self._history_lock:
                     self._history = [*self._history, *messages]
+                    self._open_tail = 0
                     try:
                         await _write_atomic(self._history_file, ModelMessagesTypeAdapter.dump_json(self._history))
                     except OSError:
@@ -589,9 +602,11 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         )
         return "\n\n".join(filter(None, [agent.instructions, composed, environment(spec.cwd, state_dir.name)]))
 
+    open_tail = 0
     if not history and spec.seed_history is not None:
         seed = await anyio.Path(spec.seed_history).read_bytes()
         history = ModelMessagesTypeAdapter.validate_json(seed)
+        open_tail = open_turn(history)
         await _write_atomic(history_file, seed)
     elif not history:
         composed = await anyio.to_thread.run_sync(refresh_instructions)
@@ -621,6 +636,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             desired_max=spec.max_context if spec.max_context is not None else DEFAULT_DESIRED_MAX,
             max_requests=spec.max_requests,
             refresh_instructions=refresh_instructions,
+            open_tail=open_tail,
         )
         yield backend
     finally:
