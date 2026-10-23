@@ -273,6 +273,21 @@ async def test_a_cut_answer_continues_and_joins_at_the_repeat(tmp_path: Path) ->
     assert prompts == ["go", CONTINUE]
 
 
+@pytest.mark.parametrize("length", [10, 1000])
+async def test_the_stream_leaves_out_a_continuations_repeat(tmp_path: Path, length: int) -> None:
+    """What streams is the joined answer, not the pieces: the repeat is held back, short continuation or long."""
+    shown: list[str] = []
+
+    async def emit(event: SessionEvent) -> None:
+        if isinstance(event, TextDelta):
+            shown.append(event.text)
+
+    rest = " on" + "." * length
+    async with backend(tmp_path, Agent(Cutting(["part one, and so", f"and so{rest}"]))) as session:
+        result = await session.prompt("go", emit)
+    assert "".join(shown) == result.output == f"part one, and so{rest}"
+
+
 async def test_continuing_stops_at_the_bound_and_without_text(tmp_path: Path) -> None:
     """Bounded by `max_continuations`; a cut answer with no text (all thinking) or a continuation that adds none
     ends the turn as `max_tokens`."""

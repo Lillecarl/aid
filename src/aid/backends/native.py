@@ -83,6 +83,8 @@ OVERLAP: Final = 500
 """The longest overlap `join_continued` looks for."""
 LEADERS: Final = " \t\n.\u2026"
 """What a continuation's repeat may open with before the repeated words."""
+HOLD: Final = 200
+"""Characters of a continuation held from the stream until its repeat of the answer is known and left out."""
 SEAM_PUNCTUATION: Final = ",.;:!?\u2014"
 """Punctuation a space follows in prose, where `join_continued` restores one."""
 
@@ -154,6 +156,13 @@ def join_continued(answer: str, more: str) -> str:
     if answer and more and more[0].isalnum() and (answer[-1].isalnum() or answer[-1] in SEAM_PUNCTUATION):
         return f"{answer} {more}"
     return answer + more
+
+
+def unshown(answer: str, more: str) -> str:
+    """What joining `more` adds to an `answer` already streamed. A rewritten cut word cannot be taken back, so the
+    stream gets what follows the part both share."""
+    joined = join_continued(answer, more)
+    return joined[len(os.path.commonprefix([answer, joined])) :]
 
 
 def _overlap(answer: str, more: str) -> int:
@@ -429,6 +438,7 @@ class NativeBackend:
                         self._desired_max,
                         preserve_signed_thinking=self._preserve_signed_thinking(),
                     )([*self._history, *messages[:-1]])
+                    held = None if so_far is None else ""
                     try:
                         stream = self._model.stream(wire, info)
                         try:
@@ -446,10 +456,16 @@ class NativeBackend:
                                             max(getattr(request_usage, name), getattr(delta.usage, name)),
                                         )
                                 if isinstance(delta.part, TextPart) and delta.part.content:
-                                    await emit(TextDelta(text=delta.part.content))
+                                    if held is None:
+                                        await emit(TextDelta(text=delta.part.content))
+                                    elif len(held := held + delta.part.content) >= HOLD:
+                                        await emit(TextDelta(text=unshown(so_far or "", held)))
+                                        held = None
                                 elif isinstance(delta.part, ThinkingPart) and delta.part.content:
                                     await emit(ThoughtDelta(text=delta.part.content))
                                 await checkpoint()
+                            if held:
+                                await emit(TextDelta(text=unshown(so_far or "", held)))
                         finally:
                             with anyio.CancelScope(shield=True):
                                 await stream.aclose()
