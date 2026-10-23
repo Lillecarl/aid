@@ -1,8 +1,8 @@
 # aid
 
 AI server for persistent, cooperating agent sessions, with separate execution engines and extension hosts.
-Runs external ACP agents (`claude-agent-acp`, `opencode acp`, …), native agents (aid's own loop), and Claude Code through
-terminal and SDK backends, behind an async Python API, CLI and web UI.
+Runs external ACP agents (`claude-agent-acp`, `opencode acp`, …), native agents (aid's own loop), and Claude Code
+through terminal and SDK backends, behind an async Python API, CLI and web UI.
 
 ## Architecture stance
 
@@ -142,9 +142,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   turn) to `state_dir/forks/`; the plugin creates `<parent[:52]>.fork-<6hex>` from the parent's `NativeSpec` with
   `seed_history` (a seeded session skips instruction composing: same cache prefix) and `parent`, prompts it, sends
   the answer to the parent as the fork with its turn `Usage` (`agent="fork <name>"`; `SendMessage.usage`, kept
-  only from control and `supervise` plugins, recorded after the message), deletes it. A session with a `parent` can't fork. At plugin start, leftover forks
-  answer from their recorded Output/TurnError (else "lost") and are deleted. Spec `parent` (also on `SessionInfo`/`SessionStatus`): chat plugins skip such sessions
-  (no Discord channel, no settled-turn notice, not in session lists).
+  only from control and `supervise` plugins, recorded after the message), deletes it. A session with a `parent`
+  can't fork. At plugin start, leftover forks answer from their recorded Output/TurnError (else "lost") and are
+  deleted. Spec `parent` (also on `SessionInfo`/`SessionStatus`): chat plugins skip such sessions (no Discord
+  channel, no settled-turn notice, not in session lists).
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/model.py` — the native backend's transports: `model_for(name)`,
   `anthropic/` → `AnthropicModel` (Messages API, native blocks, `extra_headers` carry betas, automatic caching
