@@ -95,9 +95,10 @@ async def test_a_fork_answers_its_parent_and_is_deleted(daemon: Paths, tmp_path:
                 await anyio.sleep(0.05)
     [message] = [e.item for e in messages if isinstance(e.item, MessageEntry)]
     assert message.sender is not None and is_fork(message.sender)
-    # The fork's turn is recorded in the parent right after its answer, and the parent's totals count it.
-    after = next(e.item for e in entries if e.seq > messages[0].seq)
-    assert isinstance(after, Usage) and after.agent == f"fork {message.sender}"
+    # The fork's turn is recorded in the parent after its answer, and the parent's totals count it. Not always next
+    # to it: an answer that lands mid-turn can have the parent's own entries recorded in between.
+    [after] = [e.item for e in entries if e.seq > messages[0].seq and isinstance(e.item, Usage) and e.item.agent]
+    assert after.agent == f"fork {message.sender}"
     assert after.requests == 1 and after.context_used is None
     assert summary.requests == 3 + 1 + 1  # The parent's turn, the fork's, the parent's wake.
     assert "the answer is 42" in message.text
