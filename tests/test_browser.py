@@ -19,6 +19,7 @@ import pytest
 from pydantic import JsonValue
 
 import aid
+from aid.protocol import Usage
 from aid.spec import PermissionMode
 from tests.browser_harness import (
     expect_chat_text,
@@ -309,6 +310,17 @@ async def test_status_shows_accumulated_cost(page: Page, session_daemon: Paths, 
     cost = page.get_by_test_id("status-cost")
     await cost.wait_for(timeout=TIMEOUT * 1000)
     assert await cost.text_content() == "0.50 USD"
+
+
+async def test_fork_usage_names_the_fork(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """A fork's tokens ride its answer into the parent; the row names the fork, not a Claude subagent."""
+    await seed_session(session_daemon, tmp_path, "forker", "agents:echo")
+    await open_session(page, "forker")
+    usage = Usage(input_tokens=1200, models=["local"], agent="fork forker.fork-abcdef")
+    async with aid.connect(session_daemon) as client:
+        await client.send_message("forker", "the answer", sender="forker.fork-abcdef", usage=usage)
+    await expect_chat_text(page, "fork forker.fork-abcdef · local · 1.2k in")
+    assert await page.get_by_test_id("chat-row").filter(has_text="subagent fork").count() == 0
 
 
 async def test_thinking_visible_until_done(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
