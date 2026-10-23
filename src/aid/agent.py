@@ -98,12 +98,16 @@ class Agent:
     output_type: Any = str
     model_settings: dict[str, Any] = field(default_factory=dict[str, Any])
     output_retries: int = 3
+    max_continuations: int | None = 4
+    """Requests that continue one answer cut at the output token limit; None: no bound."""
 
     def __post_init__(self) -> None:
         if isinstance(self.model, str) and ":" in self.model and "/" not in self.model:
             raise ValueError("models use provider/model, not provider:model")
         if self.output_retries < 0:
             raise ValueError("output_retries must be nonnegative")
+        if self.max_continuations is not None and self.max_continuations < 0:
+            raise ValueError("max_continuations must be nonnegative")
 
     def output_adapter(self) -> TypeAdapter[Any]:
         return TypeAdapter(self.output_type)

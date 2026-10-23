@@ -49,8 +49,12 @@ An unset request budget is unlimited. Loop detection remains a separate supervis
 
 Each turn saves available conversation parts and emits usage on success, failure, and cancellation.
 Unavailable token counts remain unknown. Partial tool calls close as interrupted before resume.
-An answer the provider cut at its output limit ends the turn with `stop_reason` `max_tokens`. A tool call cut
-mid-arguments goes back to the model as a retry that names the limit.
+An answer the provider cut at its output limit continues: aid asks for the rest, the model repeats the last words
+of what it wrote, and the pieces join at that overlap. `Agent.max_continuations` bounds it (default 4, None: no
+bound); a cut with no answer text in it (all thinking) ends at once. Each piece stays in the history as its own
+response. An answer still cut at the end ends the turn with `stop_reason` `max_tokens`. A tool call cut
+mid-arguments goes back to the model as a retry that names the limit. In-place continuation (DeepSeek's prefix
+completion) is not used: it refuses any history holding a tool call.
 Compaction changes only the stored prefix. Turn completion appends only that turn's messages.
 Signed and redacted Anthropic thinking blocks remain intact for replay; thinking from another provider is not
 sent to Anthropic. Chat Completions providers get reasoning text back as `reasoning_content`.

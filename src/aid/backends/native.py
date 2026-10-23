@@ -72,6 +72,19 @@ NOT_FORKED: Final = "Not run in this fork: the parent session runs it."
 DEFAULT_DESIRED_MAX: Final = 100_000
 """Tokens the context gauge assumes when the session names no `max_context`. Rule of thumb: half the model's
 window; unknown models err toward compacting early, which fails safe."""
+CONTINUE: Final = (
+    "Your previous answer was cut off at the output token limit. Continue it: start by repeating its last few "
+    "words exactly as written, then go on. Write nothing else."
+)
+"""The request after an answer cut at the output limit. DeepSeek's prefix completion, which would continue it in
+place, refuses any history holding a tool call (measured 2026-10-23), and every session has tools. Asked to start
+at the next character, models drop the space at the cut; the repeated words give `join_continued` an overlap."""
+OVERLAP: Final = 500
+"""The longest overlap `join_continued` looks for."""
+LEADERS: Final = " \t\n.\u2026"
+"""What a continuation's repeat may open with before the repeated words."""
+SEAM_PUNCTUATION: Final = ",.;:!?\u2014"
+"""Punctuation a space follows in prose, where `join_continued` restores one."""
 
 
 class _MetadataRequest(ModelRequest):
@@ -116,6 +129,45 @@ def context_tokens(history: list[ModelMessage], boundary: int, *, preserve_signe
     reports as `context_used` matches what its requests measured.
     """
     return estimate_tokens(prune_history(history, boundary, preserve_signed_thinking=preserve_signed_thinking))
+
+
+def join_continued(answer: str, more: str) -> str:
+    """An answer and its continuation, which repeats the answer's last words, joined at their longest overlap.
+    Measured on deepseek-flash, a repeat can open with "...", change case, or trade a no-break space for a plain one:
+    the match ignores all three. A repeat starts at a word, so the overlap must too: a single repeated word counts,
+    and a chance match inside a word does not. A repeat can also rewrite the word the cut split ("carbon-d", then
+    "carbon dioxide"), so that word may give way to the repeat's. After the repeat, a paragraph break before a
+    lowercase word is a space. Without a repeat, a continuation drops the space at the cut; every such seam
+    measured fell between words, so one goes back between a word or punctuation and a word."""
+    start = len(more) - len(more.lstrip(LEADERS))
+    rest = more[start:]
+    cut_word = max(answer.rfind(" "), answer.rfind("\n")) + 1
+    for kept in (answer, answer[:cut_word] if 0 < cut_word < len(answer) else None):
+        if kept is not None and (size := _overlap(kept, rest)):
+            after = rest[size:]
+            if after[:1].isspace() and "\n" in after[: len(after) - len(after.lstrip())]:
+                stripped = after.lstrip()
+                after = f" {stripped}" if stripped[:1].islower() else after
+            return kept + after
+    if any(char in ".\u2026" for char in more[:start]):
+        more = rest
+    if answer and more and more[0].isalnum() and (answer[-1].isalnum() or answer[-1] in SEAM_PUNCTUATION):
+        return f"{answer} {more}"
+    return answer + more
+
+
+def _overlap(answer: str, more: str) -> int:
+    """The longest start of `more` that ends `answer` and starts at a word there, loosely compared; 0 if none."""
+    tail, head = _loose(answer[-OVERLAP:]), _loose(more[:OVERLAP])
+    for size in range(min(len(tail), len(head)), 0, -1):
+        if tail.endswith(head[:size]) and (size == len(tail) or tail[-size - 1] == " "):
+            return size
+    return 0
+
+
+def _loose(text: str) -> str:
+    """Case and whitespace folded, character for character, so lengths match the original."""
+    return "".join(" " if char.isspace() else lower if len(lower := char.lower()) == 1 else char for char in text)
 
 
 def open_turn(history: list[ModelMessage]) -> int:
@@ -353,6 +405,8 @@ class NativeBackend:
         stop_reason = "end_turn"
         output: Any = None
         retries = 0
+        so_far: str | None = None
+        continued = 0
         scope = anyio.CancelScope()
         self._scope = scope
         self._turn = messages
@@ -417,7 +471,16 @@ class NativeBackend:
                             usage = usage.model_copy(update={"models": [*usage.models, resolved_model]})
                     calls = [part for part in response.parts if isinstance(part, ToolCallPart)]
                     if not calls:
-                        answer = "".join(part.content for part in response.parts if isinstance(part, TextPart))
+                        text = "".join(part.content for part in response.parts if isinstance(part, TextPart))
+                        answer = text if so_far is None else join_continued(so_far, text)
+                        # A request that adds nothing to the answer (all thinking, or only the repeat) would be cut
+                        # or stop the same way again.
+                        grew = len(answer) > len(so_far or "")
+                        limit = self._agent.max_continuations
+                        if truncated and grew and (limit is None or continued < limit):
+                            so_far, continued = answer, continued + 1
+                            messages.append(ModelRequest(parts=[UserPromptPart(CONTINUE)]))
+                            continue
                         try:
                             output = (
                                 answer
@@ -428,12 +491,14 @@ class NativeBackend:
                             if retries >= self._agent.output_retries:
                                 raise
                             retries += 1
+                            so_far, continued = None, 0
                             messages.append(ModelRequest(parts=[RetryPromptPart(str(error))]))
                             continue
                         completed = True
-                        if truncated:
+                        if truncated or not grew:
                             stop_reason = "max_tokens"
                         break
+                    so_far, continued = None, 0
                     ids = [call.tool_call_id for call in calls]
                     if any(not call_id for call_id in ids) or len(ids) != len(set(ids)):
                         raise AidError("invalid_tool_call", "response has missing or duplicate tool-call identities")

@@ -11,12 +11,14 @@ from pydantic import BaseModel, Field
 
 from aid.agent import Agent, ModelRetry, Tool
 from aid.backends.native import (
+    CONTINUE,
     DEFAULT_DESIRED_MAX,
     NOT_FORKED,
     THOUGHT_LIMIT,
     NativeBackend,
     UsageLimitExceeded,
     aid_toolset,
+    join_continued,
     open_turn,
 )
 from aid.backends.permissions import PermissionWaits
@@ -206,11 +208,87 @@ async def test_a_response_cut_at_the_output_limit_says_so(tmp_path: Path) -> Non
     def ls(path: str) -> str:
         return path  # pragma: no cover -- its arguments never parse
 
-    async with backend(tmp_path, Agent(CutModel(), tools=[ls])) as session:
+    async with backend(tmp_path, Agent(CutModel(), tools=[ls], max_continuations=0)) as session:
         result = await session.prompt("go", emit)
     assert result == Output(output="half an ans", stop_reason="max_tokens")
     [retry] = [p for m in await stored(tmp_path) for p in m.parts if isinstance(p, RetryPromptPart)]
     assert retry.content.endswith("the response hit its output token limit")
+
+
+@pytest.mark.parametrize(
+    ("answer", "more", "joined"),
+    [
+        # The seams deepseek-flash produced when asked to repeat the last words (2026-10-23).
+        ("with craters and extremes of", "craters and extremes of heat.", "with craters and extremes of heat."),
+        ("a scorched, airless wo", "...a scorched, airless world.", "a scorched, airless world."),
+        ("from scorching day.\n\nAlmost no", "almost no atmosphere.", "from scorching day.\n\nAlmost no atmosphere."),
+        ("near-twin in", "in size, but", "near-twin in size, but"),
+        ("430\u202f\u00b0C by", "430 \u00b0C by day", "430\u202f\u00b0C by day"),
+        ("a thick carbon-d", "...a thick carbon dioxide sky", "a thick carbon dioxide sky"),
+        (
+            "swings from scorching",
+            "from scorching\n\nhot to cold.\n\n**Venus**",
+            "swings from scorching hot to cold.\n\n**Venus**",
+        ),
+        ("about 465 \u00b0C.", "465 \u00b0C.\n\n**Earth**", "about 465 \u00b0C.\n\n**Earth**"),
+        # No repeat: the dropped space goes back between words, and after prose punctuation.
+        ("shrouded in thick", "carbon-dioxide clouds", "shrouded in thick carbon-dioxide clouds"),
+        ("rock,", "it is light", "rock, it is light"),
+        ("Venus \u2014", "Earth's twin", "Venus \u2014 Earth's twin"),
+        ("melt lead.", "**Earth** next", "melt lead.**Earth** next"),
+        # A chance match inside a word is no overlap.
+        ("the planet", "net worth", "the planet net worth"),
+    ],
+)
+def test_join_continued_overlaps_at_the_repeat(answer: str, more: str, joined: str) -> None:
+    assert join_continued(answer, more) == joined
+
+
+class Cutting(TestModel):
+    """Answers in the given pieces, each but the last cut at the output limit."""
+
+    def __init__(self, pieces: list[str]) -> None:
+        super().__init__()
+        self.pieces = pieces
+        self.requests = 0
+
+    async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
+        self.requests += 1
+        if text := self.pieces[min(self.requests, len(self.pieces)) - 1]:
+            yield StreamDelta(0, TextPart(text))
+        if self.requests < len(self.pieces):
+            yield StreamDelta(truncated=True)
+
+
+async def test_a_cut_answer_continues_and_joins_at_the_repeat(tmp_path: Path) -> None:
+    async def emit(event: SessionEvent) -> None:
+        pass
+
+    model = Cutting(["part one, and so", "and so on, part two"])
+    async with backend(tmp_path, Agent(model)) as session:
+        assert await session.prompt("go", emit) == Output(
+            output="part one, and so on, part two", stop_reason="end_turn"
+        )
+    prompts = [p.content for m in await stored(tmp_path) for p in m.parts if isinstance(p, UserPromptPart)]
+    assert prompts == ["go", CONTINUE]
+
+
+async def test_continuing_stops_at_the_bound_and_without_text(tmp_path: Path) -> None:
+    """Bounded by `max_continuations`; a cut answer with no text (all thinking) or a continuation that adds none
+    ends the turn as `max_tokens`."""
+
+    async def emit(event: SessionEvent) -> None:
+        pass
+
+    for name, model, limit, output, requests in [
+        ("bound", Cutting(list("abcdefgh")), 2, "a b c", 3),
+        ("thought", Cutting(["", "never"]), None, "", 1),
+        ("empty", Cutting(["half", ""]), None, "half", 2),
+        ("repeat only", Cutting(["the half", "the half"]), None, "the half", 2),
+    ]:
+        async with backend(tmp_path / name, Agent(model, max_continuations=limit)) as session:
+            assert await session.prompt("go", emit) == Output(output=output, stop_reason="max_tokens"), name
+        assert model.requests == requests, name
 
 
 async def test_missing_usage_stays_unknown(tmp_path: Path) -> None:
