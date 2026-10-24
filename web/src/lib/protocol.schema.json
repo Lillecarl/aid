@@ -747,6 +747,25 @@
       "title": "Delivery",
       "type": "string"
     },
+    "DirCompletions": {
+      "properties": {
+        "dirs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "prefix": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "prefix",
+        "dirs"
+      ],
+      "title": "DirCompletions",
+      "type": "object"
+    },
     "Done": {
       "additionalProperties": false,
       "properties": {
@@ -2131,6 +2150,9 @@
         "agent_catalog": {
           "$ref": "#/$defs/AgentCatalog"
         },
+        "dir_completions": {
+          "$ref": "#/$defs/DirCompletions"
+        },
         "file_entry": {
           "$ref": "#/$defs/Entry"
         },
@@ -2177,6 +2199,7 @@
         "agent_catalog",
         "file_entry",
         "file_view",
+        "dir_completions",
         "page_reply"
       ],
       "title": "Received",

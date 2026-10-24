@@ -28,7 +28,7 @@ from aid.protocol import (
     SessionSummary,
 )
 from aid.spec import AgentSpec
-from aid.web.files import Entry, FileView
+from aid.web.files import DirCompletions, Entry, FileView
 from aid.web.zws import PageReply, PageRequest
 
 
@@ -46,6 +46,7 @@ class Received(BaseModel):
     agent_catalog: AgentCatalog
     file_entry: Entry
     file_view: FileView
+    dir_completions: DirCompletions
     page_reply: PageReply
 
 

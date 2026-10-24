@@ -145,6 +145,10 @@ def _parser() -> argparse.ArgumentParser:
         help=f"tree-sitter grammars for the file viewer (default: ${ENV_GRAMMARS})",
     )
     web.add_argument(
+        "--cwd-prefix",
+        help="what a new session's working directory starts as in the page (default: the home directory)",
+    )
+    web.add_argument(
         "--theme",
         type=_theme,
         help="colours, as pymux names a theme: pygments:<name> or base16:<name> (default: the browser's)",
@@ -710,6 +714,7 @@ async def _web(args: argparse.Namespace) -> None:
         recognizer=recognizer,
         colors=args.theme,
         grammars=grammars,
+        cwd_prefix=args.cwd_prefix,
     )
     shutdown = anyio.Event()
     async with anyio.create_task_group() as tg:

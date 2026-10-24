@@ -6,6 +6,7 @@ import json
 import re
 import secrets
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import anyio
@@ -36,8 +37,6 @@ from tests.web_harness import (
 )
 
 if TYPE_CHECKING:
-    from pathlib import Path
-
     from aid.paths import Paths
 
 pytestmark = [pytest.mark.anyio, needs_dex]
@@ -113,6 +112,33 @@ async def test_session_files(web: Web, tmp_path: Path, daemon: Paths) -> None:
         assert code["highlights"][:2] == [[0, 3, "k"], [4, 5, "nf"]]
     assert escape.status_code == 403
     assert missing.status_code == 404
+
+
+async def test_dirs_complete_a_working_directory(web: Web, tmp_path: Path) -> None:
+    for name in ("proj", "probe", ".private", "other"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "prose.txt").write_text("not a directory\n")
+    with anyio.fail_after(TIMEOUT):
+        async with httpx.AsyncClient() as client:
+            anonymous = await client.get(f"{web.url}/api/dirs")
+            await login(client, web, ALLOWED)
+
+            async def dirs(typed: str) -> dict[str, Any]:
+                return (await client.get(f"{web.url}/api/dirs", params={"path": typed})).json()
+
+            empty, pro, hidden, relative, home = (
+                await dirs(""),
+                await dirs(f"{tmp_path}/pro"),
+                await dirs(f"{tmp_path}/."),
+                await dirs("proj"),
+                await dirs("~/"),
+            )
+    assert anonymous.status_code == 401
+    assert empty == {"prefix": str(Path.home()).rstrip("/") + "/", "dirs": []}
+    assert pro["dirs"] == [f"{tmp_path}/probe/", f"{tmp_path}/proj/"]
+    assert hidden["dirs"] == [f"{tmp_path}/.private/"]
+    assert relative["dirs"] == []
+    assert all(d.startswith(str(Path.home())) for d in home["dirs"])
 
 
 async def test_account_off_the_allowlist_is_refused(web: Web) -> None:

@@ -10,6 +10,7 @@ import contextlib
 import json
 from contextlib import asynccontextmanager
 from functools import wraps
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Final, cast
 
 import anyio
@@ -42,7 +43,6 @@ from aid.web import auth, files, theme, zws
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
-    from pathlib import Path
 
     from starlette.requests import Request
     from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -118,6 +118,15 @@ async def list_files(request: Request) -> Response:
     query = PathQuery.model_validate(dict(request.query_params))
     entries = await files.list_dir(await _cwd(request), query.path)
     return JSONResponse([e.model_dump(mode="json") for e in entries])
+
+
+@api
+async def dirs(request: Request) -> Response:
+    """The working directory a new session starts from, and the directories what was typed can go on to."""
+    query = PathQuery.model_validate(dict(request.query_params))
+    prefix: str = request.app.state.cwd_prefix
+    found = await files.complete_dirs(query.path, str(Path.home())) if query.path else []
+    return JSONResponse(files.DirCompletions(prefix=prefix, dirs=found).model_dump(mode="json"))
 
 
 @api
@@ -309,11 +318,13 @@ def create_app(
     recognizer: Recognizer | None = None,
     colors: theme.Theme | None = None,
     grammars: Grammars | None = None,
+    cwd_prefix: str | None = None,
 ) -> Starlette:
     """The app. `assets` is the built UI (web/dist); without it the API still works and `/` says what is missing.
     `recognizer` is a loaded speech model (`aid.speech.load`); without one there is no speech to text.
     `colors` is a pymux theme for `/theme.css`; without one the page keeps the browser's light or dark.
-    `grammars` highlight the file viewer's files; without them the browser highlights what it can."""
+    `grammars` highlight the file viewer's files; without them the browser highlights what it can.
+    `cwd_prefix` is what a new session's working directory starts as; the home directory by default."""
 
     @asynccontextmanager
     async def lifespan(app: Starlette) -> AsyncGenerator[None]:
@@ -333,6 +344,7 @@ def create_app(
             Route(auth.CALLBACK_PATH, auth.callback),
             Route("/logout", auth.logout, methods=["POST"]),
             Route("/api/me", me),
+            Route("/api/dirs", dirs, methods=["GET"]),
             Route("/api/sessions/{name}/files", list_files, methods=["GET"]),
             Route("/api/sessions/{name}/file", read_file, methods=["GET"]),
             Route("/api/speech", speech, methods=["GET"]),
@@ -360,6 +372,7 @@ def create_app(
     app.state.recognizer = recognizer
     app.state.theme_css = theme.css(colors)
     app.state.grammars = grammars
+    app.state.cwd_prefix = (cwd_prefix or str(Path.home())).rstrip("/") + "/"
     app.state.open_sockets = set()
     return app
 

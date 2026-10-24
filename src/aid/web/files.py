@@ -89,6 +89,44 @@ def _text(data: bytes, truncated: bool) -> str | None:
         return None
 
 
+MAX_COMPLETIONS: Final = 50
+
+
+class DirCompletions(BaseModel):
+    model_config = ConfigDict(json_schema_serialization_defaults_required=True)
+
+    prefix: str
+    """What a new session's working directory starts as (`aid web --cwd-prefix`), ending in `/`."""
+    dirs: list[str]
+    """Directories whose path starts with what was typed, each ending in `/`."""
+
+
+def _complete(typed: str, home: str) -> list[str]:
+    """Directories a partly typed absolute path can go on to. `~` is the home directory. Hidden ones only once
+    the typed name starts with a dot. Any directory on the host: a session there runs commands as this user."""
+    if typed == "~" or typed.startswith("~/"):
+        typed = home + typed[1:]
+    if not typed.startswith("/"):
+        return []
+    parent, _, start = typed.rpartition("/")
+    try:
+        with os.scandir(parent or "/") as found:
+            names = sorted(
+                entry.name
+                for entry in found
+                if entry.name.startswith(start)
+                and (start.startswith(".") or not entry.name.startswith("."))
+                and entry.is_dir()
+            )
+    except OSError:
+        return []
+    return [f"{parent}/{name}/" for name in names[:MAX_COMPLETIONS]]
+
+
+async def complete_dirs(typed: str, home: str) -> list[str]:
+    return await anyio.to_thread.run_sync(_complete, typed, home)
+
+
 async def list_dir(root: str, rel: str) -> list[Entry]:
     return await anyio.to_thread.run_sync(_list, root, rel)
 

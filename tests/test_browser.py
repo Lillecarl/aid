@@ -13,6 +13,7 @@ isolated tab from its cookies. Tests seed their sessions on the shared session d
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import anyio
@@ -36,7 +37,6 @@ from tests.web_harness import ALLOWED, ASSETS, TIMEOUT, needs_dex
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-    from pathlib import Path
 
     from playwright.async_api import Locator, Page
 
@@ -77,6 +77,18 @@ async def test_login_shows_the_user(page: Page) -> None:
     with anyio.fail_after(TIMEOUT):
         await page.get_by_text("Select or create a session.").wait_for(timeout=TIMEOUT * 1000)
     assert (await page.get_by_test_id("user-email").text_content()) == ALLOWED
+
+
+async def test_working_directory_starts_at_home_and_completes(page: Page, tmp_path: Path) -> None:
+    (tmp_path / "project").mkdir()
+    cwd = page.get_by_test_id("cwd-input")
+    home = str(Path.home()).rstrip("/") + "/"
+    with anyio.fail_after(TIMEOUT):
+        while await cwd.input_value() != home:  # noqa: ASYNC110 -- the page fills it once aid web answers
+            await anyio.sleep(0.05)
+    await cwd.fill(f"{tmp_path}/pro")
+    option = page.locator(f'#cwd-completions option[value="{tmp_path}/project/"]')
+    await option.wait_for(state="attached", timeout=TIMEOUT * 1000)
 
 
 async def test_prompt_echo_roundtrip(page: Page, session_daemon: Paths, tmp_path: Path) -> None:

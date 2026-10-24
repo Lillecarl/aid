@@ -10,7 +10,7 @@
 
   let name = $state("");
   let kind: AgentKind = $state("claude-tty");
-  let cwd = $state("");
+  let dir = $state("");
   let command = $state("claude-agent-acp");
   let permission: PermissionMode = $state("ask");
   let agent = $state("");
@@ -24,6 +24,8 @@
   const words = (text: string): string[] => text.split(/\s+/).filter((word) => word !== "");
 
   function spec(): AgentSpec {
+    // Completions end in "/"; Claude Code names its project directory after the cwd as given.
+    const cwd = dir.length > 1 ? dir.replace(/\/+$/, "") : dir;
     switch (kind) {
       case "acp": {
         const [program, ...rest] = words(command);
@@ -55,6 +57,27 @@
 
   const chosen = $derived(catalog?.agents.find((a) => a.name === agent));
 
+  // The working directory starts at aid web's prefix (the home directory by default), and the datalist offers
+  // the directories what is typed can go on to. A reply that comes back after newer typing is dropped.
+  let completions = $state<string[]>([]);
+  let asked = 0;
+  async function complete(typed: string): Promise<void> {
+    const ask = ++asked;
+    try {
+      const found = await api.dirs(typed);
+      if (ask === asked) completions = found.dirs;
+    } catch {
+      if (ask === asked) completions = [];
+    }
+  }
+  void api.dirs("").then(
+    (found) => {
+      if (dir === "") dir = found.prefix;
+      void complete(dir);
+    },
+    () => undefined,
+  );
+
   async function submit(event: SubmitEvent): Promise<void> {
     event.preventDefault();
     busy = true;
@@ -83,7 +106,23 @@
       <option value="native">Native agent</option>
     </select>
   </label>
-  <label>Working directory <input bind:value={cwd} required placeholder="/home/me/project" /></label>
+  <label>
+    Working directory
+    <input
+      bind:value={dir}
+      oninput={() => complete(dir)}
+      list="cwd-completions"
+      required
+      placeholder="/home/me/project"
+      autocomplete="off"
+      data-testid="cwd-input"
+    />
+  </label>
+  <datalist id="cwd-completions">
+    {#each completions as dir (dir)}
+      <option value={dir}></option>
+    {/each}
+  </datalist>
   {#if kind !== "claude-tty"}
     <!-- ACP: the agent's own requests. Native: aid.coding's commands and applied edits. -->
     <label>

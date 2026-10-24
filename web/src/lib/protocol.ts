@@ -437,6 +437,14 @@ export interface DeleteSession {
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "DirCompletions".
+ */
+export interface DirCompletions {
+  dirs: string[];
+  prefix: string;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Done".
  */
 export interface Done {
@@ -832,6 +840,7 @@ export interface StopSession {
  */
 export interface Received {
   agent_catalog: AgentCatalog;
+  dir_completions: DirCompletions;
   file_entry: Entry;
   file_view: FileView;
   history_entry: HistoryEntry;

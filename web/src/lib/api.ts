@@ -6,6 +6,7 @@
 import type {
   AgentCatalog,
   AgentSpec,
+  DirCompletions,
   Entry,
   FileView,
   HistoryEntry,
@@ -269,6 +270,11 @@ const fileUrl = (name: string, what: "files" | "file", path: string): string =>
 /** A directory of the session's working directory; `path` is relative to it. */
 export async function listFiles(name: string, path: string): Promise<Entry[]> {
   return (await request("GET", fileUrl(name, "files", path))).json();
+}
+
+/** Where a new session's working directory starts, and the directories `typed` can go on to. */
+export async function dirs(typed: string): Promise<DirCompletions> {
+  return (await request("GET", `/api/dirs?${new URLSearchParams({ path: typed })}`)).json();
 }
 
 export async function readFile(name: string, path: string): Promise<FileView> {
