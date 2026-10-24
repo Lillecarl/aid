@@ -1391,12 +1391,15 @@ class Daemon:
                         log.info("worker_ready", session=name, pid=reply.started.pid)
                         session.peer = peer.bytes
                         session.started = reply.started
+                        if reply.tools:
+                            session.tools = reply.tools  # Before `ready`: whoever waits on it reads them.
                         session.ready.set()
-                        await self._record_tools(session, reply.tools)
                         try:
                             await session.history.append(reply.started, uuid.uuid4().hex)
                         except OSError:
                             log.exception("record_start_failed", session=name)
+                        # Written after Started: a prompt waiting on `ready` must not be recorded ahead of it.
+                        await self._record_tools(session, reply.tools)
                 case ToolsReported():
                     if (session := self._sessions.get(name)) is not None:
                         await self._record_tools(session, reply.tools)
