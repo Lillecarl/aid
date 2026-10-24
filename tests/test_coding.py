@@ -11,7 +11,18 @@ import aid
 from aid.agent import Agent, ModelRetry
 from aid.backends.native import NativeBackend
 from aid.backends.permissions import PermissionWaits
-from aid.coding import CODING, SPILL_LIMIT, Coding, Condition, Line, WatchView, compact, spill
+from aid.coding import (
+    CODING,
+    SPILL_LIMIT,
+    Coding,
+    Condition,
+    Line,
+    WatchView,
+    _outermost,  # pyright: ignore[reportPrivateUsage]
+    _removable,  # pyright: ignore[reportPrivateUsage]
+    compact,
+    spill,
+)
 from aid.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from aid.protocol import (
     AidError,
@@ -39,6 +50,76 @@ TIMEOUT = 60
 
 def plan(*calls: tuple[str, dict[str, Any]]) -> str:
     return json.dumps([list(call) for call in calls])
+
+
+def removal_tree(tmp_path: Path) -> Path:
+    """build/ with a nested file, a file to keep, and a link to it."""
+    work = tmp_path / "work"
+    (work / "build" / "sub").mkdir(parents=True)
+    (work / "build" / "a.txt").write_text("aa")
+    (work / "build" / "sub" / "b.txt").write_text("bbb")
+    (work / "keep.txt").write_text("keep")
+    (work / "link").symlink_to("keep.txt")
+    return work
+
+
+async def test_remove_asks_with_everything_it_would_delete(daemon: Paths, tmp_path: Path) -> None:
+    work = removal_tree(tmp_path)
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(work, "agents:coder", PermissionMode.ASK))
+            events: list[aid.SessionEvent] = []
+            async for event in session.stream(plan(("remove", {"paths": ["build", "build/sub", "link"]}))):
+                events.append(event)
+                if isinstance(event, PermissionRequest):
+                    await session.answer(event.request_id, "yes")
+    [request] = [e for e in events if isinstance(e, PermissionRequest)]
+    assert request.tool_name == "remove"
+    assert request.input == {
+        "files": 3,
+        "directories": 2,
+        "bytes": 2 + 3 + len("keep.txt"),
+        "entries": ["build/", "build/a.txt", "build/sub/", "build/sub/b.txt", "link"],
+        "more": 0,
+    }
+    assert sorted(p.name for p in work.iterdir()) == ["keep.txt"]
+    assert "removed build, link" in str(events[-1].output if isinstance(events[-1], Output) else "")
+
+
+async def test_remove_refused_removes_nothing(daemon: Paths, tmp_path: Path) -> None:
+    work = removal_tree(tmp_path)
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(work, "agents:coder", PermissionMode.ASK))
+            async for event in session.stream(plan(("remove", {"paths": ["build"]}))):
+                if isinstance(event, PermissionRequest):
+                    await session.answer(event.request_id, "no")
+            output = (await session.history()).entries[-1].item
+    assert sorted(p.name for p in work.iterdir()) == ["build", "keep.txt", "link"]
+    assert isinstance(output, Output)
+    assert "not allowed: nothing was removed" in str(output.output)
+
+
+def test_remove_takes_only_entries_inside_the_directory(tmp_path: Path) -> None:
+    work = removal_tree(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "x").write_text("x")
+    (work / "out").symlink_to(outside)
+    root = work.resolve()
+    assert _removable(root, "out") == root / "out"
+    assert _removable(root, "link") == root / "link"
+    for path, code in [
+        ("out/x", "outside"),
+        ("..", "outside"),
+        (".", "outside"),
+        ("../outside", "outside"),
+        ("nope", "not_found"),
+    ]:
+        with pytest.raises(AidError) as caught:
+            _removable(root, path)
+        assert caught.value.code == code
+    assert _outermost([root / "build" / "sub", root / "build", root / "link"]) == [root / "build", root / "link"]
 
 
 async def test_edits_stage_until_applied(daemon: Paths, tmp_path: Path) -> None:

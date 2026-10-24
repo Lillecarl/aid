@@ -365,7 +365,8 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   supervision plugin, above; without a supervisor they are `ask`). Engines branch on `PermissionMode.waits`, never
   on `ask` alone; Claude's rules ask for every waiting mode (`claude_rules`).
 - Native tool permissions: a mode per tool name. `NativeSpec.tool_permissions` overrides; unset, a `Tool.asks`
-  tool (python, shell, background, monitor, apply_edits, ask_user: they permit inside, with their own titles)
+  tool (python, shell, background, monitor, apply_edits, remove, ask_user: they permit inside, with their own titles;
+  `remove` deletes at once, its request's input a `RemovalPreview` of every entry, a link removed as a link)
   follows `permission`, any other is allowed. The loop gates every non-`asks` call through `Coding.permit`, so
   `*` hooks cover all tools. The worker lists its tools in `Hello` (`SessionTool`: name, group by module,
   asks); the daemon keeps them in `tools.json` and shows `SessionStatus.tools` with the spec's modes.

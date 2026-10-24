@@ -26,8 +26,10 @@ import inspect
 import io
 import json
 import linecache
+import os
 import re
 import shlex
+import shutil
 import sys
 import uuid
 from contextvars import ContextVar
@@ -38,6 +40,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 import anyio
 import anyio.to_thread
 import structlog
+from pydantic import BaseModel
 from pyedit.session import EditSession  # pyright: ignore[reportMissingTypeStubs] -- annotated, no py.typed
 from shellous import ResultError, Runner, sh
 
@@ -757,6 +760,104 @@ async def delete(path: str) -> str:
     return f"{path} will be deleted"
 
 
+REMOVE_LISTED: Final = 50
+"""Entries a removal's preview names one by one; it counts the rest."""
+
+
+class RemovalPreview(BaseModel):
+    """Everything a `remove` call would delete, for whoever answers its permission request."""
+
+    files: int
+    """Files and symbolic links: a link goes, never what it points to."""
+    directories: int
+    bytes: int
+    entries: list[str]
+    """The first `REMOVE_LISTED` paths, relative to the session's directory; a directory ends with `/`."""
+    more: int
+    """Paths past `entries`."""
+
+
+def _removable(root: Path, path: str) -> Path:
+    """`path` itself under `root`: its parent resolved, the entry not, so a link is removed as a link."""
+    candidate = Path(os.path.normpath(path if Path(path).is_absolute() else root / path))
+    if candidate == root or not candidate.is_relative_to(root):
+        raise AidError("outside", f"{path!r} is not inside the session's directory")
+    target = candidate.parent.resolve() / candidate.name
+    if not target.parent.is_relative_to(root):
+        raise AidError("outside", f"{path!r} leads outside the session's directory through a link")
+    if not target.exists(follow_symlinks=False):
+        raise AidError("not_found", f"{path!r} does not exist")
+    return target
+
+
+def _outermost(targets: list[Path]) -> list[Path]:
+    """Targets without those another one holds: removing the outer one removes them."""
+    kept: list[Path] = []
+    for target in sorted(set(targets)):
+        if not any(target.is_relative_to(outer) for outer in kept):
+            kept.append(target)
+    return kept
+
+
+def _preview(root: Path, targets: list[Path]) -> RemovalPreview:
+    files = directories = size = total = 0
+    entries: list[str] = []
+
+    def note(entry: Path, directory: bool) -> None:
+        nonlocal total
+        total += 1
+        if len(entries) < REMOVE_LISTED:
+            entries.append(f"{entry.relative_to(root)}{'/' if directory else ''}")
+
+    for target in targets:
+        if not target.is_dir(follow_symlinks=False):
+            files += 1
+            size += target.lstat().st_size
+            note(target, False)
+            continue
+        for current, dirnames, filenames in os.walk(target):
+            directories += 1
+            note(Path(current), True)
+            # os.walk lists a link to a directory among dirnames, and does not follow it.
+            for name in [*filenames, *(d for d in dirnames if (Path(current) / d).is_symlink())]:
+                entry = Path(current) / name
+                files += 1
+                size += entry.lstat().st_size
+                note(entry, False)
+    return RemovalPreview(files=files, directories=directories, bytes=size, entries=entries, more=total - len(entries))
+
+
+def _remove(targets: list[Path]) -> None:
+    for target in targets:
+        if target.is_dir(follow_symlinks=False):
+            shutil.rmtree(target)
+        else:
+            target.unlink(missing_ok=True)
+
+
+async def remove(ctx: RunContext, paths: list[str]) -> str:
+    """Delete files and whole directory trees in the session's directory, at once: nothing is staged. Name exact
+    paths, never globs. The permission request lists everything that would go, so whoever answers sees it. Use
+    this, not `rm` in the shell. A link is removed as a link. One file among staged edits: `delete` stages it."""
+    coding = _coding()
+    root = coding.cwd.resolve()
+    if not paths:
+        raise ModelRetry("name at least one path")
+    targets = await anyio.to_thread.run_sync(lambda: _outermost([_removable(root, path) for path in paths]))
+    preview = await anyio.to_thread.run_sync(_preview, root, targets)
+    named = ", ".join(str(t.relative_to(root)) for t in targets)
+    allowed = await coding.permit(
+        ctx.tool_call_id or "",
+        tool_name="remove",
+        title=f"remove {preview.files} files, {preview.directories} directories ({preview.bytes} bytes): {named}"[:200],
+        input=preview.model_dump(mode="json"),
+    )
+    if not allowed:
+        return "not allowed: nothing was removed"
+    await anyio.to_thread.run_sync(_remove, targets)
+    return f"removed {named}: {preview.files} files, {preview.directories} directories"
+
+
 async def rename(old: str, new: str) -> str:
     """Move a file or a directory tree, staged."""
     coding = _coding()
@@ -1081,7 +1182,8 @@ async def shell(ctx: RunContext, command: str, time_limit: float = SHELL_TIME_LI
 
     Each call asks the session's permission first, judged as written; there is no remembering, since every
     command differs. The command's stdin is empty, so anything interactive meets EOF. A timeout kills the
-    shell, and the next call starts fresh and says the state reset; restart it yourself with shell_restart."""
+    shell, and the next call starts fresh and says the state reset; restart it yourself with shell_restart.
+    Delete with the `remove` tool, not `rm`: its request shows exactly what goes."""
     coding = _coding()
     first_line = next((line for line in command.splitlines() if line.strip()), "(empty command)")
     allowed = await coding.permit(
@@ -1309,6 +1411,7 @@ coding_tools: Toolset = Toolset(
         _retrying(edit),
         _retrying(write),
         _retrying(delete),
+        Tool(_retrying(remove), kind="delete", asks=True),
         _retrying(rename),
         _retrying(rename_symbol),
         _retrying(apply_patch),
