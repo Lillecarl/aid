@@ -102,6 +102,8 @@ async def test_exit_ends_the_shell_and_the_next_run_respawns(store: Path, tmp_pa
 
 async def test_concurrent_runs_serialize(store: Path, tmp_path: Path) -> None:
     shell = pyrun.ShellSession(cwd=tmp_path, store=store)
+    slow_result: pyrun.ShellResult | None = None
+    quick_result: pyrun.ShellResult | None = None
     try:
         with anyio.fail_after(TIMEOUT):
 
@@ -112,8 +114,6 @@ async def test_concurrent_runs_serialize(store: Path, tmp_path: Path) -> None:
                 return await shell.run("echo quick")
 
             async with anyio.create_task_group() as tg:
-                slow_result: pyrun.ShellResult | None = None
-                quick_result: pyrun.ShellResult | None = None
 
                 async def run_slow() -> None:
                     nonlocal slow_result

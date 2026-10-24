@@ -107,8 +107,9 @@ class ShellSession:
             raw = bytearray()
             code: int | None = None
             output: str | None = None
+            timer = anyio.move_on_after(time_limit if time_limit is not None else math.inf)
             try:
-                with anyio.move_on_after(time_limit if time_limit is not None else math.inf) as timer:
+                with timer:
                     output, code = await self._exchange(command, raw)
             except anyio.BrokenResourceError, anyio.ClosedResourceError:
                 pass  # The shell died under the write; the read below reports it as such.
