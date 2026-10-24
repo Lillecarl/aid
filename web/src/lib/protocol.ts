@@ -851,9 +851,9 @@ export interface Prompt {
   text: string;
 }
 /**
- * Change a native session's permission modes: `default` for tools that ask for themselves, `tools` by name
- * (None returns a tool to its default). Saved in the spec; a running worker applies them to its next permit,
- * while a request already waiting keeps its own.
+ * Change a session's permission modes: `default`, the spec's `permission` (any kind with one), and `tools` by
+ * name (native only; None returns a tool to its default). Saved in the spec; a running native worker applies them
+ * to its next permit, while a request already waiting keeps its own. Other kinds take them at their next start.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "SetPermissions".

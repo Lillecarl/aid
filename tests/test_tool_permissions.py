@@ -100,10 +100,13 @@ async def test_the_default_applies_to_the_tools_that_ask(daemon: Paths, tmp_path
     assert by_name(status.tools)["python"].mode is PermissionMode.ALLOW
 
 
-async def test_only_native_sessions_take_tool_modes(daemon: Paths, tmp_path: Path) -> None:
+async def test_other_kinds_take_only_the_default(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             session = await client.create("acp", acp_spec(tmp_path))
             with pytest.raises(AidError, match="not native"):
                 await session.set_permissions({"Bash": PermissionMode.ALLOW})
-            assert (await session.status()).tools == []
+            await session.set_permissions(default=PermissionMode.ASK)
+            status = await session.status()
+    assert status.tools == []
+    assert status.permission is PermissionMode.ASK

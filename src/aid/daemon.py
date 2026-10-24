@@ -276,7 +276,7 @@ class _Session:
             model=", ".join(self.models) or (self.started.model if self.started else None),
             permissions=list(self.permissions.values()),
             tools=self.tool_modes(),
-            permission=self.spec.permission if isinstance(self.spec, NativeSpec) else None,
+            permission=None if isinstance(self.spec, ClaudeTtySpec) else self.spec.permission,
             working=self.working or self.turn is not None,
             attention=self.attention,
             parent=self.spec.parent,
@@ -1111,15 +1111,19 @@ class Daemon:
     async def _set_permissions(self, session: _Session, request: SetPermissions) -> None:
         async with session.spec_lock:
             spec = session.spec
-            if not isinstance(spec, NativeSpec):
-                raise AidError("unsupported", f"{session.name!r} is not native: its permissions are one mode")
-            tools = dict(spec.tool_permissions)
-            for name, mode in request.tools.items():
-                if mode is None:
-                    tools.pop(name, None)
-                else:
-                    tools[name] = mode
-            update = {"tool_permissions": tools} | ({"permission": request.default} if request.default else {})
+            if isinstance(spec, ClaudeTtySpec):
+                raise AidError("unsupported", f"{session.name!r} asks in its own terminal pane")
+            update: dict[str, object] = {"permission": request.default} if request.default else {}
+            if request.tools:
+                if not isinstance(spec, NativeSpec):
+                    raise AidError("unsupported", f"{session.name!r} is not native: its permissions are one mode")
+                tools = dict(spec.tool_permissions)
+                for name, mode in request.tools.items():
+                    if mode is None:
+                        tools.pop(name, None)
+                    else:
+                        tools[name] = mode
+                update["tool_permissions"] = tools
             spec = spec.model_copy(update=update)
             await (anyio.Path(self._paths.session_dir(session.name)) / SPEC_FILE).write_bytes(
                 AgentSpecAdapter.dump_json(spec)

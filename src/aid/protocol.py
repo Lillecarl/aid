@@ -218,9 +218,9 @@ class AnswerPermission(_Request):
 
 
 class SetPermissions(_Request):
-    """Change a native session's permission modes: `default` for tools that ask for themselves, `tools` by name
-    (None returns a tool to its default). Saved in the spec; a running worker applies them to its next permit,
-    while a request already waiting keeps its own."""
+    """Change a session's permission modes: `default`, the spec's `permission` (any kind with one), and `tools` by
+    name (native only; None returns a tool to its default). Saved in the spec; a running native worker applies them
+    to its next permit, while a request already waiting keeps its own. Other kinds take them at their next start."""
 
     op: Literal["set_permissions"] = "set_permissions"
     session: str
@@ -912,7 +912,8 @@ class SessionStatus(_Message):
     tools: list[ToolMode] = Field(default_factory=list[ToolMode])
     """The tools the last worker reported (native only), with the modes the spec gives them now."""
     permission: PermissionMode | None = None
-    """The spec's default mode, where it has one."""
+    """The spec's mode: native tools that ask for themselves, or every request of the other kinds. None for
+    claude-tty, which asks in its own pane."""
     working: bool = False
     """In a turn: aid's, or one typed into the pane."""
     attention: str | None = None

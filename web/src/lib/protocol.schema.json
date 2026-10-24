@@ -2687,7 +2687,7 @@
     },
     "SetPermissions": {
       "additionalProperties": false,
-      "description": "Change a native session's permission modes: `default` for tools that ask for themselves, `tools` by name\n(None returns a tool to its default). Saved in the spec; a running worker applies them to its next permit,\nwhile a request already waiting keeps its own.",
+      "description": "Change a session's permission modes: `default`, the spec's `permission` (any kind with one), and `tools` by\nname (native only; None returns a tool to its default). Saved in the spec; a running native worker applies them\nto its next permit, while a request already waiting keeps its own. Other kinds take them at their next start.",
       "properties": {
         "default": {
           "anyOf": [
