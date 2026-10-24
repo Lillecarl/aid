@@ -168,12 +168,10 @@
   const firstSeq = (): number | undefined => rows.find((r) => r.seq !== undefined)?.seq;
   const nearBottom = (): boolean => !log || log.scrollHeight - log.scrollTop - log.clientHeight < EDGE_PX;
 
-  /** Box rows share a flex row: tool cards, thoughts, summaries and permission cards. Text rows break the
-   * run, so an agent message always starts a fresh row. */
+  /** Box rows share a flex row: tool cards, summaries and permission cards. Text and thought rows break the
+   * run: an agent message and its thinking each start a fresh row. */
   function flows(row: Row): boolean {
-    return (
-      row.tool !== undefined || row.permission !== undefined || row.kind === "thought" || row.kind === "summary"
-    );
+    return row.tool !== undefined || row.permission !== undefined || row.kind === "summary";
   }
 
   type FlowGroup = { flow: true; rows: Row[] } | { flow: false; row: Row };

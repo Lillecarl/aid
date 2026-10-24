@@ -469,6 +469,8 @@ async def test_thinking_visible_until_done(page: Page, session_daemon: Paths, tm
     assert "hmm" in (await streaming.text_content() or "")
     # Deltas join one box per turn instead of spawning one each.
     assert await page.locator("details.thought").count() == 1
+    # A thought stands on its own line, never beside tool cards.
+    assert await page.locator("[data-testid=flow-row] details.thought").count() == 0
     await anyio.Path(gate).write_text("go")
     await wait_for_idle(page)
     await page.locator("details.thought:not([open])").wait_for(timeout=TIMEOUT * 1000)
