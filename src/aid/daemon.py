@@ -945,6 +945,7 @@ class Daemon:
         await session.inbox.accept(message, turn)
         if usage is not None:
             await session.history.append(usage, turn)
+            session.note(usage)
         session.mail.set()
         # The sender is often an agent mid-turn, waiting on its tool call: it gets its answer before the wake.
         self._tg.start_soon(self._wake, session)
