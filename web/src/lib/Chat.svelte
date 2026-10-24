@@ -232,7 +232,8 @@
   const loadLatest = () =>
     guard(async () => {
       const page = await api.history(name, { limit: Math.min(PAGE, windowSize) });
-      rows = fromHistory(page.entries);
+      // Keep what the page made meanwhile (slash output typed before the page arrived): history never holds it.
+      rows = [...fromHistory(page.entries), ...rows.filter((r) => r.local)];
       newest = page.entries.at(-1)?.seq ?? -1;
       hasOlder = page.has_older;
       hasNewer = false;
