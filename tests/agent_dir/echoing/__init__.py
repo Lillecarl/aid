@@ -23,7 +23,7 @@ async def _shout(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator
         for p in m.parts
         if isinstance(p, UserPromptPart)
         and isinstance(p.content, str)
-        and not p.content.startswith("[Session metadata]")
+        and not p.content.startswith(("[Session metadata]", "Messages arrived while you were working:"))
     ]
     yield (prompts[-1] if prompts else "").upper()
 

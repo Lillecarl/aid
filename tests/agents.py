@@ -21,6 +21,7 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from aid.messaging import ARRIVED
 from aid.protocol import AidError, Goal, decode_request
 from tests.models import (
     AgentInfo,
@@ -39,8 +40,9 @@ if TYPE_CHECKING:
 
 
 def _is_note(content: object) -> bool:
-    # Each turn's prompt carries a session metadata part; the plan and the turn count live in the real prompts.
-    return isinstance(content, str) and content.startswith("[Session metadata]")
+    # Each turn's prompt carries a session metadata part, and messages a turn takes mid-way open with ARRIVED; the plan
+    # and the turn count live in the real prompts.
+    return isinstance(content, str) and content.startswith(("[Session metadata]", ARRIVED))
 
 
 def _last_prompt(messages: list[ModelMessage]) -> str:

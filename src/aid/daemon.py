@@ -659,8 +659,9 @@ class Daemon:
                 return Done(id=request.id)
             case ReceiveMessages():
                 session = self._session(request.session)
-                if not session.uses_channel:
-                    raise AidError("not_channel", f"{session.name!r} takes its messages as turns, not by channel")
+                # Outside a turn the inbox wakes a turn of its own; inside one, the turn may take them between steps.
+                if not session.uses_channel and session.turn is None:
+                    raise AidError("not_in_turn", f"{session.name!r} takes its messages as turns: none is running")
                 if not session.inbox:
                     with anyio.move_on_after(request.wait):
                         await session.mail.wait()

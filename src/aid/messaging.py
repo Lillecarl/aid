@@ -23,6 +23,9 @@ report: absurd, and harmless if it ever happens."""
 PLUGIN_SENDER: Final = "plugin:"
 """Prefix of a sender that is a plugin (`aid.plugins.sender`): a chat bridge carries text from outside aid."""
 TAG: Final = "aid-message"
+ARRIVED: Final = "Messages arrived while you were working:"
+"""Opens what a running turn takes between its steps (`arrived`). A request opening with it continues a turn; it
+never starts one (`aid.backends.native.open_turn`)."""
 
 
 def render_message(message: MessageEntry) -> str:
@@ -53,3 +56,9 @@ def render_message(message: MessageEntry) -> str:
 def wake_prompt(messages: Sequence[MessageEntry]) -> str:
     """The turn that hands waiting messages to a session."""
     return "\n\n---\n\n".join(render_message(message) for message in messages)
+
+
+def arrived(messages: Sequence[MessageEntry]) -> str:
+    """Messages a running turn takes between two of its model requests, as Claude Code hands a person's messages to
+    a turn in progress."""
+    return f"{ARRIVED}\n\n{wake_prompt(messages)}"

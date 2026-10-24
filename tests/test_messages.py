@@ -8,7 +8,7 @@ import zmq
 
 import aid
 from aid.daemon import Daemon
-from aid.messaging import render_message, wake_prompt
+from aid.messaging import ARRIVED, render_message, wake_prompt
 from aid.protocol import (
     AidError,
     HistoryItem,
@@ -327,15 +327,17 @@ async def test_monitor_waits_for_the_running_turn(daemon: Paths, tmp_path: Path)
                     ("python", {"script": "import time; time.sleep(3)", "mode": "sync"}),
                 )
             )
-            items = await outputs_after_message(session, count=2)
+            items = await outputs_after_message(session, count=1)
+            status = await session.status()
     outputs = [item for item in items if isinstance(item, Output)]
-    assert len(outputs) == 2
     message = next(item for item in items if isinstance(item, MessageEntry))
-    # The notification lands mid-turn: ahead of the running turn's own output.
+    # The notification lands mid-turn, and the running turn takes it before its next request: no turn of its own.
     assert items.index(message) < items.index(outputs[0])
     assert message.sender == "background task bg1"
     assert message.text.startswith("Background task bg1 finished: exit 0")
-    assert "watching bg1 as m1" in str(outputs[1].output)
+    assert len(outputs) == 1 and status.pending == 0
+    model_history = (daemon.session_dir("coder") / "history.json").read_text()
+    assert ARRIVED in model_history and "Background task bg1 finished" in model_history
 
 
 async def test_pattern_monitor_wakes_per_line_then_dies_with_the_task(daemon: Paths, tmp_path: Path) -> None:

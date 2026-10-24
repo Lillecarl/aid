@@ -87,9 +87,10 @@ async def test_a_fork_answers_its_parent_and_is_deleted(daemon: Paths, tmp_path:
                 entries = (await parent.history(limit=1000)).entries
                 messages = [e for e in entries if isinstance(e.item, MessageEntry)]
                 names = {info.name for info in await client.sessions()}
-                # The fork can answer before the parent's own turn ends: the wake is the second Output.
-                woken = messages and sum(isinstance(e.item, Output) for e in entries) == 2
-                if woken and names == {"parent"}:
+                status = await parent.status()
+                # The fork's answer either reaches the parent's running turn before its next request, or wakes a
+                # turn of its own once that turn ends: done when it is recorded and the parent is idle.
+                if messages and not status.busy and status.pending == 0 and names == {"parent"}:
                     summary = await parent.summary()
                     break
                 await anyio.sleep(0.05)
@@ -100,7 +101,9 @@ async def test_a_fork_answers_its_parent_and_is_deleted(daemon: Paths, tmp_path:
     [after] = [e.item for e in entries if e.seq > messages[0].seq and isinstance(e.item, Usage) and e.item.agent]
     assert after.agent == f"fork {message.sender}"
     assert after.requests == 1 and after.context_used is None
-    assert summary.requests == 3 + 1 + 1  # The parent's turn, the fork's, the parent's wake.
+    # The parent's turn, the fork's, and the parent's wake when the answer came after the turn's last request.
+    woken = sum(isinstance(e.item, Output) for e in entries) == 2
+    assert summary.requests == 3 + 1 + (1 if woken else 0)
     assert "the answer is 42" in message.text
     assert PREAMBLE in message.text
 

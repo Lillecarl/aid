@@ -19,6 +19,7 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from aid.messaging import ARRIVED
 from aid.model import ModelInfo, RequestUsage, StreamDelta, accumulate
 
 if TYPE_CHECKING:
@@ -133,7 +134,7 @@ class TestModel:
                 i
                 for i, m in enumerate(messages)
                 if any(
-                    isinstance(p, UserPromptPart) and not str(p.content).startswith("[Session metadata")
+                    isinstance(p, UserPromptPart) and not str(p.content).startswith(("[Session metadata", ARRIVED))
                     for p in m.parts
                 )
             ),

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import importlib
 import json
 import os
@@ -21,6 +22,7 @@ from pydantic_core import to_jsonable_python
 from aid.agent import Agent, ModelRetry, Tool, Toolset
 from aid.backends.permissions import PermissionWaits
 from aid.catalog import session_catalog
+from aid.client import connect
 from aid.coding import CODING, OUTPUTS_DIR, Coding
 from aid.instructions import compose, environment
 from aid.messages import (
@@ -36,6 +38,7 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from aid.messaging import ARRIVED, arrived
 from aid.model import AnthropicModel, Model, ModelInfo, OpenAIChatModel, RequestUsage, accumulate, model_for
 from aid.protocol import (
     AidError,
@@ -51,10 +54,11 @@ from aid.protocol import (
 from aid.tools import tool_paths
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator, Awaitable, Callable
 
     from aid.backends.base import Emit, Notifier
     from aid.discovery import Catalog
+    from aid.protocol import MessageEntry
     from aid.spec import NativeSpec
 
 log = structlog.get_logger(__name__)
@@ -185,8 +189,12 @@ def _loose(text: str) -> str:
 
 def open_turn(history: list[ModelMessage]) -> int:
     """How many messages at the end of `history` belong to its last turn: from the last user prompt on. A turn's
-    first message is its prompt, a wake's included."""
-    starts = [i for i, message in enumerate(history) if any(p.part_kind == "user-prompt" for p in message.parts)]
+    first message is its prompt, a wake's included; messages a turn took between its steps (`ARRIVED`) are not."""
+    starts = [
+        i
+        for i, message in enumerate(history)
+        if any(isinstance(p, UserPromptPart) and not str(p.content).startswith(ARRIVED) for p in message.parts)
+    ]
     return len(history) - starts[-1] if starts else 0
 
 
@@ -324,6 +332,7 @@ class NativeBackend:
         max_requests: int | None = None,
         refresh_instructions: Callable[[], str] | None = None,
         open_tail: int = 0,
+        receive: Callable[[], Awaitable[list[MessageEntry]]] | None = None,
     ) -> None:
         self._agent = agent
         self._history_file = history_file
@@ -354,6 +363,8 @@ class NativeBackend:
         # in, which the parent's own requests sent whole. Pruned, the fork's prefix would part from the parent's at
         # the first long thought, and the prompt cache with it.
         self._open_tail = open_tail
+        # Takes the messages waiting for the session (the daemon's inbox), between the steps of a turn.
+        self._receive = receive
         self._history_lock = anyio.Lock()
         self._turn: list[ModelMessage] | None = None
         self._in_flight: tuple[list[ToolCallPart], int] | None = None
@@ -367,6 +378,17 @@ class NativeBackend:
         """Closes the SDK clients of a model built from the agent's name; a model object is its owner's."""
         if self._owned is not None:
             await self._owned.aclose()
+
+    async def _take_messages(self) -> list[MessageEntry]:
+        """What waits for the session now. A failure costs the turn its messages, never the turn: they stay in the
+        inbox, and the turn's end hands them to a turn of their own."""
+        if self._receive is None:
+            return []
+        try:
+            return await self._receive()
+        except Exception:
+            log.exception("receive_messages_failed")
+            return []
 
     def _preserve_signed_thinking(self) -> bool:
         """Anthropic rejects a signed block whose signature the wire dropped, so keep them whole."""
@@ -412,10 +434,16 @@ class NativeBackend:
         scope = anyio.CancelScope()
         self._scope = scope
         self._turn = messages
+        first = True
         try:
             with scope:
                 while True:
                     await checkpoint()
+                    # Between steps, as Claude Code hands a person's messages to a turn in progress: only before a
+                    # request the turn sends anyway, so a message taken is always seen.
+                    if not first and (taken := await self._take_messages()):
+                        messages.append(ModelRequest(parts=[UserPromptPart(arrived(taken))]))
+                    first = False
                     if self._max_requests is not None and (usage.requests or 0) >= self._max_requests:
                         raise UsageLimitExceeded(self._max_requests)
                     usage = usage.model_copy(update={"requests": (usage.requests or 0) + 1})
@@ -654,6 +682,11 @@ async def _write_atomic(path: anyio.Path, data: bytes) -> None:
     await tmp.rename(path)
 
 
+async def _receive_messages(session: str) -> list[MessageEntry]:
+    async with connect() as client:
+        return await client.receive_messages(session, wait=0)
+
+
 @asynccontextmanager
 async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator[NativeBackend]:
     # Imports and filesystem walks, run off the event loop. Instructions compose for every session: None
@@ -718,6 +751,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             max_requests=spec.max_requests,
             refresh_instructions=refresh_instructions,
             open_tail=open_tail,
+            receive=functools.partial(_receive_messages, state_dir.name) if spec.aid_tools else None,
         )
         yield backend
     finally:

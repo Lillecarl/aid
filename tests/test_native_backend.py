@@ -37,8 +37,9 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from aid.messaging import ARRIVED
 from aid.model import ModelInfo, RequestUsage, StreamDelta
-from aid.protocol import AidError, Output, SessionEvent, Started, TextDelta, ToolCall, Usage
+from aid.protocol import AidError, MessageEntry, Output, SessionEvent, Started, TextDelta, ToolCall, Usage
 from aid.spec import PermissionMode
 from aid.tools import McpTool
 from tests.agents import coder, echo
@@ -46,7 +47,7 @@ from tests.models import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel
 from tests.test_coding import plan
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
     from pathlib import Path
 
 
@@ -62,6 +63,7 @@ async def backend(
     max_requests: int | None = None,
     desired_max: int = DEFAULT_DESIRED_MAX,
     open_tail: int = 0,
+    receive: Callable[[], Awaitable[list[MessageEntry]]] | None = None,
 ) -> AsyncGenerator[NativeBackend]:
     coding = Coding(
         cwd=directory,
@@ -81,6 +83,7 @@ async def backend(
         max_requests=max_requests,
         desired_max=desired_max,
         open_tail=open_tail,
+        receive=receive,
     )
     try:
         yield session
@@ -92,12 +95,12 @@ async def backend(
 
 
 def prompts_of(messages: list[ModelMessage]) -> list[str | Any]:
-    """The user prompts, without each turn's metadata part."""
+    """The user prompts, without each turn's metadata part or the messages a turn took mid-way."""
     return [
         p.content
         for m in messages
         for p in m.parts
-        if isinstance(p, UserPromptPart) and not str(p.content).startswith(METADATA)
+        if isinstance(p, UserPromptPart) and not str(p.content).startswith((METADATA, ARRIVED))
     ]
 
 
@@ -336,6 +339,46 @@ async def test_uncounted_thinking_stays_unknown(tmp_path: Path, reasoning: int |
         await session.prompt("go", emit)
     usage = next(event for event in events if isinstance(event, Usage))
     assert (usage.output_tokens, usage.thought_tokens) == (7, reasoning)
+
+
+async def test_messages_arrive_between_the_steps_of_a_turn(tmp_path: Path) -> None:
+    """A message waiting when the turn is about to send its next request goes in before it, framed, after the tool
+    results; the turn still starts at its prompt (forks seed from there), and nothing is taken before the first
+    request, which a wake turn already carries."""
+    seen: list[list[ModelMessage]] = []
+
+    def respond(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        seen.append(messages)
+        if len(seen) == 1:
+            return ModelResponse(parts=[ToolCallPart("now", "{}", "c1")])
+        return ModelResponse(parts=[TextPart("done")])
+
+    def now() -> str:
+        return "noon"
+
+    calls = 0
+    waiting = [MessageEntry(sender="alice", text="stop and report")]
+
+    async def receive() -> list[MessageEntry]:
+        nonlocal calls, waiting
+        calls += 1
+        taken, waiting = waiting, []
+        return taken
+
+    async def emit(event: SessionEvent) -> None:
+        pass
+
+    async with backend(tmp_path, Agent(FunctionModel(respond), tools=[now]), receive=receive) as session:
+        assert (await session.prompt("go", emit)).output == "done"
+    assert calls == 1
+    injected = seen[1][-1]
+    assert isinstance(injected, ModelRequest) and isinstance(injected.parts[0], UserPromptPart)
+    text = str(injected.parts[0].content)
+    assert text.startswith(ARRIVED) and '<aid-message from="alice" kind="session">' in text
+    assert any(isinstance(p, ToolReturnPart) for p in seen[1][-2].parts)
+    history = await stored(tmp_path)
+    assert prompts_of(history) == ["go"]
+    assert open_turn(history) == len(history)
 
 
 async def test_missing_usage_stays_unknown(tmp_path: Path) -> None:

@@ -128,8 +128,9 @@ class SendMessage(_Request):
 
 
 class ReceiveMessages(_Request):
-    """The messages waiting for an interactive Claude session, taken out of its mailbox. Waits up to `wait`
-    seconds for one to arrive; an empty list means none did. Only the session's channel server asks."""
+    """The messages waiting for a session, taken out of its mailbox. Waits up to `wait` seconds for one to arrive;
+    an empty list means none did. An interactive Claude session's channel server asks; any other session only
+    during a turn, between its steps (a native turn, with `wait` 0)."""
 
     op: Literal["receive"] = "receive"
     session: str

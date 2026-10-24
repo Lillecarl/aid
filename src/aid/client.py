@@ -403,7 +403,7 @@ class Client:
         return await self.call(CallPlugin(plugin=plugin, method=method, args=args))
 
     async def receive_messages(self, session: str, *, wait: float = 25) -> list[MessageEntry]:
-        """Take the messages waiting for interactive Claude session `session`, waiting up to `wait` seconds."""
+        """Take the messages waiting for `session`, waiting up to `wait` seconds (`ReceiveMessages`)."""
         return _MESSAGES.validate_python(await self.call(ReceiveMessages(session=session, wait=wait)))
 
 
