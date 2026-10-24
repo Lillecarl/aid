@@ -350,6 +350,9 @@ class ClaudeTtyBackend:
                 await self._activity(working=True, attention=None)
             case "Stop" | "StopFailure":
                 await self._activity(working=False, attention=self._attention)
+            case "Notification" if fields.get("notification_type") == "idle_prompt":
+                # A turn the person interrupted with Esc runs no Stop hook; Claude still says it went idle.
+                await self._activity(working=False, attention=self._attention)
             case "Notification" if fields.get("notification_type") not in QUIET_NOTIFICATIONS:
                 message = fields.get("message")
                 await self._activity(working=self._working, attention=message if isinstance(message, str) else None)
