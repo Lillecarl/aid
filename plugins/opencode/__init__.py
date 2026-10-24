@@ -3,8 +3,8 @@ and Go (`opencode-go/`, the subscription), with separate URLs, model lists and k
 protocol and URL (`provider.npm`, `provider.api`): Chat Completions for most, Anthropic's Messages API for `claude-*`, and OpenAI's
 Responses API and Google's Gemini API for others, which aid has no transport for yet.
 
-Measured 2026-10-24: both model lists are public; Zen's free models refuse every client but OpenCode; Go needs
-`x-opencode-session`.
+Measured 2026-10-24: both model lists are public; Zen answers over Anthropic Messages (`x-api-key`) and Chat
+Completions; Zen's free models refuse every client but OpenCode; Go needs `x-opencode-session`. No Go reply yet.
 """
 
 from __future__ import annotations

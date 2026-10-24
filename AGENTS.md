@@ -178,7 +178,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   alone, 403 FreeTierError; aid does not pose as OpenCode). Both send `User-Agent: aid/<version>` and
   `x-opencode-session` (uuid5 of the aid session, `ModelProvider.session`), as Go asks of other agents; Go answers
   400 MissingSessionID without it. A list's `unsupported` marks are fetched with it: a plugin change shows after
-  the day's cache. OpenRouter and OpenCode inference is unmeasured (no key). A plugin
+  the day's cache. Measured 2026-10-24: Zen answers over both routes (Anthropic Messages with `x-api-key`, Chat
+  Completions), priced through models.dev's `opencode`; Go and OpenRouter inference unmeasured (no working key). A plugin
   named like a bundled one in an earlier tier shadows it: the example agent is `examples/deepseek_agent`.
 - `NativeSpec.model` (`provider/model`) runs the agent on another model (`session_agent`); the agent's
   `model_settings` follow only within one provider, `NativeSpec.model_settings` go over them. `aid new-py --model`,
