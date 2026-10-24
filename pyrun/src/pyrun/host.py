@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import secrets
 import shlex
 import sys
@@ -158,14 +159,19 @@ async def run_script(
     runner = cmd(*argv, timeout=time_limit + HOST_GRACE if time_limit is not None else None, check=False)
     error: str | None = None
     try:
-        # The host's own scope records the script's process under the script's directory, and finds whatever
-        # the script started even if the script's process dies first: the marks chain.
-        async with Scope(store=directory / "host", cwd=cwd), runner.start() as process:
-            if policy is not None or files is not None:
-                await _answer(process, policy, files)
-            finished = await process.wait()
-        if not finished.ok and not (directory / ERROR_FILE).exists():
-            error = f"the script runner exited {finished.code}:\n{finished.stderr.tail()}"
+        # A question the host is still deciding holds the answer loop, and an open file question blocks the
+        # script's own loop, so its scope timeout cannot fire: the host keeps the deadline itself.
+        with anyio.move_on_after(time_limit + HOST_GRACE if time_limit is not None else math.inf) as host:
+            # The host's own scope records the script's process under the script's directory, and finds whatever
+            # the script started even if the script's process dies first: the marks chain.
+            async with Scope(store=directory / "host", cwd=cwd), runner.start() as process:
+                if policy is not None or files is not None:
+                    await _answer(process, policy, files)
+                finished = await process.wait()
+            if not finished.ok and not (directory / ERROR_FILE).exists():
+                error = f"the script runner exited {finished.code}:\n{finished.stderr.tail()}"
+        if host.cancelled_caught:
+            error = f"the script ran past its time limit of {time_limit}s and was killed"
     except TimedOut as timed_out:
         error = str(timed_out)
     except Failed as failed:
@@ -180,6 +186,8 @@ async def _answer(process: Process, policy: Policy | None, files: FilePolicy | N
             if question.get("done"):
                 break
             tg.start_soon(_decide, process, policy, files, question)
+        # Done, or the script is gone: an answer still being decided has nobody to reach.
+        tg.cancel_scope.cancel()
     await process.close_stdin()
 
 

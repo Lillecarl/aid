@@ -114,6 +114,20 @@ except PermissionError as error:
     ]
 
 
+async def test_an_unanswered_file_question_ends_with_the_time_limit(tmp_path: Path) -> None:
+    """The open question blocks the script's own loop, so its scope timeout cannot fire: the host's kill ends the
+    script, and the host stops waiting for the answer."""
+
+    async def never(access: FileAccess) -> bool:
+        await anyio.sleep_forever()
+        return False
+
+    script = f"Path({str(tmp_path.parent / 'elsewhere')!r}).write_text('x')\n"
+    with anyio.fail_after(TIMEOUT):
+        report = await run_script(script, cwd=tmp_path, store=tmp_path / "runs", files=never, time_limit=1)
+    assert report.error is not None
+
+
 async def test_long_output_is_clipped_in_the_report(tmp_path: Path) -> None:
     script = 'await run("seq", "1000")\n'
     with anyio.fail_after(TIMEOUT):
