@@ -63,7 +63,9 @@ SDK_OPTIONS: Final = [
 
 def sdk_argv(spec: ClaudeSdkSpec, *, resume: str | None, mcp_config: str | None = None) -> list[str]:
     """`claude -p` over stream-json NDJSON, resumed when a session id is persisted. With aid's tools, aid's MCP
-    server comes in `mcp_config` and its tools need no permission."""
+    server comes in `mcp_config` and its tools need no permission. Its permission prompts come to aid as
+    `can_use_tool` only through `--permission-prompt-tool stdio`: without it Claude refuses them itself
+    (measured 2.1.310)."""
     # Both options are variadic: each goes before another option, or it would take what follows too.
     mcp = ["--mcp-config", mcp_config] if mcp_config else []
     aid = ["--allowedTools", AID_TOOLS_RULE] if spec.aid_tools else []
@@ -78,6 +80,8 @@ def sdk_argv(spec: ClaudeSdkSpec, *, resume: str | None, mcp_config: str | None 
         "--include-partial-messages",
         "--input-format",
         "stream-json",
+        "--permission-prompt-tool",
+        "stdio",
         "--model",
         spec.model,
     ]

@@ -44,6 +44,14 @@ echo "$@" >> "$FAKE_CLAUDE_ARGV"
 read userline
 echo "$userline" >> "$FAKE_CLAUDE_STDIN"
 echo '{"type":"system","subtype":"init","session_id":"sess-123"}'
+# Claude Code sends can_use_tool only to a permission prompt tool; without one it refuses by itself (2.1.310).
+case " $* " in
+  *" --permission-prompt-tool stdio "*) ;;
+  *) case "$FAKE_CLAUDE_MODE" in ask*)
+       echo '{"type":"result","subtype":"success","result":"Claude requested permissions to use Bash"}'
+       exit 0 ;;
+     esac ;;
+esac
 case "$FAKE_CLAUDE_MODE" in
   drip)
     echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"part one"}]}}'
