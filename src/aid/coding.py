@@ -273,6 +273,19 @@ class Monitor:
     """A stream's last line without its newline yet; the next poll's bytes complete it."""
 
 
+@dataclass(frozen=True)
+class Verdict:
+    """A permission answer: whether the call may run, and the words its answerer gave with it."""
+
+    allowed: bool
+    said: str | None = None
+    """`The supervisor said: …` or `The person said: …`; None when nobody gave words."""
+
+    def refusal(self, outcome: str) -> str:
+        """What a refused tool returns: its outcome, then why, so the agent can act on the reason."""
+        return f"not allowed: {outcome}. {self.said}" if self.said else f"not allowed: {outcome}"
+
+
 @dataclass
 class Coding:
     cwd: Path
@@ -362,9 +375,9 @@ class Coding:
         title: str,
         input: Any,
         remember: str | None = None,
-    ) -> bool:
-        """The session's answer. Hooks refuse first with the hook's message; in ask mode, a person's:
-        `remember` offers "always" for that key."""
+    ) -> Verdict:
+        """The session's answer. Hooks refuse first with the hook's message; in a waiting mode, a person's or
+        the supervisor's: `remember` offers "always" for that key."""
         try:
             rendered = json.dumps(input, default=str)
         except TypeError, ValueError:
@@ -372,9 +385,9 @@ class Coding:
         if (hook := match_hook(list(self.hooks), tool_name, f"{title}\n{rendered}")) is not None:
             raise ModelRetry(hook.message)
         if not (mode := self.mode_for(tool_name)).waits:
-            return mode is PermissionMode.ALLOW
+            return Verdict(mode is PermissionMode.ALLOW)
         if remember is not None and remember in self.always:
-            return True
+            return Verdict(True)
         options = [PermissionChoice(option_id=YES, name="Yes", kind="allow_once")]
         if remember is not None:
             options.append(PermissionChoice(option_id=ALWAYS, name=f"Always allow {remember}", kind="allow_always"))
@@ -389,7 +402,7 @@ class Coding:
             mode=mode,
         )
         if self.emit is None:
-            return False
+            return Verdict(False)
         await self.emit(request)
         decision = PermissionDecision(request_id=request.request_id, option_id=NO, by=PermissionDecider.TIMEOUT)
         try:
@@ -406,7 +419,10 @@ class Coding:
         option_id = decision.option_id
         if option_id == ALWAYS and remember is not None:
             self.always.add(remember)
-        return option_id in (YES, ALWAYS)
+        said = None
+        if decision.text:
+            said = f"{'The supervisor' if decision.by is PermissionDecider.SUPERVISOR else 'The person'} said: {decision.text}"
+        return Verdict(option_id in (YES, ALWAYS), said)
 
     async def close(self) -> None:
         """Stop every running background task and the shell, reaping each. The worker is going: shielded, so
@@ -846,14 +862,14 @@ async def remove(ctx: RunContext, paths: list[str]) -> str:
     targets = await anyio.to_thread.run_sync(lambda: _outermost([_removable(root, path) for path in paths]))
     preview = await anyio.to_thread.run_sync(_preview, root, targets)
     named = ", ".join(str(t.relative_to(root)) for t in targets)
-    allowed = await coding.permit(
+    verdict = await coding.permit(
         ctx.tool_call_id or "",
         tool_name="remove",
         title=f"remove {preview.files} files, {preview.directories} directories ({preview.bytes} bytes): {named}"[:200],
         input=preview.model_dump(mode="json"),
     )
-    if not allowed:
-        return "not allowed: nothing was removed"
+    if not verdict.allowed:
+        return verdict.refusal("nothing was removed")
     await anyio.to_thread.run_sync(_remove, targets)
     return f"removed {named}: {preview.files} files, {preview.directories} directories"
 
@@ -930,14 +946,14 @@ async def apply_edits(ctx: RunContext) -> str:
     if not diff:
         return "nothing is staged"
     files = sorted({coding.edits.relpath(p) for p in coding.edits.staged()})
-    allowed = await coding.permit(
+    verdict = await coding.permit(
         ctx.tool_call_id or "",
         tool_name="apply_edits",
         title=f"write {len(files)} file{'s' if len(files) != 1 else ''}: {', '.join(files)}",
         input={"diff": clip(diff)},
     )
-    if not allowed:
-        return "not allowed: the edits stay staged"
+    if not verdict.allowed:
+        return verdict.refusal("the edits stay staged")
     diffs = await coding.edit(_apply)
     coding.edits = EditSession(root=coding.cwd)
     if coding.emit is not None and diffs:
@@ -1048,15 +1064,16 @@ async def python(
         return await _python_async(coding, tool_call_id, script, time_limit) + await _unapplied(coding)
     if mode == "in-loop" and coding.sandbox is not None:
         raise AidError("sandboxed", "this session is sandboxed, and in-loop runs outside it; use async")
-    if await _permit_script(coding, tool_call_id, mode, script):
-        if mode == "sync":
-            report = await _python_oneshot(coding, [sys.executable, "-c", script], mode, time_limit)
-        elif mode == "xonsh":
-            report = await _python_oneshot(coding, [sys.executable, "-m", "xonsh", "-c", script], mode, time_limit)
-        else:
-            report = await _python_in_loop(coding, script, time_limit)
-        return report + await _unapplied(coding)
-    return "not allowed: the script stays unrun"
+    verdict = await _permit_script(coding, tool_call_id, mode, script)
+    if not verdict.allowed:
+        return verdict.refusal("the script stays unrun")
+    if mode == "sync":
+        report = await _python_oneshot(coding, [sys.executable, "-c", script], mode, time_limit)
+    elif mode == "xonsh":
+        report = await _python_oneshot(coding, [sys.executable, "-m", "xonsh", "-c", script], mode, time_limit)
+    else:
+        report = await _python_in_loop(coding, script, time_limit)
+    return report + await _unapplied(coding)
 
 
 async def _unapplied(coding: Coding) -> str:
@@ -1069,22 +1086,25 @@ async def _unapplied(coding: Coding) -> str:
 
 
 async def _python_async(coding: Coding, tool_call_id: str, script: str, time_limit: float) -> str:
+    # pyrun's gates answer yes or no: a script's refused command fails inside the script, which reports it.
     async def policy(command: Command) -> bool:
-        return await coding.permit(
+        verdict = await coding.permit(
             tool_call_id,
             tool_name="python",
             title=shlex.join(command.argv),
             input={"argv": list(command.argv), "cwd": command.cwd or "."},
             remember=Path(command.argv[0]).name,
         )
+        return verdict.allowed
 
     async def files(access: FileAccess) -> bool:
-        return await coding.permit(
+        verdict = await coding.permit(
             tool_call_id,
             tool_name=PYTHON_READ if access.access == "read" else PYTHON_WRITE,
             title=f"{access.access} {access.path}",
             input={"path": access.path, "event": access.event},
         )
+        return verdict.allowed
 
     report = await run_script(
         script,
@@ -1099,7 +1119,7 @@ async def _python_async(coding: Coding, tool_call_id: str, script: str, time_lim
     return report.render()
 
 
-async def _permit_script(coding: Coding, tool_call_id: str, mode: str, script: str) -> bool:
+async def _permit_script(coding: Coding, tool_call_id: str, mode: str, script: str) -> Verdict:
     """One permit for the whole script: modes whose internals no gate can see are judged as written."""
     first = next((line for line in script.splitlines() if line.strip()), "(empty script)")
     return await coding.permit(
@@ -1186,14 +1206,14 @@ async def shell(ctx: RunContext, command: str, time_limit: float = SHELL_TIME_LI
     Delete with the `remove` tool, not `rm`: its request shows exactly what goes."""
     coding = _coding()
     first_line = next((line for line in command.splitlines() if line.strip()), "(empty command)")
-    allowed = await coding.permit(
+    verdict = await coding.permit(
         ctx.tool_call_id or "",
         tool_name="shell",
         title=first_line[:100],
         input={"command": command},
     )
-    if not allowed:
-        return "not allowed: the command stays unrun"
+    if not verdict.allowed:
+        return verdict.refusal("the command stays unrun")
     return await coding.shell_run(command, time_limit)
 
 
@@ -1217,15 +1237,15 @@ async def background(
     if not argv:
         raise AidError("no_command", "background needs an argv, like python needs a script")
     directory = coding.cwd if cwd is None else inside(coding.cwd, cwd)
-    allowed = await coding.permit(
+    verdict = await coding.permit(
         ctx.tool_call_id or "",
         tool_name="background",
         title=shlex.join(argv),
         input={"argv": argv, "cwd": cwd or "."},
         remember=Path(argv[0]).name,
     )
-    if not allowed:
-        return "not allowed: the task stays unstarted"
+    if not verdict.allowed:
+        return verdict.refusal("the task stays unstarted")
     coding.task_seq += 1
     task_id = f"bg{coding.task_seq}"
     task_dir = (coding.store / BACKGROUND_DIR / task_id).resolve()
@@ -1324,14 +1344,14 @@ async def monitor(
         None,
     ):
         return f"{task_id} is already watched as {armed}"
-    allowed = await coding.permit(
+    verdict = await coding.permit(
         ctx.tool_call_id or "",
         tool_name="monitor",
         title=f"watch {task_id} {condition.describe()}: {shlex.join(task.argv)}",
         input={"task_id": task_id, "on": on, "pattern": pattern, "stream": stream, "after": after, "codes": codes},
     )
-    if not allowed:
-        return "not allowed: nothing is watched"
+    if not verdict.allowed:
+        return verdict.refusal("nothing is watched")
     coding.monitor_seq += 1
     monitor_id = f"m{coding.monitor_seq}"
     coding.monitors[monitor_id] = Monitor(

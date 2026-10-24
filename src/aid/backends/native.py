@@ -25,7 +25,7 @@ from aid.agent import Agent, ModelRetry, Tool, Toolset
 from aid.backends.permissions import PermissionWaits
 from aid.catalog import session_catalog
 from aid.client import connect
-from aid.coding import CODING, OUTPUTS_DIR, Coding, asking_names
+from aid.coding import CODING, OUTPUTS_DIR, Coding, Verdict, asking_names
 from aid.instructions import compose, environment
 from aid.messages import (
     ModelMessage,
@@ -638,15 +638,20 @@ class NativeBackend:
                                 if truncated:
                                     raise ModelRetry(f"{error}: the response hit its output token limit") from error
                                 raise ModelRetry(str(error)) from error
-                            if tool.asks or await self._coding.permit(
-                                call.tool_call_id,
-                                tool_name=call.tool_name,
-                                title=f"{call.tool_name} {json.dumps(arguments, default=str)[:TITLE_LIMIT]}",
-                                input=arguments,
-                            ):
+                            verdict = (
+                                Verdict(True)
+                                if tool.asks
+                                else await self._coding.permit(
+                                    call.tool_call_id,
+                                    tool_name=call.tool_name,
+                                    title=f"{call.tool_name} {json.dumps(arguments, default=str)[:TITLE_LIMIT]}",
+                                    input=arguments,
+                                )
+                            )
+                            if verdict.allowed:
                                 result = await tool.call(arguments, call.tool_call_id)
                             else:
-                                result = f"not allowed: {call.tool_name} stays unrun"
+                                result = verdict.refusal(f"{call.tool_name} stays unrun")
                         except ModelRetry as error:
                             part = RetryPromptPart(str(error), tool_name=call.tool_name, tool_call_id=call.tool_call_id)
                         else:

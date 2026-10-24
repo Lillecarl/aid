@@ -17,6 +17,7 @@ from aid.coding import (
     Coding,
     Condition,
     Line,
+    Verdict,
     WatchView,
     _outermost,  # pyright: ignore[reportPrivateUsage]
     _removable,  # pyright: ignore[reportPrivateUsage]
@@ -98,6 +99,22 @@ async def test_remove_refused_removes_nothing(daemon: Paths, tmp_path: Path) -> 
     assert sorted(p.name for p in work.iterdir()) == ["build", "keep.txt", "link"]
     assert isinstance(output, Output)
     assert "not allowed: nothing was removed" in str(output.output)
+
+
+async def test_a_refusals_words_reach_the_agent(daemon: Paths, tmp_path: Path) -> None:
+    work = removal_tree(tmp_path)
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(work, "agents:coder", PermissionMode.ASK))
+            async for event in session.stream(plan(("shell", {"command": "rm -rf ./*"}))):
+                if isinstance(event, PermissionRequest):
+                    await session.answer(event.request_id, "no", "use the remove tool with exact paths")
+            output = (await session.history()).entries[-1].item
+    assert isinstance(output, Output)
+    assert "not allowed: the command stays unrun. The person said: use the remove tool with exact paths" in str(
+        output.output
+    )
+    assert (work / "keep.txt").exists()
 
 
 def test_remove_takes_only_entries_inside_the_directory(tmp_path: Path) -> None:
@@ -971,18 +988,12 @@ async def test_hook_hit_refuses_before_mode_logic(tmp_path: Path) -> None:
 
 
 async def test_hook_miss_falls_through_to_mode_logic(tmp_path: Path) -> None:
-    assert (
-        await _hooked_coding(tmp_path, PermissionMode.ALLOW).permit(
-            "call1", tool_name="shell", title="ls", input={"command": "ls"}
-        )
-        is True
-    )
-    assert (
-        await _hooked_coding(tmp_path, PermissionMode.DENY).permit(
-            "call1", tool_name="shell", title="ls", input={"command": "ls"}
-        )
-        is False
-    )
+    assert await _hooked_coding(tmp_path, PermissionMode.ALLOW).permit(
+        "call1", tool_name="shell", title="ls", input={"command": "ls"}
+    ) == Verdict(True)
+    assert await _hooked_coding(tmp_path, PermissionMode.DENY).permit(
+        "call1", tool_name="shell", title="ls", input={"command": "ls"}
+    ) == Verdict(False)
 
 
 async def test_correctable_tool_failures_do_not_end_the_turn(daemon: Paths, tmp_path: Path) -> None:
