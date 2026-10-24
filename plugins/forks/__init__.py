@@ -108,9 +108,7 @@ class Forks(aid.Plugin):
             raise AidError("unsupported", "only native sessions fork")
         if parent.parent is not None:
             raise AidError("forbidden", "a session that works for another cannot fork")
-        spec = parent.model_copy(
-            update={"seed_history": snapshot, "parent": caller, "supervisor": None, "supervisor_permissions": []}
-        )
+        spec = parent.model_copy(update={"seed_history": snapshot, "parent": caller, "supervisor": None})
         name = f"{caller[:PARENT_CHARS]}.fork-{secrets.token_hex(3)}"
         await self._client.create(name, spec)
         self._tg.start_soon(self._answer, caller, name, instructions)

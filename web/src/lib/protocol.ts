@@ -155,7 +155,6 @@ export interface AcpSpec {
   supervisor_nudge_budget?: number;
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
-  supervisor_permissions?: string[];
   tool_permissions?: {
     [k: string]: PermissionMode1;
   };
@@ -301,7 +300,6 @@ export interface NativeSpec {
   supervisor_nudge_budget?: number;
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
-  supervisor_permissions?: string[];
   target?: string | null;
   tool_permissions?: {
     [k: string]: PermissionMode1;
@@ -356,7 +354,6 @@ export interface ClaudeTtySpec {
   supervisor_nudge_budget?: number;
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
-  supervisor_permissions?: string[];
   tool_permissions?: {
     [k: string]: PermissionMode1;
   };
@@ -396,7 +393,6 @@ export interface ClaudeSdkSpec {
   supervisor_nudge_budget?: number;
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
-  supervisor_permissions?: string[];
   tool_permissions?: {
     [k: string]: PermissionMode1;
   };

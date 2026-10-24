@@ -2,7 +2,8 @@
 
 It follows each supervised session's history and tells the supervisor, by message from the supervised session:
 how each turn ended (its tail, open goals and loop score), a live tool loop it suspects, and a permission request
-the person left waiting on an allow-listed tool. It keeps the stuck episode and its nudge budget, refusing a
+whose tool's mode involves the supervisor (`supervisor`: it answers first; `ask_supervisor`: after the person).
+Either holder may hand the request on once (`ROUTES`). It keeps the stuck episode and its nudge budget, refusing a
 supervisor's nudge past the budget or one that repeats the last, and asks for a person once the budget is spent.
 The supervisor acts through `aid.supervisor_tools`, which call this plugin as the supervisor's own session.
 
@@ -47,7 +48,7 @@ from aid.protocol import (
     TurnError,
     clip,
 )
-from aid.spec import AcpSpec, AgentSpecAdapter, NativeSpec
+from aid.spec import AcpSpec, AgentSpecAdapter, ClaudeSdkSpec, NativeSpec, PermissionMode
 
 from .loops import ToolLoopDetector
 from .policy import (
@@ -58,7 +59,8 @@ from .policy import (
     loop_score,
     matches,
     nudge_repeats,
-    permission_backstop_text,
+    permission_attention,
+    permission_review_text,
     set_goal,
     supervision_stuck,
     supervision_text,
@@ -86,6 +88,39 @@ TURN_ITEMS: Final = (PromptEntry, ToolCall, PermissionRequest, PermissionDecisio
 
 _ARGS: Final = TypeAdapter(dict[str, str | int | None])
 
+SUPERVISOR: Final = "supervisor"
+PERSON: Final = "person"
+ROUTES: Final[dict[PermissionMode, tuple[str, ...]]] = {
+    PermissionMode.SUPERVISOR: (SUPERVISOR, PERSON, SUPERVISOR),
+    PermissionMode.ASK_SUPERVISOR: (PERSON, SUPERVISOR, PERSON),
+}
+"""Who holds a request at each step. Each holder but the last hands it on when it forwards or stays silent; the
+last decides, and nothing moves the request further."""
+SUPERVISOR_WINDOW: Final = 120.0
+"""Seconds the supervisor holds a request it may forward before a person gets it: one review turn."""
+
+
+@dataclass
+class Route:
+    """One permission request on its way between the supervisor and a person."""
+
+    request: PermissionRequest
+    holders: tuple[str, ...]
+    deadline: float | None
+    """`time.monotonic()` past which the worker refuses the request itself; None where aid does not know."""
+    step: int = 0
+    timer: anyio.CancelScope | None = None
+    attention: bool = False
+    """This route raised the session's attention, and clears it when the request is decided."""
+
+    @property
+    def holder(self) -> str:
+        return self.holders[self.step]
+
+    @property
+    def final(self) -> bool:
+        return self.step == len(self.holders) - 1
+
 
 @dataclass
 class Watched:
@@ -108,12 +143,12 @@ class Watched:
     loops: ToolLoopDetector = field(default_factory=ToolLoopDetector)
     loop_suspected: bool = False
     interrupted: bool = False
-    backstops: dict[str, anyio.CancelScope] = field(default_factory=dict[str, anyio.CancelScope])
-    """Permission backstops still waiting, by request id."""
+    routes: dict[str, Route] = field(default_factory=dict[str, Route])
+    """Permission requests routed between supervisor and person, by request id."""
 
 
 class Supervision(aid.Plugin):
-    """Watch over sessions that name a supervisor: turn ends, live tool loops, permission backstops, goals, nudges."""
+    """Watch over sessions that name a supervisor: turn ends, live tool loops, permission routes, goals, nudges."""
 
     grants = frozenset(
         {aid.Grant.READ, aid.Grant.MESSAGE, aid.Grant.PROMPT, aid.Grant.PERMISSIONS, aid.Grant.SUPERVISE}
@@ -144,8 +179,15 @@ class Supervision(aid.Plugin):
 
     def _forget(self, name: str) -> None:
         if (watched := self._watched.pop(name, None)) is not None:
-            for scope in watched.backstops.values():
-                scope.cancel()
+            self._drop_routes(watched)
+
+    @staticmethod
+    def _drop_routes(watched: Watched) -> None:
+        """Every request ends with its turn: stop their timers without telling anyone."""
+        for route in watched.routes.values():
+            if route.timer is not None:
+                route.timer.cancel()
+        watched.routes.clear()
 
     @property
     def client(self) -> aid.Client:
@@ -201,10 +243,9 @@ class Supervision(aid.Plugin):
                     watched.loop_suspected = True
                     await self._send_loop_review(watched, entry.turn, evidence)
             case PermissionRequest():
-                await self._arm_backstop(watched, item)
+                await self._route(watched, item)
             case PermissionDecision():
-                if (scope := watched.backstops.pop(item.request_id, None)) is not None:
-                    scope.cancel()
+                await self._settle(watched, item.request_id)
             case Output():
                 if watched.outputs is not None:
                     watched.outputs.append(item)
@@ -235,9 +276,7 @@ class Supervision(aid.Plugin):
 
     async def _turn_ended(self, watched: Watched, entry: HistoryEntry, reason: str) -> None:
         """Score the turn's tail for stuckness, then hand it to the supervisor."""
-        for scope in watched.backstops.values():
-            scope.cancel()
-        watched.backstops.clear()
+        self._drop_routes(watched)
         if watched.fired == entry.turn or (supervisor := watched.spec.supervisor) is None:
             return
         watched.fired = entry.turn
@@ -325,12 +364,12 @@ class Supervision(aid.Plugin):
             before = page.entries[0].seq
 
     @staticmethod
-    def _backstop_bound(spec: AgentSpec, request: PermissionRequest) -> float | None:
-        """Seconds the worker waits on this request itself: the backstop arms only before it. An `ask_user`
-        question with a recommended option ends at the autoselect instead. None when the worker's bound is
-        aid-unknown (interactive Claude)."""
+    def _worker_bound(spec: AgentSpec, request: PermissionRequest) -> float | None:
+        """Seconds the worker waits on this request itself: a handover past it is moot. An `ask_user` question
+        with a recommended option ends at the autoselect instead. None when the worker's bound is aid-unknown
+        (interactive Claude)."""
         match spec:
-            case AcpSpec(permission_timeout=timeout):
+            case AcpSpec(permission_timeout=timeout) | ClaudeSdkSpec(permission_timeout=timeout):
                 return timeout
             case NativeSpec(permission_timeout=timeout, ask_autoselect_after=autoselect):
                 if request.tool_name == "ask_user" and any(o.recommended for o in request.options):
@@ -339,37 +378,79 @@ class Supervision(aid.Plugin):
             case _:
                 return None
 
-    async def _arm_backstop(self, watched: Watched, request: PermissionRequest) -> None:
-        """Wake the supervisor over an unanswered permission request, once the person had their window: the
-        full timeout with a person around, the shortened one without. Skipped when the tool is not
-        allow-listed, and when the worker's own timeout answers first."""
+    async def _route(self, watched: Watched, request: PermissionRequest) -> None:
+        """Start a request on its way when its mode involves the supervisor. claude-tty's requests name no mode:
+        the spec's mode for the tool stands in."""
         spec = watched.spec
-        if self._tg is None or spec.supervisor is None or request.tool_name not in spec.supervisor_permissions:
+        mode = request.mode or (spec.tool_permissions.get(request.tool_name) if request.tool_name else None)
+        holders = ROUTES.get(mode) if mode is not None else None
+        if self._tg is None or spec.supervisor is None or holders is None:
             return
-        if (old := watched.backstops.pop(request.request_id, None)) is not None:
-            old.cancel()
-        wait = spec.supervisor_permission_timeout
-        # Presence doubles as the window: a person-authored entry this recent keeps the full wait.
-        if not await self._person_recent(watched.name, wait):
-            wait = spec.supervisor_permission_absent_timeout
-        if (bound := self._backstop_bound(spec, request)) is not None and wait >= bound:
-            log.info("backstop_moot", session=watched.name, request=request.request_id, wait=wait, bound=bound)
-            return
-        scope = watched.backstops[request.request_id] = anyio.CancelScope()
-        self._tg.start_soon(self._await_backstop, watched, request.request_id, wait, scope)
+        await self._settle(watched, request.request_id)
+        bound = self._worker_bound(spec, request)
+        route = Route(request, holders, None if bound is None else time.monotonic() + bound)
+        watched.routes[request.request_id] = route
+        await self._enter(watched, route, None)
 
-    async def _await_backstop(self, watched: Watched, request_id: str, wait: float, scope: anyio.CancelScope) -> None:
-        """Outwait the person, then hand the still-waiting request to the supervisor. A decision first cancels
-        the scope, so the message only ever carries a live request."""
-        with scope:
+    async def _enter(self, watched: Watched, route: Route, note: str | None) -> None:
+        """Give the request to its current holder, and arm the handover to the next one unless this is the last."""
+        spec, request = watched.spec, route.request
+        if route.holder == SUPERVISOR:
+            await self._tell(watched, permission_review_text(watched.name, request, final=route.final, note=note))
+            wait = SUPERVISOR_WINDOW
+        else:
+            if route.step > 0:
+                route.attention = True
+                await self.client.call(
+                    SetAttention(session=watched.name, text=permission_attention(watched.name, request, note))
+                )
+            wait = spec.supervisor_permission_timeout
+            # Presence doubles as the window: a person-authored entry this recent keeps the full wait.
+            if not await self._person_recent(watched.name, wait):
+                wait = spec.supervisor_permission_absent_timeout
+        if route.final or self._tg is None:
+            return
+        if route.deadline is not None and time.monotonic() + wait >= route.deadline:
+            log.info("handover_moot", session=watched.name, request=request.request_id, wait=wait)
+            return
+        route.timer = anyio.CancelScope()
+        self._tg.start_soon(self._hand_on_after, watched, route, wait, route.timer)
+
+    async def _hand_on_after(self, watched: Watched, route: Route, wait: float, timer: anyio.CancelScope) -> None:
+        """The holder stayed silent: the next one gets the request. A decision or a forward cancels the timer."""
+        with timer:
             await anyio.sleep(wait)
-            if watched.backstops.get(request_id) is not scope:
-                return
-            del watched.backstops[request_id]
-            status = await self.client.session(watched.name).status()
-            pending = next((p for p in status.permissions if p.request_id == request_id), None)
-            if pending is not None:
-                await self._tell(watched, permission_backstop_text(watched.name, pending))
+        if not timer.cancel_called:
+            route.timer = None
+            try:
+                await self._hand_on(watched, route, None)
+            except AidError as error:
+                # The session or its supervisor went meanwhile; the request ends with its turn.
+                log.info("handover_failed", session=watched.name, error=error.message)
+
+    async def _hand_on(self, watched: Watched, route: Route, note: str | None) -> None:
+        """Move a request still waiting to its next holder."""
+        request_id = route.request.request_id
+        if watched.routes.get(request_id) is not route or route.final:
+            return
+        if route.timer is not None:
+            route.timer.cancel()
+            route.timer = None
+        status = await self.client.session(watched.name).status()
+        if not any(p.request_id == request_id for p in status.permissions):
+            await self._settle(watched, request_id)
+            return
+        route.step += 1
+        await self._enter(watched, route, note)
+
+    async def _settle(self, watched: Watched, request_id: str) -> None:
+        """The request is decided: stop its timer, and clear the attention it raised."""
+        if (route := watched.routes.pop(request_id, None)) is None:
+            return
+        if route.timer is not None:
+            route.timer.cancel()
+        if route.attention:
+            await self.client.call(SetAttention(session=watched.name, text=None))
 
     async def on_message(self, to: str, sender: str | None, text: str) -> None:
         """A supervisor's nudge goes out within budget and unlike the last one; the episode counts it."""
@@ -444,14 +525,32 @@ class Supervision(aid.Plugin):
                     watched.interrupted = interrupted
                     raise
                 return None
+            case "entry":
+                seq = int(given.get("seq") or 0)
+                page = await session.history(before=seq + 1, limit=1)
+                if not page.entries or page.entries[0].seq != seq:
+                    raise AidError("no_entry", f"{name!r} has no history entry {seq}")
+                return page.entries[0].model_dump(mode="json")
+            case "forward_permission":
+                request_id = str(given.get("request_id"))
+                if (route := watched.routes.get(request_id)) is None:
+                    raise AidError("no_pending", f"{name!r} waits on no permission request {request_id} for you")
+                if route.holder != SUPERVISOR or route.final:
+                    raise AidError("not_forwardable", "a person had this request already: decide it yourself")
+                note = given.get("note")
+                await self._hand_on(watched, route, None if note is None else str(note))
+                return None
             case "answer_permission":
                 request_id = str(given.get("request_id"))
                 status = await session.status()
                 pending = next((p for p in status.permissions if p.request_id == request_id), None)
                 if pending is None:
                     raise AidError("no_pending", f"{name!r} waits on no permission request {request_id}")
-                if pending.tool_name not in watched.spec.supervisor_permissions:
-                    raise AidError("unlisted_tool", f"{caller!r} may not answer {pending.tool_name!r} for {name!r}")
+                if request_id not in watched.routes:
+                    raise AidError(
+                        "person_only",
+                        f"{pending.tool_name!r} asks a person in {name!r}; its mode involves no supervisor",
+                    )
                 option = given.get("option_id")
                 text = given.get("text")
                 await self.client.call(

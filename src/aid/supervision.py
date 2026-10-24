@@ -1,5 +1,5 @@
-"""Tools for a supervisor session: read a supervised session's history, track its goals, answer the
-permission requests its allow-list names when the person does not.
+"""Tools for a supervisor session: read a supervised session's history, track its goals, answer or forward the
+permission requests whose tool's mode involves the supervisor (`supervisor`, `ask_supervisor`).
 
     import aid
     from aid.agent import Agent
@@ -31,6 +31,8 @@ if TYPE_CHECKING:
 PLUGIN: Final = "supervision"
 SUPERVISION_LINE_CHARS: Final = 400
 """Characters of one history line a supervision tool returns; longer lines clip with their excess counted."""
+ENTRY_CHARS: Final = 20_000
+"""Characters of one whole entry `supervised_entry` returns."""
 
 
 async def _call(method: str, **args: JsonValue) -> JsonValue:
@@ -57,6 +59,16 @@ async def supervised_history(session: str, limit: int = 50) -> str:
     if page.total > len(page.entries):
         lines += f"\n… {page.total - len(page.entries)} older entries"
     return lines or "(no readable history)"
+
+
+async def supervised_entry(session: str, seq: int) -> str:
+    """One history entry of the supervised session in full, as JSON: the whole command, output or message a
+    history line clips. `seq` is the number before a line's colon."""
+    entry = await _call("entry", session=session, seq=seq)
+    text = json.dumps(entry, indent=1)
+    if len(text) > ENTRY_CHARS:
+        text = f"{text[:ENTRY_CHARS]}\n… {len(text) - ENTRY_CHARS} more characters"
+    return text
 
 
 async def supervised_search(session: str, query: str, limit: int = 20) -> str:
@@ -117,6 +129,18 @@ async def answer_permission(
     return f"Answered {request_id} with {option_id if option_id is not None else 'a cancel'}."
 
 
+async def forward_permission(session: str, request_id: str, note: str) -> str:
+    """Hand a waiting permission request you are unsure about to a person, with a note on what to weigh. Once
+    only: when a person already had it, decide it yourself with answer_permission."""
+    try:
+        await _call("forward_permission", session=session, request_id=request_id, note=note)
+    except AidError as error:
+        if error.code == "no_pending":
+            return "The request is gone: someone answered it, or the turn moved on."
+        raise
+    return f"Forwarded {request_id} to a person."
+
+
 def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     """A tool's failure goes back to the model as a retry with the reason: an exception would end the run."""
 
@@ -136,12 +160,14 @@ def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[
 supervisor_tools: Toolset = Toolset(
     [
         _retrying(supervised_history),
+        _retrying(supervised_entry),
         _retrying(supervised_search),
         _retrying(goals),
         _retrying(goal_add),
         _retrying(goal_done),
         _retrying(goal_drop),
         _retrying(answer_permission),
+        _retrying(forward_permission),
         _retrying(interrupt),
     ]
 )

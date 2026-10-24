@@ -15,6 +15,7 @@ from aid.protocol import (
     Cost,
     Failure,
     GetHistory,
+    GetSpec,
     GetStatus,
     Lifecycle,
     Output,
@@ -28,7 +29,7 @@ from aid.protocol import (
     decode_reply,
     encode,
 )
-from aid.spec import PermissionMode
+from aid.spec import AgentSpecAdapter, PermissionMode
 from tests.agents import Review
 from tests.conftest import acp_spec, py_spec
 from tests.fake_acp_agent import AGENT_NAME, AGENT_VERSION, CHUNKS, RESOLVED_MODEL
@@ -401,6 +402,25 @@ async def test_native_history_survives_daemon_restart(
                 assert [s.name for s in await client.sessions()] == ["echo"]
                 assert (await client.session("echo").run("c")).output == "turn 3: echo c"
             tg.cancel_scope.cancel()
+
+
+async def test_an_older_spec_file_loads_and_is_rewritten_as_the_model_reads_it(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path
+) -> None:
+    spec_file = paths.session_dir("old") / "spec.json"
+    spec_file.parent.mkdir(parents=True)
+    stored = json.loads(AgentSpecAdapter.dump_json(py_spec(tmp_path, "agents:echo", PermissionMode.ASK)))
+    spec_file.write_text(json.dumps({**stored, "supervisor_permissions": ["ask_user", "shell"]}))
+    with anyio.fail_after(TIMEOUT):
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
+            async with aid.connect(paths) as client:
+                spec = AgentSpecAdapter.validate_python(await client.call(GetSpec(session="old")))
+            tg.cancel_scope.cancel()
+            modes = {"ask_user": PermissionMode.ASK_SUPERVISOR, "shell": PermissionMode.ASK_SUPERVISOR}
+            assert spec.tool_permissions == modes
+            assert AgentSpecAdapter.validate_json(spec_file.read_bytes()) == spec
+            assert "supervisor_permissions" not in json.loads(spec_file.read_bytes())
 
 
 async def test_a_stopped_session_lists_its_tools_after_a_daemon_restart(

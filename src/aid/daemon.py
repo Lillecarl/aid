@@ -480,11 +480,16 @@ class Daemon:
             if not await spec_file.exists():
                 continue
             await session_dir.chmod(SESSION_DIR_MODE)
+            stored = await spec_file.read_bytes()
             try:
-                spec = AgentSpecAdapter.validate_json(await spec_file.read_bytes())
+                spec = AgentSpecAdapter.validate_json(stored)
             except ValidationError:
                 log.exception("invalid_session_spec", session=session_dir.name)
                 continue
+            # The model reads older files (its validators upgrade them); the file then holds what it reads as.
+            if (current := AgentSpecAdapter.dump_json(spec)) != stored:
+                await spec_file.write_bytes(current)
+                log.info("session_spec_rewritten", session=session_dir.name)
             session = self._new_session(session_dir.name, spec)
             if await (tools_file := session_dir / TOOLS_FILE).exists():
                 try:
@@ -981,11 +986,6 @@ class Daemon:
         """The supervision link holds: the supervisor exists, is not this session, and closes no cycle."""
         supervisor = spec.supervisor
         if supervisor is None:
-            if spec.supervisor_permissions:
-                raise AidError(
-                    "supervisor_permissions_need_supervisor",
-                    f"session {name!r} allows supervisor permissions but names no supervisor",
-                )
             return
         if supervisor == name:
             raise AidError("self_supervised", f"session {name!r} cannot supervise itself")

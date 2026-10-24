@@ -412,6 +412,50 @@ supervisor_answerer = Agent(
 )
 
 
+def _last_user_prompt(messages: list[ModelMessage]) -> str:
+    for message in reversed(messages):
+        for part in reversed(message.parts):
+            if part.part_kind == "user-prompt" and isinstance(part.content, str) and not _is_note(part.content):
+                return part.content
+    return ""
+
+
+def _forwarding_decide(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """A supervisor unsure of everything: it forwards each permission request it may forward, and answers
+    with the first option once a person had the request and left it."""
+    if any(isinstance(part, ToolReturnPart) for part in messages[-1].parts):
+        return ModelResponse(parts=[TextPart("done")])
+    prompt = _last_user_prompt(messages)
+    session = re.search(r"Supervised session '([^']+)' waits on permission", prompt)
+    request = re.search(r"request ([0-9a-f]+)", prompt)
+    options = re.findall(r"(?m)^- (\S+):", prompt)
+    if not (session and request and options):
+        return ModelResponse(parts=[TextPart("noted")])
+    args: dict[str, JsonValue] = {"session": session.group(1), "request_id": request.group(1)}
+    if "cannot be forwarded" in prompt:
+        call = ToolCallPart("answer_permission", {**args, "option_id": options[0]}, tool_call_id="answer")
+    else:
+        call = ToolCallPart("forward_permission", {**args, "note": "unsure: check the target"}, tool_call_id="fwd")
+    return ModelResponse(parts=[call])
+
+
+async def _forwarding_stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    match _forwarding_decide(messages, info).parts:
+        case [ToolCallPart() as call]:
+            yield {
+                0: DeltaToolCall(name=call.tool_name, json_args=call.args_as_json_str(), tool_call_id=call.tool_call_id)
+            }
+        case [TextPart() as text]:
+            yield text.content
+        case parts:
+            raise ValueError(f"unexpected parts {parts}")
+
+
+supervisor_forwarder = Agent(
+    FunctionModel(_forwarding_decide, stream_function=_forwarding_stream), toolsets=[aid.supervisor_tools]
+)
+
+
 async def _looping_stream(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
     """A stuck worker: every turn outputs the same line, so the loop score reads 1.0 from the second turn."""
     yield "stuck on the same thing"

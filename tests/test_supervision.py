@@ -32,14 +32,14 @@ from aid.protocol import (
     ToolCall,
     Usage,
 )
-from aid.spec import PermissionMode
+from aid.spec import AgentSpecAdapter, NativeSpec, PermissionMode
 from plugins.supervision.policy import (
     SUPERVISION_ITEM_CHARS,
     SUPERVISION_LOOP_THRESHOLD,
     add_goal,
     loop_score,
     nudge_repeats,
-    permission_backstop_text,
+    permission_review_text,
     set_goal,
     supervision_stuck,
     supervision_text,
@@ -55,7 +55,6 @@ if TYPE_CHECKING:
     from aid.launcher import ForkserverLauncher
     from aid.paths import Paths
     from aid.protocol import HistoryItem
-    from aid.spec import NativeSpec
 
 pytestmark = pytest.mark.anyio
 
@@ -341,10 +340,6 @@ async def test_supervisor_link_validation(daemon: Paths, tmp_path: Path) -> None
                 await client.create("a", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "nobody"}))
             with pytest.raises(aid.AidError, match="self_supervised"):
                 await client.create("b", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "b"}))
-            with pytest.raises(aid.AidError, match="supervisor_permissions_need_supervisor"):
-                await client.create(
-                    "c", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor_permissions": ["ask_user"]})
-                )
             await client.create("boss", py_spec(tmp_path, "agents:echo"))
             await client.create("coder", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "boss"}))
 
@@ -424,23 +419,45 @@ async def test_supervised_turn_end_fires_supervisor(daemon: Paths, tmp_path: Pat
     assert not [i for i in coder_items if isinstance(i, MessageEntry) and i.sender == "boss"]
 
 
-def test_permission_backstop_text_names_options() -> None:
+def test_permission_review_text_names_input_options_and_what_is_left() -> None:
     request = PermissionRequest(
         request_id="ab12",
         tool_call_id="t",
         tool_name="ask_user",
         title="Which database?",
+        input={"argv": ["rm", "-rf", "build"]},
         options=[
             PermissionChoice(option_id="0", name="postgres", kind="ask_once"),
             PermissionChoice(option_id="1", name="sqlite", kind="ask_once", recommended=True),
         ],
     )
-    text = permission_backstop_text("coder", request)
+    text = permission_review_text("coder", request, final=False)
     assert "coder" in text
     assert "ab12" in text
+    assert '"rm"' in text
     assert "- 0: postgres" in text
     assert "- 1: sqlite (recommended)" in text
     assert "answer_permission" in text
+    assert "forward_permission" in text
+    final = permission_review_text("coder", request, final=True, note="check the target")
+    assert "cannot be forwarded" in final
+    assert "forward_permission" not in final
+    assert "Note: check the target" in final
+
+
+def test_stored_supervisor_permissions_become_ask_supervisor_modes() -> None:
+    stored = {
+        "kind": "native",
+        "cwd": "/",
+        "target": "agents:echo",
+        "permission": "ask",
+        "tool_permissions": {"shell": "deny"},
+        "supervisor_permissions": ["ask_user", "shell"],
+    }
+    spec = AgentSpecAdapter.validate_python(stored)
+    assert isinstance(spec, NativeSpec)
+    assert spec.tool_permissions == {"shell": PermissionMode.DENY, "ask_user": PermissionMode.ASK_SUPERVISOR}
+    assert "supervisor_permissions" not in spec.model_dump()
 
 
 def plan(*calls: tuple[str, dict[str, Any]]) -> str:
@@ -449,16 +466,16 @@ def plan(*calls: tuple[str, dict[str, Any]]) -> str:
 
 def asking_spec(
     tmp_path: Path,
-    allow: tuple[str, ...] = ("ask_user",),
+    mode: PermissionMode = PermissionMode.ASK_SUPERVISOR,
     permission_timeout: float = 30,
     timeout: float = 25,
     absent: float = 2,
 ) -> NativeSpec:
-    """A supervised coder whose `ask_user` questions outwait the person fast, for backstop tests."""
+    """A supervised coder whose `ask_user` questions take `mode`, with short person windows."""
     return py_spec(tmp_path, "agents:coder", PermissionMode.ASK, permission_timeout=permission_timeout).model_copy(
         update={
             "supervisor": "boss",
-            "supervisor_permissions": list(allow),
+            "tool_permissions": {"ask_user": mode},
             "supervisor_permission_timeout": timeout,
             "supervisor_permission_absent_timeout": absent,
         }
@@ -507,6 +524,76 @@ async def test_supervisor_answers_after_timeout(daemon: Paths, tmp_path: Path) -
     assert any("Answered" in out and "with 0" in out for out in completed_outputs(boss_items))
 
 
+async def test_supervisor_mode_asks_the_supervisor_first(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:supervisor_answerer"))
+            # Person windows longer than the test: only a supervisor asked first answers in time.
+            asker = await client.create(
+                "coder", asking_spec(tmp_path, PermissionMode.SUPERVISOR, timeout=60, absent=60)
+            )
+            with anyio.fail_after(20):
+                result = await asker.run(
+                    plan(("ask_user", {"question": "Which database?", "options": ["postgres", "sqlite"]}))
+                )
+            asker_items = [e.item for e in (await asker.history(limit=1000)).entries]
+            wake = await permission_wake(boss, "coder")
+            await output_after(boss, wake.seq)
+    assert 'The supervisor picked "postgres".' in str(result.output)
+    [request] = [item for item in asker_items if isinstance(item, PermissionRequest)]
+    assert request.mode is PermissionMode.SUPERVISOR
+    [decision] = [item for item in asker_items if isinstance(item, PermissionDecision)]
+    assert (decision.by, decision.supervisor) == (PermissionDecider.SUPERVISOR, "boss")
+
+
+async def test_a_forwarded_request_comes_back_to_the_supervisor(daemon: Paths, tmp_path: Path) -> None:
+    """supervisor mode: the unsure supervisor forwards, the person stays silent, the supervisor decides."""
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:supervisor_forwarder"))
+            asker = await client.create("coder", asking_spec(tmp_path, PermissionMode.SUPERVISOR, timeout=1, absent=1))
+            result = await asker.run(
+                plan(("ask_user", {"question": "Which database?", "options": ["postgres", "sqlite"]}))
+            )
+            asker_items = [e.item for e in (await asker.history(limit=1000)).entries]
+            status = await asker.status()
+            firings = await supervised_firings(boss, "coder", 1)
+            await output_after(boss, firings[0].seq)
+            boss_items = [e.item for e in (await boss.history(limit=1000)).entries]
+    assert 'The supervisor picked "postgres".' in str(result.output)
+    wakes = permission_wakes(boss_items)
+    assert len(wakes) == 2
+    assert "forward_permission hands it" in wakes[0].text
+    assert "cannot be forwarded" in wakes[1].text
+    assert any(out.startswith("Forwarded") for out in completed_outputs(boss_items))
+    [decision] = [item for item in asker_items if isinstance(item, PermissionDecision)]
+    assert decision.by is PermissionDecider.SUPERVISOR
+    assert status.attention is None
+
+
+async def test_ask_supervisor_hands_back_to_the_person_once(daemon: Paths, tmp_path: Path) -> None:
+    """ask_supervisor: the person is silent, the supervisor forwards back, and nothing moves the request again."""
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:supervisor_forwarder"))
+            asker = await client.create(
+                "coder",
+                asking_spec(tmp_path, PermissionMode.ASK_SUPERVISOR, permission_timeout=8, timeout=1, absent=1),
+            )
+            result = await asker.run(
+                plan(("ask_user", {"question": "Which database?", "options": ["postgres", "sqlite"]}))
+            )
+            asker_items = [e.item for e in (await asker.history(limit=1000)).entries]
+            firings = await supervised_firings(boss, "coder", 1)
+            await output_after(boss, firings[0].seq)
+            boss_items = [e.item for e in (await boss.history(limit=1000)).entries]
+    assert "Nobody answered" in str(result.output)
+    [wake] = permission_wakes(boss_items)
+    assert "forward_permission hands it" in wake.text
+    [decision] = [item for item in asker_items if isinstance(item, PermissionDecision)]
+    assert decision.by is PermissionDecider.TIMEOUT
+
+
 async def test_person_beats_supervisor(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
@@ -539,14 +626,14 @@ async def test_unlisted_tool_stays_human(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             boss = await client.create("boss", py_spec(tmp_path, "agents:supervisor_answerer"))
-            asker = await client.create("coder", asking_spec(tmp_path, ("permit",), permission_timeout=6))
+            asker = await client.create("coder", asking_spec(tmp_path, PermissionMode.ASK, permission_timeout=6))
             events: list[aid.SessionEvent] = []
             async for event in asker.stream(
                 plan(("ask_user", {"question": "Which database?", "options": ["postgres", "sqlite"]}))
             ):
                 events.append(event)
                 if isinstance(event, PermissionRequest):
-                    with pytest.raises(aid.AidError, match="unlisted_tool"):
+                    with pytest.raises(aid.AidError, match="person_only"):
                         await sup(
                             client,
                             "boss",

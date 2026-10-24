@@ -178,21 +178,15 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument(
             "--supervisor",
             metavar="SESSION",
-            help="the session watching this one: the daemon hands it the clipped tail of every turn end",
-        )
-        p.add_argument(
-            "--supervisor-permissions",
-            action="append",
-            default=[],
-            metavar="TOOL",
-            help="tool names the supervisor may answer permission requests for when the person does not; repeat for more (needs --supervisor and ask mode)",
+            help="the session watching this one: it reviews every turn end, and answers requests of tools in "
+            "supervisor or ask_supervisor mode (`aid permissions`)",
         )
         p.add_argument(
             "--supervisor-permission-timeout",
             type=float,
             default=300,
             metavar="SECONDS",
-            help="seconds a permission request waits for a person before the daemon wakes the supervisor (default: 300)",
+            help="seconds a person holds a request in a supervisor mode before it moves on (default: 300)",
         )
         p.add_argument(
             "--supervisor-permission-absent-timeout",
@@ -406,7 +400,6 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             worker_endpoint=worker_endpoint,
             worker_ca=worker_ca,
             supervisor=args.supervisor,
-            supervisor_permissions=args.supervisor_permissions,
             supervisor_permission_timeout=args.supervisor_permission_timeout,
             supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
             supervisor_nudge_budget=args.supervisor_nudge_budget,
@@ -424,7 +417,6 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             worker_endpoint=worker_endpoint,
             worker_ca=worker_ca,
             supervisor=args.supervisor,
-            supervisor_permissions=args.supervisor_permissions,
             supervisor_permission_timeout=args.supervisor_permission_timeout,
             supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
             supervisor_nudge_budget=args.supervisor_nudge_budget,
@@ -440,7 +432,6 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             worker_endpoint=worker_endpoint,
             worker_ca=worker_ca,
             supervisor=args.supervisor,
-            supervisor_permissions=args.supervisor_permissions,
             supervisor_permission_timeout=args.supervisor_permission_timeout,
             supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
             supervisor_nudge_budget=args.supervisor_nudge_budget,
@@ -459,7 +450,6 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         max_requests=args.max_requests,
         model=args.model,
         supervisor=args.supervisor,
-        supervisor_permissions=args.supervisor_permissions,
         supervisor_permission_timeout=args.supervisor_permission_timeout,
         supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
         supervisor_nudge_budget=args.supervisor_nudge_budget,

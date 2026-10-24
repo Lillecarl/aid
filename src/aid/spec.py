@@ -98,6 +98,11 @@ def match_hook(hooks: list[Hook], tool: str | None, text: str | None) -> Hook | 
     return None
 
 
+_FIELDS: Final = TypeAdapter(dict[str, object])
+_TOOLS: Final = TypeAdapter(list[str])
+_MODES: Final = TypeAdapter(dict[str, PermissionMode])
+
+
 class _Spec(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -118,15 +123,13 @@ class _Spec(BaseModel):
     worker_ca: str | None = None
     """PEM CAs file for a `wss://` worker_endpoint with a private certificate, like `aid daemon --worker-ca`."""
     supervisor: str | None = None
-    """The session watching this one: the daemon hands it the clipped tail of every turn end. The supervisor
-    must already exist, must not be this session, and must not close a cycle; the link rides the persisted
-    spec file, so it survives restarts."""
-    supervisor_permissions: list[str] = Field(default_factory=list[str])
-    """Tool names the supervisor may answer permission requests for when the person does not: allow-listed
-    tools only, and only in `ask` mode. Empty means no backstop — the supervisor never answers permissions."""
+    """The session watching this one: the daemon hands it the clipped tail of every turn end, and it answers
+    the permission requests of tools in `supervisor` and `ask_supervisor` mode. The supervisor must already
+    exist, must not be this session, and must not close a cycle; the link rides the persisted spec file, so it
+    survives restarts."""
     supervisor_permission_timeout: Annotated[float, Field(gt=0)] = 300
-    """Seconds a permission request waits for a person before the daemon wakes the supervisor. Also the
-    presence window: a person-authored entry (message, permission answer) this recent keeps the full wait."""
+    """Seconds a person holds a request in a supervisor mode before it moves on. Also the presence window: a
+    person-authored entry (message, permission answer) this recent keeps the full wait."""
     supervisor_permission_absent_timeout: Annotated[float, Field(gt=0)] = 60
     """The wait above, shortened when nobody is around: no person-authored entry in the presence window."""
     supervisor_nudge_budget: Annotated[int, Field(ge=0)] = 3
@@ -138,6 +141,26 @@ class _Spec(BaseModel):
     parent: str | None = None
     """The session this one works for, such as a fork's parent: its results reach the parent as messages.
     Chat plugins leave such a session out; a person follows it through the parent."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _supervisor_permissions(cls, data: object) -> object:
+        """A stored spec's `supervisor_permissions`: tools the supervisor answered after the person, in `ask`
+        mode only. Each such tool is in `ask_supervisor` mode now; the daemon writes the spec back without it."""
+        if not isinstance(data, dict):
+            return data
+        fields = _FIELDS.validate_python(data)
+        if "supervisor_permissions" not in fields:
+            return fields
+        listed = _TOOLS.validate_python(fields.pop("supervisor_permissions") or [])
+        modes = _MODES.validate_python(fields.get("tool_permissions") or {})
+        default = fields.get("permission")
+        for tool in listed:
+            if modes.get(tool, default) == PermissionMode.ASK:
+                modes[tool] = PermissionMode.ASK_SUPERVISOR
+        if modes:
+            fields["tool_permissions"] = modes
+        return fields
 
     @model_validator(mode="after")
     def _worker_launch_is_sane(self) -> Self:

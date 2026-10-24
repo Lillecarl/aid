@@ -88,12 +88,6 @@
           "exclusiveMinimum": 0,
           "type": "number"
         },
-        "supervisor_permissions": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "tool_permissions": {
           "additionalProperties": {
             "$ref": "#/$defs/PermissionMode"
@@ -502,12 +496,6 @@
           "exclusiveMinimum": 0,
           "type": "number"
         },
-        "supervisor_permissions": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "tool_permissions": {
           "additionalProperties": {
             "$ref": "#/$defs/PermissionMode"
@@ -662,12 +650,6 @@
           "default": 300,
           "exclusiveMinimum": 0,
           "type": "number"
-        },
-        "supervisor_permissions": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
         },
         "tool_permissions": {
           "additionalProperties": {
@@ -1968,12 +1950,6 @@
           "default": 300,
           "exclusiveMinimum": 0,
           "type": "number"
-        },
-        "supervisor_permissions": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
         },
         "target": {
           "anyOf": [

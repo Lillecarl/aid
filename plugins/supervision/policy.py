@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import difflib
+import json
 import time
 import uuid
 from typing import TYPE_CHECKING, Final
@@ -80,24 +81,51 @@ def supervision_text(
     return "\n".join(lines)
 
 
-def permission_backstop_text(name: str, request: PermissionRequest) -> str:
-    """What the supervisor is told when a supervised session's permission request outwaits the person: the
-    session, the tool, the question, and every option with its id. Small by design: the supervisor answers
-    inline with the answer_permission tool, and stays silent to leave the request for the person."""
+PERMISSION_INPUT_CHARS: Final = 4000
+"""Characters of a request's input the supervisor reads inline: the command or edit it judges."""
+
+
+def permission_review_text(name: str, request: PermissionRequest, *, final: bool, note: str | None = None) -> str:
+    """What the supervisor is told when a supervised session's permission request is its to answer: the
+    session, the tool, the question, the input it would run, and every option with its id. `final`: the person
+    had it and did not answer, so the supervisor decides and cannot hand it on."""
     lines = [
         f"Supervised session {name!r} waits on permission (request {request.request_id}"
         f", tool {request.tool_name or 'a question'}): {request.title or 'no question given'}."
     ]
+    if request.input is not None:
+        rendered = json.dumps(request.input, indent=1, default=str)
+        if len(rendered) > PERMISSION_INPUT_CHARS:
+            rendered = (
+                f"{rendered[:PERMISSION_INPUT_CHARS]}\n… {len(rendered) - PERMISSION_INPUT_CHARS} more characters"
+            )
+        lines.append(f"Input:\n{rendered}")
+    if note:
+        lines.append(f"Note: {note}")
     options = [
         f"- {option.option_id}: {option.name}{' (recommended)' if option.recommended else ''}"
         for option in request.options
     ]
     lines.extend(options or ["(It offers no options: answer only with words, or not at all.)"])
     lines.append(
-        f"Answer with the answer_permission tool, naming {name!r} and the request id. "
-        "A person answering first wins: then the request is gone, and silence is the right answer."
+        "Read the session's recent history (supervised_history, supervised_entry) to judge what the call is for. "
+        f"Answer with the answer_permission tool, naming {name!r} and the request id."
     )
+    if final:
+        lines.append(
+            "A person had this request and did not answer: decide now. It cannot be forwarded again; "
+            "silence lets it time out as refused."
+        )
+    else:
+        lines.append("Unsure? forward_permission hands it to a person, with a note saying what to weigh.")
+    lines.append("A person answering first wins: then the request is gone, and silence is the right answer.")
     return "\n".join(lines)
+
+
+def permission_attention(name: str, request: PermissionRequest, note: str | None) -> str:
+    """The attention a person sees when a request is theirs: the supervisor's note, when it forwarded one."""
+    text = f"{name} waits on permission for {request.tool_name or 'a question'}: {request.title or ''}".rstrip(": ")
+    return f"{text} (supervisor: {note})" if note else text
 
 
 def nudge_repeats(last: str | None, text: str) -> bool:
