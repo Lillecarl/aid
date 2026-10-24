@@ -30,6 +30,7 @@ from aid.model import (
     AnthropicModel,
     ModelInfo,
     OpenAIChatModel,
+    Provider,
     RequestUsage,
     accumulate,
     anthropic_messages,
@@ -476,13 +477,13 @@ def test_wire_skips_an_empty_assistant_message() -> None:
 
 async def test_model_names_pick_the_sdk_and_credentials_fail_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(model_for("anthropic/claude-x"), AnthropicModel)
-    assert isinstance(model_for("deepseek/deepseek-flash"), OpenAIChatModel)
+    assert isinstance(model_for("groq/llama"), OpenAIChatModel)
     assert isinstance(model_for("gpt-x"), OpenAIChatModel)
-    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     go: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart("go")])]
     for name, code, says in [
-        ("deepseek/deepseek-flash", "missing_credentials", "DEEPSEEK_API_KEY"),
+        ("groq/llama", "missing_credentials", "GROQ_API_KEY"),
         ("anthropic/claude-x", "missing_credentials", "ANTHROPIC_API_KEY"),
         ("nowhere/model", "unknown_provider", "api_base"),
     ]:
@@ -581,9 +582,11 @@ async def test_anthropic_request_is_native_and_passes_headers(monkeypatch: pytes
 
 async def test_provider_defaults_go_under_the_session_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     sent: list[dict[str, Any]] = []
+    titles: list[str | None] = []
 
     def handle(request: httpx2.Request) -> httpx2.Response:
         sent.append(json.loads(request.content))
+        titles.append(request.headers.get("X-Title"))
         body = event({"content": "ok"}) + b"data: [DONE]\n\n"
         return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=body)
 
@@ -591,24 +594,30 @@ async def test_provider_defaults_go_under_the_session_settings(monkeypatch: pyte
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
     monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
-    model = OpenAIChatModel("deepseek/deepseek-flash")
+    provider = Provider("https://p.test/v1", "P_KEY", defaults={"max_tokens": 64}, headers={"X-Title": "aid"})
+    monkeypatch.setenv("P_KEY", "k")
+    model = OpenAIChatModel("p/model", provider)
     go: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart("go")])]
     try:
         await model.request(go, ModelInfo())
         await model.request(go, ModelInfo(settings={"max_tokens": 5}))
     finally:
         await model.aclose()
-    assert [body["max_tokens"] for body in sent] == [131072, 5]
+    assert [body["max_tokens"] for body in sent] == [64, 5]
+    assert [body["model"] for body in sent] == ["model", "model"]
+    assert titles == ["aid", "aid"]
 
 
-async def test_openai_compatible_stream_keeps_reasoning_and_deepseek_cache_hits(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_openai_compatible_stream_keeps_reasoning_and_cache_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     data = event({"reasoning_content": "hmm"}) + event({"content": "ok"}) + event({}, finish="length")
     data += event(
         {},
-        usage={"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12, "prompt_cache_hit_tokens": 6},
+        usage={
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "total_tokens": 12,
+            "prompt_tokens_details": {"cached_tokens": 6},
+        },
     )
 
     def make_client(**kwargs: Any) -> httpx2.AsyncClient:
@@ -622,8 +631,8 @@ async def test_openai_compatible_stream_keeps_reasoning_and_deepseek_cache_hits(
         )
 
     monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
-    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
-    model = OpenAIChatModel("deepseek/deepseek-flash")
+    monkeypatch.setenv("GROQ_API_KEY", "k")
+    model = OpenAIChatModel("groq/llama")
     usages: list[RequestUsage] = []
     response = ModelResponse(parts=[])
     indexes: dict[int, int] = {}

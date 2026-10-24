@@ -1,4 +1,5 @@
-"""An aid agent on DeepSeek. The provider reads DEEPSEEK_API_KEY from the worker's environment.
+"""An aid agent on DeepSeek, served by the bundled `deepseek` provider plugin, which reads DEEPSEEK_API_KEY from the
+worker's environment. Not named `deepseek` itself: an earlier tier would shadow that plugin.
 
 Put `examples` on AID_PLUGINS_PATH, or copy this directory into `~/.config/aid/plugins`, and it shows up as
 `deep_seek`:

@@ -175,8 +175,6 @@ class Provider:
 
 OPENAI_COMPATIBLE: Final[dict[str, Provider]] = {
     "openai": Provider(None, "OPENAI_API_KEY"),
-    # Unset, max_tokens is 8K without thinking and 64K with it (128K at effort max); the API allows 384K.
-    "deepseek": Provider("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", defaults={"max_tokens": 131072}),
     "openrouter": Provider("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "groq": Provider("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
     "gemini": Provider(
@@ -190,7 +188,8 @@ OPENAI_COMPATIBLE: Final[dict[str, Provider]] = {
     "vllm": Provider("http://localhost:8000/v1", "VLLM_API_KEY", local=True),
     "lmstudio": Provider("http://localhost:1234/v1", "LM_STUDIO_API_KEY", local=True),
 }
-"""`provider/model` prefixes served through the OpenAI SDK. Another prefix works with an explicit `api_base`."""
+"""`provider/model` prefixes served through the OpenAI SDK, for servers models.dev names no URL for and local ones.
+Others resolve through `aid.providers`."""
 
 CLIENT_SETTINGS: Final = frozenset({"api_key", "api_base", "base_url", "num_retries", "max_retries"})
 """`model_settings` keys that configure the SDK client; every other key goes into each request."""
@@ -332,10 +331,9 @@ class OpenAIChatModel:
 
 
 def _openai_usage(usage: CompletionUsage) -> RequestUsage:
-    """`input_tokens` includes cached tokens here, as Chat Completions counts them. DeepSeek reports its cache
-    hits beside the standard details."""
+    """`input_tokens` includes cached tokens here, as Chat Completions counts them."""
     prompt = usage.prompt_tokens_details
-    cached = (prompt and prompt.cached_tokens) or (usage.model_extra or {}).get("prompt_cache_hit_tokens") or 0
+    cached = (prompt and prompt.cached_tokens) or 0
     completion = usage.completion_tokens_details
     return RequestUsage(
         input_tokens=usage.prompt_tokens or 0,
