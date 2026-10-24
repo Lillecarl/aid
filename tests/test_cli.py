@@ -7,6 +7,7 @@ import pytest
 
 # The parsing rules under test are private to the CLI.
 from aid.cli import (
+    _history_line,  # pyright: ignore[reportPrivateUsage]
     _parser,  # pyright: ignore[reportPrivateUsage]
     _preload,  # pyright: ignore[reportPrivateUsage]
     _session_line,  # pyright: ignore[reportPrivateUsage]
@@ -15,7 +16,7 @@ from aid.cli import (
     _tool_line,  # pyright: ignore[reportPrivateUsage]
 )
 from aid.launcher import PRELOAD
-from aid.protocol import SessionInfo, ToolCall
+from aid.protocol import Cost, HistoryEntry, SessionInfo, ToolCall, Usage
 from aid.spec import AgentKind, ClaudeSdkSpec, ClaudeTtySpec, McpHttp, McpStdio, NativeSpec, PermissionMode
 
 if TYPE_CHECKING:
@@ -163,3 +164,12 @@ def test_session_line(info: SessionInfo, line: str) -> None:
 
 def test_list_json() -> None:
     assert _parser().parse_args(["list", "--json"]).json is True
+
+
+@pytest.mark.parametrize(("amount", "shown"), [(0.0011324, "0.0011 USD"), (0.25, "0.25 USD"), (12.345, "12.35 USD")])
+def test_a_usage_line_shows_its_cost(amount: float, shown: str) -> None:
+    usage = Usage(
+        input_tokens=6, output_tokens=42, models=["claude-haiku-5-5"], cost=Cost(amount=amount, currency="USD")
+    )
+    line = _history_line(HistoryEntry(seq=5, at=0, turn="t", item=usage), {})
+    assert line == f"     5  [usage] 6 in, 42 out claude-haiku-5-5 {shown}"

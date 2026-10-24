@@ -478,7 +478,11 @@ def _history_line(entry: HistoryEntry, titles: dict[str, str]) -> str:
             how = "[resumed]" if item.resumed else "[started]"
             body = " ".join(p for p in (how, f"pid {item.pid}", item.agent, item.model, item.agent_session) if p)
         case Usage():
-            body = " ".join([f"[usage] {item.input_tokens} in, {item.output_tokens} out", *item.models])
+            # Cents, or two significant digits below a cent, as the web UI shows it.
+            amount = item.cost.amount if item.cost is not None else 0.0
+            shown = f"{amount:.2f}" if amount >= 0.01 or amount == 0 else f"{amount:.2g}"
+            cost = [f"{shown} {item.cost.currency}"] if item.cost is not None else []
+            body = " ".join([f"[usage] {item.input_tokens} in, {item.output_tokens} out", *item.models, *cost])
         case PermissionRequest() | PermissionDecision():
             body = _permission_line(item)
         case Lifecycle():
