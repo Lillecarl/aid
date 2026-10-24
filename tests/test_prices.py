@@ -57,6 +57,15 @@ def test_a_prompt_over_a_tier_bills_at_its_price() -> None:
     assert haiku.cost(1000, 100_000, 0, 1000) == pytest.approx((1000 * 0.5 + 100_000 * 0.05 + 1000 * 2.5) / 1e6)
 
 
+def test_a_prompt_of_exactly_the_tier_size_bills_at_the_base_price() -> None:
+    haiku = lookup(CATALOG, "anthropic/claude-haiku-5-5")
+    assert haiku is not None
+    at_size = haiku.cost(100_000, 0, 0, 1000)
+    over_size = haiku.cost(100_001, 0, 0, 1000)
+    assert at_size == pytest.approx((100_000 * 0.1 + 1000 * 0.5) / 1e6)
+    assert over_size == pytest.approx((100_001 * 0.5 + 1000 * 2.5) / 1e6)
+
+
 def test_chat_completions_counts_cache_reads_inside_input() -> None:
     price = Price(input=1, output=2, cache_read=0.1, cache_write=1.25)
     usage = RequestUsage(input_tokens=1000, output_tokens=10, cache_read_tokens=800)
