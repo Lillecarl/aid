@@ -32,6 +32,7 @@ from aid.protocol import (
     PermissionDecision,
     PermissionRequest,
     PromptEntry,
+    QueryResult,
     RemoteControl,
     SessionInfo,
     Started,
@@ -325,6 +326,13 @@ def _parser() -> argparse.ArgumentParser:
     supervise = sub.add_parser("supervise", help="set or end the session supervising another")
     supervise.add_argument("name")
     supervise.add_argument("supervisor", nargs="?", help="the supervising session; omitted ends supervision")
+    supervision = sub.add_parser("supervision", help="the supervision plugin's records")
+    supervision_sub = supervision.add_subparsers(dest="supervision_command", required=True)
+    query = supervision_sub.add_parser(
+        "query", help="one read-only SQL statement over supervisor rulings and a session's removal plans, as JSON"
+    )
+    query.add_argument("sql", help="tables: rulings, ruling_steps; with --session also removal_plans, _entries, _kept")
+    query.add_argument("--session", help="attach this session's removal plans")
 
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
@@ -631,6 +639,9 @@ async def _client_command(args: argparse.Namespace) -> None:
                 await client.session(args.name).set_sandbox(chosen)
             case "supervise":
                 await client.session(args.name).set_supervisor(args.supervisor)
+            case "supervision":
+                answer = await client.call_plugin("supervision", "query", sql=args.sql, session=args.session)
+                print(QueryResult.model_validate(answer).model_dump_json())
             case "stop":
                 await client.session(args.name).stop()
             case "delete":

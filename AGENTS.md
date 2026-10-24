@@ -264,6 +264,11 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `permission_timeout` bounds the route (`_worker_bound`). The supervisor answers only routed requests
   (`person_only`). Stored `supervisor_permissions` (gone): the spec's before-validator maps listed `ask` tools to
   `ask_supervisor`, and the daemon writes each spec file back as the model reads it.
+  Rulings (`rulings.py`, `plugin_dir/rulings.db`): every routed request (`rulings`: session, turn, seq, mode, input,
+  remove's `plan`, end, allowed, decided_by, said) and its holders (`ruling_steps`: forwarded with note, silent,
+  decided, gone); a failed write is logged, never fatal. `query` (`aid.sql.ask`): one read-only statement over
+  `rulings` and, with a session, its `removals.db`; a supervisor names only its own sessions and must supervise one,
+  the operator (`aid supervision query`, JSON) any.
   Bundled agent `supervisor` (`agent.py`, `deepseek/deepseek-flash`): supervisor tools plus `reference.py`'s
   read-only `man_page` (`man -P cat`, fixed argv, command-shaped names only) and `tldr_page`
   (`AID_TLDR_PAGES`, `nix/tldr-pages.nix`, pinned tldr-pages main); no shell, files or editor by design (User).
@@ -288,6 +293,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   web build's `types:check` fail on drift. After changing a model: regenerate both.
 - `web/` — the Svelte 5 UI (runes, TypeScript, Vite). `web/default.nix` builds it; `aid web` serves the result
   from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.
+- `src/aid/sql.py` — apsw (`nix/apsw.nix`, its own SQLite): `Database`, one owner's writes in a worker thread, WAL;
+  `ask`, one statement over files attached `mode=ro` under a read-only authorizer (ATTACH/PRAGMA still work on ro
+  files), capped in rows, cell size and time (progress handler). `QueryResult` in protocol.
 - `src/aid/removals.py` — `remove`'s plans: paths, globs (`glob.translate`, hidden included), regexes (searched),
   excludes and filters (kind, age, git tracked/ignored from two `git ls-files`) → every entry that goes, before
   anyone is asked. A matched directory goes whole (rmtree at execution, whatever it then holds); one holding a kept

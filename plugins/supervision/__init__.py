@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
 import anyio
+import apsw
 import structlog
 from pydantic import TypeAdapter, ValidationError
 
@@ -38,6 +39,7 @@ from aid.protocol import (
     PermissionRequest,
     PromptEntry,
     PublishSupervision,
+    QueryResult,
     SearchResults,
     SetAttention,
     SupervisionEvent,
@@ -48,7 +50,9 @@ from aid.protocol import (
     TurnError,
     clip,
 )
+from aid.removals import PLANS_FILE
 from aid.spec import AcpSpec, AgentSpecAdapter, ClaudeSdkSpec, NativeSpec, PermissionMode
+from aid.sql import ask
 
 from .agent import Supervisor as Supervisor
 from .loops import ToolLoopDetector
@@ -66,8 +70,10 @@ from .policy import (
     supervision_stuck,
     supervision_text,
 )
+from .rulings import RULINGS_FILE, RulingStore, StepOutcome
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
     from pathlib import Path
 
     from anyio.abc import TaskGroup
@@ -161,42 +167,58 @@ class Supervision(aid.Plugin):
         self._started = 0.0
         self._tg: TaskGroup | None = None
         self._goals_dir = default_paths().plugin_dir(self.plugin_name()) / GOALS_DIR
+        self._rulings: RulingStore | None = None
 
     async def run(self, client: aid.Client) -> None:
         self._client = client
         self._started = time.time()
-        followers: dict[str, tuple[anyio.CancelScope, str | None]] = {}
-        async with anyio.create_task_group() as tg:
-            self._tg = tg
-            async for infos in client.follow_sessions():
-                supervisors = {info.name: info.supervisor for info in infos}
-                for gone in followers.keys() - supervisors.keys():
-                    followers.pop(gone)[0].cancel()
-                    self._forget(gone)
-                    (self._goals_dir / f"{gone}.json").unlink(missing_ok=True)
-                for name, supervisor in supervisors.items():
-                    since: int | None = None
-                    if (held := followers.get(name)) is not None:
-                        if held[1] == supervisor:
-                            continue
-                        # A supervisor set or changed later (`SetSupervisor`): from now, never what was told.
-                        held[0].cancel()
-                        self._forget(name)
-                        since = await self._latest(name)
-                    followers[name] = (scope := anyio.CancelScope(), supervisor)
-                    tg.start_soon(self._follow, name, scope, since)
+        self._rulings = await RulingStore.open(default_paths().plugin_dir(self.plugin_name()) / RULINGS_FILE)
+        try:
+            followers: dict[str, tuple[anyio.CancelScope, str | None]] = {}
+            async with anyio.create_task_group() as tg:
+                self._tg = tg
+                async for infos in client.follow_sessions():
+                    supervisors = {info.name: info.supervisor for info in infos}
+                    for gone in followers.keys() - supervisors.keys():
+                        followers.pop(gone)[0].cancel()
+                        await self._forget(gone)
+                        (self._goals_dir / f"{gone}.json").unlink(missing_ok=True)
+                    for name, supervisor in supervisors.items():
+                        since: int | None = None
+                        if (held := followers.get(name)) is not None:
+                            if held[1] == supervisor:
+                                continue
+                            # A supervisor set or changed later (`SetSupervisor`): from now, never what was told.
+                            held[0].cancel()
+                            await self._forget(name)
+                            since = await self._latest(name)
+                        followers[name] = (scope := anyio.CancelScope(), supervisor)
+                        tg.start_soon(self._follow, name, scope, since)
+        finally:
+            await self._rulings.aclose()
+            self._rulings = None
 
-    def _forget(self, name: str) -> None:
+    async def _forget(self, name: str) -> None:
         if (watched := self._watched.pop(name, None)) is not None:
-            self._drop_routes(watched)
+            await self._drop_routes(watched)
 
-    @staticmethod
-    def _drop_routes(watched: Watched) -> None:
+    async def _drop_routes(self, watched: Watched) -> None:
         """Every request ends with its turn: stop their timers without telling anyone."""
-        for route in watched.routes.values():
+        routes = list(watched.routes.values())
+        watched.routes.clear()
+        for route in routes:
             if route.timer is not None:
                 route.timer.cancel()
-        watched.routes.clear()
+            await self._record(lambda r, route=route: r.ended(route.request, route.step, None))
+
+    async def _record(self, write: Callable[[RulingStore], Awaitable[None]]) -> None:
+        """Keep a ruling. A failed write is logged: supervision goes on without its record."""
+        if (rulings := self._rulings) is None:
+            return
+        try:
+            await write(rulings)
+        except apsw.Error:
+            log.exception("ruling_unrecorded")
 
     @property
     def client(self) -> aid.Client:
@@ -261,9 +283,9 @@ class Supervision(aid.Plugin):
                     watched.loop_suspected = True
                     await self._send_loop_review(watched, entry.turn, evidence)
             case PermissionRequest():
-                await self._route(watched, item)
+                await self._route(watched, item, entry)
             case PermissionDecision():
-                await self._settle(watched, item.request_id)
+                await self._settle(watched, item.request_id, item)
             case Output():
                 if watched.outputs is not None:
                     watched.outputs.append(item)
@@ -294,7 +316,7 @@ class Supervision(aid.Plugin):
 
     async def _turn_ended(self, watched: Watched, entry: HistoryEntry, reason: str) -> None:
         """Score the turn's tail for stuckness, then hand it to the supervisor."""
-        self._drop_routes(watched)
+        await self._drop_routes(watched)
         if watched.fired == entry.turn or (supervisor := watched.spec.supervisor) is None:
             return
         watched.fired = entry.turn
@@ -396,23 +418,29 @@ class Supervision(aid.Plugin):
             case _:
                 return None
 
-    async def _route(self, watched: Watched, request: PermissionRequest) -> None:
+    async def _route(self, watched: Watched, request: PermissionRequest, entry: HistoryEntry) -> None:
         """Start a request on its way when its mode involves the supervisor. claude-tty's requests name no mode:
         the spec's mode for the tool stands in."""
         spec = watched.spec
         mode = request.mode or (spec.tool_permissions.get(request.tool_name) if request.tool_name else None)
         holders = ROUTES.get(mode) if mode is not None else None
-        if self._tg is None or spec.supervisor is None or holders is None:
+        if self._tg is None or (supervisor := spec.supervisor) is None or mode is None or holders is None:
             return
         await self._settle(watched, request.request_id)
         bound = self._worker_bound(spec, request)
         route = Route(request, holders, None if bound is None else time.monotonic() + bound)
         watched.routes[request.request_id] = route
+        await self._record(
+            lambda r: r.started(
+                request, session=watched.name, turn=entry.turn, seq=entry.seq, supervisor=supervisor, mode=mode
+            )
+        )
         await self._enter(watched, route, None)
 
     async def _enter(self, watched: Watched, route: Route, note: str | None) -> None:
         """Give the request to its current holder, and arm the handover to the next one unless this is the last."""
         spec, request = watched.spec, route.request
+        await self._record(lambda r: r.entered(request.request_id, route.step, route.holder))
         if route.holder == SUPERVISOR:
             await self._tell(watched, permission_review_text(watched.name, request, final=route.final, note=note))
             wait = SUPERVISOR_WINDOW
@@ -441,13 +469,13 @@ class Supervision(aid.Plugin):
         if not timer.cancel_called:
             route.timer = None
             try:
-                await self._hand_on(watched, route, None)
+                await self._hand_on(watched, route, StepOutcome.SILENT, None)
             except AidError as error:
                 # The session or its supervisor went meanwhile; the request ends with its turn.
                 log.info("handover_failed", session=watched.name, error=error.message)
 
-    async def _hand_on(self, watched: Watched, route: Route, note: str | None) -> None:
-        """Move a request still waiting to its next holder."""
+    async def _hand_on(self, watched: Watched, route: Route, how: StepOutcome, note: str | None) -> None:
+        """Move a request still waiting to its next holder: `how` says why the holder let it go."""
         request_id = route.request.request_id
         if watched.routes.get(request_id) is not route or route.final:
             return
@@ -458,15 +486,17 @@ class Supervision(aid.Plugin):
         if not any(p.request_id == request_id for p in status.permissions):
             await self._settle(watched, request_id)
             return
+        await self._record(lambda r: r.left(request_id, route.step, how, note))
         route.step += 1
         await self._enter(watched, route, note)
 
-    async def _settle(self, watched: Watched, request_id: str) -> None:
-        """The request is decided: stop its timer, and clear the attention it raised."""
+    async def _settle(self, watched: Watched, request_id: str, decision: PermissionDecision | None = None) -> None:
+        """The request is decided, or stopped waiting: stop its timer, and clear the attention it raised."""
         if (route := watched.routes.pop(request_id, None)) is None:
             return
         if route.timer is not None:
             route.timer.cancel()
+        await self._record(lambda r: r.ended(route.request, route.step, decision))
         if route.attention:
             await self.client.call(SetAttention(session=watched.name, text=None))
 
@@ -496,6 +526,10 @@ class Supervision(aid.Plugin):
             given = _ARGS.validate_python(args)
         except ValidationError as error:
             raise AidError("invalid_args", str(error)) from None
+        if method == "query":
+            session = given.get("session")
+            result = await self._query(caller, None if session is None else str(session), str(given.get("sql") or ""))
+            return result.model_dump(mode="json")
         name = str(given.get("session") or "")
         watched = await self._watch(name)
         if caller is None or watched.spec.supervisor != caller:
@@ -556,7 +590,7 @@ class Supervision(aid.Plugin):
                 if route.holder != SUPERVISOR or route.final:
                     raise AidError("not_forwardable", "a person had this request already: decide it yourself")
                 note = given.get("note")
-                await self._hand_on(watched, route, None if note is None else str(note))
+                await self._hand_on(watched, route, StepOutcome.FORWARDED, None if note is None else str(note))
                 return None
             case "answer_permission":
                 request_id = str(given.get("request_id"))
@@ -583,6 +617,22 @@ class Supervision(aid.Plugin):
                 return None
             case _:
                 raise AidError("unknown_method", f"supervision has no method {method!r}")
+
+    async def _query(self, caller: str | None, session: str | None, sql: str) -> QueryResult:
+        """Read-only SQL over the rulings, and with `session` over its removal plans. A supervisor names only a
+        session it supervises, and must supervise one to ask at all; the operator (None) names any."""
+        if not sql.strip():
+            raise AidError("empty_query", "a query needs SQL")
+        attach = {"supervision": default_paths().plugin_dir(self.plugin_name()) / RULINGS_FILE}
+        if session is not None:
+            if caller is None:
+                await self.client.call(GetSpec(session=session))
+            elif (await self._watch(session)).spec.supervisor != caller:
+                raise AidError("not_supervised", f"{caller!r} supervises no session {session!r}")
+            attach["session"] = default_paths().session_dir(session) / PLANS_FILE
+        elif caller is not None and not any(w.spec.supervisor == caller for w in self._watched.values()):
+            raise AidError("not_supervising", f"{caller!r} supervises no session")
+        return await ask(attach, sql)
 
     async def _search(self, name: str, query: str, limit: int) -> SearchResults:
         """Entries whose rendered line holds `query`, newest first, over the whole history."""

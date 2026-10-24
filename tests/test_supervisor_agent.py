@@ -47,6 +47,7 @@ def test_the_supervisor_is_discovered_with_typed_tools_only() -> None:
     assert names == {
         "man_page",
         "tldr_page",
+        "query",
         "supervised_history",
         "supervised_entry",
         "supervised_search",

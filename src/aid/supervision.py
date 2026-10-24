@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Final
 
 from aid.agent import ModelRetry, Toolset
 from aid.client import connect
-from aid.protocol import AidError, GoalState, HistoryPage, SearchResults, history_line
+from aid.protocol import AidError, GoalState, HistoryPage, QueryResult, SearchResults, history_line
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -141,6 +141,30 @@ async def forward_permission(session: str, request_id: str, note: str) -> str:
     return f"Forwarded {request_id} to a person."
 
 
+def render_query(result: QueryResult) -> str:
+    """Tab-separated, a header row first; JSON values, so text is quoted and NULL is null."""
+    lines = ["\t".join(result.columns)]
+    lines += ["\t".join(json.dumps(value) for value in row) for row in result.rows]
+    if result.truncated:
+        lines.append(f"… more rows past {len(result.rows)}; narrow the query or aggregate")
+    return "\n".join(lines)
+
+
+async def query(sql: str, session: str | None = None) -> str:
+    """One read-only SQLite statement over supervision records.
+    - `rulings`: every permission request routed through you or another supervisor (request_id, session, turn,
+      seq, supervisor, mode, tool_name, title, input JSON, plan, started, ended, end, option_id, allowed,
+      decided_by, decider, said); `ruling_steps` (request_id, step, holder, entered, left, outcome, note).
+    - With `session` (one you supervise), its `remove` plans: `removal_plans` (id, request_id, request JSON,
+      status, files, directories, bytes, tracked), `removal_entries` (plan, path, kind, size, mtime, top: removed
+      itself, within: the top directory taking it along, matched, tracked, ignored, outcome), `removal_kept`
+      (plan, path, kind, reason).
+    Example, before answering a remove request for plan 3:
+    SELECT kind, count(*), sum(size), sum(tracked) FROM removal_entries WHERE plan = 3 GROUP BY kind"""
+    result = QueryResult.model_validate(await _call("query", sql=sql, session=session))
+    return render_query(result)
+
+
 def _retrying[**P, R](tool: Callable[P, Awaitable[R]]) -> Callable[P, Awaitable[R]]:
     """A tool's failure goes back to the model as a retry with the reason: an exception would end the run."""
 
@@ -169,5 +193,6 @@ supervisor_tools: Toolset = Toolset(
         _retrying(answer_permission),
         _retrying(forward_permission),
         _retrying(interrupt),
+        _retrying(query),
     ]
 )

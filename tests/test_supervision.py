@@ -28,6 +28,7 @@ from aid.protocol import (
     PermissionDecision,
     PermissionRequest,
     PromptEntry,
+    QueryResult,
     SendMessage,
     TextDelta,
     ToolCall,
@@ -396,6 +397,14 @@ async def test_supervision_ops_refuse_strangers(daemon: Paths, tmp_path: Path) -
                 await sup(client, "boss", "goal_add", session="coder", text="  ")
             with pytest.raises(aid.AidError, match="unknown_goal"):
                 await sup(client, "boss", "goal_set", session="coder", goal_id="nope", state=GoalState.DONE)
+            with pytest.raises(aid.AidError, match="not_supervised"):
+                await sup(client, "stranger", "query", session="coder", sql="SELECT 1")
+            with pytest.raises(aid.AidError, match="not_supervising"):
+                await sup(client, "stranger", "query", sql="SELECT 1")
+            with pytest.raises(aid.AidError, match="query_failed"):
+                await sup(client, "boss", "query", session="coder", sql="DELETE FROM rulings")
+            answer = await sup(client, "boss", "query", session="coder", sql="SELECT count(*) FROM rulings")
+            assert QueryResult.model_validate(answer).rows == [[0]]
 
 
 def read_goals(paths: Paths, name: str) -> list[dict[str, Any]]:
@@ -540,6 +549,19 @@ async def permission_wake(session: aid.Session, name: str) -> HistoryEntry:
         await anyio.sleep(0.05)
 
 
+async def rulings(client: aid.Client, sql: str, session: str | None = None) -> QueryResult:
+    return QueryResult.model_validate(await client.call_plugin("supervision", "query", sql=sql, session=session))
+
+
+async def settled_ruling(client: aid.Client) -> QueryResult:
+    """The one ruling, once the plugin recorded its end: it follows the decision through history."""
+    sql = "SELECT mode, end, allowed, decided_by, decider, option_id FROM rulings WHERE ended IS NOT NULL"
+    while True:
+        if (result := await rulings(client, sql)).rows:
+            return result
+        await anyio.sleep(0.05)
+
+
 async def test_supervisor_answers_after_timeout(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
@@ -599,6 +621,8 @@ async def test_a_forwarded_request_comes_back_to_the_supervisor(daemon: Paths, t
             firings = await supervised_firings(boss, "coder", 1)
             await output_after(boss, firings[0].seq)
             boss_items = [e.item for e in (await boss.history(limit=1000)).entries]
+            ruling = await settled_ruling(client)
+            steps = await rulings(client, "SELECT step, holder, outcome, note FROM ruling_steps ORDER BY step")
     assert 'The supervisor picked "postgres".' in str(result.output)
     wakes = permission_wakes(boss_items)
     assert len(wakes) == 2
@@ -608,6 +632,12 @@ async def test_a_forwarded_request_comes_back_to_the_supervisor(daemon: Paths, t
     [decision] = [item for item in asker_items if isinstance(item, PermissionDecision)]
     assert decision.by is PermissionDecider.SUPERVISOR
     assert status.attention is None
+    assert ruling.rows == [["supervisor", "decided", None, "supervisor", "boss", "0"]]
+    assert steps.rows == [
+        [0, "supervisor", "forwarded", "unsure: check the target"],
+        [1, "person", "silent", None],
+        [2, "supervisor", "decided", None],
+    ]
 
 
 async def test_ask_supervisor_hands_back_to_the_person_once(daemon: Paths, tmp_path: Path) -> None:
