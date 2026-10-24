@@ -374,8 +374,16 @@ class Coding:
             return False
         await self.emit(request)
         decision = PermissionDecision(request_id=request.request_id, option_id=NO, by=PermissionDecider.TIMEOUT)
-        with anyio.move_on_after(self.timeout):
-            decision = await self.waits.wait(request)
+        try:
+            with anyio.move_on_after(self.timeout):
+                decision = await self.waits.wait(request)
+        except anyio.get_cancelled_exc_class():
+            # Its asker is gone (a script past its time limit): settle the request, or its card stays open.
+            with anyio.CancelScope(shield=True):
+                await self.emit(
+                    PermissionDecision(request_id=request.request_id, option_id=None, by=PermissionDecider.CANCEL)
+                )
+            raise
         await self.emit(decision)
         option_id = decision.option_id
         if option_id == ALWAYS and remember is not None:
@@ -907,7 +915,8 @@ async def python(
         a, b = await pyrun.all(cmd("make", "a"), cmd("make", "b"))  # together
         await sh("echo $HOME")                          # the one way to use a shell
 
-    Each command asks the session's permission first; a refused one raises Denied. Everything a script starts
+    Each command asks the session's permission first; a refused one raises Denied. So does reading or writing a
+    file outside your working directory; a refused access raises PermissionError. Everything a script starts
     dies when it ends or after `time_limit` seconds. Read a record's full output with read("<id>/stdout").
 
     `sync` runs an isolated plain script instead, for code with no `await` in it. `xonsh` runs the script

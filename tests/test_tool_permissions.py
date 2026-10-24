@@ -169,3 +169,14 @@ except PermissionError as error:
     assert not (outside / "there.txt").exists()
     assert "refused" in output
     assert (tools["python:read"].mode, tools["python:write"].group) == (PermissionMode.ASK, "coding")
+
+
+async def test_a_question_left_open_ends_with_the_scripts_time_limit(daemon: Paths, tmp_path: Path) -> None:
+    script = f"Path({str(tmp_path.parent / 'elsewhere.txt')!r}).write_text('x')\n"
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ASK))
+            result = await session.run(plan(("python", {"script": script, "time_limit": 1})))
+            status = await session.status()
+    assert "time limit" in str(result.output)
+    assert status.permissions == []
