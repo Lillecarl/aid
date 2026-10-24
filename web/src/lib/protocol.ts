@@ -18,14 +18,14 @@ export type McpServers = McpServer[];
 /**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
  */
-export type PermissionMode = "allow" | "deny" | "ask";
+export type PermissionMode = "allow" | "deny" | "ask" | "supervisor" | "ask_supervisor";
 /**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "PermissionMode".
  */
-export type PermissionMode1 = "allow" | "deny" | "ask";
+export type PermissionMode1 = "allow" | "deny" | "ask" | "supervisor" | "ask_supervisor";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Grant".
@@ -49,11 +49,11 @@ export type JsonValue = unknown;
 /**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
  */
-export type PermissionMode2 = "allow" | "deny" | "ask";
+export type PermissionMode2 = "allow" | "deny" | "ask" | "supervisor" | "ask_supervisor";
 /**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
  */
-export type PermissionMode3 = "allow" | "deny" | "ask";
+export type PermissionMode3 = "allow" | "deny" | "ask" | "supervisor" | "ask_supervisor";
 /**
  * When a message reaches a session that is in a turn.
  *
@@ -600,6 +600,7 @@ export interface PermissionRequest {
     [k: string]: unknown;
   };
   kind: string | null;
+  mode: PermissionMode1 | null;
   options: PermissionChoice[];
   request_id: string;
   title: string | null;

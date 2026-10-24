@@ -755,6 +755,9 @@ class PermissionRequest(_Message):
     kind: str | None = None
     input: JsonValue = None
     options: list[PermissionChoice]
+    mode: PermissionMode | None = None
+    """The tool's mode when the agent asked: who answers first. None where aid does not know it (Claude's own
+    asking, for a tool `tool_permissions` names no mode for)."""
 
 
 class PermissionDecider(StrEnum):

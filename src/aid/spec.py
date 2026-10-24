@@ -23,6 +23,18 @@ class PermissionMode(StrEnum):
     DENY = "deny"
     ASK = "ask"
     """A person answers, from the web UI or `aid answer`; the request is refused after `permission_timeout`."""
+    SUPERVISOR = "supervisor"
+    """The session's supervisor answers first. Unsure, it hands the request to a person, and it comes back to the
+    supervisor if nobody answers. Without a supervisor it is `ask`."""
+    ASK_SUPERVISOR = "ask_supervisor"
+    """A person answers first; past `supervisor_permission_timeout` the supervisor does, and it may hand the request
+    back to the person once. Without a supervisor it is `ask`."""
+
+    @property
+    def waits(self) -> bool:
+        """The engine asks and waits for an answer, refused after `permission_timeout`. Who is asked, and in what
+        order, is the supervision plugin's routing: engines treat every waiting mode alike."""
+        return self not in (PermissionMode.ALLOW, PermissionMode.DENY)
 
 
 def _compile_pattern(pattern: str) -> str:

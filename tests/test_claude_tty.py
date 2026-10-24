@@ -25,7 +25,7 @@ from aid.backends.claude_tty import (
     read_settings,
     split_settings,
 )
-from aid.mcp import claude_config
+from aid.mcp import claude_config, claude_rules
 from aid.paths import hook_socket
 from aid.protocol import (
     AidError,
@@ -143,6 +143,8 @@ def test_tool_modes_become_claudes_rules() -> None:
         "id",
         "hi",
     ]
+    supervised = {"Write": PermissionMode.SUPERVISOR, "Edit": PermissionMode.ASK_SUPERVISOR, **modes}
+    assert claude_rules(supervised, aid_tools=False)[2] == ["Write", "Edit", "WebFetch"]
     own = {"model": "opus", "permissions": {"ask": ["Edit"], "allow": ["Grep"]}}
     assert ask_settings(own, ["WebFetch"]) == {
         "model": "opus",

@@ -2283,7 +2283,9 @@
       "enum": [
         "allow",
         "deny",
-        "ask"
+        "ask",
+        "supervisor",
+        "ask_supervisor"
       ],
       "title": "PermissionMode",
       "type": "string"
@@ -2300,6 +2302,17 @@
           "anyOf": [
             {
               "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
             },
             {
               "type": "null"
@@ -2355,7 +2368,8 @@
         "title",
         "kind",
         "input",
-        "options"
+        "options",
+        "mode"
       ],
       "title": "PermissionRequest",
       "type": "object"

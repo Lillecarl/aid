@@ -277,11 +277,12 @@ class _Client:
             kind=tool_call.kind,
             input=to_json(tool_call.raw_input),
             options=[PermissionChoice(option_id=o.option_id, name=o.name, kind=o.kind) for o in options],
+            mode=mode,
         )
         events = self.events
         if events is not None:
             events.send_nowait(request)
-        if mode is PermissionMode.ASK and events is not None:
+        if mode.waits and events is not None:
             refused = choose_permission(PermissionMode.DENY, request.options)
             decision = PermissionDecision(
                 request_id=request.request_id, option_id=refused, by=PermissionDecider.TIMEOUT

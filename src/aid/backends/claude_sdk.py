@@ -347,10 +347,13 @@ class ClaudeSdkBackend:
             title=title if isinstance(title, str) else None,
             input=to_json(request.get("input")),
             options=list(SDK_OPTIONS),
+            mode=self._spec.tool_permissions.get(
+                tool_name if isinstance(tool_name, str) else "", self._spec.permission
+            ),
         )
         await emit(permission)
-        mode = self._spec.tool_permissions.get(permission.tool_name or "", self._spec.permission)
-        if mode is PermissionMode.ASK:
+        mode = permission.mode or self._spec.permission
+        if mode.waits:
             refused = choose_permission(PermissionMode.DENY, permission.options)
             decision = PermissionDecision(
                 request_id=permission.request_id, option_id=refused, by=PermissionDecider.TIMEOUT

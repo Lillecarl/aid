@@ -5,7 +5,7 @@
 
   let { name }: { name: string } = $props();
 
-  const MODES: PermissionMode[] = ["allow", "ask", "deny"];
+  const MODES: PermissionMode[] = ["allow", "ask", "supervisor", "ask_supervisor", "deny"];
 
   let status: SessionStatus | null = $state(null);
   let problem = $state("");
@@ -236,7 +236,9 @@
   .mode.deny {
     color: var(--bad);
   }
-  .mode.ask {
+  .mode.ask,
+  .mode.supervisor,
+  .mode.ask_supervisor {
     color: var(--accent);
   }
   .mode.default {

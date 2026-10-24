@@ -34,7 +34,8 @@ def claude_rules(modes: Mapping[str, PermissionMode], *, aid_tools: bool) -> tup
     asked."""
     allowed = [*([AID_TOOLS_RULE] if aid_tools else []), *(t for t, m in modes.items() if m is PermissionMode.ALLOW)]
     denied = [t for t, m in modes.items() if m is PermissionMode.DENY]
-    asked = [t for t, m in modes.items() if m is PermissionMode.ASK]
+    # Claude must ask for every waiting mode: aid hears only what Claude asks, and routes it from there.
+    asked = [t for t, m in modes.items() if m.waits]
     return allowed, denied, asked
 
 

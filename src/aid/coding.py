@@ -368,7 +368,7 @@ class Coding:
             rendered = str(input)
         if (hook := match_hook(list(self.hooks), tool_name, f"{title}\n{rendered}")) is not None:
             raise ModelRetry(hook.message)
-        if (mode := self.mode_for(tool_name)) is not PermissionMode.ASK:
+        if not (mode := self.mode_for(tool_name)).waits:
             return mode is PermissionMode.ALLOW
         if remember is not None and remember in self.always:
             return True
@@ -383,6 +383,7 @@ class Coding:
             title=title,
             input=input,
             options=options,
+            mode=mode,
         )
         if self.emit is None:
             return False
@@ -875,7 +876,7 @@ async def ask_user(
     names = options or []
     if recommended is not None and recommended not in names:
         raise AidError("unknown_option", f"{recommended!r} is not one of the options; name one of them")
-    if mode is not PermissionMode.ASK or coding.emit is None:
+    if not mode.waits or coding.emit is None:
         return "No one is watching; proceed with your best judgment."
     picked_id = str(names.index(recommended)) if recommended is not None else None
     request = PermissionRequest(
@@ -887,6 +888,7 @@ async def ask_user(
             PermissionChoice(option_id=str(i), name=name, kind="ask_once", recommended=name == recommended)
             for i, name in enumerate(names)
         ],
+        mode=mode,
     )
     await coding.emit(request)
     decision = PermissionDecision(request_id=request.request_id, option_id=None, by=PermissionDecider.TIMEOUT)

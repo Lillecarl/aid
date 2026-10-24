@@ -67,10 +67,12 @@ async def test_acp_permission_policy(daemon: Paths, tmp_path: Path, mode: Permis
     assert (decision.option_id, decision.by) == (answer, PermissionDecider.POLICY)
 
 
-async def test_acp_permission_waits_for_a_person(daemon: Paths, tmp_path: Path) -> None:
+@pytest.mark.parametrize("mode", [PermissionMode.ASK, PermissionMode.SUPERVISOR, PermissionMode.ASK_SUPERVISOR])
+async def test_acp_permission_waits_for_a_person(daemon: Paths, tmp_path: Path, mode: PermissionMode) -> None:
+    """Every waiting mode waits alike in the engine; without a supervisor, the person answers."""
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
-            session = await client.create("ask", acp_spec(tmp_path, PermissionMode.ASK))
+            session = await client.create("ask", acp_spec(tmp_path, mode))
             events: list[aid.SessionEvent] = []
             waiting: list[PermissionRequest] = []
             async for event in session.stream("permission"):
@@ -85,10 +87,11 @@ async def test_acp_permission_waits_for_a_person(daemon: Paths, tmp_path: Path) 
                 await session.answer(waiting[0].request_id, "no")
             recorded = [e.item for e in (await session.history()).entries]
     request = next(e for e in events if isinstance(e, PermissionRequest))
-    assert (request.tool_call_id, request.title, [o.option_id for o in request.options]) == (
+    assert (request.tool_call_id, request.title, [o.option_id for o in request.options], request.mode) == (
         "t1",
         "rm -rf /",
         ["yes", "no"],
+        mode,
     )
     assert waiting == [request]
     assert after == []
