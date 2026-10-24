@@ -98,6 +98,12 @@ class ModelProvider(ABC):
     """The prefix it serves (`deepseek` for `deepseek/deepseek-flash`). Empty means the class name in snake case."""
     key_env: ClassVar[str | None] = None
     """The variable its key comes from, for listings to say whether it is set."""
+    catalog_id: ClassVar[str | None] = None
+    """models.dev's id for it, for model details and prices. None: the same as its name."""
+
+    @classmethod
+    def catalog_name(cls) -> str:
+        return cls.catalog_id or cls.provider_name()
 
     @classmethod
     def provider_name(cls) -> str:

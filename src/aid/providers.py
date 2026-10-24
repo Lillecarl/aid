@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from aid import models_dev
 from aid.model import OPENAI_COMPATIBLE, AnthropicModel, OpenAIChatModel, Provider, split_name
+from aid.protocol import AidError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -37,12 +38,26 @@ def catalog_provider(catalog: Any, prefix: str) -> Provider | None:
     return Provider(entry.api, entry.env[0] if entry.env else "")
 
 
+def claimed(prefix: str, providers: Mapping[str, type[ModelProvider]]) -> type[ModelProvider] | None:
+    """The plugin that serves models.dev's `prefix` under another name (`opencode` as `opencode-zen`)."""
+    return next((cls for name, cls in providers.items() if name != prefix and cls.catalog_name() == prefix), None)
+
+
+def catalog_model(name: str, providers: Mapping[str, type[ModelProvider]]) -> str:
+    """`name` as models.dev keys it, for prices: the plugin's catalog id in place of its prefix."""
+    prefix, model = split_name(name)
+    cls = providers.get(prefix)
+    return f"{cls.catalog_name()}/{model}" if cls is not None else name
+
+
 async def resolve(name: str, providers: Mapping[str, type[ModelProvider]]) -> Transport:
     """The transport for `name`: the plugin provider that claims its prefix, else the generic resolution. A prefix
     nobody knows still resolves; its first request fails unless the settings name an `api_base`."""
     prefix, model = split_name(name)
     if (cls := providers.get(prefix)) is not None:
         return await cls().transport(model)
+    if (owner := claimed(prefix, providers)) is not None:
+        raise AidError("unknown_provider", f"{prefix}/ is served as {owner.provider_name()}/: {owner.description()}")
     if prefix == "anthropic":
         return AnthropicModel(name)
     if prefix in OPENAI_COMPATIBLE:

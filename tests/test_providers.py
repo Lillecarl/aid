@@ -8,18 +8,22 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+import aid
 from aid.agent import Agent
 from aid.backends.native import session_agent
 from aid.discovery import discover
 from aid.messages import ModelMessage, ModelRequest, UserPromptPart
-from aid.model import AnthropicModel, ModelInfo, OpenAIChatModel
+from aid.model import AnthropicModel, ModelInfo, OpenAIChatModel, Provider
+from aid.model_lists import providers
 from aid.models_dev import ENV_SOURCE
 from aid.protocol import AidError
-from aid.providers import catalog_provider, resolve
+from aid.providers import catalog_model, catalog_provider, claimed, resolve
 from aid.spec import NativeSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from aid.model import Transport
 
 pytestmark = pytest.mark.anyio
 
@@ -122,3 +126,27 @@ def test_a_sessions_model_takes_the_agents_settings_only_on_the_same_provider() 
         {"thinking": {"type": "enabled"}, "max_tokens": 1},
     )
     assert agent.model_settings["max_tokens"] == 9
+
+
+class Gateway(aid.ModelProvider):
+    """Zen under a name of its own."""
+
+    name = "zen-gateway"
+    catalog_id = "zen"
+
+    async def transport(self, model: str) -> Transport:
+        return OpenAIChatModel(f"{self.name}/{model}", Provider("https://gateway.test/v1", "GATEWAY_KEY"))
+
+
+async def test_a_plugin_serving_a_catalog_id_under_another_name_owns_it(catalog: None) -> None:
+    plugins: dict[str, type[aid.ModelProvider]] = {"zen-gateway": Gateway}
+    assert claimed("zen", plugins) is Gateway
+    assert claimed("zen-gateway", plugins) is None
+    assert catalog_model("zen-gateway/big", plugins) == "zen/big"
+    assert catalog_model("deepseek/deepseek-flash", plugins) == "deepseek/deepseek-flash"
+    with pytest.raises(AidError) as caught:
+        await resolve("zen/big", plugins)
+    assert (caught.value.code, "zen-gateway/" in caught.value.message) == ("unknown_provider", True)
+    names = [row.name for row in providers(CATALOG, plugins, env={})]
+    assert "zen" not in names
+    assert "zen-gateway" in names

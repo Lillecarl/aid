@@ -56,7 +56,7 @@ from aid.protocol import (
     clip,
     to_json,
 )
-from aid.providers import resolve
+from aid.providers import catalog_model, resolve
 from aid.tools import tool_paths
 
 if TYPE_CHECKING:
@@ -369,9 +369,11 @@ class NativeBackend:
         open_tail: int = 0,
         receive: Callable[[], Awaitable[list[MessageEntry]]] | None = None,
         transport: Transport | None = None,
+        price_as: str | None = None,
     ) -> None:
         """`transport`: the agent's model, resolved from its name (`aid.providers.resolve`); the backend owns and
-        prices it. Without one, a name resolves through `model_for` alone."""
+        prices it. Without one, a name resolves through `model_for` alone. `price_as`: the name models.dev prices it
+        under, where the provider's prefix is not models.dev's id."""
         self._agent = agent
         self._history_file = history_file
         self._history = history
@@ -379,6 +381,7 @@ class NativeBackend:
         self._started = started
         self._scope: anyio.CancelScope | None = None
         self._owned: Transport | None = transport
+        self._price_as = price_as
         model = agent.model if transport is None else transport
         if isinstance(model, str):
             model = self._owned = model_for(model)
@@ -451,7 +454,7 @@ class NativeBackend:
     async def _request_price(self) -> Price | None:
         if not self._priced:
             self._priced = True
-            self._price = await price_for(self._model.model_name)
+            self._price = await price_for(self._price_as or self._model.model_name)
         return self._price
 
     def _preserve_signed_thinking(self) -> bool:
@@ -847,6 +850,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             open_tail=open_tail,
             receive=functools.partial(_receive_messages, state_dir.name) if spec.aid_tools else None,
             transport=transport,
+            price_as=catalog_model(agent.model, catalog.model_providers) if isinstance(agent.model, str) else None,
         )
         yield backend
     finally:

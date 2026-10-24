@@ -114,7 +114,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   or cycle drops dependents); `discover` imports packages in dependency order, under their own names, never via
   `sys.path`, and sorts by interface: `AgentDefinition`, `InstructionsProvider`, `ModelProvider` (by the prefix it
   serves, `Catalog.model_providers`), `@aid.mcptool`, `Plugin` (≤1 per
-  plugin; `plugin_name()` = top-level package). Data-only plugins (`skills/`) need no `__init__.py`. Workers and
+  plugin; `plugin_name()` = top-level package); abstract and `_`-named classes are bases, skipped. Data-only plugins (`skills/`) need no `__init__.py`. Workers and
   `aid.mcp_server` import everything; the daemon never imports a plugin without a task (below).
 - `src/aid/catalog.py` — `python -m aid.catalog [--path DIR]`, the catalog as JSON (`AgentCatalog`, plugins
   included); `listing()` runs it as a subprocess for the daemon. `session_catalog()` is what a session gets.
@@ -156,8 +156,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   build the client, the rest goes into each request. `model_for(name)`: the table alone, for direct use.
 - `src/aid/providers.py` — `resolve(name, catalog.model_providers)`, in `open_native`: an `aid.ModelProvider`
   plugin claiming the prefix (async `transport(model)`), else `anthropic/`, else `OPENAI_COMPATIBLE`, else a
-  models.dev `@ai-sdk/openai-compatible` provider by its `api` and first `env`. Providers are stateless and built
-  per use in workers; the transport is the backend's to close and price.
+  models.dev `@ai-sdk/openai-compatible` provider by its `api` and first `env`. `ModelProvider.catalog_id` names a
+  plugin's models.dev id where its prefix differs: that id then resolves to an error naming the plugin's prefix, is
+  left out of listings, and prices and backfills the plugin's models (`catalog_model`, `price_as`). Providers are
+  stateless and built per use in workers; the transport is the backend's to close and price.
 - `src/aid/models_dev.py` — models.dev's catalog (`~/.cache/aid/models.dev.json`, refetched daily, stale kept on
   failure; `AID_MODEL_PRICES` = URL, file or `off`, tests set `off`), typed per provider and model. `prices.py`
   prices from it: the native backend prices each request of a model it resolved from a name (context tiers
@@ -169,9 +171,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   models.dev's list. `AID_MODEL_LISTS=off` fetches nothing (tests; they also isolate `XDG_CACHE_HOME`).
 - `plugins/deepseek/`, `plugins/openrouter/`, `plugins/opencode/` — bundled model providers. DeepSeek: output-limit
   default, `prompt_cache_hit_tokens`, its keyed `/models`. OpenRouter: `usage.include`, its `reasoning` field, no
-  reasoning replay (needs `reasoning_details`), public `/models` priced per token. OpenCode Zen: per-model protocol
-  from models.dev's `provider.npm`/`api` (Anthropic Messages, Chat Completions; Responses models listed
-  `unsupported`), public `/zen/v1/models`. OpenRouter and OpenCode inference is unmeasured (no key). A plugin
+  reasoning replay (needs `reasoning_details`), public `/models` priced per token. OpenCode: two gateways, two prefixes and
+  keys: Zen `opencode-zen/` (models.dev's `opencode`; `OPENCODE_API_KEY`, public `/zen/v1/models`) and Go
+  `opencode-go/` (`OPENCODE_GO_API_KEY`, public `/zen/go/v1/models`); per-model protocol from models.dev's `provider.npm`/`api` (Anthropic Messages, Chat
+  Completions; Responses and Gemini models listed `unsupported`). OpenRouter and OpenCode inference is unmeasured (no key). A plugin
   named like a bundled one in an earlier tier shadows it: the example agent is `examples/deepseek_agent`.
 - `NativeSpec.model` (`provider/model`) runs the agent on another model (`session_agent`); the agent's
   `model_settings` follow only within one provider, `NativeSpec.model_settings` go over them. `aid new-py --model`,

@@ -25,7 +25,7 @@ from aid.catalog import session_catalog
 from aid.model import OPENAI_COMPATIBLE
 from aid.models_dev import cache_dir, stale, write_aside
 from aid.protocol import AidError, ModelEntry, ModelListing, ProviderModels
-from aid.providers import catalog_provider
+from aid.providers import catalog_provider, claimed
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -67,6 +67,8 @@ def providers(
     for name, provider in OPENAI_COMPATIBLE.items():
         rows.setdefault(name, _row(name, "builtin", provider.key_env, env=env))
     for name in models_dev.provider_names(catalog):
+        if claimed(name, plugins) is not None:
+            continue
         if name not in rows and (provider := catalog_provider(catalog, name)) is not None:
             rows[name] = _row(name, "catalog", provider.key_env, env=env)
     return sorted(rows.values(), key=lambda row: row.name)
@@ -105,7 +107,8 @@ async def collect(provider: str | None, plugins: Mapping[str, type[ModelProvider
     row = next((row for row in rows if row.name == provider), None)
     if row is None:
         return ModelListing(providers=[])
-    known = entry.entries() if (entry := models_dev.provider(catalog, provider)) is not None else {}
+    catalog_id = plugins[provider].catalog_name() if provider in plugins else provider
+    known = entry.entries() if (entry := models_dev.provider(catalog, catalog_id)) is not None else {}
     own, problem = await own_models(plugins[provider], provider) if provider in plugins else ([], None)
     models = [model.backfill(known.get(model.id)) for model in own] if own else list(known.values())
     return ModelListing(providers=[row.model_copy(update={"models": models, "problem": problem})])

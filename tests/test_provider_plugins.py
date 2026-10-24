@@ -32,8 +32,18 @@ CATALOG: dict[str, Any] = {
             "big-pickle": {"id": "big-pickle", "provider": {"api": f"{ZEN}/openai/v1"}},
             "claude-x": {"id": "claude-x", "provider": {"npm": "@ai-sdk/anthropic", "api": f"{ZEN}/anthropic/v1"}},
             "gpt-x": {"id": "gpt-x", "provider": {"npm": "@ai-sdk/openai", "api": f"{ZEN}/openai/v1"}},
+            "gemini-x": {"id": "gemini-x", "provider": {"npm": "@ai-sdk/google", "api": f"{ZEN}/google/v1beta"}},
         },
-    }
+    },
+    "opencode-go": {
+        "api": f"{ZEN}/go/openai/v1",
+        "npm": "@ai-sdk/openai-compatible",
+        "env": ["OPENCODE_API_KEY"],
+        "models": {
+            "go-chat": {"id": "go-chat", "provider": {"api": f"{ZEN}/go/openai/v1"}},
+            "claude-x": {"id": "claude-x", "provider": {"npm": "@ai-sdk/anthropic", "api": f"{ZEN}/go/anthropic/v1"}},
+        },
+    },
 }
 
 
@@ -76,7 +86,7 @@ def capture(monkeypatch: pytest.MonkeyPatch, data: bytes) -> list[httpx2.Request
 def test_both_providers_are_discovered() -> None:
     found = discover([PLUGINS], only=["openrouter", "opencode"])
     assert found.problems == []
-    assert sorted(found.model_providers) == ["opencode", "openrouter"]
+    assert sorted(found.model_providers) == ["opencode-go", "opencode-zen", "openrouter"]
 
 
 async def test_openrouter_asks_for_usage_reads_reasoning_and_replays_none(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -130,7 +140,7 @@ async def test_openrouter_lists_prices_per_million(monkeypatch: pytest.MonkeyPat
 
 async def test_opencode_routes_each_model_by_its_protocol(catalog: None, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENCODE_API_KEY", "k")
-    provider = opencode.OpenCode()
+    provider = opencode.OpenCodeZen()
     chat = await provider.transport("big-pickle")
     claude = await provider.transport("claude-x")
     unknown = await provider.transport("not-catalogued")
@@ -141,18 +151,42 @@ async def test_opencode_routes_each_model_by_its_protocol(catalog: None, monkeyp
     assert str(chat._client({}).base_url) == f"{ZEN}/openai/v1/"  # pyright: ignore[reportPrivateUsage]
     # Anthropic's SDK posts to <base>/v1/messages: models.dev's URL plus /messages.
     assert str(claude._client({}).base_url).rstrip("/") == f"{ZEN}/anthropic"  # pyright: ignore[reportPrivateUsage]
-    assert claude.model_name == "opencode/claude-x"
-    with pytest.raises(AidError) as caught:
-        await provider.transport("gpt-x")
-    assert caught.value.code == "unsupported_model"
+    assert claude.model_name == "opencode-zen/claude-x"
+    for unsupported in ("gpt-x", "gemini-x"):
+        with pytest.raises(AidError) as caught:
+            await provider.transport(unsupported)
+        assert caught.value.code == "unsupported_model"
     for model in (chat, claude, unknown):
+        await model.aclose()
+
+
+async def test_opencode_go_is_its_own_gateway_with_its_own_key(catalog: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENCODE_API_KEY", "zen")
+    monkeypatch.delenv("OPENCODE_GO_API_KEY", raising=False)
+    go = opencode.OpenCodeGo()
+    chat = await go.transport("go-chat")
+    claude = await go.transport("claude-x")
+    assert isinstance(chat, OpenAIChatModel)
+    assert isinstance(claude, AnthropicModel)
+    assert (chat.model_name, claude.model_name) == ("opencode-go/go-chat", "opencode-go/claude-x")
+    with pytest.raises(AidError) as caught:
+        chat._client({})  # pyright: ignore[reportPrivateUsage]
+    assert (caught.value.code, "OPENCODE_GO_API_KEY" in caught.value.message) == ("missing_credentials", True)
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "go")
+    assert str(chat._client({}).base_url) == f"{ZEN}/go/openai/v1/"  # pyright: ignore[reportPrivateUsage]
+    assert str(claude._client({}).base_url).rstrip("/") == f"{ZEN}/go/anthropic"  # pyright: ignore[reportPrivateUsage]
+    assert claude._client({}).api_key == "go"  # pyright: ignore[reportPrivateUsage]
+    for model in (chat, claude):
         await model.aclose()
 
 
 async def test_opencode_lists_its_models_and_marks_responses_ones(
     catalog: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    serve(monkeypatch, opencode, {"object": "list", "data": [{"id": "big-pickle"}, {"id": "gpt-x"}]})
-    pickle, gpt = await opencode.OpenCode().fetch_models()
+    serve(
+        monkeypatch, opencode, {"object": "list", "data": [{"id": "big-pickle"}, {"id": "gpt-x"}, {"id": "gemini-x"}]}
+    )
+    pickle, gpt, gemini = await opencode.OpenCodeZen().fetch_models()
     assert (pickle.id, pickle.unsupported) == ("big-pickle", None)
-    assert (gpt.id, gpt.unsupported) == ("gpt-x", opencode.UNSUPPORTED)
+    assert (gpt.id, gpt.unsupported) == ("gpt-x", opencode.UNSUPPORTED["@ai-sdk/openai"])
+    assert (gemini.id, gemini.unsupported) == ("gemini-x", opencode.UNSUPPORTED["@ai-sdk/google"])

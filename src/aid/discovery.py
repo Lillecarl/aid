@@ -291,7 +291,13 @@ def _collect(catalog: Catalog, root: PluginRoot, module: ModuleType) -> None:
             if _owned(tool.fn.__module__, root.name):
                 _add_tool(catalog, tool)
             continue
-        if not isinstance(obj, type) or not _owned(obj.__module__, root.name) or inspect.isabstract(obj):
+        # A private class (`_Base`) is a plugin's shared base, never an offering of its own.
+        if (
+            not isinstance(obj, type)
+            or not _owned(obj.__module__, root.name)
+            or inspect.isabstract(obj)
+            or obj.__name__.startswith("_")
+        ):
             continue
         if issubclass(obj, Plugin):
             tasks.append(obj)
