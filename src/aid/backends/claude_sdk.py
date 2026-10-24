@@ -31,6 +31,7 @@ from aid.protocol import (
     PermissionDecision,
     PermissionRequest,
     RemoteControl,
+    SessionTool,
     Started,
     TextDelta,
     ThoughtDelta,
@@ -61,19 +62,34 @@ SDK_OPTIONS: Final = [
 """Answers to a `can_use_tool` prompt. Kinds mirror ACP's, so `choose_permission` picks the policy answer."""
 
 
+def tool_group(name: str) -> str:
+    """`claude` for Claude Code's own tools, the server's name for an MCP tool (`mcp__<server>__<tool>`)."""
+    if name.startswith("mcp__") and (server := name.removeprefix("mcp__").split("__", 1)[0]):
+        return server
+    return "claude"
+
+
 def sdk_argv(spec: ClaudeSdkSpec, *, resume: str | None, mcp_config: str | None = None) -> list[str]:
     """`claude -p` over stream-json NDJSON, resumed when a session id is persisted. With aid's tools, aid's MCP
     server comes in `mcp_config` and its tools need no permission. Its permission prompts come to aid as
     `can_use_tool` only through `--permission-prompt-tool stdio`: without it Claude refuses them itself
     (measured 2.1.310)."""
-    # Both options are variadic: each goes before another option, or it would take what follows too.
+    # Variadic options: each goes before another option, or it would take what follows too.
     mcp = ["--mcp-config", mcp_config] if mcp_config else []
-    aid = ["--allowedTools", AID_TOOLS_RULE] if spec.aid_tools else []
+    modes = spec.tool_permissions
+    allowed = [
+        *([AID_TOOLS_RULE] if spec.aid_tools else []),
+        *(t for t, m in modes.items() if m is PermissionMode.ALLOW),
+    ]
+    denied = [t for t, m in modes.items() if m is PermissionMode.DENY]
+    asked = [t for t, m in modes.items() if m is PermissionMode.ASK]
     argv = [
         *spec.command,
         "-p",
         *mcp,
-        *aid,
+        *(["--allowedTools", *allowed] if allowed else []),
+        *(["--disallowedTools", *denied] if denied else []),
+        *(["--settings", json.dumps({"permissions": {"ask": asked}})] if asked else []),
         "--verbose",
         "--output-format",
         "stream-json",
@@ -107,9 +123,26 @@ class ClaudeSdkBackend:
         """The pending Remote Control enable's request id; its control_response carries the bridge URLs."""
         self._streamed = False
         """Text deltas streamed the content block whose finished `assistant` line comes next."""
+        self._tools: list[SessionTool] = []
+        """What the latest `system init` listed."""
 
     def started(self) -> Started:
         return self._started
+
+    def session_tools(self) -> list[SessionTool]:
+        return self._tools
+
+    def set_permissions(self, default: PermissionMode | None, tools: dict[str, PermissionMode | None]) -> None:
+        modes = dict(self._spec.tool_permissions)
+        for name, mode in tools.items():
+            if mode is None:
+                modes.pop(name, None)
+            else:
+                modes[name] = mode
+        update: dict[str, object] = {"tool_permissions": modes}
+        if default is not None:
+            update["permission"] = default
+        self._spec = self._spec.model_copy(update=update)
 
     async def prompt(self, text: str, emit: Emit) -> Output:
         payload = json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n"
@@ -238,6 +271,12 @@ class ClaudeSdkBackend:
                 if isinstance(session_id, str) and session_id:
                     await self._id_file.write_text(session_id)
                     self._started = self._started.model_copy(update={"agent_session": session_id})
+                if isinstance(names := message.get("tools"), list):
+                    self._tools = [
+                        SessionTool(name=name, group=tool_group(name), asks=False)
+                        for name in names
+                        if isinstance(name, str)
+                    ]
                 return None
             case "stream_event":
                 event = message.get("event")
@@ -323,7 +362,8 @@ class ClaudeSdkBackend:
             options=list(SDK_OPTIONS),
         )
         await emit(permission)
-        if self._spec.permission is PermissionMode.ASK:
+        mode = self._spec.tool_permissions.get(permission.tool_name or "", self._spec.permission)
+        if mode is PermissionMode.ASK:
             refused = choose_permission(PermissionMode.DENY, permission.options)
             decision = PermissionDecision(
                 request_id=permission.request_id, option_id=refused, by=PermissionDecider.TIMEOUT
@@ -331,7 +371,7 @@ class ClaudeSdkBackend:
             with anyio.move_on_after(self._spec.permission_timeout):
                 decision = await self._waits.wait(permission)
         else:
-            chosen = choose_permission(self._spec.permission, permission.options)
+            chosen = choose_permission(mode, permission.options)
             decision = PermissionDecision(
                 request_id=permission.request_id, option_id=chosen, by=PermissionDecider.POLICY
             )

@@ -245,6 +245,11 @@ class ClaudeSdkSpec(_Spec):
     """Beside aid's own (`aid.mcp.session_servers`), in the `--mcp-config` file each prompt's process reads."""
     inherit_env: bool = True
     permission: PermissionMode = PermissionMode.DENY
+    """How aid answers what Claude Code asks (`can_use_tool`) about a tool `tool_permissions` does not name."""
+    tool_permissions: dict[str, PermissionMode] = Field(default_factory=dict[str, PermissionMode])
+    """Modes by Claude Code tool name, as Claude's own rules: allow and deny as `--allowedTools` and
+    `--disallowedTools` (a denied tool leaves the model's list), ask as a `permissions.ask` setting, which Claude
+    asks aid and aid asks a person. A tool it does not name follows Claude's own defaults."""
     permission_timeout: Annotated[float, Field(gt=0)] = 1800
     """Seconds an `ask` request waits for a person before it is refused."""
 

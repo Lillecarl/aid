@@ -61,7 +61,11 @@
 {:else}
   <div class="bar">
     <label>
-      {status.kind === "native" ? "Tools that ask for themselves" : "Every request"}
+      {status.kind === "native"
+        ? "Tools that ask for themselves"
+        : status.kind === "claude-sdk"
+          ? "What Claude asks about the rest"
+          : "Every request"}
       <select
         value={status.permission}
         disabled={busy}
@@ -71,13 +75,15 @@
         {#each MODES as mode (mode)}<option value={mode}>{mode}</option>{/each}
       </select>
     </label>
-    {#if status.kind !== "native"}
+    {#if status.kind === "acp"}
       <span class="muted">Applies when the session next starts.</span>
     {/if}
   </div>
-  {#if status.kind === "native"}
+  {#if status.kind === "native" || status.kind === "claude-sdk"}
     {#if groups.length === 0}
-      <p class="muted">Start the session to list its tools.</p>
+      <p class="muted">
+        {status.kind === "native" ? "Start the session" : "Send the session a prompt"} to list its tools.
+      </p>
     {:else}
       <div class="bar" data-testid="permission-actions">
         {#each MODES as mode (mode)}
@@ -114,8 +120,8 @@
               <li data-testid="permission-tool">
                 <label>
                   <span class="name">{tool.name}</span>
-                  <span class="mode {tool.mode}" class:default={!tool.set}
-                    >{tool.mode}{tool.set ? "" : " (default)"}</span
+                  <span class="mode {tool.mode ?? ''}" class:default={!tool.set}
+                    >{tool.mode === null ? "agent decides" : `${tool.mode}${tool.set ? "" : " (default)"}`}</span
                   >
                   <input
                     type="checkbox"

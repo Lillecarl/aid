@@ -8,8 +8,9 @@ import pytest
 
 import aid
 from aid.protocol import AidError, Output, PermissionRequest, ToolMode
-from aid.spec import PermissionMode
+from aid.spec import ClaudeSdkSpec, PermissionMode
 from tests.conftest import acp_spec, py_spec
+from tests.test_claude_sdk import FAKE_CLAUDE
 from tests.test_coding import plan
 
 if TYPE_CHECKING:
@@ -104,9 +105,29 @@ async def test_other_kinds_take_only_the_default(daemon: Paths, tmp_path: Path) 
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             session = await client.create("acp", acp_spec(tmp_path))
-            with pytest.raises(AidError, match="not native"):
+            with pytest.raises(AidError, match="one mode"):
                 await session.set_permissions({"Bash": PermissionMode.ALLOW})
             await session.set_permissions(default=PermissionMode.ASK)
             status = await session.status()
     assert status.tools == []
     assert status.permission is PermissionMode.ASK
+
+
+async def test_claude_sdk_reports_its_tools_after_a_prompt(daemon: Paths, tmp_path: Path) -> None:
+    fake = tmp_path / "claude"
+    fake.write_text(FAKE_CLAUDE)
+    fake.chmod(0o755)
+    logs = {"FAKE_CLAUDE_ARGV": str(tmp_path / "argv.log"), "FAKE_CLAUDE_STDIN": str(tmp_path / "stdin.log")}
+    spec = ClaudeSdkSpec(cwd=str(tmp_path), model="opus", command=[str(fake)], env=logs)
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("sdk", spec)
+            await session.start()
+            before = (await session.status()).tools
+            await session.run("hello")
+            await session.set_permissions({"Bash": PermissionMode.DENY})
+            after = by_name((await session.status()).tools)
+    assert before == []
+    assert (after["Bash"].group, after["Bash"].mode, after["Bash"].set) == ("claude", PermissionMode.DENY, True)
+    assert (after["Read"].mode, after["Read"].set) == (None, False)
+    assert after["mcp__aid__send_message"].group == "aid"

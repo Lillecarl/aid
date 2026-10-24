@@ -50,6 +50,7 @@ from aid.protocol import (
     SetPermissions,
     StartFailed,
     StopSession,
+    ToolsReported,
     decode_request,
     encode,
 )
@@ -60,7 +61,7 @@ if TYPE_CHECKING:
     from anyio.abc import TaskGroup
 
     from aid.backends.base import Backend
-    from aid.protocol import HistoryItem, SessionEvent
+    from aid.protocol import HistoryItem, SessionEvent, SessionTool
     from aid.spec import AgentSpec
 
 log = structlog.get_logger(__name__)
@@ -113,8 +114,8 @@ async def serve(
                 raise
             tg = await stack.enter_async_context(anyio.create_task_group())
             worker = _Worker(sock, backend, tg)
-            tools = backend.session_tools() if isinstance(backend, ToolPolicyBackend) else []
-            await worker.send(Hello(started=backend.started(), tools=tools))
+            worker.reported = backend.session_tools() if isinstance(backend, ToolPolicyBackend) else []
+            await worker.send(Hello(started=backend.started(), tools=worker.reported))
             tg.start_soon(worker.serve_hooks, hook_sock)
             if isinstance(backend, FollowingBackend):
                 tg.start_soon(worker.follow, backend)
@@ -155,6 +156,8 @@ class _Worker:
         self._hook_lock = anyio.Lock()
         self._busy = False
         self._turn: str | None = None
+        self.reported: list[SessionTool] = []
+        """The tools the daemon last heard of, in Hello or ToolsReported."""
 
     async def serve_hooks(self, sock: zmq.asyncio.Socket) -> None:
         """Answer `aid/hook.py`'s fast path: Hook requests on the worker's own ROUTER, past the daemon. Pass
@@ -191,7 +194,9 @@ class _Worker:
     ) -> None:
         await self._hook_send(sock, route, await self._answer_hook(backend, request))
 
-    async def send(self, reply: Hello | Event | Done | Failure | Observed | Activity | Notify | Live) -> None:
+    async def send(
+        self, reply: Hello | ToolsReported | Event | Done | Failure | Observed | Activity | Notify | Live
+    ) -> None:
         async with self._send_lock:
             await self._sock.send(encode(reply))
 
@@ -324,10 +329,19 @@ class _Worker:
             output = await self._backend.prompt(request.text, emit)
         except Exception as error:
             log.exception("prompt_failed", id=request.id)
+            await self._report_tools()
             await self.send(Failure(id=request.id, code="agent_error", message=f"{type(error).__name__}: {error}"))
         else:
             await emit(output)
+            await self._report_tools()
             await self.send(Done(id=request.id))
         finally:
             self._turn = None
             self._busy = False
+
+    async def _report_tools(self) -> None:
+        """Before the prompt's reply, so its caller reads them in the status: a backend can learn its tools in a
+        prompt (claude-sdk's `system init`)."""
+        if isinstance(self._backend, ToolPolicyBackend) and (tools := self._backend.session_tools()) != self.reported:
+            self.reported = tools
+            await self.send(ToolsReported(tools=tools))

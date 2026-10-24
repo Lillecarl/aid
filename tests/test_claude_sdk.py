@@ -43,7 +43,7 @@ FAKE_CLAUDE = """\
 echo "$@" >> "$FAKE_CLAUDE_ARGV"
 read userline
 echo "$userline" >> "$FAKE_CLAUDE_STDIN"
-echo '{"type":"system","subtype":"init","session_id":"sess-123"}'
+echo '{"type":"system","subtype":"init","session_id":"sess-123","tools":["Bash","Read","mcp__aid__send_message"]}'
 # Claude Code sends can_use_tool only to a permission prompt tool; without one it refuses by itself (2.1.310).
 case " $* " in
   *" --permission-prompt-tool stdio "*) ;;
@@ -297,6 +297,59 @@ async def test_ask_timeout_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPat
     [decision] = [event for event in events if isinstance(event, PermissionDecision)]
     assert (decision.option_id, decision.by) == ("deny", PermissionDecider.TIMEOUT)
     assert '"deny"' in stdin_log.read_text()
+
+
+async def test_tool_modes_become_claudes_own_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """allow and deny go to Claude Code as tool flags, ask as a setting; a change reaches the next prompt."""
+    fake, argv_log, _ = write_fake(tmp_path, monkeypatch)
+    state = anyio.Path(str(tmp_path / "state"))
+    await state.mkdir()
+
+    async def emit(event: SessionEvent) -> None:
+        return None
+
+    modes = {"Edit": PermissionMode.ALLOW, "WebFetch": PermissionMode.DENY, "Read": PermissionMode.ASK}
+    async with open_sdk(make_spec(tmp_path, fake, tool_permissions=modes), state) as backend:
+        assert backend.session_tools() == []
+        await backend.prompt("hello", emit)
+        tools = backend.session_tools()
+        backend.set_permissions(PermissionMode.ASK, {"Read": None, "WebFetch": PermissionMode.ALLOW})
+        await backend.prompt("again", emit)
+    first, second = argv_log.read_text().splitlines()
+    assert f"--allowedTools {AID_TOOLS_RULE} Edit --disallowedTools WebFetch" in first
+    assert '--settings {"permissions": {"ask": ["Read"]}}' in first
+    assert f"--allowedTools {AID_TOOLS_RULE} Edit WebFetch --verbose" in second
+    assert "--settings" not in second and "--disallowedTools" not in second
+    assert [(t.name, t.group) for t in tools] == [
+        ("Bash", "claude"),
+        ("Read", "claude"),
+        ("mcp__aid__send_message", "aid"),
+    ]
+
+
+async def test_a_tool_set_to_ask_waits_whatever_the_session_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake, _, _ = write_fake(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "ask_timeout")
+    state = anyio.Path(str(tmp_path / "state"))
+    await state.mkdir()
+    events: list[SessionEvent] = []
+
+    async def emit(event: SessionEvent) -> None:
+        events.append(event)
+
+    spec = make_spec(
+        tmp_path,
+        fake,
+        permission=PermissionMode.ALLOW,
+        tool_permissions={"Bash": PermissionMode.ASK},
+        permission_timeout=1,
+    )
+    async with open_sdk(spec, state) as backend:
+        await backend.prompt("run echo hi", emit)
+    [decision] = [event for event in events if isinstance(event, PermissionDecision)]
+    assert decision.by is PermissionDecider.TIMEOUT
 
 
 async def test_cancelled_ask_settles(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

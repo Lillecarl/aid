@@ -89,6 +89,7 @@ from aid.protocol import (
     ToolCall,
     ToolEvent,
     ToolMode,
+    ToolsReported,
     TurnEvent,
     Usage,
     decode_reply,
@@ -227,14 +228,21 @@ class _Session:
         return self.spec.kind is AgentKind.CLAUDE_TTY
 
     def tool_modes(self) -> list[ToolMode]:
-        """Each reported tool's mode under the spec now, then the spec's settings for tools none reported."""
-        if not isinstance(self.spec, NativeSpec):
-            return []
+        """Each reported tool's mode under the spec now, then the spec's settings for tools none reported. An unset
+        claude-sdk tool has none: Claude Code's own defaults decide it."""
         spec = self.spec
+        if not isinstance(spec, NativeSpec | ClaudeSdkSpec):
+            return []
+
+        def unset(tool: SessionTool) -> PermissionMode | None:
+            if not isinstance(spec, NativeSpec):
+                return None
+            return spec.permission if tool.asks else PermissionMode.ALLOW
+
         modes = [
             ToolMode(
                 **tool.model_dump(),
-                mode=spec.tool_permissions.get(tool.name) or (spec.permission if tool.asks else PermissionMode.ALLOW),
+                mode=spec.tool_permissions.get(tool.name) or unset(tool),
                 set=tool.name in spec.tool_permissions,
             )
             for tool in self.tools
@@ -1108,6 +1116,19 @@ class Daemon:
             raise AidError("not_a_directory", f"{cwd!r} is not a directory")
         return str(target)
 
+    async def _record_tools(self, session: _Session, tools: list[SessionTool]) -> None:
+        """Keep a worker's tool list, on disk too; an empty one (a backend that has not learned them yet) keeps
+        the last."""
+        if not tools:
+            return
+        session.tools = tools
+        try:
+            await (anyio.Path(self._paths.session_dir(session.name)) / TOOLS_FILE).write_bytes(
+                SessionToolsAdapter.dump_json(tools)
+            )
+        except OSError:
+            log.exception("record_tools_failed", session=session.name)
+
     async def _set_permissions(self, session: _Session, request: SetPermissions) -> None:
         async with session.spec_lock:
             spec = session.spec
@@ -1115,8 +1136,8 @@ class Daemon:
                 raise AidError("unsupported", f"{session.name!r} asks in its own terminal pane")
             update: dict[str, object] = {"permission": request.default} if request.default else {}
             if request.tools:
-                if not isinstance(spec, NativeSpec):
-                    raise AidError("unsupported", f"{session.name!r} is not native: its permissions are one mode")
+                if not isinstance(spec, NativeSpec | ClaudeSdkSpec):
+                    raise AidError("unsupported", f"{session.name!r} takes one mode, not one per tool")
                 tools = dict(spec.tool_permissions)
                 for name, mode in request.tools.items():
                     if mode is None:
@@ -1355,19 +1376,15 @@ class Daemon:
                         log.info("worker_ready", session=name, pid=reply.started.pid)
                         session.peer = peer.bytes
                         session.started = reply.started
-                        session.tools = reply.tools
                         session.ready.set()
-                        if reply.tools:
-                            try:
-                                await (anyio.Path(self._paths.session_dir(name)) / TOOLS_FILE).write_bytes(
-                                    SessionToolsAdapter.dump_json(reply.tools)
-                                )
-                            except OSError:
-                                log.exception("record_tools_failed", session=name)
+                        await self._record_tools(session, reply.tools)
                         try:
                             await session.history.append(reply.started, uuid.uuid4().hex)
                         except OSError:
                             log.exception("record_start_failed", session=name)
+                case ToolsReported():
+                    if (session := self._sessions.get(name)) is not None:
+                        await self._record_tools(session, reply.tools)
                 case StartFailed():
                     if (session := self._sessions.get(name)) is not None:
                         log.warning("worker_start_failed", session=name, error=reply.message)

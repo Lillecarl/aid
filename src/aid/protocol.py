@@ -219,8 +219,9 @@ class AnswerPermission(_Request):
 
 class SetPermissions(_Request):
     """Change a session's permission modes: `default`, the spec's `permission` (any kind with one), and `tools` by
-    name (native only; None returns a tool to its default). Saved in the spec; a running native worker applies them
-    to its next permit, while a request already waiting keeps its own. Other kinds take them at their next start."""
+    name (native and claude-sdk; None returns a tool to its default). Saved in the spec; a running native worker
+    applies them to its next permit, claude-sdk to its next prompt; a request already waiting keeps its own. ACP
+    takes `default` at its next start."""
 
     op: Literal["set_permissions"] = "set_permissions"
     session: str
@@ -873,8 +874,9 @@ class SessionTool(_Message):
 
 
 class ToolMode(SessionTool):
-    mode: PermissionMode
-    """What the session answers now."""
+    mode: PermissionMode | None
+    """What the session answers now. None: the agent's own rules decide (claude-sdk), and aid answers what they ask
+    with the session's `permission`."""
     set: bool
     """`mode` is the tool's own setting, not its default."""
 
@@ -910,7 +912,7 @@ class SessionStatus(_Message):
     permissions: list[PermissionRequest] = Field(default_factory=list[PermissionRequest])
     """Requests the agent waits on an answer to."""
     tools: list[ToolMode] = Field(default_factory=list[ToolMode])
-    """The tools the last worker reported (native only), with the modes the spec gives them now."""
+    """The tools the last worker reported (native, claude-sdk), with the modes the spec gives them now."""
     permission: PermissionMode | None = None
     """The spec's mode: native tools that ask for themselves, or every request of the other kinds. None for
     claude-tty, which asks in its own pane."""
@@ -971,7 +973,15 @@ class Hello(_Message):
     reply: Literal["hello"] = "hello"
     started: Started
     tools: list[SessionTool] = Field(default_factory=list[SessionTool])
-    """The agent's tools, for backends that know them (native)."""
+    """The agent's tools, for backends that know them at start (native). Empty keeps what the daemon holds."""
+
+
+class ToolsReported(_Message):
+    """From a worker, unasked: its agent's tools, for a backend that learns them later than Hello (claude-sdk, at
+    each prompt's `system init`). Sent when they change."""
+
+    reply: Literal["tools"] = "tools"
+    tools: list[SessionTool]
 
 
 class StartFailed(_Message):
@@ -1031,7 +1041,7 @@ class Invocation(_Message):
 
 
 type Reply = Annotated[
-    Event | Done | Failure | Hello | StartFailed | Observed | Activity | Notify | Live | Invocation,
+    Event | Done | Failure | Hello | ToolsReported | StartFailed | Observed | Activity | Notify | Live | Invocation,
     Field(discriminator="reply"),
 ]
 
