@@ -137,7 +137,7 @@ let
   };
   python = pkgs.python3.override {
     self = python;
-    packageOverrides = final: prev: {
+    packageOverrides = lib.composeExtensions (pkgs.callPackage ./nix/apsw.nix { }) (final: prev: {
       pyzmq = prev.pyzmq.override { inherit zeromq; };
       dunamai = prev.dunamai.overridePythonAttrs {
         version = "1.26.0";
@@ -186,7 +186,7 @@ let
         ];
         UV_DYNAMIC_VERSIONING_BYPASS = "2.12.0";
       };
-    };
+    });
   };
 
   set = p.mkPythonSet {
