@@ -88,6 +88,34 @@ class StopSession(_Request):
     session: str
 
 
+class ChangeDirectory(_Request):
+    """Move a session to another working directory: saved in its spec, and its worker restarted there if it runs.
+    Refused while a turn runs. A relative `cwd` is taken from the session's current one."""
+
+    op: Literal["cd"] = "cd"
+    session: str
+    cwd: str
+
+
+class RequestDirectory(_Request):
+    """An agent asks to move its own session (`ChangeDirectory`). A person answers with `AnswerDirectory`, under
+    every permission mode; an approved move waits for the running turn to end. A newer request replaces one still
+    waiting."""
+
+    op: Literal["cd_request"] = "cd_request"
+    session: str
+    cwd: str
+    reason: str
+
+
+class AnswerDirectory(_Request):
+    """A person's answer to a session's `RequestDirectory`."""
+
+    op: Literal["cd_answer"] = "cd_answer"
+    session: str
+    approve: bool
+
+
 class DeleteSession(_Request):
     op: Literal["delete"] = "delete"
     session: str
@@ -373,6 +401,9 @@ type Request = Annotated[
     | StartSession
     | StopSession
     | DeleteSession
+    | ChangeDirectory
+    | RequestDirectory
+    | AnswerDirectory
     | ListAgents
     | GetHistory
     | GetSummary
@@ -701,12 +732,13 @@ class Started(_Message):
 
 class Lifecycle(_Message):
     """Something happened to the agent's session outside a turn: interactive Claude compacted its context,
-    cleared it (a new agent session follows, with a Started), or ended."""
+    cleared it (a new agent session follows, with a Started), or ended; or the session moved directory."""
 
     type: Literal["lifecycle"] = "lifecycle"
-    event: Literal["compacted", "cleared", "ended"]
+    event: Literal["compacted", "cleared", "ended", "moved"]
     detail: str | None = None
-    """Why: `manual` or `auto` for a compaction; Claude's exit reason for an end."""
+    """Why: `manual` or `auto` for a compaction; Claude's exit reason for an end; the new working directory for a
+    move (`ChangeDirectory`)."""
     summary: str | None = None
     """A compaction's summary: what the agent keeps of the conversation before it."""
 
@@ -818,6 +850,13 @@ class SessionInfo(_Message):
     """The spec's `parent`: the session this one works for."""
 
 
+class DirectoryRequest(_Message):
+    cwd: str
+    """Absolute, as the daemon resolved it."""
+    reason: str
+    approved: bool = False
+
+
 class SessionStatus(_Message):
     """What a session is doing now, and what it runs. Never env values or MCP headers: those hold credentials."""
 
@@ -847,6 +886,9 @@ class SessionStatus(_Message):
     """What the agent asks a person to look at, in its own words."""
     parent: str | None = None
     """The spec's `parent`: the session this one works for."""
+    directory_request: DirectoryRequest | None = None
+    """The agent's request to move (`RequestDirectory`), waiting for a person, or approved and waiting for the
+    turn to end."""
     cost: dict[str, float] = Field(default_factory=dict[str, float])
     """Per currency, accumulated as SessionSummary.cost: the last cost each agent session reported, summed
     over the agent sessions. Safe here: amounts, never credentials."""

@@ -27,10 +27,12 @@ from aid.protocol import (
     AddPlugin,
     AgentCatalog,
     AidError,
+    AnswerDirectory,
     AnswerPermission,
     CallPlugin,
     CallResult,
     Cancel,
+    ChangeDirectory,
     CompactSession,
     CreateSession,
     DeleteSession,
@@ -548,6 +550,17 @@ class Session:
         await self._client.call(
             AnswerPermission(session=self.name, request_id=request_id, option_id=option_id, text=text)
         )
+
+    async def change_directory(self, cwd: str) -> str:
+        """Move the session to `cwd` (`ChangeDirectory`), relative to its current one; returns the absolute path."""
+        result = await self._client.call(ChangeDirectory(session=self.name, cwd=cwd))
+        if not isinstance(result, dict) or not isinstance(moved := result.get("cwd"), str):
+            raise AidError("cd_failed", f"the move returned {result!r}")
+        return moved
+
+    async def answer_directory(self, approve: bool) -> None:
+        """Approve or decline the agent's request to move (`SessionStatus.directory_request`)."""
+        await self._client.call(AnswerDirectory(session=self.name, approve=approve))
 
     async def start(self) -> None:
         """Start the worker if it is stopped, with no turn. A prompt or a message starts it too."""

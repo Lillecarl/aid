@@ -33,6 +33,14 @@ async def test_discover_finds_tools() -> None:
     assert described == [
         {"name": "add", "description": "Add two numbers.", "module": "tooling"},
         {
+            "name": "change_directory",
+            "description": "Ask to move this session to another working directory: absolute, or relative to the "
+            "current one. A person approves or declines it, whatever your permissions allow. An approved move happens "
+            "when this turn ends and restarts you there with your conversation kept; either way the answer arrives "
+            "as a message from aid. Say in `reason` why the work needs the other directory.",
+            "module": "aid.builtin_tools",
+        },
+        {
             "name": "list_sessions",
             "description": "The aid sessions you can message: name, kind, whether its worker is running, and which "
             "one is you.",
@@ -91,7 +99,7 @@ async def test_mcp_server_serves_the_tools() -> None:
             who = await rpc.call("tools/call", {"name": "whoami", "arguments": {}})
             await process.stdin.aclose()
     tools = {t["name"]: t for t in listed["tools"]}
-    assert sorted(tools) == ["add", "list_sessions", "send_message", "whoami"]
+    assert sorted(tools) == ["add", "change_directory", "list_sessions", "send_message", "whoami"]
     assert sorted(tools["add"]["inputSchema"]["required"]) == ["a", "b"]
     assert added["content"] == [{"type": "text", "text": "5"}]
     assert who["content"] == [{"type": "text", "text": "s1"}]

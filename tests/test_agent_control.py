@@ -16,14 +16,17 @@ from aid.launcher import WorkerArgs
 from aid.paths import ENV_SESSION
 from aid.protocol import (
     AidError,
+    AnswerDirectory,
     CallPlugin,
     Cancel,
+    ChangeDirectory,
     GetHistory,
     Hello,
     ListSessions,
     MessageEntry,
     ReceiveMessages,
     RequestAdapter,
+    RequestDirectory,
     SendMessage,
     Started,
     Usage,
@@ -96,6 +99,13 @@ async def test_agent_identity_rejects_supervisor_spoofing_and_administration(
                     await client.call(ReceiveMessages(session="worker", wait=0))
                 with pytest.raises(AidError, match="forbidden"):
                     await client.create("unapproved", py_spec(tmp_path, "agents:echo"))
+                # An agent asks to move its own session, and a person answers; it never moves one itself.
+                with pytest.raises(AidError, match="forbidden"):
+                    await client.call(ChangeDirectory(session="intruder", cwd="/"))
+                with pytest.raises(AidError, match="forbidden"):
+                    await client.call(RequestDirectory(session="worker", cwd="/", reason="x"))
+                with pytest.raises(AidError, match="forbidden"):
+                    await client.call(AnswerDirectory(session="intruder", approve=True))
                 await client.send_message("worker", "authored by the intruder", sender="boss")
                 async with client.open_socket(zmq.DEALER) as raw:
                     await raw.send(encode(Hello(started=Started(pid=1, agent="forged"))))

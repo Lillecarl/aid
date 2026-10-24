@@ -89,6 +89,8 @@ NEEDS: Final[dict[str, Grant]] = {
     "start": Grant.MANAGE,
     "stop": Grant.MANAGE,
     "delete": Grant.MANAGE,
+    "cd": Grant.MANAGE,
+    "cd_answer": Grant.PERMISSIONS,
     "spec": Grant.SUPERVISE,
     "attention": Grant.SUPERVISE,
     "publish_supervision": Grant.SUPERVISE,

@@ -200,12 +200,15 @@ def open_turn(history: list[ModelMessage]) -> int:
     return len(history) - starts[-1] if starts else 0
 
 
-def turn_metadata(used: int, desired_max: int) -> UserPromptPart:
+def turn_metadata(used: int, desired_max: int, cwd: str | None = None) -> UserPromptPart:
     """The metadata part of a turn's opening request, stored with it. Sent and stored once, never stripped: a
     provider's prefix cache and Anthropic's binding of thinking to the conversation before it both need the
     history to only grow (measured 2026-10-23 on claude-haiku-5-5: a stripped per-request part left the cache
     unread and flagged the replayed thinking `prefix_binding_mismatch`)."""
-    meta = {"context_pct": round(used / desired_max * 100), "unixtime": int(time.time())}
+    meta: dict[str, object] = {"context_pct": round(used / desired_max * 100), "unixtime": int(time.time())}
+    if cwd is not None:
+        # The instructions name the directory once, at the start; a session can move since (`ChangeDirectory`).
+        meta["cwd"] = cwd
     return UserPromptPart(content=f"{METADATA}\n{json.dumps(meta)}")
 
 
@@ -434,7 +437,9 @@ class NativeBackend:
             max(0, len(self._history) - self._open_tail),
             preserve_signed_thinking=self._preserve_signed_thinking(),
         )
-        messages.append(ModelRequest(parts=[UserPromptPart(text), turn_metadata(used, self._desired_max)]))
+        messages.append(
+            ModelRequest(parts=[UserPromptPart(text), turn_metadata(used, self._desired_max, str(self._coding.cwd))])
+        )
         usage = Usage(requests=0, models=[])
         completed = False
         stop_reason = "end_turn"

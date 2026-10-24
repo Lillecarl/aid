@@ -50,7 +50,7 @@ def test_discovers_plugins_tools_declined_and_problems() -> None:
         "First test plugin.",
     )
     assert alpha.plugin_name() == "alpha"
-    assert sorted(catalog.tools) == ["add", "list_sessions", "send_message", "whoami"]
+    assert sorted(catalog.tools) == ["add", "change_directory", "list_sessions", "send_message", "whoami"]
     assert catalog.declined == {"gated": "needs a token"}
     assert len(catalog.problems) == 2
     assert any("unimportable" in problem and "ModuleNotFoundError" in problem for problem in catalog.problems)

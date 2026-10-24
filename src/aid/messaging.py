@@ -20,6 +20,9 @@ BACKGROUND_SENDER: Final = "background task "
 """Prefix of a MessageEntry sender naming a background task report, `background task bg1`. The worker sends
 the task id; the daemon builds the sender. A session named this way would also match, and render as a
 report: absurd, and harmless if it ever happens."""
+AID_SENDER: Final = "aid:"
+"""Prefix of a sender that is aid itself, `aid:directory`: what aid tells a session about its own state. No session
+name holds a colon."""
 PLUGIN_SENDER: Final = "plugin:"
 """Prefix of a sender that is a plugin (`aid.plugins.sender`): a chat bridge carries text from outside aid."""
 TAG: Final = "aid-message"
@@ -32,7 +35,7 @@ def render_message(message: MessageEntry) -> str:
     sender = message.sender
     if sender is None:
         return f"Message from a person using aid:\n\n{message.text}"
-    if sender.startswith(BACKGROUND_SENDER):
+    if sender.startswith((BACKGROUND_SENDER, AID_SENDER)):
         return message.text
     # The sender's text cannot close the tag early and continue as if aid wrote the rest.
     body = message.text.replace(f"</{TAG}", f"<\\/{TAG}")

@@ -111,7 +111,9 @@ export type PageRequest =
   | AnswerPermission
   | StartSession
   | StopSession
-  | DeleteSession;
+  | DeleteSession
+  | ChangeDirectory
+  | AnswerDirectory;
 /**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
  *
@@ -369,6 +371,18 @@ export interface ClaudeSdkSpec {
   worker_endpoint?: string | null;
 }
 /**
+ * A person's answer to a session's `RequestDirectory`.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "AnswerDirectory".
+ */
+export interface AnswerDirectory {
+  approve: boolean;
+  id?: string;
+  op: "cd_answer";
+  session: string;
+}
+/**
  * A person's answer to a pending PermissionRequest: one of its options, or None to cancel it. `text`
  * is the person's own words: with an option, alongside the pick; alone, the whole answer, which only a
  * session whose agent reads answer text (the `ask_user` tool) takes.
@@ -395,6 +409,19 @@ export interface Cancel {
   op: "cancel";
   session: string;
   turn?: string | null;
+}
+/**
+ * Move a session to another working directory: saved in its spec, and its worker restarted there if it runs.
+ * Refused while a turn runs. A relative `cwd` is taken from the session's current one.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ChangeDirectory".
+ */
+export interface ChangeDirectory {
+  cwd: string;
+  id?: string;
+  op: "cd";
+  session: string;
 }
 /**
  * Summarize the session's history into a digest, outside a turn; the worker records a `compacted` lifecycle.
@@ -442,6 +469,15 @@ export interface DeleteSession {
 export interface DirCompletions {
   dirs: string[];
   prefix: string;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "DirectoryRequest".
+ */
+export interface DirectoryRequest {
+  approved: boolean;
+  cwd: string;
+  reason: string;
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -738,14 +774,14 @@ export interface Started {
 }
 /**
  * Something happened to the agent's session outside a turn: interactive Claude compacted its context,
- * cleared it (a new agent session follows, with a Started), or ended.
+ * cleared it (a new agent session follows, with a Started), or ended; or the session moved directory.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Lifecycle".
  */
 export interface Lifecycle {
   detail: string | null;
-  event: "compacted" | "cleared" | "ended";
+  event: "compacted" | "cleared" | "ended" | "moved";
   summary: string | null;
   type: "lifecycle";
 }
@@ -882,6 +918,7 @@ export interface SessionStatus {
     [k: string]: number;
   };
   cwd: string;
+  directory_request: DirectoryRequest | null;
   kind: AgentKind;
   mcp_servers: string[];
   model: string | null;

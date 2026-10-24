@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from aid.client import connect
 from aid.paths import ENV_SESSION
-from aid.protocol import Delivery
+from aid.protocol import Delivery, RequestDirectory
 from aid.tools import mcptool
 
 
@@ -25,6 +25,21 @@ async def send_message(to: str, text: str, delivery: Literal["interrupt", "wait_
     async with connect() as client:
         await client.send_message(to, text, sender=os.environ.get(ENV_SESSION), delivery=Delivery(delivery))
     return f"delivered to {to}"
+
+
+@mcptool
+async def change_directory(path: str, reason: str) -> str:
+    """Ask to move this session to another working directory: absolute, or relative to the current one. A person
+    approves or declines it, whatever your permissions allow. An approved move happens when this turn ends and
+    restarts you there with your conversation kept; either way the answer arrives as a message from aid. Say in
+    `reason` why the work needs the other directory."""
+    session = os.environ.get(ENV_SESSION)
+    if not session:
+        return "not in an aid session: there is no directory to change"
+    async with connect() as client:
+        result = await client.call(RequestDirectory(session=session, cwd=path, reason=reason))
+    target = result.get("cwd") if isinstance(result, dict) else path
+    return f"asked to move to {target}; a person decides, and the answer arrives as a message"
 
 
 @mcptool

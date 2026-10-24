@@ -299,6 +299,13 @@ def _parser() -> argparse.ArgumentParser:
     answer.add_argument("option", nargs="?", help="the option id to choose; none cancels the request")
     answer.add_argument("--text", help="your own words: with an option, alongside the pick; alone, the whole answer")
 
+    cd = sub.add_parser("cd", help="move a session to another working directory, or answer its agent's request to")
+    cd.add_argument("name")
+    cd.add_argument("path", nargs="?", help="the new directory, relative to the current one")
+    answer_cd = cd.add_mutually_exclusive_group()
+    answer_cd.add_argument("--approve", action="store_true", help="approve the move the agent asked for")
+    answer_cd.add_argument("--decline", action="store_true", help="decline the move the agent asked for")
+
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
 
@@ -579,6 +586,14 @@ async def _client_command(args: argparse.Namespace) -> None:
                 await client.session(args.name).cancel()
             case "answer":
                 await client.session(args.name).answer(args.request, args.option, args.text)
+            case "cd":
+                session = client.session(args.name)
+                if args.approve or args.decline:
+                    await session.answer_directory(args.approve)
+                elif args.path:
+                    print(await session.change_directory(args.path))
+                else:
+                    raise SystemExit("aid cd: give a path, --approve or --decline")
             case "stop":
                 await client.session(args.name).stop()
             case "delete":

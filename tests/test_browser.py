@@ -91,6 +91,29 @@ async def test_working_directory_starts_at_home_and_completes(page: Page, tmp_pa
     await option.wait_for(state="attached", timeout=TIMEOUT * 1000)
 
 
+async def test_slash_cd_moves_the_session(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    (tmp_path / "there").mkdir()
+    await seed_acp_session(session_daemon, tmp_path, "mover")
+    await open_session(page, "mover")
+    await send_chat(page, "/cd there")
+    await expect_chat_text(page, f"Working directory changed ({(tmp_path / 'there').resolve()})")
+
+
+async def test_a_person_approves_the_agents_move(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    (tmp_path / "sub").mkdir()
+    await seed_session(session_daemon, tmp_path, "asker", "agents:coder", PermissionMode.ALLOW)
+    async with aid.connect(session_daemon) as client:
+        await client.session("asker").run(
+            json.dumps([["change_directory", {"path": "sub", "reason": "tests live there"}]])
+        )
+    await open_session(page, "asker")
+    card = page.get_by_test_id("move-request")
+    await card.get_by_text("tests live there").wait_for(timeout=TIMEOUT * 1000)
+    await card.get_by_role("button", name="Approve").click()
+    await card.wait_for(state="detached", timeout=TIMEOUT * 1000)
+    await expect_chat_text(page, f"this session's working directory is now {(tmp_path / 'sub').resolve()}")
+
+
 async def test_prompt_echo_roundtrip(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     await seed_session(session_daemon, tmp_path, "echo", "agents:echo")
     await open_session(page, "echo")
@@ -106,9 +129,10 @@ async def test_slash_menu_lists_commands(page: Page, session_daemon: Paths, tmp_
     menu = page.get_by_test_id("slash-menu")
     await menu.wait_for(timeout=TIMEOUT * 1000)
     items = menu.get_by_test_id("slash-item")
-    assert await items.count() == 2
-    rendered = [await items.nth(i).text_content() for i in range(2)]
+    assert await items.count() == 3
+    rendered = [await items.nth(i).text_content() for i in range(3)]
     assert any("/help" in (t or "") and "List these commands" in (t or "") for t in rendered)
+    assert any("/cd" in (t or "") for t in rendered)
     assert any("/compact" in (t or "") for t in rendered)
     await box.press("Escape")
     await menu.wait_for(state="hidden", timeout=TIMEOUT * 1000)
@@ -119,7 +143,7 @@ async def test_slash_menu_completes_keyboard(page: Page, session_daemon: Paths, 
     await seed_session(session_daemon, tmp_path, "complete", "agents:echo")
     await open_session(page, "complete")
     box = page.get_by_test_id("chat-input")
-    await box.fill("/c")
+    await box.fill("/co")
     menu = page.get_by_test_id("slash-menu")
     await menu.wait_for(timeout=TIMEOUT * 1000)
     assert await menu.get_by_test_id("slash-item").count() == 1

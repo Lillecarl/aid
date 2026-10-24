@@ -240,6 +240,33 @@
         }
       ]
     },
+    "AnswerDirectory": {
+      "additionalProperties": false,
+      "description": "A person's answer to a session's `RequestDirectory`.",
+      "properties": {
+        "approve": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "cd_answer",
+          "default": "cd_answer",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session",
+        "approve"
+      ],
+      "title": "AnswerDirectory",
+      "type": "object"
+    },
     "AnswerPermission": {
       "additionalProperties": false,
       "description": "A person's answer to a pending PermissionRequest: one of its options, or None to cancel it. `text`\nis the person's own words: with an option, alongside the pick; alone, the whole answer, which only a\nsession whose agent reads answer text (the `ask_user` tool) takes.",
@@ -342,6 +369,33 @@
         "session"
       ],
       "title": "Cancel",
+      "type": "object"
+    },
+    "ChangeDirectory": {
+      "additionalProperties": false,
+      "description": "Move a session to another working directory: saved in its spec, and its worker restarted there if it runs.\nRefused while a turn runs. A relative `cwd` is taken from the session's current one.",
+      "properties": {
+        "cwd": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "cd",
+          "default": "cd",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session",
+        "cwd"
+      ],
+      "title": "ChangeDirectory",
       "type": "object"
     },
     "ClaudeSdkSpec": {
@@ -764,6 +818,28 @@
         "dirs"
       ],
       "title": "DirCompletions",
+      "type": "object"
+    },
+    "DirectoryRequest": {
+      "additionalProperties": false,
+      "properties": {
+        "approved": {
+          "default": false,
+          "type": "boolean"
+        },
+        "cwd": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "cwd",
+        "reason",
+        "approved"
+      ],
+      "title": "DirectoryRequest",
       "type": "object"
     },
     "Done": {
@@ -1233,7 +1309,7 @@
     "JsonValue": {},
     "Lifecycle": {
       "additionalProperties": false,
-      "description": "Something happened to the agent's session outside a turn: interactive Claude compacted its context,\ncleared it (a new agent session follows, with a Started), or ended.",
+      "description": "Something happened to the agent's session outside a turn: interactive Claude compacted its context,\ncleared it (a new agent session follows, with a Started), or ended; or the session moved directory.",
       "properties": {
         "detail": {
           "anyOf": [
@@ -1250,7 +1326,8 @@
           "enum": [
             "compacted",
             "cleared",
-            "ended"
+            "ended",
+            "moved"
           ],
           "type": "string"
         },
@@ -1765,6 +1842,8 @@
           "agents": "#/$defs/ListAgents",
           "answer_permission": "#/$defs/AnswerPermission",
           "cancel": "#/$defs/Cancel",
+          "cd": "#/$defs/ChangeDirectory",
+          "cd_answer": "#/$defs/AnswerDirectory",
           "compact": "#/$defs/CompactSession",
           "create": "#/$defs/CreateSession",
           "delete": "#/$defs/DeleteSession",
@@ -1821,6 +1900,12 @@
         },
         {
           "$ref": "#/$defs/DeleteSession"
+        },
+        {
+          "$ref": "#/$defs/ChangeDirectory"
+        },
+        {
+          "$ref": "#/$defs/AnswerDirectory"
         }
       ]
     },
@@ -2394,6 +2479,17 @@
         "cwd": {
           "type": "string"
         },
+        "directory_request": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/DirectoryRequest"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "kind": {
           "$ref": "#/$defs/AgentKind"
         },
@@ -2476,6 +2572,7 @@
         "working",
         "attention",
         "parent",
+        "directory_request",
         "cost"
       ],
       "title": "SessionStatus",

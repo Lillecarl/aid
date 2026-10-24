@@ -24,20 +24,23 @@ from aid.control import AGENT_ID_PREFIX, authorize
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
 from aid.inbox import INBOX_FILE, Inbox
 from aid.launcher import CommandLauncher, WorkerArgs
-from aid.messaging import BACKGROUND_SENDER, wake_prompt
+from aid.messaging import AID_SENDER, BACKGROUND_SENDER, wake_prompt
 from aid.paths import hook_socket
 from aid.plugins import PLUGIN_FILE, Grant, PluginSpec
 from aid.protocol import (
     Activity,
     AddPlugin,
     AidError,
+    AnswerDirectory,
     AnswerPermission,
     CallPlugin,
     CallResult,
     Cancel,
+    ChangeDirectory,
     CompactSession,
     CreateSession,
     DeleteSession,
+    DirectoryRequest,
     Done,
     Event,
     Failure,
@@ -51,6 +54,7 @@ from aid.protocol import (
     Hello,
     Hook,
     Invocation,
+    Lifecycle,
     ListAgents,
     ListPlugins,
     ListSessions,
@@ -67,6 +71,7 @@ from aid.protocol import (
     PublishSupervision,
     ReceiveMessages,
     RemovePlugin,
+    RequestDirectory,
     SendMessage,
     ServeCalls,
     SessionInfo,
@@ -163,6 +168,7 @@ class _Session:
     """The newest `usertee` output, at most LIVE_LIMIT characters, of the turn `live_turn`."""
     live_turn: str | None = None
     attention: str | None = None
+    directory_request: DirectoryRequest | None = None
 
     @property
     def running(self) -> bool:
@@ -240,6 +246,7 @@ class _Session:
             working=self.working or self.turn is not None,
             attention=self.attention,
             parent=self.spec.parent,
+            directory_request=self.directory_request,
             cost={**self.cost, **self.latest},
         )
 
@@ -730,6 +737,28 @@ class Daemon:
             case StopSession():
                 await self._stop(self._session(request.session))
                 return Done(id=request.id)
+            case ChangeDirectory():
+                session = self._session(request.session)
+                cwd = await self._directory(session, request.cwd)
+                await self._move(session, cwd)
+                session.directory_request = None  # A person's own move answers what the agent asked.
+                return Done(id=request.id, data={"cwd": cwd})
+            case RequestDirectory():
+                session = self._session(request.session)
+                cwd = await self._directory(session, request.cwd)
+                session.directory_request = DirectoryRequest(cwd=cwd, reason=request.reason)
+                return Done(id=request.id, data={"cwd": cwd})
+            case AnswerDirectory():
+                session = self._session(request.session)
+                if (asked := session.directory_request) is None or asked.approved:
+                    raise AidError("no_pending", f"{session.name!r} waits on no directory request")
+                if not request.approve:
+                    session.directory_request = None
+                    await self._tell(session, f"A person declined moving this session to {asked.cwd}.")
+                    return Done(id=request.id)
+                session.directory_request = asked.model_copy(update={"approved": True})
+                await self._settle_directory(session)
+                return Done(id=request.id)
             case DeleteSession():
                 session = self._session(request.session)
                 await self._stop(session)
@@ -1019,8 +1048,60 @@ class Daemon:
         session.turn = None
         session.permissions.clear()
         await self._publish_turn(name, turn, "ended", reason)
-        if session.inbox and not session.uses_channel and self._tg is not None:
+        if session.directory_request is not None and session.directory_request.approved and self._tg is not None:
+            # The move restarts the worker; its message, and what else waits, are delivered after it.
+            self._tg.start_soon(self._settle_directory, session)
+        elif session.inbox and not session.uses_channel and self._tg is not None:
             self._tg.start_soon(self._deliver, session)
+
+    async def _directory(self, session: _Session, cwd: str) -> str:
+        """`cwd` as an existing directory's absolute path; relative to the session's own, `~` the home."""
+        target = await (anyio.Path(session.spec.cwd) / await anyio.Path(cwd).expanduser()).resolve()
+        if not await target.is_dir():
+            raise AidError("not_a_directory", f"{cwd!r} is not a directory")
+        return str(target)
+
+    async def _move(self, session: _Session, cwd: str) -> None:
+        """Save the session's new working directory and restart a running worker there. Its agent session carries
+        on: native history is aid's, and Claude Code resumes in another directory (measured 2.1.310)."""
+        if session.busy:
+            raise AidError("busy", f"{session.name!r} is in a turn; move it when the turn ends")
+        spec = session.spec.model_copy(update={"cwd": cwd})
+        await (anyio.Path(self._paths.session_dir(session.name)) / SPEC_FILE).write_bytes(
+            AgentSpecAdapter.dump_json(spec)
+        )
+        running = session.running
+        await self._stop(session)
+        session.spec = spec
+        await session.history.append(Lifecycle(event="moved", detail=cwd), uuid.uuid4().hex)
+        if running:
+            try:
+                await self._ensure_running(session)
+            except AidError:
+                # Moved all the same: the next prompt starts it there, and shows why it fails.
+                log.exception("restart_after_move_failed", session=session.name)
+
+    async def _settle_directory(self, session: _Session) -> None:
+        """Carry out an approved directory request once no turn runs, and tell the agent how it went."""
+        asked = session.directory_request
+        if asked is None or not asked.approved or session.busy:
+            return
+        session.directory_request = None
+        try:
+            await self._move(session, asked.cwd)
+        except (AidError, OSError) as error:
+            # A daemon task: a failed move is this session's, never the daemon's.
+            log.exception("move_failed", session=session.name, cwd=asked.cwd)
+            await self._tell(session, f"Moving this session to {asked.cwd} was approved, but failed: {error}")
+        else:
+            await self._tell(
+                session, f"A person approved the move: this session's working directory is now {asked.cwd}."
+            )
+        await self._publish_changes()
+
+    async def _tell(self, session: _Session, text: str) -> None:
+        """A message from aid itself about the session's own state; it reads plainly, and wakes the session."""
+        await self._accept_message(session, MessageEntry(sender=f"{AID_SENDER}directory", text=text), uuid.uuid4().hex)
 
     def _checked_pending(
         self, session: _Session, request_id: str, option_id: str | None, text: str | None
@@ -1227,6 +1308,8 @@ class Daemon:
                         session.working, session.attention = reply.working, reply.attention
                         if not session.busy and session.inbox:
                             session.mail.set()  # The channel server holds what waits for the turn to end.
+                        if not session.busy and session.directory_request is not None and self._tg is not None:
+                            self._tg.start_soon(self._settle_directory, session)
                 case Notify():
                     if (session := self._sessions.get(name)) is not None:
                         await self._notify(session, reply)

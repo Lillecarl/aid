@@ -29,8 +29,10 @@ from pydantic import Field, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketDisconnect
 
 from aid.protocol import (
+    AnswerDirectory,
     AnswerPermission,
     Cancel,
+    ChangeDirectory,
     CompactSession,
     CreateSession,
     DeleteSession,
@@ -86,7 +88,9 @@ type PageRequest = Annotated[
     | AnswerPermission
     | StartSession
     | StopSession
-    | DeleteSession,
+    | DeleteSession
+    | ChangeDirectory
+    | AnswerDirectory,
     Field(discriminator="op"),
 ]
 """What the page may ask the daemon. Not `Hook` (a claude-tty worker's), `SendMessage` (it names its sender),

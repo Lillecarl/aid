@@ -17,6 +17,7 @@ from aid.protocol import (
     ListAgents,
     ListSessions,
     ReceiveMessages,
+    RequestDirectory,
     SendMessage,
 )
 
@@ -48,7 +49,7 @@ def authorize(request: Request, session: str) -> Request:
             return request.model_copy(update={"sender": session, "usage": None})
         case CallPlugin():
             return request.model_copy(update={"caller": session})
-        case CompactSession() | ReceiveMessages() | Hook() if request.session == session:
+        case CompactSession() | ReceiveMessages() | Hook() | RequestDirectory() if request.session == session:
             return request
         case _:
             raise AidError("forbidden", f"agent {session!r} may not send {request.op!r} with this authority")

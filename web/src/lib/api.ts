@@ -343,6 +343,15 @@ export const compact = async (name: string, instructions?: string): Promise<stri
     ...(instructions === undefined ? {} : { instructions }),
   })) as string;
 
+/** Move a session to another working directory, relative to its current one; the absolute path it moved to. */
+export const changeDirectory = async (name: string, cwd: string): Promise<string> =>
+  ((await call({ op: "cd", session: name, cwd })) as { cwd: string }).cwd;
+
+/** Approve or decline the agent's request to move (`SessionStatus.directory_request`). */
+export async function answerDirectory(name: string, approve: boolean): Promise<void> {
+  await call({ op: "cd_answer", session: name, approve });
+}
+
 /** Send a prompt and call `onEvent` for each event of the answer. */
 export async function prompt(
   name: string,

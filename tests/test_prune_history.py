@@ -111,7 +111,7 @@ async def test_policy_filters_wire_but_not_store(tmp_path: Path) -> None:
     assert result.output == "done"
     assert len(seen) == 1
     wire = seen[0]
-    assert set(_metadata_of(wire)) == {"context_pct", "unixtime"}
+    assert set(_metadata_of(wire)) == {"context_pct", "unixtime", "cwd"}
     wire_thought = wire[1].parts[0]
     assert isinstance(wire_thought, ThinkingPart)
     assert wire_thought.signature is None

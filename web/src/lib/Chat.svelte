@@ -2,6 +2,7 @@
   import { onMount, tick } from "svelte";
   import * as api from "./api";
   import type {
+    DirectoryRequest,
     HistoryEntry,
     HistoryItem,
     Lifecycle,
@@ -29,6 +30,7 @@
     compacted: "Context compacted",
     cleared: "Context cleared: a new session follows",
     ended: "Claude exited",
+    moved: "Working directory changed",
   };
   type Permission = { request: PermissionRequest; decision: PermissionDecision | null };
   /** One entry of the log. `seq` is set for rows read from history; rows of a turn still streaming lack it. A
@@ -348,6 +350,20 @@
     }
   }
 
+  // The agent's request to move (`change_directory`): every permission mode leaves it to a person.
+  let moveRequest = $state<DirectoryRequest | null>(null);
+  let answering = $state(false);
+  async function answerMove(approve: boolean): Promise<void> {
+    answering = true;
+    try {
+      await api.answerDirectory(name, approve);
+    } catch (e) {
+      rows.push({ key: `l${liveCount++}`, kind: "error", local: true, text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      answering = false;
+    }
+  }
+
   /** Slash commands: parsed here, run against the daemon; the digest a command returns arrives through history. */
   type Slash = {
     name: string;
@@ -369,6 +385,15 @@
           local: true,
           text: slashes.map((s) => `${s.usage} — ${s.description}`).join("\n"),
         });
+      },
+    },
+    {
+      name: "cd",
+      usage: "/cd <path>",
+      description: "Move the session to another working directory; it restarts there",
+      run: async (args: string) => {
+        if (args === "") throw new Error("/cd needs a path");
+        await api.changeDirectory(name, args);
       },
     },
     {
@@ -538,6 +563,7 @@
         const now = status.busy || status.working;
         if (running && !now) live = null;
         running = now;
+        moveRequest = status.directory_request;
       },
       () => undefined,
     );
@@ -625,6 +651,17 @@
     </details>
   {/if}
 </div>
+{#if moveRequest !== null}
+  <div class="move" data-testid="move-request">
+    {#if moveRequest.approved}
+      Moves to <code>{moveRequest.cwd}</code> when the turn ends.
+    {:else}
+      <p>The agent asks to move to <code>{moveRequest.cwd}</code>: {moveRequest.reason}</p>
+      <button type="button" class="allow" disabled={answering} onclick={() => answerMove(true)}>Approve</button>
+      <button type="button" class="reject" disabled={answering} onclick={() => answerMove(false)}>Decline</button>
+    {/if}
+  </div>
+{/if}
 <form onsubmit={send}>
   {#if slashOpen}
     <div class="slashmenu" role="listbox" aria-label="Slash commands" data-testid="slash-menu">
@@ -664,6 +701,22 @@
 </form>
 
 <style>
+  .move {
+    font-size: 0.9em;
+    border: 1px solid var(--line);
+    border-radius: 0.3rem;
+    padding: 0.4rem 0.6rem;
+    margin: 0.3rem 0;
+  }
+  .move p {
+    margin: 0 0 0.4rem;
+  }
+  .move .allow {
+    border-color: var(--ok);
+  }
+  .move .reject {
+    border-color: var(--bad);
+  }
   .head {
     display: flex;
     align-items: baseline;

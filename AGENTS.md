@@ -175,6 +175,13 @@ on reusable decisions and current boundaries; put long investigations and dated 
   the inbox checkpoint keeps `delivered` seqs past `through`, so out-of-order claims survive a restart. A wake turn has no client (`_Route.client` None).
   `aid.messaging.render_message`: a person's and background reports plain; another session's or a plugin's in
   `<aid-message from kind>` with an untrusted note (never `<system-reminder>`, which Claude reads as its harness).
+- Directory moves: `ChangeDirectory` (control, page `/cd`, `aid cd`, plugin `manage`) saves `spec.cwd`, restarts a
+  running worker there, records `Lifecycle(moved)`; refused while `busy`. Agents only `RequestDirectory` their own
+  session (`change_directory` tool); a person answers (`AnswerDirectory`: page card, `aid cd --approve/--decline`,
+  plugin `permissions`) under every permission mode, allow-all included, until the permissions rework. Approved
+  mid-turn → applied at turn end (or when claude-tty stops `working`), then aid tells the agent (`aid:` sender,
+  plain). Continuity measured: Claude Code 2.1.310 resumes across directories (the transcript stays under the old
+  project; `find_transcript` globs every project); native history is aid's; native turns name `cwd` in metadata.
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.
 - Recording: each turn ends with `Usage` (tokens, models, context, the agent's session cost) before `Output`; each
   worker start records `Started` (agent session id, agent, model) under a turn id of its own. What a turn's tokens

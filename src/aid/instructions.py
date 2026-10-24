@@ -43,7 +43,8 @@ def environment(cwd: Path | str, session_name: str) -> str:
             "# environment",
             "",
             f"- Working directory: {Path(cwd).resolve()}. Relative paths in file tools resolve against it, and the"
-            " shell starts there; return to it with this absolute path.",
+            " shell starts there; return to it with this absolute path. The session can move (`change_directory`, or a"
+            " person's /cd): each turn's metadata names the directory as it is now.",
             f"- aid session: {session_name}",
             f"- Platform: {sys.platform}",
             f"- {USERTEE}",
