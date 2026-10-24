@@ -15,6 +15,7 @@ import type {
   PageReply,
   PageRequest,
   PermissionMode,
+  Sandbox,
   SessionEvent,
   SessionInfo,
   SessionStatus,
@@ -349,6 +350,12 @@ export async function setPermissions(
     tools,
     ...(permission === undefined ? {} : { default: permission }),
   });
+}
+
+/** Change a native session's sandbox; null turns it off. A running worker restarts under it, when its turn ends
+ * if one runs. */
+export async function setSandbox(name: string, sandbox: Sandbox | null): Promise<void> {
+  await call({ op: "sandbox", session: name, sandbox });
 }
 
 /** Summarize the session's history into a digest, outside a turn; resolve with the digest. */

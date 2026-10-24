@@ -22,7 +22,7 @@ from pydantic import JsonValue
 
 import aid
 from aid.protocol import Cost, Usage
-from aid.spec import PermissionMode
+from aid.spec import PermissionMode, Sandbox
 from tests.browser_harness import (
     expect_chat_text,
     open_details,
@@ -33,6 +33,7 @@ from tests.browser_harness import (
     wait_for_idle,
 )
 from tests.test_agents import AGENT_DIR
+from tests.test_sandbox import needs_bwrap
 from tests.web_harness import ALLOWED, ASSETS, TIMEOUT, needs_dex
 
 if TYPE_CHECKING:
@@ -366,6 +367,23 @@ async def test_permissions_tab_sets_checked_tools(page: Page, session_daemon: Pa
         modes = {t.name: (t.mode, t.set) for t in (await client.session("gated").status()).tools}
     assert modes["ls"] == (PermissionMode.DENY, True)
     assert modes["read"] == (PermissionMode.ALLOW, False)
+
+
+@needs_bwrap
+async def test_permissions_tab_turns_the_sandbox_on(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "boxed", "agents:coder", PermissionMode.ASK)
+    await open_session(page, "boxed")
+    await page.get_by_role("tab", name="Permissions").click()
+    box = page.get_by_test_id("sandbox")
+    await box.get_by_test_id("sandbox-on").check()
+    await box.get_by_label("Network").uncheck()
+    await box.get_by_test_id("sandbox-save").click()
+    async with aid.connect(session_daemon) as client:
+        with anyio.fail_after(TIMEOUT):
+            while (await client.session("boxed").status()).sandbox is None:  # noqa: ASYNC110 -- the page saves it
+                await anyio.sleep(0.05)
+        status = await client.session("boxed").status()
+    assert status.sandbox == Sandbox(network=False)
 
 
 async def test_fork_usage_names_the_fork(page: Page, session_daemon: Paths, tmp_path: Path) -> None:

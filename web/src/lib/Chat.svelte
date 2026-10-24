@@ -31,6 +31,7 @@
     cleared: "Context cleared: a new session follows",
     ended: "Claude exited",
     moved: "Working directory changed",
+    sandboxed: "Sandbox changed",
   };
   type Permission = { request: PermissionRequest; decision: PermissionDecision | null };
   /** One entry of the log. `seq` is set for rows read from history; rows of a turn still streaming lack it. A

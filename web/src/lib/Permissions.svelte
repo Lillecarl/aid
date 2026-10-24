@@ -51,6 +51,36 @@
   const setChecked = (mode: PermissionMode | null) =>
     change(() => api.setPermissions(name, Object.fromEntries([...checked].map((n) => [n, mode]))));
   const setDefault = (mode: PermissionMode) => change(() => api.setPermissions(name, {}, mode));
+
+  // The sandbox form edits a draft; the status stream resets it whenever the saved sandbox changes.
+  let boxed = $state(false);
+  let network = $state(true);
+  let writable = $state("");
+  let shown = "";
+  $effect(() => {
+    const saved = status?.sandbox ?? null;
+    const key = JSON.stringify(saved);
+    if (key === shown) return;
+    shown = key;
+    boxed = saved !== null;
+    network = saved?.network ?? true;
+    writable = (saved?.writable ?? []).join("\n");
+  });
+  const saveSandbox = () =>
+    change(() =>
+      api.setSandbox(
+        name,
+        boxed
+          ? {
+              network,
+              writable: writable
+                .split("\n")
+                .map((line) => line.trim())
+                .filter((line) => line !== ""),
+            }
+          : null,
+      ),
+    );
 </script>
 
 {#if problem}<p class="problem">{problem}</p>{/if}
@@ -76,6 +106,23 @@
       </select>
     </label>
   </div>
+  {#if status.kind === "native"}
+    <fieldset data-testid="sandbox">
+      <legend>
+        <label><input type="checkbox" bind:checked={boxed} data-testid="sandbox-on" /> Sandbox (bwrap)</label>
+      </legend>
+      <p class="muted">
+        The shell, background tasks and scripts see a read-only system; they write only the working directory, a
+        private /tmp and the paths below. Saving restarts the worker, when its turn ends if one runs.
+      </p>
+      <label><input type="checkbox" bind:checked={network} disabled={!boxed} /> Network</label>
+      <label class="column">
+        Also writable, one absolute path per line
+        <textarea bind:value={writable} disabled={!boxed} rows="3"></textarea>
+      </label>
+      <button type="button" disabled={busy} onclick={saveSandbox} data-testid="sandbox-save">Save sandbox</button>
+    </fieldset>
+  {/if}
   {#if status.kind !== "claude-tty"}
     {#if groups.length === 0}
       <p class="muted">
@@ -152,6 +199,15 @@
     border-radius: 0.3rem;
     margin: 0 0 0.75rem;
     padding: 0.25rem 0.75rem 0.5rem;
+  }
+  .column {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    margin: 0.5rem 0;
+  }
+  textarea {
+    font-family: monospace;
   }
   ul {
     list-style: none;
