@@ -249,11 +249,24 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - `plugins/supervision/` — supervision, bundled, `autostart` (read, message, prompt, permissions, supervise). Follows each
   supervised session's history (gap-filled), from the last entry before it started: turn ends (`Output`,
   `TurnError`, once per turn) message the supervisor as the supervised session with tail/goals/loop score;
-  `loops.py` exact tool-call/cycle suspicions (never cancels); permission backstops; stuck episode → attention;
+  `loops.py` exact tool-call/cycle suspicions (never cancels); permission routes; stuck episode → attention;
   nudge budget via the `message` hook. Goals in its plugin dir (`goals/<session>.json`, legacy session-dir
   `goals.json` read). `aid.supervisor_tools` (core) call it via `CallPlugin`; it authorizes by `caller`.
   `interrupt` = `Cancel(turn=…)`, the worker rechecks the turn. Daemon keeps only `spec.supervisor` links and
-  their validation (`supervision_cycle`). State is in memory: a restart starts a fresh episode.
+  their validation (`supervision_cycle`); `SetSupervisor` (control, page, `aid supervise`, plugin `manage`; never
+  agents) changes one later, and the plugin refollows that session from its newest entry (`SessionInfo.supervisor`).
+  State is in memory: a restart starts a fresh episode.
+  Permission routes (`ROUTES`): modes `supervisor` (supervisor → person → supervisor) and `ask_supervisor`
+  (person → supervisor → person); engines treat both as `ask` (`PermissionMode.waits`) and know no routing; a
+  request carries its `mode` (claude-tty's none: the plugin reads the spec). A holder hands on by
+  `forward_permission` or silence (`SUPERVISOR_WINDOW`; a person: `supervisor_permission_timeout` / absent); the
+  last decides; a handover to a person raises attention, the decision clears it; the worker's
+  `permission_timeout` bounds the route (`_worker_bound`). The supervisor answers only routed requests
+  (`person_only`). Stored `supervisor_permissions` (gone): the spec's before-validator maps listed `ask` tools to
+  `ask_supervisor`, and the daemon writes each spec file back as the model reads it.
+  Bundled agent `supervisor` (`agent.py`, `deepseek/deepseek-flash`): supervisor tools plus `reference.py`'s
+  read-only `man_page` (`man -P cat`, fixed argv, command-shaped names only) and `tldr_page`
+  (`AID_TLDR_PAGES`, `nix/tldr-pages.nix`, pinned tldr-pages main); no shell, files or editor by design (User).
 - `src/aid/mutes.py` — runtime mutes per chat plugin, on disk beside the registration.
 - `src/aid/events.py` — the daemon's PUB socket (`Paths.events`): `[topic, JSON]` for the session list, each
   status, each history entry. The daemon compares state with what it last published after every request,
@@ -348,6 +361,9 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 - multiprocessing re-imports the parent's `__main__` in each worker: every entry script needs a
   `if __name__ == "__main__":` guard.
 - Daemon shutdown: `_stop_all` runs inside the task group; worker watchers are shielded and must see every exit.
+- Permission modes: `allow`, `deny`, `ask`, `supervisor`, `ask_supervisor` (the last two route through the
+  supervision plugin, above; without a supervisor they are `ask`). Engines branch on `PermissionMode.waits`, never
+  on `ask` alone; Claude's rules ask for every waiting mode (`claude_rules`).
 - Native tool permissions: a mode per tool name. `NativeSpec.tool_permissions` overrides; unset, a `Tool.asks`
   tool (python, shell, background, monitor, apply_edits, ask_user: they permit inside, with their own titles)
   follows `permission`, any other is allowed. The loop gates every non-`asks` call through `Coding.permit`, so
