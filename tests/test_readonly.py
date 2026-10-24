@@ -22,6 +22,10 @@ READ_COMMANDS = [
     "awk '{print $1}' file | sort | uniq -c",
     "nix flake metadata",
     "pynix path-info /nix/store/abc-x",
+    "hostname; nproc; free -g; df -h /; uname -a",
+    "mount | grep -E ' / '; command -v sudo",
+    "timeout 6 jj --no-pager git remote list",
+    "ip -4 addr show scope global",
 ]
 
 UNSURE_COMMANDS = [
@@ -58,6 +62,11 @@ UNSURE_COMMANDS = [
     "curl https://example.com",
     "python -c 'print(1)'",
     "diff <(ls a) <(ls b)",
+    "mount /dev/sda1 /mnt",
+    "timeout 5 rm -rf x",
+    "ip addr add 10.0.0.1/24 dev eth0",
+    "jj git push",
+    "command rm x",
 ]
 
 

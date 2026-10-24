@@ -23,6 +23,7 @@ READERS: Final = frozenset(
         *("false", "test", "[", "md5sum", "sha1sum", "sha256sum", "b2sum", "hexdump", "od", "strings", "nproc"),
         *("free", "uptime", "ps", "lsblk", "man", "tldr", "jq", "fd", "bat", "cd", "pidof", "getent", "seq"),
         *("tac", "rev", "fold", "fmt", "expand", "paste", "join", "look", "zcat", "xxd", "lscpu", "findmnt"),
+        *("hostname", "nixos-version", "hostnamectl", "locale", "tty", "groups", "users", "who", "w", "last"),
     }
 )
 """Programs that read and print, whatever their arguments. Not `find` (-delete, -exec), `sed` (-i), `env`
@@ -57,6 +58,7 @@ JJ_NESTED_READS: Final = {
     "workspace": frozenset({"list", "root"}),
     "tag": frozenset({"list", "l"}),
 }
+JJ_GIT_READS: Final = (["remote", "list"],)
 NIX_READS: Final = frozenset({"eval", "path-info", "search", "log", "why-depends", "show-derivation", "hash"})
 NIX_NESTED_READS: Final = {
     "derivation": frozenset({"show"}),
@@ -115,6 +117,8 @@ def _jj(argv: list[str]) -> bool:
         return False
     if words[0] in JJ_READS:
         return True
+    if words[0] == "git":
+        return words[1:3] in JJ_GIT_READS
     nested = JJ_NESTED_READS.get(words[0])
     return nested is not None and len(words) > 1 and words[1] in nested
 
@@ -157,6 +161,22 @@ def _journalctl(argv: list[str]) -> bool:
     return not any(a.startswith(("--vacuum", "--rotate", "--flush", "--sync", "--relinquish")) for a in argv[1:])
 
 
+def _timeout(argv: list[str]) -> bool:
+    """`timeout [options] DURATION COMMAND…`: the command decides."""
+    rest = argv[1:]
+    while rest and rest[0].startswith("-"):
+        option = rest.pop(0)
+        if option in {"-s", "--signal", "-k", "--kill-after"} and rest:
+            rest.pop(0)
+    return len(rest) > 1 and argv_reads(rest[1:])
+
+
+def _ip(argv: list[str]) -> bool:
+    words = [w for w in argv[1:] if not w.startswith("-")]
+    objects = {"addr", "address", "a", "route", "r", "link", "l", "neigh", "n", "rule"}
+    return bool(words) and words[0] in objects and (len(words) == 1 or words[1] in {"show", "list", "ls", "get"})
+
+
 PROGRAMS: Final[dict[str, Callable[[list[str]], bool]]] = {
     "git": _git,
     "jj": _jj,
@@ -168,6 +188,10 @@ PROGRAMS: Final[dict[str, Callable[[list[str]], bool]]] = {
     "gawk": _awk,
     "systemctl": _systemctl,
     "journalctl": _journalctl,
+    "timeout": _timeout,
+    "ip": _ip,
+    "mount": lambda argv: argv == ["mount"],
+    "command": lambda argv: len(argv) > 2 and argv[1] in {"-v", "-V"},
 }
 
 
