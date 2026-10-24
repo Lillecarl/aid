@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict
 if TYPE_CHECKING:
     from aid.agent import Agent
     from aid.model import Transport
+    from aid.protocol import ModelEntry
 
 
 class AgentDefinition(ABC):
@@ -95,6 +96,8 @@ class ModelProvider(ABC):
 
     name: ClassVar[str] = ""
     """The prefix it serves (`deepseek` for `deepseek/deepseek-flash`). Empty means the class name in snake case."""
+    key_env: ClassVar[str | None] = None
+    """The variable its key comes from, for listings to say whether it is set."""
 
     @classmethod
     def provider_name(cls) -> str:
@@ -107,6 +110,12 @@ class ModelProvider(ABC):
         return inspect.cleandoc(doc).split("\n\n")[0].replace("\n", " ") if doc else ""
 
     @abstractmethod
-    def transport(self, model: str) -> Transport:
+    async def transport(self, model: str) -> Transport:
         """The transport for `model`, the name after the prefix. Its `model_name` is the whole
         `provider/model`, which pricing and the history record."""
+
+    async def fetch_models(self) -> list[ModelEntry]:
+        """The provider's own model list, from its API. aid fills what an entry leaves None from models.dev,
+        caches the list a day, and keeps the cached copy (else models.dev's list) when this raises. Empty:
+        models.dev's list stands alone."""
+        return []

@@ -264,6 +264,9 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser(
         "agents", help="list the aid.AgentDefinition classes and @aid.mcptool functions on the daemon's plugins path"
     )
+    sub.add_parser("models", help="model providers as JSON; with a provider, the models it serves").add_argument(
+        "provider", nargs="?"
+    )
 
     sub.add_parser(
         "summary", help="a session's totals as JSON: tokens, models, agent sessions, cost, files touched"
@@ -568,6 +571,14 @@ async def _client_command(args: argparse.Namespace) -> None:
                     print(f"tool {tool.name}\t{tool.module}\t{tool.description}")
                 for problem in catalog.problems:
                     print(f"problem: {problem}", file=sys.stderr)
+            case "models":
+                listing = await client.models(args.provider)
+                if args.provider and not listing.providers:
+                    raise AidError("unknown_provider", f"no model provider {args.provider!r}")
+                print(listing.model_dump_json(exclude_none=True))
+                for row in listing.providers:
+                    if row.problem:
+                        print(f"problem: {row.name}: {row.problem}", file=sys.stderr)
             case "prompt":
                 text = sys.stdin.read() if args.text == "-" else args.text
                 titles: dict[str, str] = {}

@@ -15,6 +15,7 @@ from aid.protocol import (
     GetSummary,
     Hook,
     ListAgents,
+    ListModels,
     ListSessions,
     ReceiveMessages,
     RequestDirectory,
@@ -43,7 +44,16 @@ class AgentConnection(BaseModel):
 def authorize(request: Request, session: str) -> Request:
     """Bind an agent request to its authenticated session; administration belongs to the local control socket."""
     match request:
-        case ListSessions() | ListAgents() | GetStatus() | GetHistory() | GetSummary() | GetScreen() | GetPane():
+        case (
+            ListSessions()
+            | ListAgents()
+            | ListModels()
+            | GetStatus()
+            | GetHistory()
+            | GetSummary()
+            | GetScreen()
+            | GetPane()
+        ):
             return request
         case SendMessage():
             return request.model_copy(update={"sender": session, "usage": None})

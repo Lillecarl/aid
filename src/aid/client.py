@@ -49,9 +49,11 @@ from aid.protocol import (
     HistoryPage,
     Invocation,
     ListAgents,
+    ListModels,
     ListPlugins,
     ListSessions,
     MessageEntry,
+    ModelListing,
     Output,
     PaneAddress,
     PaneView,
@@ -383,6 +385,10 @@ class Client:
     async def agents(self) -> AgentCatalog:
         """The `aid.AgentDefinition`s on the daemon's plugins path, and what failed to load."""
         return AgentCatalog.model_validate(await self.call(ListAgents()))
+
+    async def models(self, provider: str | None = None) -> ModelListing:
+        """Model providers, and `provider`'s models (`ListModels`)."""
+        return ModelListing.model_validate(await self.call(ListModels(provider=provider)))
 
     def session(self, name: str) -> Session:
         return Session(self, name)

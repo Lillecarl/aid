@@ -18,7 +18,7 @@ import zmq
 import zmq.asyncio
 from pydantic import TypeAdapter, ValidationError
 
-from aid import events, plugin_host, plugins, sandbox, zap
+from aid import events, model_lists, plugin_host, plugins, sandbox, zap
 from aid.catalog import listing
 from aid.client import spawn_plugin_client
 from aid.control import AGENT_ID_PREFIX, authorize
@@ -57,6 +57,7 @@ from aid.protocol import (
     Invocation,
     Lifecycle,
     ListAgents,
+    ListModels,
     ListPlugins,
     ListSessions,
     Live,
@@ -703,6 +704,9 @@ class Daemon:
                 return Done(id=request.id, data=[info.model_dump(mode="json") for info in infos])
             case ListAgents():
                 return Done(id=request.id, data=(await listing()).model_dump(mode="json"))
+            case ListModels():
+                models = await model_lists.listing(request.provider)
+                return Done(id=request.id, data=models.model_dump(mode="json"))
             case Prompt():
                 session = self._session(request.session)
                 if session.turn is not None:

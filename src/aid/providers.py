@@ -42,7 +42,7 @@ async def resolve(name: str, providers: Mapping[str, type[ModelProvider]]) -> Tr
     nobody knows still resolves; its first request fails unless the settings name an `api_base`."""
     prefix, model = split_name(name)
     if (cls := providers.get(prefix)) is not None:
-        return cls().transport(model)
+        return await cls().transport(model)
     if prefix == "anthropic":
         return AnthropicModel(name)
     if prefix in OPENAI_COMPATIBLE:

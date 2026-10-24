@@ -33,7 +33,7 @@ from aid.model import OpenAIChatModel, Provider
 class Zen(aid.ModelProvider):
     """Zen through its own plugin."""
 
-    def transport(self, model: str) -> OpenAIChatModel:
+    async def transport(self, model: str) -> OpenAIChatModel:
         return OpenAIChatModel(f"zen/{model}", Provider("https://plugin.test/v1", "PLUGIN_KEY"))
 '''
 

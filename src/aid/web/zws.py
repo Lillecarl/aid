@@ -44,6 +44,7 @@ from aid.protocol import (
     GetStatus,
     GetSummary,
     ListAgents,
+    ListModels,
     ListSessions,
     Prompt,
     SetPermissions,
@@ -79,6 +80,7 @@ WS_POLICY_VIOLATION: Final = 1008
 type PageRequest = Annotated[
     ListSessions
     | ListAgents
+    | ListModels
     | CreateSession
     | GetStatus
     | GetHistory

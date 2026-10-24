@@ -137,6 +137,14 @@ class ListAgents(_Request):
     op: Literal["agents"] = "agents"
 
 
+class ListModels(_Request):
+    """Model providers (`aid.ModelProvider` plugins, aid's built-in ones, and models.dev's) and, for `provider`,
+    the models it serves. Answered from a subprocess (`python -m aid.model_lists`): the daemon imports no plugin."""
+
+    op: Literal["models"] = "models"
+    provider: str | None = None
+
+
 class GetHistory(_Request):
     """A page of a session's history: the newest entries before `before`, the oldest after `after`, or the
     newest of all when neither is given."""
@@ -427,6 +435,7 @@ type Request = Annotated[
     | RequestDirectory
     | AnswerDirectory
     | ListAgents
+    | ListModels
     | GetHistory
     | GetSummary
     | GetLive
@@ -464,6 +473,60 @@ class ProviderInfo(_Message):
     name: str
     description: str
     module: str
+
+
+class ModelCost(_Message):
+    """USD per million tokens. A missing cache price bills those tokens as plain input."""
+
+    input: float
+    output: float
+    cache_read: float | None = None
+    cache_write: float | None = None
+
+
+class ModelEntry(_Message):
+    """One model a provider serves, as its own list says, with models.dev filling what that list leaves out. None
+    is unknown."""
+
+    id: str
+    """The name after the provider's prefix: `deepseek-flash` in `deepseek/deepseek-flash`."""
+    name: str | None = None
+    context: int | None = None
+    """Tokens the model reads at most."""
+    output: int | None = None
+    """Tokens the model writes at most in one response."""
+    reasoning: bool | None = None
+    tools: bool | None = None
+    cost: ModelCost | None = None
+    unsupported: str | None = None
+    """Why aid cannot run it (a protocol it has no transport for); None runs."""
+
+    def backfill(self, other: ModelEntry | None) -> ModelEntry:
+        """This entry with `other`'s values where this one has None."""
+        if other is None:
+            return self
+        return ModelEntry.model_validate({**other.model_dump(exclude_none=True), **self.model_dump(exclude_none=True)})
+
+
+class ProviderModels(_Message):
+    name: str
+    """The `provider/` prefix."""
+    source: Literal["plugin", "builtin", "catalog"]
+    """Who serves it: an `aid.ModelProvider` plugin, aid itself (anthropic and `aid.model.OPENAI_COMPATIBLE`), or a
+    models.dev entry that speaks Chat Completions."""
+    description: str = ""
+    key_env: str | None = None
+    """The variable its key comes from, where it has one."""
+    has_key: bool = False
+    """`key_env` is set where the listing ran: the daemon's environment, before a spec's `env`."""
+    models: list[ModelEntry] | None = None
+    """For the provider asked about; None in the full listing."""
+    problem: str | None = None
+    """Why its own list could not be had: the models shown are models.dev's or a cached copy."""
+
+
+class ModelListing(_Message):
+    providers: list[ProviderModels]
 
 
 class PluginInfo(_Message):

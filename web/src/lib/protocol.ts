@@ -107,6 +107,7 @@ export type PageReply = Event | Done | Failure;
 export type PageRequest =
   | ListSessions
   | ListAgents
+  | ListModels
   | CreateSession
   | GetStatus
   | GetHistory
@@ -846,6 +847,18 @@ export interface HistoryPage {
 export interface ListAgents {
   id?: string;
   op: "agents";
+}
+/**
+ * Model providers (`aid.ModelProvider` plugins, aid's built-in ones, and models.dev's) and, for `provider`,
+ * the models it serves. Answered from a subprocess (`python -m aid.model_lists`): the daemon imports no plugin.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ListModels".
+ */
+export interface ListModels {
+  id?: string;
+  op: "models";
+  provider?: string | null;
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema

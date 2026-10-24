@@ -77,6 +77,7 @@ class Grant(StrEnum):
 NEEDS: Final[dict[str, Grant]] = {
     "list": Grant.READ,
     "agents": Grant.READ,
+    "models": Grant.READ,
     "status": Grant.READ,
     "history": Grant.READ,
     "summary": Grant.READ,

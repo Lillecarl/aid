@@ -1402,6 +1402,36 @@
       "title": "ListAgents",
       "type": "object"
     },
+    "ListModels": {
+      "additionalProperties": false,
+      "description": "Model providers (`aid.ModelProvider` plugins, aid's built-in ones, and models.dev's) and, for `provider`,\nthe models it serves. Answered from a subprocess (`python -m aid.model_lists`): the daemon imports no plugin.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "models",
+          "default": "models",
+          "type": "string"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "title": "ListModels",
+      "type": "object"
+    },
     "ListSessions": {
       "additionalProperties": false,
       "properties": {
@@ -1893,6 +1923,7 @@
           "history": "#/$defs/GetHistory",
           "list": "#/$defs/ListSessions",
           "live": "#/$defs/GetLive",
+          "models": "#/$defs/ListModels",
           "prompt": "#/$defs/Prompt",
           "sandbox": "#/$defs/SetSandbox",
           "set_permissions": "#/$defs/SetPermissions",
@@ -1909,6 +1940,9 @@
         },
         {
           "$ref": "#/$defs/ListAgents"
+        },
+        {
+          "$ref": "#/$defs/ListModels"
         },
         {
           "$ref": "#/$defs/CreateSession"
