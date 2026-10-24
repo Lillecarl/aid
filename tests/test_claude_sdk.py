@@ -18,6 +18,7 @@ from aid.protocol import (
     RemoteControl,
     TextDelta,
     ThoughtDelta,
+    ToolCall,
 )
 from aid.spec import AgentKind, ClaudeSdkSpec, PermissionMode
 
@@ -94,6 +95,13 @@ case "$FAKE_CLAUDE_MODE" in
     echo '{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":" there"}}}'
     echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hi there"}]}}'
     echo '{"type":"result","subtype":"success","result":"hi there"}'
+    ;;
+  tools)
+    echo '{"type":"assistant","parent_tool_use_id":null,"message":{"role":"assistant","content":[{"type":"tool_use","id":"tu-9","name":"Read","input":{"file_path":"pyproject.toml"}}]}}'
+    echo '{"type":"assistant","parent_tool_use_id":"tu-9","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu-sub","name":"Bash","input":{"command":"ls"}}]}}'
+    echo '{"type":"user","parent_tool_use_id":null,"tool_use_result":{"type":"text","file":{"filePath":"pyproject.toml"}},"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-9","content":"name = aid"}]}}'
+    echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"aid"}]}}'
+    echo '{"type":"result","subtype":"success","result":"aid"}'
     ;;
   linger)
     echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}'
@@ -173,6 +181,26 @@ async def test_partial_messages_stream_text_and_thinking_once(tmp_path: Path, mo
         ("TextDelta", "hi"),
         ("TextDelta", " there"),
     ]
+
+
+async def test_tool_calls_and_their_results_reach_the_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Claude Code's tool_use blocks and tool_result lines, as the transcript path turns them; a subagent's are its
+    own conversation and stay out."""
+    fake, _, _ = write_fake(tmp_path, monkeypatch)
+    monkeypatch.setenv("FAKE_CLAUDE_MODE", "tools")
+    state = anyio.Path(str(tmp_path / "state"))
+    await state.mkdir()
+    events: list[SessionEvent] = []
+
+    async def emit(event: SessionEvent) -> None:
+        events.append(event)
+
+    async with open_sdk(make_spec(tmp_path, fake), state) as backend:
+        output = await backend.prompt("hello", emit)
+    calls = [e for e in events if isinstance(e, ToolCall)]
+    assert output.output == "aid"
+    assert [(c.tool_call_id, c.status) for c in calls] == [("tu-9", "in_progress"), ("tu-9", "completed")]
+    assert (calls[0].title, calls[1].output) == ("Read", "name = aid")
 
 
 async def test_resume_argv_on_second_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
