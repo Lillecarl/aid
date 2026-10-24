@@ -6,7 +6,7 @@ import re
 from enum import StrEnum
 from typing import Annotated, Final, Literal, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, model_validator
 
 
 class AgentKind(StrEnum):
@@ -218,6 +218,12 @@ class NativeSpec(_Spec):
     kind: Literal[AgentKind.NATIVE] = AgentKind.NATIVE
     agent: Annotated[str, Field(pattern=r"^[\w.-]+$")] | None = None
     target: Annotated[str, Field(pattern=r"^[\w.]+:[\w.]+$")] | None = None
+    model: Annotated[str, Field(pattern=r"^\S+$")] | None = None
+    """`provider/model` the session runs on (`aid models` lists them), over the agent's own. The agent's
+    `model_settings` follow only to a model of the same provider: they may hold keys another provider refuses."""
+    model_settings: dict[str, JsonValue] = Field(default_factory=dict[str, JsonValue])
+    """Over the agent's `model_settings`: request settings (`max_tokens`, `reasoning_effort`, ...) and client ones
+    (`api_key`, `api_base`, `max_retries`)."""
     python_path: list[str] = Field(default_factory=list[str])
     permission: PermissionMode = PermissionMode.DENY
     """The mode of tools that ask for themselves (`Tool.asks`: each command a `python` script starts, each edit

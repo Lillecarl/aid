@@ -8,12 +8,15 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+from aid.agent import Agent
+from aid.backends.native import session_agent
 from aid.discovery import discover
 from aid.messages import ModelMessage, ModelRequest, UserPromptPart
 from aid.model import AnthropicModel, ModelInfo, OpenAIChatModel
 from aid.models_dev import ENV_SOURCE
 from aid.protocol import AidError
 from aid.providers import catalog_provider, resolve
+from aid.spec import NativeSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -98,3 +101,24 @@ async def test_a_plugin_provider_wins_its_prefix(
     assert isinstance(model, OpenAIChatModel)
     assert model._client({}).base_url.host == "plugin.test"  # pyright: ignore[reportPrivateUsage]
     await model.aclose()
+
+
+def test_a_sessions_model_takes_the_agents_settings_only_on_the_same_provider() -> None:
+    agent = Agent("deepseek/deepseek-flash", model_settings={"thinking": {"type": "enabled"}, "max_tokens": 9})
+    plain = NativeSpec(cwd="/", agent="a")
+    assert session_agent(agent, plain) is agent
+    same = session_agent(
+        agent, NativeSpec(cwd="/", agent="a", model="deepseek/deepseek-v4-pro", model_settings={"max_tokens": 5})
+    )
+    assert (same.model, same.model_settings) == (
+        "deepseek/deepseek-v4-pro",
+        {"thinking": {"type": "enabled"}, "max_tokens": 5},
+    )
+    other = session_agent(agent, NativeSpec(cwd="/", agent="a", model="openrouter/vendor/model"))
+    assert (other.model, other.model_settings) == ("openrouter/vendor/model", {})
+    tuned = session_agent(agent, NativeSpec(cwd="/", agent="a", model_settings={"max_tokens": 1}))
+    assert (tuned.model, tuned.model_settings) == (
+        "deepseek/deepseek-flash",
+        {"thinking": {"type": "enabled"}, "max_tokens": 1},
+    )
+    assert agent.model_settings["max_tokens"] == 9

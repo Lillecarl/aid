@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import importlib
 import json
@@ -40,7 +41,7 @@ from aid.messages import (
     UserPromptPart,
 )
 from aid.messaging import ARRIVED, arrived
-from aid.model import Model, ModelInfo, OpenAIChatModel, RequestUsage, Transport, accumulate, model_for
+from aid.model import Model, ModelInfo, OpenAIChatModel, RequestUsage, Transport, accumulate, model_for, split_name
 from aid.prices import CURRENCY, Price, price_for
 from aid.protocol import (
     AidError,
@@ -274,6 +275,18 @@ def load_target(target: str) -> Agent:
 
 def _session_catalog() -> Catalog:
     return session_catalog()
+
+
+def session_agent(agent: Agent, spec: NativeSpec) -> Agent:
+    """The agent on the spec's model and settings. The agent's own settings follow only to the same provider."""
+    if spec.model is None and not spec.model_settings:
+        return agent
+    model = spec.model or agent.model
+    same = (
+        isinstance(agent.model, str) and isinstance(model, str) and split_name(agent.model)[0] == split_name(model)[0]
+    )
+    inherited = agent.model_settings if spec.model is None or same else {}
+    return dataclasses.replace(agent, model=model, model_settings={**inherited, **spec.model_settings})
 
 
 def load_named(catalog: Catalog, name: str) -> Agent:
@@ -773,6 +786,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         agent = await anyio.to_thread.run_sync(load_target, spec.target)
     else:
         raise ValueError("the spec names no agent")
+    agent = session_agent(agent, spec)
     toolsets: list[Toolset] = [aid_toolset(catalog)] if spec.aid_tools and catalog.tools else []
     history_file = state_dir / HISTORY_FILE
     history: list[ModelMessage] = (

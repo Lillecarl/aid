@@ -1632,6 +1632,162 @@
       "title": "MessageEntry",
       "type": "object"
     },
+    "ModelCost": {
+      "additionalProperties": false,
+      "description": "USD per million tokens. A missing cache price bills those tokens as plain input.",
+      "properties": {
+        "cache_read": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cache_write": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "input": {
+          "type": "number"
+        },
+        "output": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "input",
+        "output",
+        "cache_read",
+        "cache_write"
+      ],
+      "title": "ModelCost",
+      "type": "object"
+    },
+    "ModelEntry": {
+      "additionalProperties": false,
+      "description": "One model a provider serves, as its own list says, with models.dev filling what that list leaves out. None\nis unknown.",
+      "properties": {
+        "context": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ModelCost"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "output": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "reasoning": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "tools": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "unsupported": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "context",
+        "output",
+        "reasoning",
+        "tools",
+        "cost",
+        "unsupported"
+      ],
+      "title": "ModelEntry",
+      "type": "object"
+    },
+    "ModelListing": {
+      "additionalProperties": false,
+      "properties": {
+        "providers": {
+          "items": {
+            "$ref": "#/$defs/ProviderModels"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "providers"
+      ],
+      "title": "ModelListing",
+      "type": "object"
+    },
     "NativeSpec": {
       "additionalProperties": false,
       "description": "A native agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, or `target`, a\n`package.module:attribute` that is an agent itself. Exactly one of them.",
@@ -1714,6 +1870,24 @@
             }
           ],
           "default": null
+        },
+        "model": {
+          "anyOf": [
+            {
+              "pattern": "^\\S+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "model_settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "type": "object"
         },
         "parent": {
           "anyOf": [
@@ -2314,6 +2488,77 @@
       "title": "ProviderInfo",
       "type": "object"
     },
+    "ProviderModels": {
+      "additionalProperties": false,
+      "properties": {
+        "description": {
+          "default": "",
+          "type": "string"
+        },
+        "has_key": {
+          "default": false,
+          "type": "boolean"
+        },
+        "key_env": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "models": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ModelEntry"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "name": {
+          "type": "string"
+        },
+        "problem": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "source": {
+          "enum": [
+            "plugin",
+            "builtin",
+            "catalog"
+          ],
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "source",
+        "description",
+        "key_env",
+        "has_key",
+        "models",
+        "problem"
+      ],
+      "title": "ProviderModels",
+      "type": "object"
+    },
     "Received": {
       "description": "What aid web sends the page. Only the definitions matter; this model names them.",
       "properties": {
@@ -2341,6 +2586,9 @@
         "live_chunk": {
           "$ref": "#/$defs/LiveChunk"
         },
+        "model_listing": {
+          "$ref": "#/$defs/ModelListing"
+        },
         "page_reply": {
           "$ref": "#/$defs/PageReply"
         },
@@ -2367,6 +2615,7 @@
         "session_summary",
         "live_chunk",
         "agent_catalog",
+        "model_listing",
         "file_entry",
         "file_view",
         "dir_completions",

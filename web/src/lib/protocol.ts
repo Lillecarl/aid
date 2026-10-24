@@ -42,6 +42,11 @@ export type AgentKind = "acp" | "native" | "claude-tty" | "claude-sdk";
  */
 export type AgentSpec = AcpSpec | NativeSpec | ClaudeTtySpec | ClaudeSdkSpec;
 /**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "JsonValue".
+ */
+export type JsonValue = unknown;
+/**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
  */
 export type PermissionMode2 = "allow" | "deny" | "ask";
@@ -68,11 +73,6 @@ export type SessionEvent =
  */
 export type PermissionDecider =
   "person" | "policy" | "timeout" | "auto" | "cancel" | "terminal" | "plugin" | "supervisor";
-/**
- * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "JsonValue".
- */
-export type JsonValue = unknown;
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "HistoryItem".
@@ -286,6 +286,10 @@ export interface NativeSpec {
   kind: "native";
   max_context?: number | null;
   max_requests?: number | null;
+  model?: string | null;
+  model_settings?: {
+    [k: string]: JsonValue;
+  };
   parent?: string | null;
   permission?: PermissionMode2;
   permission_timeout?: number;
@@ -881,6 +885,55 @@ export interface LiveChunk {
   turn: string | null;
 }
 /**
+ * USD per million tokens. A missing cache price bills those tokens as plain input.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ModelCost".
+ */
+export interface ModelCost {
+  cache_read: number | null;
+  cache_write: number | null;
+  input: number;
+  output: number;
+}
+/**
+ * One model a provider serves, as its own list says, with models.dev filling what that list leaves out. None
+ * is unknown.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ModelEntry".
+ */
+export interface ModelEntry {
+  context: number | null;
+  cost: ModelCost | null;
+  id: string;
+  name: string | null;
+  output: number | null;
+  reasoning: boolean | null;
+  tools: boolean | null;
+  unsupported: string | null;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ModelListing".
+ */
+export interface ModelListing {
+  providers: ProviderModels[];
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ProviderModels".
+ */
+export interface ProviderModels {
+  description: string;
+  has_key: boolean;
+  key_env: string | null;
+  models: ModelEntry[] | null;
+  name: string;
+  problem: string | null;
+  source: "plugin" | "builtin" | "catalog";
+}
+/**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Prompt".
  */
@@ -958,6 +1011,7 @@ export interface Received {
   history_item: HistoryItem;
   history_page: HistoryPage;
   live_chunk: LiveChunk;
+  model_listing: ModelListing;
   page_reply: PageReply;
   session_event: SessionEvent;
   session_info: SessionInfo;

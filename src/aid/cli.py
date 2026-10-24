@@ -245,6 +245,7 @@ def _parser() -> argparse.ArgumentParser:
 
     py = with_permission(new("new-py", "create a session running a native agent"))
     py.add_argument("agent", help="an agent `aid agents` lists, or module:attribute of an aid.Agent")
+    py.add_argument("--model", help="provider/model to run on instead of the agent's own (`aid models` lists them)")
     py.add_argument("--python-path", action="append", default=[], help="prepend to the worker's sys.path")
     py.add_argument(
         "--max-context",
@@ -456,6 +457,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         worker_ca=worker_ca,
         max_context=args.max_context,
         max_requests=args.max_requests,
+        model=args.model,
         supervisor=args.supervisor,
         supervisor_permissions=args.supervisor_permissions,
         supervisor_permission_timeout=args.supervisor_permission_timeout,

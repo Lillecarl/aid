@@ -12,6 +12,7 @@ import type {
   HistoryEntry,
   HistoryPage,
   LiveChunk,
+  ModelListing,
   PageReply,
   PageRequest,
   PermissionMode,
@@ -288,6 +289,10 @@ export async function readFile(name: string, path: string): Promise<FileView> {
 /** The agents on the daemon's plugins path. Each call imports them afresh, so edits show up. */
 export const agents = async (): Promise<AgentCatalog> =>
   (await call({ op: "agents" })) as AgentCatalog;
+
+/** Model providers, and with `provider` the models it serves. Fetched afresh from a subprocess each call. */
+export const models = async (provider?: string): Promise<ModelListing> =>
+  (await call({ op: "models", provider: provider ?? null })) as ModelListing;
 
 export const sessions = async (): Promise<SessionInfo[]> =>
   (await call({ op: "list" })) as SessionInfo[];

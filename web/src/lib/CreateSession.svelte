@@ -1,6 +1,6 @@
 <script lang="ts">
   import * as api from "./api";
-  import type { AgentCatalog, AgentKind, AgentSpec, PermissionMode } from "./api";
+  import type { AgentCatalog, AgentKind, AgentSpec, ModelEntry, PermissionMode, ProviderModels } from "./api";
 
   // A new session asks; its Permissions tab changes that, per tool for native sessions.
   const permission: PermissionMode = "ask";
@@ -17,6 +17,11 @@
   let command = $state("claude-agent-acp");
   let agent = $state("");
   let catalog = $state<AgentCatalog | null>(null);
+  // Empty: the agent's own model.
+  let provider = $state("");
+  let providers = $state<ProviderModels[]>([]);
+  let modelId = $state("");
+  let models = $state<ModelEntry[]>([]);
   let args = $state("");
   let model = $state("");
   let trust = $state(false);
@@ -35,7 +40,9 @@
         return { kind, cwd, command: [program, ...rest], permission };
       }
       case "native":
-        return { kind, cwd, agent, permission };
+        return provider && modelId
+          ? { kind, cwd, agent, permission, model: `${provider}/${modelId}` }
+          : { kind, cwd, agent, permission };
       case "claude-tty":
         return { kind, cwd, args: words(args), trust_cwd: trust };
       case "claude-sdk":
@@ -52,10 +59,45 @@
     }
   }
 
+  // Providers with a key first: those are the ones a session can run on.
+  async function loadProviders(): Promise<void> {
+    try {
+      const listing = await api.models();
+      providers = listing.providers.toSorted((a, b) => Number(b.has_key) - Number(a.has_key));
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // A reply that comes back after another provider was chosen is dropped.
+  async function loadModels(chosen: string): Promise<void> {
+    models = [];
+    modelId = "";
+    if (!chosen) return;
+    try {
+      const [row] = (await api.models(chosen)).providers;
+      if (provider !== chosen) return;
+      models = row?.models ?? [];
+      modelId = models.find((m) => m.unsupported === null)?.id ?? "";
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    }
+  }
+
   // Asked each time the kind turns to native: the catalog reflects the plugins path as it is now.
   $effect(() => {
-    if (kind === "native") void loadAgents();
+    if (kind === "native") {
+      void loadAgents();
+      void loadProviders();
+    }
   });
+
+  const tokens = (count: number | null): string =>
+    count === null ? "" : count >= 1000 ? `${Math.round(count / 1000)}K` : String(count);
+  const modelLabel = (m: ModelEntry): string =>
+    [m.id, m.context === null ? "" : `${tokens(m.context)} context`, m.unsupported === null ? "" : "unsupported"]
+      .filter((part) => part !== "")
+      .join(" · ");
 
   const chosen = $derived(catalog?.agents.find((a) => a.name === agent));
 
@@ -143,6 +185,27 @@
     {#each catalog?.problems ?? [] as problem (problem)}
       <p class="error">{problem}</p>
     {/each}
+    <label>
+      Model provider
+      <select bind:value={provider} onchange={() => loadModels(provider)} data-testid="model-provider">
+        <option value="">the agent's own model</option>
+        {#each providers as row (row.name)}
+          <option value={row.name}>{row.name}{row.has_key || row.key_env === null ? "" : " (no key)"}</option>
+        {/each}
+      </select>
+    </label>
+    {#if provider}
+      <label>
+        Model
+        <select bind:value={modelId} required data-testid="model-id">
+          {#each models as m (m.id)}
+            <option value={m.id} disabled={m.unsupported !== null} title={m.unsupported ?? m.name ?? ""}
+              >{modelLabel(m)}</option
+            >
+          {/each}
+        </select>
+      </label>
+    {/if}
   {:else if kind === "claude-sdk"}
     <label>Model <input bind:value={model} required placeholder="opus" /></label>
   {:else}
