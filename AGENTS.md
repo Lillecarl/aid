@@ -112,7 +112,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   a plugin is a directory named as an import name, with `__init__.py` and/or optional `plugin.toml` (`name` = dir,
   `version`, `description`, `requires`). `resolve` reads manifests only (first tier wins a name; missing requirement
   or cycle drops dependents); `discover` imports packages in dependency order, under their own names, never via
-  `sys.path`, and sorts by interface: `AgentDefinition`, `InstructionsProvider`, `@aid.mcptool`, `Plugin` (≤1 per
+  `sys.path`, and sorts by interface: `AgentDefinition`, `InstructionsProvider`, `ModelProvider` (by the prefix it
+  serves, `Catalog.model_providers`), `@aid.mcptool`, `Plugin` (≤1 per
   plugin; `plugin_name()` = top-level package). Data-only plugins (`skills/`) need no `__init__.py`. Workers and
   `aid.mcp_server` import everything; the daemon never imports a plugin without a task (below).
 - `src/aid/catalog.py` — `python -m aid.catalog [--path DIR]`, the catalog as JSON (`AgentCatalog`, plugins
@@ -147,14 +148,34 @@ on reusable decisions and current boundaries; put long investigations and dated 
   deleted. Spec `parent` (also on `SessionInfo`/`SessionStatus`): chat plugins skip such sessions (no Discord
   channel, no settled-turn notice, not in session lists).
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
-- `src/aid/model.py` — the native backend's transports: `model_for(name)`,
-  `anthropic/` → `AnthropicModel` (Messages API, native blocks, `extra_headers` carry betas, automatic caching
-  on), else `OpenAIChatModel` (Chat Completions; `OPENAI_COMPATIBLE` maps prefix → base URL + key variable).
-  `model_settings`: `api_key`/`api_base`/`max_retries` build the client, the rest goes into each request.
-- `src/aid/prices.py` — models.dev's catalog (`~/.cache/aid/models.dev.json`, refetched daily, stale kept on
-  failure; `AID_MODEL_PRICES` = URL, file or `off`, tests set `off`). The native backend prices each request of a
-  model it built from a name (context tiers included) into `Usage.cost`, a per-turn amount that summaries add;
-  `session_cost` stays the agent's own running total.
+- `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API, native blocks,
+  `extra_headers` carry betas, automatic caching on) and `OpenAIChatModel` (Chat Completions), each taking a
+  `Provider` (base URL, key variable, default request settings, headers). A provider's quirks subclass
+  `OpenAIChatModel` (`request_settings`, `reasoning`, `usage`, `wire`), never branch in it. `OPENAI_COMPATIBLE`:
+  prefixes models.dev gives no URL for, and local servers. `model_settings`: `api_key`/`api_base`/`max_retries`
+  build the client, the rest goes into each request. `model_for(name)`: the table alone, for direct use.
+- `src/aid/providers.py` — `resolve(name, catalog.model_providers)`, in `open_native`: an `aid.ModelProvider`
+  plugin claiming the prefix (async `transport(model)`), else `anthropic/`, else `OPENAI_COMPATIBLE`, else a
+  models.dev `@ai-sdk/openai-compatible` provider by its `api` and first `env`. Providers are stateless and built
+  per use in workers; the transport is the backend's to close and price.
+- `src/aid/models_dev.py` — models.dev's catalog (`~/.cache/aid/models.dev.json`, refetched daily, stale kept on
+  failure; `AID_MODEL_PRICES` = URL, file or `off`, tests set `off`), typed per provider and model. `prices.py`
+  prices from it: the native backend prices each request of a model it resolved from a name (context tiers
+  included) into `Usage.cost`, a per-turn amount that summaries add; `session_cost` stays the agent's own total.
+- `src/aid/model_lists.py` — `ListModels` (`aid models [PROVIDER]`, page, plugin `read`, agents) answered by
+  `python -m aid.model_lists` in a subprocess: providers (plugin, builtin, catalog; whether the key variable is set
+  in the daemon's environment) and one provider's models: `ModelProvider.fetch_models` cached a day
+  (`~/.cache/aid/models/<provider>.json`, stale kept on failure with `problem`), backfilled from models.dev, else
+  models.dev's list. `AID_MODEL_LISTS=off` fetches nothing (tests; they also isolate `XDG_CACHE_HOME`).
+- `plugins/deepseek/`, `plugins/openrouter/`, `plugins/opencode/` — bundled model providers. DeepSeek: output-limit
+  default, `prompt_cache_hit_tokens`, its keyed `/models`. OpenRouter: `usage.include`, its `reasoning` field, no
+  reasoning replay (needs `reasoning_details`), public `/models` priced per token. OpenCode Zen: per-model protocol
+  from models.dev's `provider.npm`/`api` (Anthropic Messages, Chat Completions; Responses models listed
+  `unsupported`), public `/zen/v1/models`. OpenRouter and OpenCode inference is unmeasured (no key). A plugin
+  named like a bundled one in an earlier tier shadows it: the example agent is `examples/deepseek_agent`.
+- `NativeSpec.model` (`provider/model`) runs the agent on another model (`session_agent`); the agent's
+  `model_settings` follow only within one provider, `NativeSpec.model_settings` go over them. `aid new-py --model`,
+  the create form's picker.
 - `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON,
   plus the built-in `aid` server (`session_servers`). claude-agent-acp restarts its query when `session/load` gets
   servers other than `session/new` did.
