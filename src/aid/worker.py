@@ -27,6 +27,7 @@ from aid.backends.base import (
     HookBackend,
     PermissionBackend,
     ScreenBackend,
+    ToolPolicyBackend,
     WatchBackend,
 )
 from aid.protocol import (
@@ -46,6 +47,7 @@ from aid.protocol import (
     Notify,
     Observed,
     Prompt,
+    SetPermissions,
     StartFailed,
     StopSession,
     decode_request,
@@ -111,7 +113,8 @@ async def serve(
                 raise
             tg = await stack.enter_async_context(anyio.create_task_group())
             worker = _Worker(sock, backend, tg)
-            await worker.send(Hello(started=backend.started()))
+            tools = backend.session_tools() if isinstance(backend, ToolPolicyBackend) else []
+            await worker.send(Hello(started=backend.started(), tools=tools))
             tg.start_soon(worker.serve_hooks, hook_sock)
             if isinstance(backend, FollowingBackend):
                 tg.start_soon(worker.follow, backend)
@@ -259,6 +262,12 @@ class _Worker:
                         await self.send(
                             Failure(id=request.id, code="no_pending", message="no such permission request waits")
                         )
+                case SetPermissions():
+                    # The daemon saved them in the spec first: a backend without tool policies takes them at
+                    # its next start, if ever.
+                    if isinstance(self._backend, ToolPolicyBackend):
+                        self._backend.set_permissions(request.default, request.tools)
+                    await self.send(Done(id=request.id))
                 case StopSession():
                     await self._backend.cancel()
                     await self.send(Done(id=request.id))

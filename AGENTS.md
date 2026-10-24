@@ -301,6 +301,14 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 - multiprocessing re-imports the parent's `__main__` in each worker: every entry script needs a
   `if __name__ == "__main__":` guard.
 - Daemon shutdown: `_stop_all` runs inside the task group; worker watchers are shielded and must see every exit.
+- Native tool permissions: a mode per tool name. `NativeSpec.tool_permissions` overrides; unset, a `Tool.asks`
+  tool (python, shell, background, monitor, apply_edits, ask_user: they permit inside, with their own titles)
+  follows `permission`, any other is allowed. The loop gates every non-`asks` call through `Coding.permit`, so
+  `*` hooks cover all tools. The worker lists its tools in `Hello` (`SessionTool`: name, group by module,
+  asks); the daemon keeps them in `tools.json` and shows `SessionStatus.tools` with the spec's modes.
+  `SetPermissions` (control, page, `aid permissions`, plugin `permissions`; never agents) writes the spec under
+  `spec_lock`, then the running worker applies it to its next permit. ACP/claude-sdk still take one mode;
+  learned names (ACP `requested_tool`, claude -p `system init` tools) are the next step.
 - ACP permission requests: `AcpSpec.permission` allow/deny answers at once; `ask` waits for `AnswerPermission` (web
   card, `aid answer`), refused after `permission_timeout`. The worker's `_Client` emits `PermissionRequest` and
   `PermissionDecision` into the running prompt's events, whatever the mode; the daemon keeps the pending ones in

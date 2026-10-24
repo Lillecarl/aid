@@ -6,7 +6,17 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from pydantic import JsonValue
 
-    from aid.protocol import Activity, HistoryItem, Output, PaneAddress, PaneView, SessionEvent, Started
+    from aid.protocol import (
+        Activity,
+        HistoryItem,
+        Output,
+        PaneAddress,
+        PaneView,
+        SessionEvent,
+        SessionTool,
+        Started,
+    )
+    from aid.spec import PermissionMode
 
 type Emit = Callable[[SessionEvent], Awaitable[None]]
 type Record = Callable[[str, HistoryItem], Awaitable[None]]
@@ -75,6 +85,19 @@ class PermissionBackend(Backend, Protocol):
         answering; None is a person. `supervisor` names the supervision link's supervisor answering; the
         daemon sets it, a worker never does. `text` is the answerer's own words; only a waiter that reads
         answer text (the `ask_user` tool) hands it to its agent."""
+        ...
+
+
+@runtime_checkable
+class ToolPolicyBackend(Backend, Protocol):
+    """A backend that knows its agent's tools and answers permissions for each by name."""
+
+    def session_tools(self) -> list[SessionTool]:
+        """The agent's tools; the worker sends them in Hello."""
+        ...
+
+    def set_permissions(self, default: PermissionMode | None, tools: dict[str, PermissionMode | None]) -> None:
+        """Apply `SetPermissions` to the next permit; a request already waiting keeps its own."""
         ...
 
 

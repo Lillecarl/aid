@@ -33,6 +33,9 @@ class Tool:
     kind: str | None = None
     """ACP's tool kind (`read`, `edit`, `delete`, `move`, `search`, `execute`, …): the web UI labels the call by it,
     and session summaries count a call of a write kind as writing its `path`."""
+    asks: bool = False
+    """The tool asks the session's permission itself, with its own title and options, and its mode defaults to the
+    session's. Any other tool is gated by the loop on its name and arguments, and is allowed unless set otherwise."""
     errors_to_model: bool = False
     """Any exception goes back to the model as a retry, as an MCP server answers a failing tool. Otherwise only
     `ModelRetry` does, and other exceptions end the turn."""

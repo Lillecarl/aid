@@ -15,7 +15,7 @@ import anyio.to_thread
 import structlog
 import zmq
 import zmq.asyncio
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from aid import events, plugin_host, plugins, zap
 from aid.catalog import listing
@@ -77,7 +77,9 @@ from aid.protocol import (
     SessionInfo,
     SessionInfosAdapter,
     SessionStatus,
+    SessionTool,
     SetAttention,
+    SetPermissions,
     Started,
     StartFailed,
     StartSession,
@@ -86,6 +88,7 @@ from aid.protocol import (
     ThoughtDelta,
     ToolCall,
     ToolEvent,
+    ToolMode,
     TurnEvent,
     Usage,
     decode_reply,
@@ -102,6 +105,7 @@ from aid.spec import (
     ClaudeSdkSpec,
     ClaudeTtySpec,
     NativeSpec,
+    PermissionMode,
 )
 from aid.summary import summarize
 
@@ -129,6 +133,9 @@ PLUGIN_CALL_TIMEOUT: Final = 30.0
 LIVE_LIMIT: Final = 65536
 """Characters of `usertee` output a session keeps for a page opened mid-command (`GetLive`)."""
 SPEC_FILE: Final = "spec.json"
+TOOLS_FILE: Final = "tools.json"
+"""The tools the last worker reported, so a stopped session still lists them."""
+SessionToolsAdapter: Final = TypeAdapter(list[SessionTool])
 # A spec holds env values and MCP headers, which are often credentials.
 SESSION_DIR_MODE: Final = 0o700
 
@@ -169,6 +176,10 @@ class _Session:
     live_turn: str | None = None
     attention: str | None = None
     directory_request: DirectoryRequest | None = None
+    tools: list[SessionTool] = field(default_factory=list[SessionTool])
+    """What the last worker's Hello listed."""
+    spec_lock: anyio.Lock = field(default_factory=anyio.Lock)
+    """Held from reading the spec to writing its change, so two changes never write over each other."""
 
     @property
     def running(self) -> bool:
@@ -215,6 +226,27 @@ class _Session:
     def uses_channel(self) -> bool:
         return self.spec.kind is AgentKind.CLAUDE_TTY
 
+    def tool_modes(self) -> list[ToolMode]:
+        """Each reported tool's mode under the spec now, then the spec's settings for tools none reported."""
+        if not isinstance(self.spec, NativeSpec):
+            return []
+        spec = self.spec
+        modes = [
+            ToolMode(
+                **tool.model_dump(),
+                mode=spec.tool_permissions.get(tool.name) or (spec.permission if tool.asks else PermissionMode.ALLOW),
+                set=tool.name in spec.tool_permissions,
+            )
+            for tool in self.tools
+        ]
+        known = {tool.name for tool in self.tools}
+        modes.extend(
+            ToolMode(name=name, group="unreported", asks=False, mode=mode, set=True)
+            for name, mode in spec.tool_permissions.items()
+            if name not in known
+        )
+        return modes
+
     def status(self) -> SessionStatus:
         match self.spec:
             case AcpSpec():
@@ -243,6 +275,8 @@ class _Session:
             agent=self.started.agent if self.started else None,
             model=", ".join(self.models) or (self.started.model if self.started else None),
             permissions=list(self.permissions.values()),
+            tools=self.tool_modes(),
+            permission=self.spec.permission if isinstance(self.spec, NativeSpec) else None,
             working=self.working or self.turn is not None,
             attention=self.attention,
             parent=self.spec.parent,
@@ -433,6 +467,11 @@ class Daemon:
                 log.exception("invalid_session_spec", session=session_dir.name)
                 continue
             session = self._new_session(session_dir.name, spec)
+            if await (tools_file := session_dir / TOOLS_FILE).exists():
+                try:
+                    session.tools = SessionToolsAdapter.validate_json(await tools_file.read_bytes())
+                except ValidationError:
+                    log.warning("invalid_session_tools", session=session_dir.name)
             session.attention = await session.inbox.restore()
             if session.inbox:
                 session.mail.set()
@@ -727,6 +766,14 @@ class Daemon:
                 await self._send_worker(
                     session, request.model_copy(update={"plugin": client.plugin, "supervisor": supervisor})
                 )
+                return None
+            case SetPermissions():
+                session = self._session(request.session)
+                await self._set_permissions(session, request)
+                if not session.running:
+                    return Done(id=request.id)
+                self._routes[request.id] = _Route(client, session.name)
+                await self._send_worker(session, request)
                 return None
             case StartSession():
                 session = self._session(request.session)
@@ -1061,18 +1108,37 @@ class Daemon:
             raise AidError("not_a_directory", f"{cwd!r} is not a directory")
         return str(target)
 
+    async def _set_permissions(self, session: _Session, request: SetPermissions) -> None:
+        async with session.spec_lock:
+            spec = session.spec
+            if not isinstance(spec, NativeSpec):
+                raise AidError("unsupported", f"{session.name!r} is not native: its permissions are one mode")
+            tools = dict(spec.tool_permissions)
+            for name, mode in request.tools.items():
+                if mode is None:
+                    tools.pop(name, None)
+                else:
+                    tools[name] = mode
+            update = {"tool_permissions": tools} | ({"permission": request.default} if request.default else {})
+            spec = spec.model_copy(update=update)
+            await (anyio.Path(self._paths.session_dir(session.name)) / SPEC_FILE).write_bytes(
+                AgentSpecAdapter.dump_json(spec)
+            )
+            session.spec = spec
+
     async def _move(self, session: _Session, cwd: str) -> None:
         """Save the session's new working directory and restart a running worker there. Its agent session carries
         on: native history is aid's, and Claude Code resumes in another directory (measured 2.1.310)."""
         if session.busy:
             raise AidError("busy", f"{session.name!r} is in a turn; move it when the turn ends")
-        spec = session.spec.model_copy(update={"cwd": cwd})
-        await (anyio.Path(self._paths.session_dir(session.name)) / SPEC_FILE).write_bytes(
-            AgentSpecAdapter.dump_json(spec)
-        )
-        running = session.running
-        await self._stop(session)
-        session.spec = spec
+        async with session.spec_lock:
+            spec = session.spec.model_copy(update={"cwd": cwd})
+            await (anyio.Path(self._paths.session_dir(session.name)) / SPEC_FILE).write_bytes(
+                AgentSpecAdapter.dump_json(spec)
+            )
+            running = session.running
+            await self._stop(session)
+            session.spec = spec
         await session.history.append(Lifecycle(event="moved", detail=cwd), uuid.uuid4().hex)
         if running:
             try:
@@ -1285,7 +1351,15 @@ class Daemon:
                         log.info("worker_ready", session=name, pid=reply.started.pid)
                         session.peer = peer.bytes
                         session.started = reply.started
+                        session.tools = reply.tools
                         session.ready.set()
+                        if reply.tools:
+                            try:
+                                await (anyio.Path(self._paths.session_dir(name)) / TOOLS_FILE).write_bytes(
+                                    SessionToolsAdapter.dump_json(reply.tools)
+                                )
+                            except OSError:
+                                log.exception("record_tools_failed", session=name)
                         try:
                             await session.history.append(reply.started, uuid.uuid4().hex)
                         except OSError:

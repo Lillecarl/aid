@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from aid.plugins import Grant, PluginSpec
-from aid.spec import AgentKind, AgentSpec
+from aid.spec import AgentKind, AgentSpec, PermissionMode
 
 PROTOCOL_VERSION = 1
 
@@ -217,6 +217,17 @@ class AnswerPermission(_Request):
     else."""
 
 
+class SetPermissions(_Request):
+    """Change a native session's permission modes: `default` for tools that ask for themselves, `tools` by name
+    (None returns a tool to its default). Saved in the spec; a running worker applies them to its next permit,
+    while a request already waiting keeps its own."""
+
+    op: Literal["set_permissions"] = "set_permissions"
+    session: str
+    default: PermissionMode | None = None
+    tools: dict[str, PermissionMode | None] = Field(default_factory=dict[str, PermissionMode | None])
+
+
 class GetLive(_Request):
     """The `usertee` output the daemon still holds for a session, as a `LiveChunk`: the newest characters of the
     turn it last came in. Never recorded, so gone with the daemon."""
@@ -411,6 +422,7 @@ type Request = Annotated[
     | SendMessage
     | ReceiveMessages
     | AnswerPermission
+    | SetPermissions
     | Hook
     | AddPlugin
     | ListPlugins
@@ -850,6 +862,23 @@ class SessionInfo(_Message):
     """The spec's `parent`: the session this one works for."""
 
 
+class SessionTool(_Message):
+    """A tool the worker's agent has, as its permissions see it."""
+
+    name: str
+    group: str
+    """Where the tool comes from: `coding`, `aid`, a plugin's name, or `agent` for the agent's own."""
+    asks: bool
+    """It asks for itself, and its mode defaults to the session's (`Tool.asks`)."""
+
+
+class ToolMode(SessionTool):
+    mode: PermissionMode
+    """What the session answers now."""
+    set: bool
+    """`mode` is the tool's own setting, not its default."""
+
+
 class DirectoryRequest(_Message):
     cwd: str
     """Absolute, as the daemon resolved it."""
@@ -880,6 +909,10 @@ class SessionStatus(_Message):
     """What the latest turn used, since this daemon started; else the model at the last start."""
     permissions: list[PermissionRequest] = Field(default_factory=list[PermissionRequest])
     """Requests the agent waits on an answer to."""
+    tools: list[ToolMode] = Field(default_factory=list[ToolMode])
+    """The tools the last worker reported (native only), with the modes the spec gives them now."""
+    permission: PermissionMode | None = None
+    """The spec's default mode, where it has one."""
     working: bool = False
     """In a turn: aid's, or one typed into the pane."""
     attention: str | None = None
@@ -936,6 +969,8 @@ class Hello(_Message):
 
     reply: Literal["hello"] = "hello"
     started: Started
+    tools: list[SessionTool] = Field(default_factory=list[SessionTool])
+    """The agent's tools, for backends that know them (native)."""
 
 
 class StartFailed(_Message):

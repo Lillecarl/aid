@@ -40,8 +40,15 @@ export type AgentSpec = AcpSpec | NativeSpec | ClaudeTtySpec | ClaudeSdkSpec;
 export type PermissionMode1 = "allow" | "deny" | "ask";
 /**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "PermissionMode".
  */
 export type PermissionMode2 = "allow" | "deny" | "ask";
+/**
+ * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
+ */
+export type PermissionMode3 = "allow" | "deny" | "ask";
 /**
  * When a message reaches a session that is in a turn.
  *
@@ -109,18 +116,12 @@ export type PageRequest =
   | Cancel
   | CompactSession
   | AnswerPermission
+  | SetPermissions
   | StartSession
   | StopSession
   | DeleteSession
   | ChangeDirectory
   | AnswerDirectory;
-/**
- * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
- *
- * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "PermissionMode".
- */
-export type PermissionMode3 = "allow" | "deny" | "ask";
 
 export interface AidProtocol {
   [k: string]: unknown;
@@ -291,6 +292,9 @@ export interface NativeSpec {
   supervisor_permission_timeout?: number;
   supervisor_permissions?: string[];
   target?: string | null;
+  tool_permissions?: {
+    [k: string]: PermissionMode2;
+  };
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
   worker_endpoint?: string | null;
@@ -359,7 +363,7 @@ export interface ClaudeSdkSpec {
   mcp_servers?: McpServers;
   model: string;
   parent?: string | null;
-  permission?: PermissionMode2;
+  permission?: PermissionMode3;
   permission_timeout?: number;
   supervisor?: string | null;
   supervisor_nudge_budget?: number;
@@ -847,6 +851,23 @@ export interface Prompt {
   text: string;
 }
 /**
+ * Change a native session's permission modes: `default` for tools that ask for themselves, `tools` by name
+ * (None returns a tool to its default). Saved in the spec; a running worker applies them to its next permit,
+ * while a request already waiting keeps its own.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "SetPermissions".
+ */
+export interface SetPermissions {
+  default?: PermissionMode2 | null;
+  id?: string;
+  op: "set_permissions";
+  session: string;
+  tools?: {
+    [k: string]: PermissionMode2 | null;
+  };
+}
+/**
  * Start a stopped session's worker without a turn; for interactive Claude, its pane. A running one is left be.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -925,11 +946,24 @@ export interface SessionStatus {
   name: string;
   parent: string | null;
   pending: number;
+  permission: PermissionMode2 | null;
   permissions: PermissionRequest[];
   pid: number | null;
   running: boolean;
   runs: string;
+  tools: ToolMode[];
   working: boolean;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ToolMode".
+ */
+export interface ToolMode {
+  asks: boolean;
+  group: string;
+  mode: PermissionMode2;
+  name: string;
+  set: boolean;
 }
 /**
  * A session's whole history, totalled. Token counts sum each turn's Usage, so they cover what the agents

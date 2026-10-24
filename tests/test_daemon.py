@@ -23,6 +23,7 @@ from aid.protocol import (
     PermissionRequest,
     Started,
     TextDelta,
+    ToolMode,
     Usage,
     decode_reply,
     encode,
@@ -387,6 +388,30 @@ async def test_native_history_survives_daemon_restart(
             async with aid.connect(paths) as client:
                 assert [s.name for s in await client.sessions()] == ["echo"]
                 assert (await client.session("echo").run("c")).output == "turn 3: echo c"
+            tg.cancel_scope.cancel()
+
+
+async def test_a_stopped_session_lists_its_tools_after_a_daemon_restart(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path
+) -> None:
+    before: list[ToolMode] = []
+    with anyio.fail_after(TIMEOUT):
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
+            async with aid.connect(paths) as client:
+                session = await client.create("coder", py_spec(tmp_path, "agents:coder"))
+                await session.start()
+                await session.set_permissions({"shell": PermissionMode.ALLOW})
+                before = (await session.status()).tools
+            tg.cancel_scope.cancel()
+
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
+            async with aid.connect(paths) as client:
+                after = await client.session("coder").status()
+                assert not after.running
+                assert after.tools == before
+                assert [(t.mode, t.set) for t in after.tools if t.name == "shell"] == [(PermissionMode.ALLOW, True)]
             tg.cancel_scope.cancel()
 
 

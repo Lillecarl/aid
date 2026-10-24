@@ -269,12 +269,21 @@ class Coding:
     outputs: Path
     """Where oversize tool results spill: content-addressed files the model reads back with `read`."""
     mode: PermissionMode
+    """The mode of tools in `asking` that `overrides` does not name."""
     timeout: float
     waits: PermissionWaits
     autoselect_after: float = 240.0
     """Seconds an `ask_user` question with a recommended option waits for a person before it picks it."""
     hooks: tuple[Hook, ...] = ()
     """Pre-tool gates: the first hook whose tool fits and whose match finds the call's text refuses it."""
+    overrides: dict[str, PermissionMode] = field(default_factory=dict[str, PermissionMode])
+    """Modes by tool name, `NativeSpec.tool_permissions`; a person changes them while the worker runs."""
+    asking: frozenset[str] = field(
+        default_factory=lambda: frozenset(
+            t.name for t in coding_tools.tools if isinstance(t, Tool) and t.asks and t.name
+        )
+    )
+    """Tools that ask for themselves (`Tool.asks`); the backend sets the session's."""
     edits: EditSession = field(init=False)
     emit: Emit | None = None
     """The running turn's; the worker sets it before each turn."""
@@ -316,6 +325,11 @@ class Coding:
         sections = re.split(r"(?m)^(?=--- )", text)
         return "".join(s for s in sections if f"a/{path}\n" in s.split("\n+++", 1)[0] or f"+++ b/{path}\n" in s)
 
+    def mode_for(self, tool_name: str) -> PermissionMode:
+        if (mode := self.overrides.get(tool_name)) is not None:
+            return mode
+        return self.mode if tool_name in self.asking else PermissionMode.ALLOW
+
     async def permit(
         self,
         tool_call_id: str,
@@ -333,8 +347,8 @@ class Coding:
             rendered = str(input)
         if (hook := match_hook(list(self.hooks), tool_name, f"{title}\n{rendered}")) is not None:
             raise ModelRetry(hook.message)
-        if self.mode is not PermissionMode.ASK:
-            return self.mode is PermissionMode.ALLOW
+        if (mode := self.mode_for(tool_name)) is not PermissionMode.ASK:
+            return mode is PermissionMode.ALLOW
         if remember is not None and remember in self.always:
             return True
         options = [PermissionChoice(option_id=YES, name="Yes", kind="allow_once")]
@@ -826,12 +840,13 @@ async def ask_user(
     words, or both; when nobody answers in time with no recommendation, it says so, and you proceed with
     your best judgment."""
     coding = _coding()
-    if coding.mode is PermissionMode.DENY:
+    mode = coding.mode_for("ask_user")
+    if mode is PermissionMode.DENY:
         raise AidError("questions_declined", "this session declines questions; proceed with your best judgment")
     names = options or []
     if recommended is not None and recommended not in names:
         raise AidError("unknown_option", f"{recommended!r} is not one of the options; name one of them")
-    if coding.mode is not PermissionMode.ASK or coding.emit is None:
+    if mode is not PermissionMode.ASK or coding.emit is None:
         return "No one is watching; proceed with your best judgment."
     picked_id = str(names.index(recommended)) if recommended is not None else None
     request = PermissionRequest(
@@ -1250,16 +1265,16 @@ coding_tools: Toolset = Toolset(
         _retrying(show_edits),
         _retrying(discard_edits),
         _retrying(compact),
-        Tool(_retrying(apply_edits), kind="edit"),
-        _retrying(ask_user),
-        Tool(_retrying(_sees_disk(python)), kind="execute"),
-        Tool(_retrying(_sees_disk(shell)), kind="execute"),
+        Tool(_retrying(apply_edits), kind="edit", asks=True),
+        Tool(_retrying(ask_user), asks=True),
+        Tool(_retrying(_sees_disk(python)), kind="execute", asks=True),
+        Tool(_retrying(_sees_disk(shell)), kind="execute", asks=True),
         _retrying(shell_restart),
-        Tool(_retrying(_sees_disk(background)), kind="execute"),
+        Tool(_retrying(_sees_disk(background)), kind="execute", asks=True),
         _retrying(task_output),
         _retrying(task_stop),
         _retrying(tasks),
-        _retrying(monitor),
+        Tool(_retrying(monitor), asks=True),
         _retrying(monitor_stop),
         _retrying(monitors),
     ],

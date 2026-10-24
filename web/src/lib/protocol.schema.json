@@ -1746,6 +1746,12 @@
           ],
           "default": null
         },
+        "tool_permissions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PermissionMode"
+          },
+          "type": "object"
+        },
         "worker_ca": {
           "anyOf": [
             {
@@ -1851,6 +1857,7 @@
           "list": "#/$defs/ListSessions",
           "live": "#/$defs/GetLive",
           "prompt": "#/$defs/Prompt",
+          "set_permissions": "#/$defs/SetPermissions",
           "start": "#/$defs/StartSession",
           "status": "#/$defs/GetStatus",
           "stop": "#/$defs/StopSession",
@@ -1891,6 +1898,9 @@
         },
         {
           "$ref": "#/$defs/AnswerPermission"
+        },
+        {
+          "$ref": "#/$defs/SetPermissions"
         },
         {
           "$ref": "#/$defs/StartSession"
@@ -2527,6 +2537,17 @@
         "pending": {
           "type": "integer"
         },
+        "permission": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "permissions": {
           "items": {
             "$ref": "#/$defs/PermissionRequest"
@@ -2549,6 +2570,12 @@
         "runs": {
           "type": "string"
         },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/ToolMode"
+          },
+          "type": "array"
+        },
         "working": {
           "default": false,
           "type": "boolean"
@@ -2569,6 +2596,8 @@
         "agent",
         "model",
         "permissions",
+        "tools",
+        "permission",
         "working",
         "attention",
         "parent",
@@ -2654,6 +2683,53 @@
         "files"
       ],
       "title": "SessionSummary",
+      "type": "object"
+    },
+    "SetPermissions": {
+      "additionalProperties": false,
+      "description": "Change a native session's permission modes: `default` for tools that ask for themselves, `tools` by name\n(None returns a tool to its default). Saved in the spec; a running worker applies them to its next permit,\nwhile a request already waiting keeps its own.",
+      "properties": {
+        "default": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PermissionMode"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "set_permissions",
+          "default": "set_permissions",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "tools": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PermissionMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "op",
+        "session"
+      ],
+      "title": "SetPermissions",
       "type": "object"
     },
     "StartSession": {
@@ -2936,6 +3012,35 @@
         "module"
       ],
       "title": "ToolInfo",
+      "type": "object"
+    },
+    "ToolMode": {
+      "additionalProperties": false,
+      "properties": {
+        "asks": {
+          "type": "boolean"
+        },
+        "group": {
+          "type": "string"
+        },
+        "mode": {
+          "$ref": "#/$defs/PermissionMode"
+        },
+        "name": {
+          "type": "string"
+        },
+        "set": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "group",
+        "asks",
+        "mode",
+        "set"
+      ],
+      "title": "ToolMode",
       "type": "object"
     },
     "TurnError": {

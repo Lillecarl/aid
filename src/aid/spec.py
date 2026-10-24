@@ -181,7 +181,10 @@ class NativeSpec(_Spec):
     target: Annotated[str, Field(pattern=r"^[\w.]+:[\w.]+$")] | None = None
     python_path: list[str] = Field(default_factory=list[str])
     permission: PermissionMode = PermissionMode.DENY
-    """How aid answers what `aid.coding` tools ask: each command a `python` script starts, each edit applied."""
+    """The mode of tools that ask for themselves (`Tool.asks`: each command a `python` script starts, each edit
+    applied) when `tool_permissions` names no mode of their own."""
+    tool_permissions: dict[str, PermissionMode] = Field(default_factory=dict[str, PermissionMode])
+    """Modes by tool name. A tool it does not name follows `permission` if it asks for itself, else is allowed."""
     permission_timeout: Annotated[float, Field(gt=0)] = 1800
     ask_autoselect_after: Annotated[float, Field(gt=0)] = 240.0
     """Seconds an `ask_user` question with a recommended option waits for a person before it picks it."""

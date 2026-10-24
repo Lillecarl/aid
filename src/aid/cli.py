@@ -306,6 +306,15 @@ def _parser() -> argparse.ArgumentParser:
     answer_cd.add_argument("--approve", action="store_true", help="approve the move the agent asked for")
     answer_cd.add_argument("--decline", action="store_true", help="decline the move the agent asked for")
 
+    permissions = sub.add_parser("permissions", help="list a native session's tools and modes, or set them")
+    permissions.add_argument("name")
+    permissions.add_argument(
+        "set", nargs="*", metavar="TOOL=MODE", help="allow, ask or deny; empty returns a tool to its default"
+    )
+    permissions.add_argument(
+        "--default", choices=list(PermissionMode), help="the mode of tools that ask for themselves"
+    )
+
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
 
@@ -594,6 +603,13 @@ async def _client_command(args: argparse.Namespace) -> None:
                     print(await session.change_directory(args.path))
                 else:
                     raise SystemExit("aid cd: give a path, --approve or --decline")
+            case "permissions":
+                session = client.session(args.name)
+                if args.set or args.default:
+                    await session.set_permissions(_tool_modes(args.set), args.default)
+                else:
+                    for tool in (await session.status()).tools:
+                        print(f"{tool.group}\t{tool.name}\t{tool.mode}\t{'set' if tool.set else 'default'}")
             case "stop":
                 await client.session(args.name).stop()
             case "delete":
@@ -602,6 +618,19 @@ async def _client_command(args: argparse.Namespace) -> None:
                 await _plugin_command(client, args)
             case other:
                 raise SystemExit(f"unknown command {other!r}")
+
+
+def _tool_modes(settings: list[str]) -> dict[str, PermissionMode | None]:
+    modes: dict[str, PermissionMode | None] = {}
+    for setting in settings:
+        name, sep, mode = setting.partition("=")
+        if not sep or not name:
+            raise SystemExit(f"aid permissions: {setting!r} is not TOOL=MODE")
+        try:
+            modes[name] = PermissionMode(mode) if mode else None
+        except ValueError:
+            raise SystemExit(f"aid permissions: {mode!r} is not allow, ask or deny") from None
+    return modes
 
 
 async def _plugin_command(client: Client, args: argparse.Namespace) -> None:

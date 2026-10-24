@@ -65,6 +65,7 @@ from aid.protocol import (
     SessionInfosAdapter,
     SessionStatus,
     SessionSummary,
+    SetPermissions,
     StartSession,
     StopSession,
     TextDelta,
@@ -79,7 +80,7 @@ if TYPE_CHECKING:
 
     from aid.paths import Paths
     from aid.protocol import Request, SessionEvent, Usage
-    from aid.spec import AgentSpec
+    from aid.spec import AgentSpec, PermissionMode
 
 _MESSAGES = TypeAdapter(list[MessageEntry])
 _PLUGINS = TypeAdapter(list[PluginSpec])
@@ -550,6 +551,13 @@ class Session:
         await self._client.call(
             AnswerPermission(session=self.name, request_id=request_id, option_id=option_id, text=text)
         )
+
+    async def set_permissions(
+        self, tools: dict[str, PermissionMode | None] | None = None, default: PermissionMode | None = None
+    ) -> None:
+        """Change a native session's modes (`SetPermissions`): by tool name, None returning one to its default;
+        `default` for the tools that ask for themselves."""
+        await self._client.call(SetPermissions(session=self.name, default=default, tools=tools or {}))
 
     async def change_directory(self, cwd: str) -> str:
         """Move the session to `cwd` (`ChangeDirectory`), relative to its current one; returns the absolute path."""

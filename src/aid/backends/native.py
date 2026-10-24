@@ -45,6 +45,7 @@ from aid.protocol import (
     AidError,
     Cost,
     Output,
+    SessionTool,
     Started,
     TextDelta,
     ThoughtDelta,
@@ -61,7 +62,7 @@ if TYPE_CHECKING:
     from aid.backends.base import Emit, Notifier
     from aid.discovery import Catalog
     from aid.protocol import MessageEntry
-    from aid.spec import NativeSpec
+    from aid.spec import NativeSpec, PermissionMode
 
 log = structlog.get_logger(__name__)
 
@@ -324,6 +325,18 @@ def model_name(agent: Agent) -> str | None:
     return model if isinstance(model, str) else model.model_name
 
 
+TITLE_LIMIT: Final = 100
+"""Characters of a gated call's arguments its permission request names in the title; `input` has them all."""
+
+
+def tool_group(tool: Tool) -> str:
+    """Where a tool comes from, by its function's module: `coding`, `aid`, or a plugin's top-level package."""
+    module = getattr(tool.fn, "__module__", None) or ""
+    if module == "aid.coding":
+        return "coding"
+    return module.split(".")[0] or "agent"
+
+
 class NativeBackend:
     def __init__(
         self,
@@ -361,6 +374,7 @@ class NativeBackend:
             tools[tool.name] = tool
         self._tools = tools
         self._coding = coding
+        coding.asking = frozenset(name for name, tool in tools.items() if tool.asks)
         self._desired_max = desired_max
         self._max_requests = max_requests
         self._refresh_instructions = refresh_instructions
@@ -381,6 +395,18 @@ class NativeBackend:
 
     def started(self) -> Started:
         return self._started
+
+    def session_tools(self) -> list[SessionTool]:
+        return [SessionTool(name=name, group=tool_group(tool), asks=tool.asks) for name, tool in self._tools.items()]
+
+    def set_permissions(self, default: PermissionMode | None, tools: dict[str, PermissionMode | None]) -> None:
+        if default is not None:
+            self._coding.mode = default
+        for name, mode in tools.items():
+            if mode is None:
+                self._coding.overrides.pop(name, None)
+            else:
+                self._coding.overrides[name] = mode
 
     async def aclose(self) -> None:
         """Closes the SDK clients of a model built from the agent's name; a model object is its owner's."""
@@ -574,7 +600,15 @@ class NativeBackend:
                                 if truncated:
                                     raise ModelRetry(f"{error}: the response hit its output token limit") from error
                                 raise ModelRetry(str(error)) from error
-                            result = await tool.call(arguments, call.tool_call_id)
+                            if tool.asks or await self._coding.permit(
+                                call.tool_call_id,
+                                tool_name=call.tool_name,
+                                title=f"{call.tool_name} {json.dumps(arguments, default=str)[:TITLE_LIMIT]}",
+                                input=arguments,
+                            ):
+                                result = await tool.call(arguments, call.tool_call_id)
+                            else:
+                                result = f"not allowed: {call.tool_name} stays unrun"
                         except ModelRetry as error:
                             part = RetryPromptPart(str(error), tool_name=call.tool_name, tool_call_id=call.tool_call_id)
                         else:
@@ -766,6 +800,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         timeout=spec.permission_timeout,
         autoselect_after=spec.ask_autoselect_after,
         hooks=tuple(spec.hooks),
+        overrides=dict(spec.tool_permissions),
         waits=PermissionWaits(),
     )
     backend: NativeBackend | None = None
