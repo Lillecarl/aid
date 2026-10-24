@@ -287,6 +287,7 @@ export interface NativeSpec {
   permission?: PermissionMode2;
   permission_timeout?: number;
   python_path?: string[];
+  sandbox?: Sandbox | null;
   seed_history?: string | null;
   skip_instructions?: string[];
   supervisor?: string | null;
@@ -301,6 +302,18 @@ export interface NativeSpec {
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
   worker_endpoint?: string | null;
+}
+/**
+ * bubblewrap around the native `shell` tool's bash (`aid.sandbox`): the filesystem read-only but the session's
+ * directory and `writable`, a private /tmp. A session that asks for one never runs without it: no bwrap, or no
+ * user namespaces, and the worker refuses to start.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "Sandbox".
+ */
+export interface Sandbox {
+  network?: boolean;
+  writable?: string[];
 }
 /**
  * Interactive Claude Code in a pymux window: prompts are pasted in, events come from its transcript.

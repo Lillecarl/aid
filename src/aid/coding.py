@@ -59,7 +59,7 @@ from pyrun.host import run_script
 from pyrun.scope import Scope
 from pyrun.script import FILENAME as SCRIPT_FILENAME
 from pyrun.script import script_frames
-from pyrun.shell import ShellResult, ShellSession
+from pyrun.shell import SHELL_ARGV, ShellResult, ShellSession
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
@@ -307,6 +307,8 @@ class Coding:
     shell: ShellSession | None = None
     """The session's shell, started by the first `shell` call. `cd` and the environment persist between
     calls; it dies with the worker, or sooner on a timeout, which the next call reports as a reset."""
+    shell_argv: tuple[str, ...] = SHELL_ARGV
+    """How the shell starts: bash, or bash under bwrap (`NativeSpec.sandbox`)."""
     compact: Callable[[str], Awaitable[str]] | None = None
     """Summarize the conversation into a digest; the worker sets it per session, and `compact` calls it."""
     snapshot: Callable[[str], Awaitable[Path]] | None = None
@@ -408,7 +410,7 @@ class Coding:
         """Run `command` in the session's shell, starting it on first use, and report what it did."""
         first = self.shell is None
         if first:
-            self.shell = ShellSession(cwd=self.cwd, store=self.store)
+            self.shell = ShellSession(cwd=self.cwd, store=self.store, argv=self.shell_argv)
         assert self.shell is not None
         return _render_shell(await self.shell.run(command, time_limit=time_limit), time_limit, first)
 

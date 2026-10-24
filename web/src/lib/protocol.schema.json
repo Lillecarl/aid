@@ -1697,6 +1697,17 @@
           },
           "type": "array"
         },
+        "sandbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sandbox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "seed_history": {
           "anyOf": [
             {
@@ -2334,6 +2345,24 @@
         "connect_url"
       ],
       "title": "RemoteControl",
+      "type": "object"
+    },
+    "Sandbox": {
+      "additionalProperties": false,
+      "description": "bubblewrap around the native `shell` tool's bash (`aid.sandbox`): the filesystem read-only but the session's\ndirectory and `writable`, a private /tmp. A session that asks for one never runs without it: no bwrap, or no\nuser namespaces, and the worker refuses to start.",
+      "properties": {
+        "network": {
+          "default": true,
+          "type": "boolean"
+        },
+        "writable": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "title": "Sandbox",
       "type": "object"
     },
     "Sent": {

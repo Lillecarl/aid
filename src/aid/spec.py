@@ -36,6 +36,24 @@ def _compile_pattern(pattern: str) -> str:
 type HookMatch = Annotated[str, AfterValidator(_compile_pattern)]
 
 
+def _absolute(paths: list[str]) -> list[str]:
+    if relative := [p for p in paths if not p.startswith("/")]:
+        raise ValueError(f"sandbox paths must be absolute: {relative}")
+    return paths
+
+
+class Sandbox(BaseModel):
+    """bubblewrap around the native `shell` tool's bash (`aid.sandbox`): the filesystem read-only but the session's
+    directory and `writable`, a private /tmp. A session that asks for one never runs without it: no bwrap, or no
+    user namespaces, and the worker refuses to start."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    network: bool = True
+    writable: Annotated[list[str], AfterValidator(_absolute)] = Field(default_factory=list[str])
+    """Absolute paths the shell may write besides the session's directory: caches, a build output."""
+
+
 class Hook(BaseModel):
     """A pre-tool gate: when `tool` runs with rendered text matching `match`, refuse it with `message`."""
 
@@ -208,6 +226,8 @@ class NativeSpec(_Spec):
     permission_timeout: Annotated[float, Field(gt=0)] = 1800
     ask_autoselect_after: Annotated[float, Field(gt=0)] = 240.0
     """Seconds an `ask_user` question with a recommended option waits for a person before it picks it."""
+    sandbox: Sandbox | None = None
+    """Run the `shell` tool's bash under bubblewrap. None runs it as the user, unconfined."""
     max_context: Annotated[int, Field(gt=0)] | None = None
     """Tokens the context gauge calls 100%: rule of thumb half the model's window. None takes a conservative
     backend default."""
