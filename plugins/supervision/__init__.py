@@ -190,6 +190,8 @@ class Supervision(aid.Plugin):
         self._goals_dir = default_paths().plugin_dir(self.plugin_name()) / GOALS_DIR
         self._rulings: RulingStore | None = None
         self._classifier_locks: dict[str, anyio.Lock] = {}
+        self._dropping: set[str] = set()
+        """Classifier sessions being deleted."""
         """One request at a time per classifier session: a second prompt would find it busy."""
 
     async def run(self, client: aid.Client) -> None:
@@ -203,7 +205,10 @@ class Supervision(aid.Plugin):
                 async for infos in client.follow_sessions():
                     supervisors = {info.name: info.supervisor for info in infos}
                     for info in infos:
-                        if info.name.endswith(CLASSIFIER_SUFFIX) and info.parent not in supervisors:
+                        orphan = info.name.endswith(CLASSIFIER_SUFFIX) and info.parent not in supervisors
+                        if orphan and info.name not in self._dropping:
+                            # Lists keep arriving while the delete runs: one delete per orphan.
+                            self._dropping.add(info.name)
                             tg.start_soon(self._drop_classifier, info.name)
                     for gone in followers.keys() - supervisors.keys():
                         followers.pop(gone)[0].cancel()
@@ -597,7 +602,10 @@ class Supervision(aid.Plugin):
         try:
             await self.client.session(name).delete()
         except AidError as error:
-            log.info("classifier_drop_failed", session=name, error=error.message)
+            if error.code != "not_found":
+                log.info("classifier_drop_failed", session=name, error=error.message)
+        finally:
+            self._dropping.discard(name)
 
     async def _hand_on_after(self, watched: Watched, route: Route, wait: float, timer: anyio.CancelScope) -> None:
         """The holder stayed silent: the next one gets the request. A decision or a forward cancels the timer."""
