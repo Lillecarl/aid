@@ -5,11 +5,15 @@ export const tokens = (n: number): string =>
 
 const part = (n: number | null, label: string): string | null => (n ? `${tokens(n)} ${label}` : null);
 
+/** Cents, or two significant digits below a cent: a native turn often costs a tenth of one. */
+export const money = (amount: number, currency: string): string =>
+  `${amount >= 0.01 || amount === 0 ? amount.toFixed(2) : amount.toPrecision(2)} ${currency}`;
+
 /** Accumulated cost across turns, per currency, highest amount first; empty when nothing reported. */
 export function costLine(record: Record<string, number>): string {
   return Object.entries(record)
     .sort(([, a], [, b]) => b - a)
-    .map(([currency, amount]) => `${amount.toFixed(2)} ${currency}`)
+    .map(([currency, amount]) => money(amount, currency))
     .join(", ");
 }
 
@@ -19,7 +23,8 @@ export function usageLine(u: Usage): string {
     u.context_used !== null && u.context_size
       ? `context ${Math.round((100 * u.context_used) / u.context_size)}% of ${tokens(u.context_size)}`
       : null;
-  const cost = u.session_cost ? `session ${u.session_cost.amount.toFixed(2)} ${u.session_cost.currency}` : null;
+  const cost = u.cost ? money(u.cost.amount, u.cost.currency) : null;
+  const session = u.session_cost ? `session ${money(u.session_cost.amount, u.session_cost.currency)}` : null;
   return [
     u.agent ? (u.agent.startsWith("fork ") ? u.agent : `subagent ${u.agent}`) : null,
     u.models.join(", ") || null,
@@ -30,6 +35,7 @@ export function usageLine(u: Usage): string {
     u.requests && u.requests > 1 ? `${u.requests} requests` : null,
     context,
     cost,
+    session,
   ]
     .filter((p) => p !== null)
     .join(" · ");

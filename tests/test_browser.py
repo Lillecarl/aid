@@ -20,7 +20,7 @@ import pytest
 from pydantic import JsonValue
 
 import aid
-from aid.protocol import Usage
+from aid.protocol import Cost, Usage
 from aid.spec import PermissionMode
 from tests.browser_harness import (
     expect_chat_text,
@@ -322,6 +322,21 @@ async def test_fork_usage_names_the_fork(page: Page, session_daemon: Paths, tmp_
         await client.send_message("forker", "the answer", sender="forker.fork-abcdef", usage=usage)
     await expect_chat_text(page, "fork forker.fork-abcdef · local · 1.2k in")
     assert await page.get_by_test_id("chat-row").filter(has_text="subagent fork").count() == 0
+
+
+async def test_a_priced_turn_shows_its_cost(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """aid's own price for a turn (native): a fraction of a cent reads as such, not as 0.00."""
+    await seed_session(session_daemon, tmp_path, "priced", "agents:echo")
+    await open_session(page, "priced")
+    usage = Usage(input_tokens=1200, models=["local"], cost=Cost(amount=0.0011324, currency="USD"))
+    async with aid.connect(session_daemon) as client:
+        await client.send_message("priced", "the answer", sender="priced.fork-abcdef", usage=usage)
+    await expect_chat_text(page, "local · 1.2k in · 0.0011 USD")
+    await wait_for_idle(page)
+    await page.get_by_role("tab", name="Status").click()
+    cost = page.get_by_test_id("status-cost")
+    await cost.wait_for(timeout=TIMEOUT * 1000)
+    assert await cost.text_content() == "0.0011 USD"
 
 
 async def test_usertee_output_shows_live_until_the_turn_ends(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
