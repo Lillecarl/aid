@@ -138,7 +138,7 @@ async def test_a_message_wakes_a_native_session(daemon: Paths, tmp_path: Path) -
     assert str(items[-1].output).startswith("turn 1: echo Message from a person using aid")
 
 
-@pytest.mark.parametrize("failure", ["startup", "transport"])
+@pytest.mark.parametrize("failure", ["startup", "launcher", "transport"])
 @pytest.mark.parametrize("recovery", ["restart", "start"])
 async def test_failed_wake_retains_messages_across_restart(
     paths: Paths,
@@ -150,6 +150,9 @@ async def test_failed_wake_retains_messages_across_restart(
 ) -> None:
     async def fail_start(*args: object) -> None:
         raise AidError("start_failed", "injected startup failure")
+
+    async def fail_launch(*args: object) -> None:
+        raise ConnectionResetError("injected: the forkserver went away")
 
     async def fail_send(*args: object) -> None:
         raise zmq.ZMQError(zmq.EHOSTUNREACH)
@@ -163,6 +166,8 @@ async def test_failed_wake_retains_messages_across_restart(
                 await session.stop()
                 if failure == "startup":
                     monkeypatch.setattr(server, "_ensure_running", fail_start)
+                elif failure == "launcher":
+                    monkeypatch.setattr(launcher, "launch", fail_launch)
                 else:
                     monkeypatch.setattr(server, "_send_worker", fail_send)
                 await client.send_message("recipient", "keep this", sender="sender")

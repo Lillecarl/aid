@@ -1082,10 +1082,14 @@ class Daemon:
             )
             try:
                 handle = await self._launcher_for(session).launch(args)
-            except BaseException:
+            except BaseException as error:
                 self._keys.revoke(session.name, keys.public)
                 self._keys.revoke_agent(session.name, agent_keys.public)
-                raise
+                if not isinstance(error, Exception) or isinstance(error, AidError):
+                    raise
+                # A launcher fault is this session's failed start, not the daemon's: wakes run as daemon tasks.
+                log.exception("launch_failed", session=session.name)
+                raise AidError("start_failed", f"{session.name!r} did not launch: {error!r}") from error
             session.handle = handle
             self._tg.start_soon(self._watch, session, handle, keys.public, agent_keys.public)
             try:
