@@ -20,6 +20,10 @@ against 2.1.283. What this module relies on:
 - A prompt a person typed, and one aid pasted, is a `user` entry with
   `origin.kind == "human"`. Other turns open on other origins: `channel`,
   `task-notification`. Slash commands and their output carry no origin.
+
+Rechecked on 2.1.310 (live, Haiku) for blocks, tool results, turn ends, ids and
+origins. It adds entry types such as `api-request-blob`, which carry `message`
+content but match no case here.
 """
 
 from __future__ import annotations
