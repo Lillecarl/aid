@@ -188,10 +188,11 @@ class Fake:
     def turn(self, text: str) -> None:
         self.hook("UserPromptSubmit", prompt=text)
         self.write({"type": "user", "origin": {"kind": "human"}, "message": {"role": "user", "content": text}})
-        self.reply(text)
-        self.hook("Stop", stop_hook_active=False)
+        if self.reply(text):
+            self.hook("Stop", stop_hook_active=False)
 
-    def reply(self, text: str) -> None:
+    def reply(self, text: str) -> bool:
+        """False when Escape interrupted the turn: Claude then runs no Stop hook (measured 2.1.310)."""
         if text == "slow":
             self.say("waiting")
             while self.next_event()[0] != "escape":
@@ -199,7 +200,7 @@ class Fake:
             self.write(
                 {"type": "user", "message": {"content": [{"type": "text", "text": "[Request interrupted by user]"}]}}
             )
-            return
+            return False
         if text == "count":
             for i in range(COUNT):
                 self.say(f"{i} ")
@@ -230,6 +231,7 @@ class Fake:
             self.say(f"echo: {text}")
         self.write({"type": "system", "subtype": "stop_hook_summary"})
         self.write({"type": "system", "subtype": "turn_duration", "durationMs": 1})
+        return True
 
     def run(self) -> None:
         self.trust()
