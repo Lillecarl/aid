@@ -163,10 +163,12 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - `src/aid/builtin_tools.py` — aid's own tools, in every session: `send_message`, `list_sessions`.
 - Request ids route replies across all clients: the daemon refuses an id in flight (`duplicate_id`); relays and
   plugins never pass a caller's id through unchecked.
-- Messages: `SendMessage` → recipient's history + inbox. A native turn takes what waits before each model request
-  after its first (`ReceiveMessages`, wait 0; `ARRIVED`, skipped by `open_turn`); the rest, and ACP and claude-sdk
-  sessions, get a daemon-started wake turn after the running turn (claude -p queues stdin lines until its turn ends:
-  measured 2.1.309); interactive Claude gets a channel event. A wake turn has no client (`_Route.client` None).
+- Messages: `SendMessage` → recipient's history + inbox. `Delivery`: `interrupt` (default) or `wait_for_turn`.
+  A native turn takes waiting interrupts before each model request after its first (`ReceiveMessages`, wait 0;
+  `ARRIVED`, skipped by `open_turn`); the rest, and ACP and claude-sdk sessions, get a daemon-started wake turn after
+  the running turn (claude -p queues stdin lines until its turn ends: measured 2.1.309); interactive Claude gets a
+  channel event, `wait_for_turn` held while `working`. A busy session's `ReceiveMessages` claims interrupts only;
+  the inbox checkpoint keeps `delivered` seqs past `through`, so out-of-order claims survive a restart. A wake turn has no client (`_Route.client` None).
   `aid.messaging.render_message`: a person's and background reports plain; another session's or a plugin's in
   `<aid-message from kind>` with an untrusted note (never `<system-reminder>`, which Claude reads as its harness).
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.

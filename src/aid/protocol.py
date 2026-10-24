@@ -113,6 +113,16 @@ class GetHistory(_Request):
     none came."""
 
 
+class Delivery(StrEnum):
+    """When a message reaches a session that is in a turn."""
+
+    INTERRUPT = "interrupt"
+    """Between the running turn's steps where the session takes messages there (native, interactive Claude);
+    after the turn elsewhere."""
+    WAIT_FOR_TURN = "wait_for_turn"
+    """After the running turn ends, as a turn of its own."""
+
+
 class SendMessage(_Request):
     """A message to another session. The daemon wakes it: a turn of its own for ACP and native, a channel
     event for interactive Claude. `sender` is a session name, or None for a person."""
@@ -121,6 +131,7 @@ class SendMessage(_Request):
     to: str
     text: str
     sender: str | None = None
+    delivery: Delivery = Delivery.INTERRUPT
     usage: Usage | None = None
     """Tokens the sender's work for this message used, such as a fork's turn. The daemon records it in the
     recipient's history after the message, so its summary counts it. Kept from the control socket and from a
@@ -716,6 +727,7 @@ class MessageEntry(_Message):
     type: Literal["message"] = "message"
     sender: str | None
     text: str
+    delivery: Delivery = Delivery.INTERRUPT
 
 
 type HistoryItem = Annotated[

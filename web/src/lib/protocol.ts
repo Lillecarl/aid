@@ -43,6 +43,13 @@ export type PermissionMode1 = "allow" | "deny" | "ask";
  */
 export type PermissionMode2 = "allow" | "deny" | "ask";
 /**
+ * When a message reaches a session that is in a turn.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "Delivery".
+ */
+export type Delivery = "interrupt" | "wait_for_turn";
+/**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "SessionEvent".
  */
@@ -77,6 +84,10 @@ export type HistoryItem =
   | Output
   | RemoteControl
   | TurnError;
+/**
+ * When a message reaches a session that is in a turn.
+ */
+export type Delivery1 = "interrupt" | "wait_for_turn";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "PageReply".
@@ -697,6 +708,7 @@ export interface PromptEntry {
  * via the `definition` "MessageEntry".
  */
 export interface MessageEntry {
+  delivery: Delivery1;
   sender: string | null;
   text: string;
   type: "message";

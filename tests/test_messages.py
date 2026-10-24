@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import anyio
@@ -11,6 +12,7 @@ from aid.daemon import Daemon
 from aid.messaging import ARRIVED, render_message, wake_prompt
 from aid.protocol import (
     AidError,
+    Delivery,
     HistoryItem,
     MessageEntry,
     Output,
@@ -338,6 +340,34 @@ async def test_monitor_waits_for_the_running_turn(daemon: Paths, tmp_path: Path)
     assert len(outputs) == 1 and status.pending == 0
     model_history = (daemon.session_dir("coder") / "history.json").read_text()
     assert ARRIVED in model_history and "Background task bg1 finished" in model_history
+
+
+async def test_a_native_turn_takes_only_interrupts_between_its_steps(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW))
+            steps = plan(
+                ("python", {"script": "import time; time.sleep(1)", "mode": "sync"}),
+                ("python", {"script": "print('second')", "mode": "sync"}),
+            )
+            sent = False
+            async for event in session.stream(steps):
+                if event.type == "tool_call" and not sent:
+                    await client.send_message("coder", "later", sender="a", delivery=Delivery.WAIT_FOR_TURN)
+                    await client.send_message("coder", "now", sender="b")
+                    sent = True
+            items = await outputs_after_message(session, count=2)
+    model_history = json.loads((daemon.session_dir("coder") / "history.json").read_text())
+    prompts = [
+        part["content"]
+        for message in model_history
+        for part in message["parts"]
+        if part["part_kind"] == "user-prompt" and not part["content"].startswith("[Session metadata]")
+    ]
+    # The turn takes the interrupt between its steps; the waiting message gets a turn of its own after it.
+    assert prompts[1].startswith(ARRIVED) and "now" in prompts[1] and "later" not in prompts[1]
+    assert prompts[2] == wake_prompt([MessageEntry(sender="a", text="later", delivery=Delivery.WAIT_FOR_TURN)])
+    assert len([item for item in items if isinstance(item, Output)]) == 2
 
 
 async def test_pattern_monitor_wakes_per_line_then_dies_with_the_task(daemon: Paths, tmp_path: Path) -> None:

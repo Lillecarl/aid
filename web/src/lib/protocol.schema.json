@@ -738,6 +738,15 @@
       "title": "DeleteSession",
       "type": "object"
     },
+    "Delivery": {
+      "description": "When a message reaches a session that is in a turn.",
+      "enum": [
+        "interrupt",
+        "wait_for_turn"
+      ],
+      "title": "Delivery",
+      "type": "string"
+    },
     "Done": {
       "additionalProperties": false,
       "properties": {
@@ -1439,6 +1448,10 @@
       "additionalProperties": false,
       "description": "A message another session, or a person, sent to this one.",
       "properties": {
+        "delivery": {
+          "$ref": "#/$defs/Delivery",
+          "default": "interrupt"
+        },
         "sender": {
           "anyOf": [
             {
@@ -1461,7 +1474,8 @@
       "required": [
         "type",
         "sender",
-        "text"
+        "text",
+        "delivery"
       ],
       "title": "MessageEntry",
       "type": "object"

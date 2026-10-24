@@ -7,7 +7,7 @@ import pytest
 
 from aid.history import HistoryLog
 from aid.inbox import Inbox
-from aid.protocol import MessageEntry, TurnError
+from aid.protocol import Delivery, MessageEntry, TurnError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -113,3 +113,42 @@ async def test_initialization_preserves_an_early_dispatch(tmp_path: Path) -> Non
     restored = Inbox(path, history)
     assert await restored.restore() is None
     assert len(restored) == 0
+
+
+async def test_a_turn_takes_interrupts_past_messages_waiting_for_its_end(tmp_path: Path) -> None:
+    history = HistoryLog(anyio.Path(tmp_path / "history.jsonl"))
+    path = anyio.Path(tmp_path / "inbox.json")
+    inbox = Inbox(path, history)
+    await inbox.initialize()
+    waiting = MessageEntry(sender="a", text="later", delivery=Delivery.WAIT_FOR_TURN)
+    urgent = MessageEntry(sender="b", text="now")
+    await inbox.accept(waiting, "m1")
+    await inbox.accept(urgent, "m2")
+    assert inbox.ready(interrupts_only=True)
+    assert await inbox.claim("turn", interrupts_only=True) == [urgent]
+    await inbox.finish("turn")
+    assert not inbox.ready(interrupts_only=True)
+    # A restart neither replays the interrupt nor drops the waiting message.
+    restored = Inbox(path, history)
+    assert await restored.restore() is None
+    assert await restored.claim("wake") == [waiting]
+    await restored.finish("wake")
+    again = Inbox(path, history)
+    assert await again.restore() is None
+    assert len(again) == 0
+
+
+async def test_a_rejected_interrupt_returns_in_order(tmp_path: Path) -> None:
+    history = HistoryLog(anyio.Path(tmp_path / "history.jsonl"))
+    path = anyio.Path(tmp_path / "inbox.json")
+    inbox = Inbox(path, history)
+    await inbox.initialize()
+    waiting = MessageEntry(sender="a", text="later", delivery=Delivery.WAIT_FOR_TURN)
+    urgent = MessageEntry(sender="b", text="now")
+    await inbox.accept(waiting, "m1")
+    await inbox.accept(urgent, "m2")
+    await inbox.claim("turn", interrupts_only=True)
+    await inbox.release("turn")
+    restored = Inbox(path, history)
+    assert await restored.restore() is None
+    assert await restored.claim("wake") == [waiting, urgent]

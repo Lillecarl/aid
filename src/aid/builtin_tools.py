@@ -3,22 +3,27 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Literal
 
 from aid.client import connect
 from aid.paths import ENV_SESSION
+from aid.protocol import Delivery
 from aid.tools import mcptool
 
 
 @mcptool
-async def send_message(to: str, text: str) -> str:
+async def send_message(to: str, text: str, delivery: Literal["interrupt", "wait_for_turn"] = "interrupt") -> str:
     """Send a message to another aid session, by its name from list_sessions. It wakes that session.
+
+    delivery: "interrupt" reaches a busy session between the steps of its running turn, where its kind allows
+    (else after the turn); "wait_for_turn" waits until that turn ends. Interrupt for what changes the work in
+    progress, wait_for_turn for what can wait.
 
     Returns once the message is delivered. An answer, if the session sends one, arrives later as a message to
     you: do not wait for it.
     """
     async with connect() as client:
-        await client.send_message(to, text, sender=os.environ.get(ENV_SESSION))
+        await client.send_message(to, text, sender=os.environ.get(ENV_SESSION), delivery=Delivery(delivery))
     return f"delivered to {to}"
 
 

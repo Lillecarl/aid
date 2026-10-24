@@ -28,6 +28,7 @@ from aid.mcp import claude_config
 from aid.paths import hook_socket
 from aid.protocol import (
     AidError,
+    Delivery,
     Done,
     HistoryItem,
     Lifecycle,
@@ -462,6 +463,25 @@ async def test_messages_reach_claude_through_its_channel(daemon: Paths, tmp_path
         MessageEntry(sender="bob", text="ping"),
         MessageEntry(sender=None, text="from a person"),
     ]
+
+
+@needs_pymux
+async def test_the_channel_holds_what_waits_for_the_turn(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            during: list[MessageEntry] = []
+            async for event in session.stream("slow"):
+                if event == TextDelta(text="waiting"):
+                    await client.send_message("tty", "later", sender="a", delivery=Delivery.WAIT_FOR_TURN)
+                    await client.send_message("tty", "now", sender="b")
+                    during = await client.receive_messages("tty", wait=0)
+                    await session.cancel()
+            while (await session.status()).working:  # noqa: ASYNC110 -- Claude runs Stop after the turn ends
+                await anyio.sleep(0.1)
+            after = await client.receive_messages("tty", wait=0)
+    assert during == [MessageEntry(sender="b", text="now")]
+    assert after == [MessageEntry(sender="a", text="later", delivery=Delivery.WAIT_FOR_TURN)]
 
 
 @needs_pymux

@@ -34,6 +34,7 @@ from aid.protocol import (
     CompactSession,
     CreateSession,
     DeleteSession,
+    Delivery,
     Done,
     Event,
     Failure,
@@ -392,11 +393,19 @@ class Client:
     async def remove_plugin(self, name: str) -> None:
         await self.call(RemovePlugin(name=name))
 
-    async def send_message(self, to: str, text: str, *, sender: str | None = None, usage: Usage | None = None) -> None:
+    async def send_message(
+        self,
+        to: str,
+        text: str,
+        *,
+        sender: str | None = None,
+        usage: Usage | None = None,
+        delivery: Delivery = Delivery.INTERRUPT,
+    ) -> None:
         """Leave a message for session `to`; the daemon wakes it. `sender` names the session it is from, or None
-        for a person; `usage` what the sender's work for it cost (`SendMessage.usage`). Returns once the message
-        is recorded, not answered."""
-        await self.call(SendMessage(to=to, text=text, sender=sender, usage=usage))
+        for a person; `usage` what the sender's work for it cost (`SendMessage.usage`); `delivery` whether a
+        running turn takes it between its steps. Returns once the message is recorded, not answered."""
+        await self.call(SendMessage(to=to, text=text, sender=sender, usage=usage, delivery=delivery))
 
     async def call_plugin(self, plugin: str, method: str, /, **args: JsonValue) -> JsonValue:
         """Call `method` on `plugin` (`Plugin.call`), as this connection's session, or as the operator."""

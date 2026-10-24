@@ -24,6 +24,7 @@ from aid.paths import default_paths
 from aid.plugins import ENV_PLUGINS_PATH, Grant, plugins_path
 from aid.protocol import (
     AidError,
+    Delivery,
     Lifecycle,
     MessageEntry,
     Output,
@@ -279,6 +280,14 @@ def _parser() -> argparse.ArgumentParser:
     message.add_argument("name")
     message.add_argument("text", help="message text, or - to read stdin")
     message.add_argument("--from", dest="sender", help="the session it is from (default: a person)")
+    message.add_argument(
+        "--wait-for-turn",
+        dest="delivery",
+        action="store_const",
+        const=Delivery.WAIT_FOR_TURN,
+        default=Delivery.INTERRUPT,
+        help="hold it until the session's running turn ends (default: between the turn's steps, where it can)",
+    )
 
     answer = sub.add_parser("answer", help="answer a permission request the session waits on")
     answer.add_argument("name")
@@ -553,7 +562,7 @@ async def _client_command(args: argparse.Namespace) -> None:
                         print(f"\n[{event.stop_reason}]", file=sys.stderr)
             case "message":
                 text = sys.stdin.read() if args.text == "-" else args.text
-                await client.send_message(args.name, text, sender=args.sender)
+                await client.send_message(args.name, text, sender=args.sender, delivery=args.delivery)
             case "start":
                 await client.session(args.name).start()
             case "compact":

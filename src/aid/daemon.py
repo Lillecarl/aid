@@ -200,6 +200,10 @@ class _Session:
         )
 
     @property
+    def busy(self) -> bool:
+        return self.working or self.turn is not None
+
+    @property
     def uses_channel(self) -> bool:
         return self.spec.kind is AgentKind.CLAUDE_TTY
 
@@ -662,12 +666,15 @@ class Daemon:
                 # Outside a turn the inbox wakes a turn of its own; inside one, the turn may take them between steps.
                 if not session.uses_channel and session.turn is None:
                     raise AidError("not_in_turn", f"{session.name!r} takes its messages as turns: none is running")
-                if not session.inbox:
-                    with anyio.move_on_after(request.wait):
-                        await session.mail.wait()
+                with anyio.move_on_after(request.wait):
+                    while not session.inbox.ready(interrupts_only=session.busy):
+                        mail = session.mail
+                        await mail.wait()
+                        if session.mail is mail:
+                            session.mail = anyio.Event()
                 if client.agent_key is not None and self._keys.agent_session(client.agent_key) != session.name:
                     raise AidError("unauthenticated", "agent control credentials were revoked")
-                taken = await session.inbox.claim(request.id)
+                taken = await session.inbox.claim(request.id, interrupts_only=session.busy)
                 await session.inbox.finish(request.id)
                 session.mail = anyio.Event()
                 if session.inbox:
@@ -897,7 +904,10 @@ class Daemon:
             raise AidError("cannot_receive", f"{session.name!r} has aid_tools off, so nothing reads its messages")
         await self._gate_message(request)
         await self._accept_message(
-            session, MessageEntry(sender=request.sender, text=request.text), request.id, request.usage
+            session,
+            MessageEntry(sender=request.sender, text=request.text, delivery=request.delivery),
+            request.id,
+            request.usage,
         )
 
     async def _live(self, session: _Session, text: str) -> None:
@@ -1201,6 +1211,8 @@ class Daemon:
                 case Activity():
                     if (session := self._sessions.get(name)) is not None:
                         session.working, session.attention = reply.working, reply.attention
+                        if not session.busy and session.inbox:
+                            session.mail.set()  # The channel server holds what waits for the turn to end.
                 case Notify():
                     if (session := self._sessions.get(name)) is not None:
                         await self._notify(session, reply)
