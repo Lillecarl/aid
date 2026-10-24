@@ -288,6 +288,13 @@ on reusable decisions and current boundaries; put long investigations and dated 
   web build's `types:check` fail on drift. After changing a model: regenerate both.
 - `web/` — the Svelte 5 UI (runes, TypeScript, Vite). `web/default.nix` builds it; `aid web` serves the result
   from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.
+- `src/aid/removals.py` — `remove`'s plans: paths, globs (`glob.translate`, hidden included), regexes (searched),
+  excludes and filters (kind, age, git tracked/ignored from two `git ls-files`) → every entry that goes, before
+  anyone is asked. A matched directory goes whole (rmtree at execution, whatever it then holds); one holding a kept
+  entry stays and its other entries go one by one; patterns never match `.git`. Execution removes the plan's top
+  rows only, rechecking kind and parents. Rows in the session dir's `removals.db` (apsw, the worker writes:
+  `removal_plans` with the permission `request_id`, `removal_entries` with `top`/`within`/`tracked`/`outcome`,
+  `removal_kept`); the request's input is a `RemovalPreview` naming the plan. `preview=True` plans without asking.
 - `src/aid/coding.py` — `aid.coding_tools`, a toolset native agents opt into: list and read, pyedit edits through its
   library (`EditSession`, staged until `apply_edits`; no agent code runs in the worker), and `python` (pyrun
   `run_script` in a child, each command asked under `python`; file reads and writes outside the cwd under
@@ -366,7 +373,7 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   on `ask` alone; Claude's rules ask for every waiting mode (`claude_rules`).
 - Native tool permissions: a mode per tool name. `NativeSpec.tool_permissions` overrides; unset, a `Tool.asks`
   tool (python, shell, background, monitor, apply_edits, remove, ask_user: they permit inside, with their own titles;
-  `remove` deletes at once, its request's input a `RemovalPreview` of every entry, a link removed as a link)
+  `remove` deletes at once from a plan, below)
   follows `permission`, any other is allowed. The loop gates every non-`asks` call through `Coding.permit`, so
   `*` hooks cover all tools. The worker lists its tools in `Hello` (`SessionTool`: name, group by module,
   asks); the daemon keeps them in `tools.json` and shows `SessionStatus.tools` with the spec's modes.

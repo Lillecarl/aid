@@ -5,6 +5,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 import anyio
+import apsw
 import pytest
 
 import aid
@@ -19,8 +20,6 @@ from aid.coding import (
     Line,
     Verdict,
     WatchView,
-    _outermost,  # pyright: ignore[reportPrivateUsage]
-    _removable,  # pyright: ignore[reportPrivateUsage]
     compact,
     spill,
 )
@@ -35,6 +34,7 @@ from aid.protocol import (
     Started,
     ToolCall,
 )
+from aid.removals import PLANS_FILE, Removal
 from aid.spec import Hook, PermissionMode
 from tests.conftest import py_spec
 from tests.models import TestModel
@@ -47,6 +47,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.anyio
 
 TIMEOUT = 60
+REMOVAL_DEFAULTS = Removal().model_dump(mode="json")
 
 
 def plan(*calls: tuple[str, dict[str, Any]]) -> str:
@@ -77,14 +78,29 @@ async def test_remove_asks_with_everything_it_would_delete(daemon: Paths, tmp_pa
     [request] = [e for e in events if isinstance(e, PermissionRequest)]
     assert request.tool_name == "remove"
     assert request.input == {
+        "plan": 1,
+        "removal": REMOVAL_DEFAULTS | {"paths": ["build", "build/sub", "link"]},
         "files": 3,
         "directories": 2,
         "bytes": 2 + 3 + len("keep.txt"),
-        "entries": ["build/", "build/a.txt", "build/sub/", "build/sub/b.txt", "link"],
+        "tracked": None,
+        "top": ["build/", "link"],
         "more": 0,
+        "kept": [],
+        "kept_more": 0,
+        "unmatched": [],
     }
     assert sorted(p.name for p in work.iterdir()) == ["keep.txt"]
-    assert "removed build, link" in str(events[-1].output if isinstance(events[-1], Output) else "")
+    assert "removed plan 1: 2 directories, 3 files" in str(events[-1].output if isinstance(events[-1], Output) else "")
+    db = apsw.Connection(str(daemon.session_dir("coder") / PLANS_FILE))
+    assert db.execute("SELECT request_id, status FROM removal_plans").fetchall() == [(request.request_id, "removed")]
+    assert db.execute("SELECT path, top, within, outcome FROM removal_entries ORDER BY path").fetchall() == [
+        ("build", 1, None, "removed"),
+        ("build/a.txt", 0, "build", None),
+        ("build/sub", 0, "build", None),
+        ("build/sub/b.txt", 0, "build", None),
+        ("link", 1, None, "removed"),
+    ]
 
 
 async def test_remove_refused_removes_nothing(daemon: Paths, tmp_path: Path) -> None:
@@ -99,6 +115,24 @@ async def test_remove_refused_removes_nothing(daemon: Paths, tmp_path: Path) -> 
     assert sorted(p.name for p in work.iterdir()) == ["build", "keep.txt", "link"]
     assert isinstance(output, Output)
     assert "not allowed: nothing was removed" in str(output.output)
+    db = apsw.Connection(str(daemon.session_dir("coder") / PLANS_FILE))
+    assert db.execute("SELECT status FROM removal_plans").fetchall() == [("refused",)]
+
+
+async def test_a_preview_asks_nobody_and_removes_nothing(daemon: Paths, tmp_path: Path) -> None:
+    work = removal_tree(tmp_path)
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(work, "agents:coder", PermissionMode.ASK))
+            call = {"globs": ["**/*.txt"], "excludes": ["keep.txt"], "preview": True}
+            events = [event async for event in session.stream(plan(("remove", call)))]
+    assert not [e for e in events if isinstance(e, PermissionRequest)]
+    assert sorted(p.name for p in work.iterdir()) == ["build", "keep.txt", "link"]
+    output = events[-1]
+    assert isinstance(output, Output)
+    assert "plan 1: 0 directories and 2 files (5 bytes)" in str(output.output)
+    assert "keep.txt (excluded)" in str(output.output)
+    assert "nothing was removed (preview)" in str(output.output)
 
 
 async def test_a_refusals_words_reach_the_agent(daemon: Paths, tmp_path: Path) -> None:
@@ -115,28 +149,6 @@ async def test_a_refusals_words_reach_the_agent(daemon: Paths, tmp_path: Path) -
         output.output
     )
     assert (work / "keep.txt").exists()
-
-
-def test_remove_takes_only_entries_inside_the_directory(tmp_path: Path) -> None:
-    work = removal_tree(tmp_path)
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "x").write_text("x")
-    (work / "out").symlink_to(outside)
-    root = work.resolve()
-    assert _removable(root, "out") == root / "out"
-    assert _removable(root, "link") == root / "link"
-    for path, code in [
-        ("out/x", "outside"),
-        ("..", "outside"),
-        (".", "outside"),
-        ("../outside", "outside"),
-        ("nope", "not_found"),
-    ]:
-        with pytest.raises(AidError) as caught:
-            _removable(root, path)
-        assert caught.value.code == code
-    assert _outermost([root / "build" / "sub", root / "build", root / "link"]) == [root / "build", root / "link"]
 
 
 async def test_edits_stage_until_applied(daemon: Paths, tmp_path: Path) -> None:

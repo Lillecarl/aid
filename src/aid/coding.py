@@ -26,10 +26,8 @@ import inspect
 import io
 import json
 import linecache
-import os
 import re
 import shlex
-import shutil
 import sys
 import uuid
 from contextvars import ContextVar
@@ -40,7 +38,6 @@ from typing import TYPE_CHECKING, Any, Final, Literal, cast
 import anyio
 import anyio.to_thread
 import structlog
-from pydantic import BaseModel
 from pyedit.session import EditSession  # pyright: ignore[reportMissingTypeStubs] -- annotated, no py.typed
 from shellous import ResultError, Runner, sh
 
@@ -57,6 +54,10 @@ from aid.protocol import (
     ToolDiff,
     clip,
 )
+from aid.removals import Outcome, PlanStatus, PlanStore, Removal, RemovalPreview, git_state
+from aid.removals import execute as execute_removal
+from aid.removals import plan as plan_removal
+from aid.removals import preview as removal_preview
 from aid.sandbox import bwrap_argv
 from aid.spec import PermissionMode, match_hook
 from pyrun.host import run_script
@@ -331,6 +332,9 @@ class Coding:
     snapshot: Callable[[str], Awaitable[Path]] | None = None
     """Write the conversation as it stands inside the running tool call, with the text as that call's return;
     returns the file. The worker sets it per session; forks start from it."""
+    plans_file: Path | None = None
+    """The session's removal plans database (`aid.removals`); None keeps plans in memory, for tests."""
+    _plans: PlanStore | None = None
     _lock: anyio.Lock = field(default_factory=anyio.Lock)
 
     def __post_init__(self) -> None:
@@ -350,6 +354,12 @@ class Coding:
             return text
         sections = re.split(r"(?m)^(?=--- )", text)
         return "".join(s for s in sections if f"a/{path}\n" in s.split("\n+++", 1)[0] or f"+++ b/{path}\n" in s)
+
+    async def plans(self) -> PlanStore:
+        """The plans database, opened on the first removal."""
+        if self._plans is None:
+            self._plans = await PlanStore.open(self.plans_file or Path(":memory:"))
+        return self._plans
 
     def confine(self, chdir: Path | None = None, writable: tuple[Path, ...] = ()) -> list[str]:
         """The argv prefix that puts a process the tools start in the sandbox; empty without one."""
@@ -375,9 +385,11 @@ class Coding:
         title: str,
         input: Any,
         remember: str | None = None,
+        request_id: str | None = None,
     ) -> Verdict:
         """The session's answer. Hooks refuse first with the hook's message; in a waiting mode, a person's or
-        the supervisor's: `remember` offers "always" for that key."""
+        the supervisor's: `remember` offers "always" for that key. `request_id` names the request, for a caller
+        that recorded it before asking."""
         try:
             rendered = json.dumps(input, default=str)
         except TypeError, ValueError:
@@ -393,7 +405,7 @@ class Coding:
             options.append(PermissionChoice(option_id=ALWAYS, name=f"Always allow {remember}", kind="allow_always"))
         options.append(PermissionChoice(option_id=NO, name="No", kind="reject_once"))
         request = PermissionRequest(
-            request_id=uuid.uuid4().hex,
+            request_id=request_id or uuid.uuid4().hex,
             tool_call_id=tool_call_id,
             tool_name=tool_name,
             title=title,
@@ -437,6 +449,9 @@ class Coding:
                 if self.shell is not None:
                     tg.start_soon(self.shell.aclose)
                     self.shell = None
+                if self._plans is not None:
+                    tg.start_soon(self._plans.aclose)
+                    self._plans = None
 
     async def shell_run(self, command: str, time_limit: float) -> str:
         """Run `command` in the session's shell, starting it on first use, and report what it did."""
@@ -776,102 +791,91 @@ async def delete(path: str) -> str:
     return f"{path} will be deleted"
 
 
-REMOVE_LISTED: Final = 50
-"""Entries a removal's preview names one by one; it counts the rest."""
+def _removal_text(preview: RemovalPreview) -> str:
+    lines = [
+        f"plan {preview.plan}: {preview.directories} directories and {preview.files} files ({preview.bytes} bytes)"
+        + ("" if preview.tracked is None else f", {preview.tracked} tracked by git")
+    ]
+    lines += [f"  {entry}" for entry in preview.top]
+    if preview.more:
+        lines.append(f"  … {preview.more} more")
+    if preview.kept:
+        lines.append("kept:")
+        lines += [f"  {entry}" for entry in preview.kept]
+        if preview.kept_more:
+            lines.append(f"  … {preview.kept_more} more")
+    if preview.unmatched:
+        lines.append(f"matched nothing: {', '.join(preview.unmatched)}")
+    return "\n".join(lines)
 
 
-class RemovalPreview(BaseModel):
-    """Everything a `remove` call would delete, for whoever answers its permission request."""
+async def remove(
+    ctx: RunContext,
+    paths: list[str] | None = None,
+    globs: list[str] | None = None,
+    regexes: list[str] | None = None,
+    excludes: list[str] | None = None,
+    kind: Literal["any", "file", "directory", "link"] = "any",
+    older_than_days: float | None = None,
+    untracked_only: bool = False,
+    ignored_only: bool = False,
+    preview: bool = False,
+) -> str:
+    """Delete files and directories in the session's directory, at once: nothing is staged. Use this, not `rm`.
 
-    files: int
-    """Files and symbolic links: a link goes, never what it points to."""
-    directories: int
-    bytes: int
-    entries: list[str]
-    """The first `REMOVE_LISTED` paths, relative to the session's directory; a directory ends with `/`."""
-    more: int
-    """Paths past `entries`."""
-
-
-def _removable(root: Path, path: str) -> Path:
-    """`path` itself under `root`: its parent resolved, the entry not, so a link is removed as a link."""
-    candidate = Path(os.path.normpath(path if Path(path).is_absolute() else root / path))
-    if candidate == root or not candidate.is_relative_to(root):
-        raise AidError("outside", f"{path!r} is not inside the session's directory")
-    target = candidate.parent.resolve() / candidate.name
-    if not target.parent.is_relative_to(root):
-        raise AidError("outside", f"{path!r} leads outside the session's directory through a link")
-    if not target.exists(follow_symlinks=False):
-        raise AidError("not_found", f"{path!r} does not exist")
-    return target
-
-
-def _outermost(targets: list[Path]) -> list[Path]:
-    """Targets without those another one holds: removing the outer one removes them."""
-    kept: list[Path] = []
-    for target in sorted(set(targets)):
-        if not any(target.is_relative_to(outer) for outer in kept):
-            kept.append(target)
-    return kept
-
-
-def _preview(root: Path, targets: list[Path]) -> RemovalPreview:
-    files = directories = size = total = 0
-    entries: list[str] = []
-
-    def note(entry: Path, directory: bool) -> None:
-        nonlocal total
-        total += 1
-        if len(entries) < REMOVE_LISTED:
-            entries.append(f"{entry.relative_to(root)}{'/' if directory else ''}")
-
-    for target in targets:
-        if not target.is_dir(follow_symlinks=False):
-            files += 1
-            size += target.lstat().st_size
-            note(target, False)
-            continue
-        for current, dirnames, filenames in os.walk(target):
-            directories += 1
-            note(Path(current), True)
-            # os.walk lists a link to a directory among dirnames, and does not follow it.
-            for name in [*filenames, *(d for d in dirnames if (Path(current) / d).is_symlink())]:
-                entry = Path(current) / name
-                files += 1
-                size += entry.lstat().st_size
-                note(entry, False)
-    return RemovalPreview(files=files, directories=directories, bytes=size, entries=entries, more=total - len(entries))
-
-
-def _remove(targets: list[Path]) -> None:
-    for target in targets:
-        if target.is_dir(follow_symlinks=False):
-            shutil.rmtree(target)
-        else:
-            target.unlink(missing_ok=True)
-
-
-async def remove(ctx: RunContext, paths: list[str]) -> str:
-    """Delete files and whole directory trees in the session's directory, at once: nothing is staged. Name exact
-    paths, never globs. The permission request lists everything that would go, so whoever answers sees it. Use
-    this, not `rm` in the shell. A link is removed as a link. One file among staged edits: `delete` stages it."""
+    Plans first: the permission request carries the plan, and whoever answers can query every entry in it.
+    - `paths`: exact paths. `globs`: `*`, `?`, `[…]`, `**` across directories, hidden names included, matched
+      against the path relative to the session's directory (`build/**` takes build's contents, `build` itself
+      stays). `regexes`: searched in that relative path. `.git` directories are never matched by a pattern.
+    - A matched directory goes whole. `excludes` (globs) keep what they match and everything under it; a directory
+      holding a kept entry stays, and the rest of it goes entry by entry.
+    - `kind` limits what patterns match. `older_than_days`, `untracked_only`, `ignored_only` (git) keep files
+      that fail them.
+    - `preview`: plan and report, remove nothing, ask nobody. Use it to get patterns right first.
+    A link is removed as a link. One file among staged edits: `delete` stages it."""
     coding = _coding()
     root = coding.cwd.resolve()
-    if not paths:
-        raise ModelRetry("name at least one path")
-    targets = await anyio.to_thread.run_sync(lambda: _outermost([_removable(root, path) for path in paths]))
-    preview = await anyio.to_thread.run_sync(_preview, root, targets)
-    named = ", ".join(str(t.relative_to(root)) for t in targets)
+    removal = Removal(
+        paths=paths or [],
+        globs=globs or [],
+        regexes=regexes or [],
+        excludes=excludes or [],
+        kind=kind,
+        older_than_days=older_than_days,
+        untracked_only=untracked_only,
+        ignored_only=ignored_only,
+    )
+    git = await git_state(root)
+    try:
+        planned = await anyio.to_thread.run_sync(plan_removal, root, removal, git)
+    except AidError as error:
+        raise ModelRetry(error.message) from None
+    if not planned.entries:
+        return "nothing to remove" + (f"; matched nothing: {', '.join(planned.unmatched)}" if planned.unmatched else "")
+    store = await coding.plans()
+    request_id = None if preview else uuid.uuid4().hex
+    plan_id = await store.record(removal, planned, ctx.tool_call_id or "", request_id)
+    shown = removal_preview(plan_id, removal, planned)
+    text = _removal_text(shown)
+    if preview:
+        return f"{text}\nnothing was removed (preview)"
+    named = ", ".join(shown.top)
     verdict = await coding.permit(
         ctx.tool_call_id or "",
         tool_name="remove",
-        title=f"remove {preview.files} files, {preview.directories} directories ({preview.bytes} bytes): {named}"[:200],
-        input=preview.model_dump(mode="json"),
+        title=f"remove plan {plan_id}: {shown.directories} directories, {shown.files} files: {named}"[:200],
+        input=shown.model_dump(mode="json"),
+        request_id=request_id,
     )
     if not verdict.allowed:
+        await store.decide(plan_id, PlanStatus.REFUSED, verdict.said)
         return verdict.refusal("nothing was removed")
-    await anyio.to_thread.run_sync(_remove, targets)
-    return f"removed {named}: {preview.files} files, {preview.directories} directories"
+    await store.decide(plan_id, PlanStatus.REMOVED, verdict.said)
+    outcomes = await anyio.to_thread.run_sync(execute_removal, root, planned.tops)
+    await store.outcomes(plan_id, outcomes)
+    lines = [f"removed plan {plan_id}: {shown.directories} directories, {shown.files} files"]
+    lines += [f"  {path}: {outcome}" for path, outcome in outcomes.items() if outcome is not Outcome.REMOVED]
+    return "\n".join(lines)
 
 
 async def rename(old: str, new: str) -> str:

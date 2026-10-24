@@ -67,6 +67,7 @@ from aid.protocol import (
     to_json,
 )
 from aid.providers import catalog_model, resolve
+from aid.removals import PLANS_FILE
 from aid.tools import tool_paths
 
 if TYPE_CHECKING:
@@ -842,6 +843,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         cwd=Path(spec.cwd),
         store=Path(state_dir) / RUNS_DIR,
         outputs=Path(state_dir) / OUTPUTS_DIR,
+        plans_file=Path(state_dir) / PLANS_FILE,
         mode=spec.permission,
         timeout=spec.permission_timeout,
         autoselect_after=spec.ask_autoselect_after,
