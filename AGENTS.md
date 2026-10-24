@@ -272,7 +272,13 @@ on reusable decisions and current boundaries; put long investigations and dated 
   (`person_only`). Stored `supervisor_permissions` (gone): the spec's before-validator maps listed `ask` tools to
   `ask_supervisor`, and the daemon writes each spec file back as the model reads it.
   A routed request `aid.readonly` calls a plain read (and offering `allow_once`) gets the single holder `rules`:
-  the plugin allows it at once, no model asked (`PermissionDecision.by` plugin `supervision`).
+  the plugin allows it at once, no model asked (`PermissionDecision.by` plugin `supervision`). Else, with
+  `spec.supervisor_classifier` (agent name or `module:attr`; default the bundled `classifier`, `classifier.py`,
+  `fresh_turns`, structured `ClassifierVerdict`) and allow/reject options, holder `classifier` comes first: the
+  supervisor's session `<supervisor[:52]>.classifier` (parent = supervisor, made on use, remade for another
+  classifier, deleted with the supervisor; one request at a time) gets one turn per request. allow/deny answer as
+  the plugin (a deny's reason reaches the agent as `aid's supervision check said:`); escalate forwards with the
+  reason as note; failure or `CLASSIFIER_WINDOW` hands on silently. Tests' `py_spec` sets it None.
   Rulings (`rulings.py`, `plugin_dir/rulings.db`): every routed request (`rulings`: session, turn, seq, mode, input,
   remove's `plan`, end, allowed, decided_by, said) and its holders (`ruling_steps`: forwarded with note, silent,
   decided, gone); a failed write is logged, never fatal. `query` (`aid.sql.ask`): one read-only statement over

@@ -73,6 +73,17 @@
           ],
           "default": null
         },
+        "supervisor_classifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "classifier"
+        },
         "supervisor_nudge_budget": {
           "default": 3,
           "minimum": 0,
@@ -481,6 +492,17 @@
           ],
           "default": null
         },
+        "supervisor_classifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "classifier"
+        },
         "supervisor_nudge_budget": {
           "default": 3,
           "minimum": 0,
@@ -635,6 +657,17 @@
             }
           ],
           "default": null
+        },
+        "supervisor_classifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "classifier"
         },
         "supervisor_nudge_budget": {
           "default": 3,
@@ -1936,6 +1969,17 @@
             }
           ],
           "default": null
+        },
+        "supervisor_classifier": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": "classifier"
         },
         "supervisor_nudge_budget": {
           "default": 3,

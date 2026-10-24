@@ -136,6 +136,10 @@ class _Spec(BaseModel):
     """Nudges the supervisor may send per stuck episode — the run of supervised turns since the last
     unstuck one. Past it the daemon refuses nudges; K stuck turns after K nudges raises `attention` to
     the person instead. Zero never nudges, and escalates the first stuck turn."""
+    supervisor_classifier: str | None = "classifier"
+    """What judges a routed permission request the read-only rules leave, before the supervisor's route: an agent
+    name, or a `module:attr` target. It runs in a session of its own beside the supervisor, one fresh turn per
+    request, and allows, denies with a reason, or escalates. None sends such requests straight to the route."""
     hooks: list[Hook] = Field(default_factory=list[Hook])
     """Pre-tool gates: the first hook whose tool fits and whose match finds the call's text refuses it."""
     parent: str | None = None

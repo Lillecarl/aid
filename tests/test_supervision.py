@@ -665,6 +665,75 @@ async def test_rules_allow_a_plain_read_before_anyone_is_asked(daemon: Paths, tm
     assert permission_wakes(boss_items) == []
 
 
+def classified_spec(tmp_path: Path, classifier: str) -> NativeSpec:
+    return py_spec(tmp_path, "agents:coder", PermissionMode.ASK).model_copy(
+        update={
+            "supervisor": "boss",
+            "tool_permissions": {"shell": PermissionMode.SUPERVISOR},
+            "supervisor_classifier": classifier,
+        }
+    )
+
+
+async def classified_run(
+    client: aid.Client, tmp_path: Path, classifier: str
+) -> tuple[aid.Session, list[HistoryItem], QueryResult]:
+    """A supervised coder whose `touch made` the classifier judges first; its history and the ruling's steps."""
+    boss = await client.create("boss", py_spec(tmp_path, "agents:supervisor_answerer"))
+    coder = await client.create("coder", classified_spec(tmp_path, classifier))
+    await coder.run(plan(("shell", {"command": "touch made"})))
+    await settled_ruling(client)
+    steps = await rulings(client, "SELECT step, holder, outcome, note FROM ruling_steps ORDER BY step")
+    return boss, [e.item for e in (await coder.history(limit=1000)).entries], steps
+
+
+async def test_the_classifier_allows_without_the_supervisor(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss, items, steps = await classified_run(client, tmp_path, "agents:classifier_allow")
+            firings = await supervised_firings(boss, "coder", 1)
+            await output_after(boss, firings[0].seq)
+            boss_items = [e.item for e in (await boss.history(limit=1000)).entries]
+            [classifier] = [s for s in await client.sessions() if s.name == "boss.classifier"]
+    [decision] = [item for item in items if isinstance(item, PermissionDecision)]
+    assert (decision.by, decision.plugin, decision.option_id) == (PermissionDecider.PLUGIN, "supervision", "yes")
+    assert steps.rows == [[0, "classifier", "decided", None]]
+    assert permission_wakes(boss_items) == []
+    assert classifier.parent == "boss"
+    assert (tmp_path / "made").exists()
+
+
+async def test_the_classifier_denies_with_its_reason(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            _, items, steps = await classified_run(client, tmp_path, "agents:classifier_deny")
+    [decision] = [item for item in items if isinstance(item, PermissionDecision)]
+    assert (decision.by, decision.option_id, decision.text) == (
+        PermissionDecider.PLUGIN,
+        "no",
+        "write it with the edit tools instead",
+    )
+    assert steps.rows == [[0, "classifier", "decided", None]]
+    outputs = [item for item in items if isinstance(item, Output)]
+    assert "aid's supervision check said: write it with the edit tools instead" in str(outputs[-1].output)
+    assert not (tmp_path / "made").exists()
+
+
+async def test_the_classifier_escalates_to_the_supervisor(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss, items, steps = await classified_run(client, tmp_path, "agents:classifier_escalate")
+            wake = await permission_wake(boss, "coder")
+    [decision] = [item for item in items if isinstance(item, PermissionDecision)]
+    assert (decision.by, decision.supervisor) == (PermissionDecider.SUPERVISOR, "boss")
+    assert steps.rows == [
+        [0, "classifier", "forwarded", "classifier: needs the task to judge"],
+        [1, "supervisor", "decided", None],
+    ]
+    assert isinstance(wake.item, MessageEntry)
+    assert "Note: classifier: needs the task to judge" in wake.item.text
+
+
 async def test_ask_supervisor_hands_back_to_the_person_once(daemon: Paths, tmp_path: Path) -> None:
     """ask_supervisor: the person is silent, the supervisor forwards back, and nothing moves the request again."""
     with anyio.fail_after(TIMEOUT):

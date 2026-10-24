@@ -174,6 +174,8 @@ def py_spec(
         permission=permission,
         permission_timeout=permission_timeout,
         ask_autoselect_after=ask_autoselect_after,
+        # The bundled classifier calls a real model; a test that wants one names a fake.
+        supervisor_classifier=None,
     )
 
 

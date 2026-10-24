@@ -23,6 +23,7 @@ from aid.messages import (
 )
 from aid.messaging import ARRIVED
 from aid.protocol import AidError, Goal, decode_request
+from plugins.supervision.classifier import ClassifierVerdict
 from tests.models import (
     AgentInfo,
     DeltaThinkingCalls,
@@ -512,3 +513,15 @@ failed_watcher = _arming_watcher(
     {"argv": ["true"]},
     {"task_id": "bg1", "on": "failed"},
 )
+
+
+def _classifier(verdict: str, reason: str) -> Agent:
+    return Agent(
+        TestModel(call_tools=[], custom_output_args={"verdict": verdict, "reason": reason}),
+        output_type=ClassifierVerdict,
+    )
+
+
+classifier_allow = _classifier("allow", "touching a file in the project")
+classifier_deny = _classifier("deny", "write it with the edit tools instead")
+classifier_escalate = _classifier("escalate", "needs the task to judge")

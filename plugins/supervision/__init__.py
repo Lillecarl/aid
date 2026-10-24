@@ -12,6 +12,7 @@ Bundled and on by default (`autostart`): the daemon keeps only the links and the
 
 from __future__ import annotations
 
+import contextlib
 import time
 import uuid
 from collections import deque
@@ -56,6 +57,8 @@ from aid.spec import AcpSpec, AgentSpecAdapter, ClaudeSdkSpec, NativeSpec, Permi
 from aid.sql import ask
 
 from .agent import Supervisor as Supervisor
+from .classifier import Classifier as Classifier
+from .classifier import ClassifierVerdict, classifier_prompt
 from .loops import ToolLoopDetector
 from .policy import (
     SEARCH_PAGE,
@@ -107,6 +110,13 @@ last decides, and nothing moves the request further."""
 RULES: Final = "rules"
 """The holder of a request `aid.readonly` calls a plain read: answered at once, no model asked."""
 ALLOW_ONCE: Final = "allow_once"
+REJECT_ONCE: Final = "reject_once"
+CLASSIFIER: Final = "classifier"
+"""The holder before the route's first: a fresh model call that allows, denies, or escalates (`classifier.py`)."""
+CLASSIFIER_SUFFIX: Final = ".classifier"
+"""A supervisor's classifier session is `<supervisor[:52]>.classifier`, its `parent` the supervisor."""
+CLASSIFIER_WINDOW: Final = 90.0
+"""Seconds the classifier may take, waiting for its session included, before the request moves on."""
 SUPERVISOR_WINDOW: Final = 120.0
 """Seconds the supervisor holds a request it may forward before a person gets it: one review turn."""
 
@@ -162,7 +172,14 @@ class Supervision(aid.Plugin):
     """Watch over sessions that name a supervisor: turn ends, live tool loops, permission routes, goals, nudges."""
 
     grants = frozenset(
-        {aid.Grant.READ, aid.Grant.MESSAGE, aid.Grant.PROMPT, aid.Grant.PERMISSIONS, aid.Grant.SUPERVISE}
+        {
+            aid.Grant.READ,
+            aid.Grant.MESSAGE,
+            aid.Grant.PROMPT,
+            aid.Grant.PERMISSIONS,
+            aid.Grant.SUPERVISE,
+            aid.Grant.MANAGE,
+        }
     )
 
     def __init__(self) -> None:
@@ -172,6 +189,8 @@ class Supervision(aid.Plugin):
         self._tg: TaskGroup | None = None
         self._goals_dir = default_paths().plugin_dir(self.plugin_name()) / GOALS_DIR
         self._rulings: RulingStore | None = None
+        self._classifier_locks: dict[str, anyio.Lock] = {}
+        """One request at a time per classifier session: a second prompt would find it busy."""
 
     async def run(self, client: aid.Client) -> None:
         self._client = client
@@ -183,6 +202,9 @@ class Supervision(aid.Plugin):
                 self._tg = tg
                 async for infos in client.follow_sessions():
                     supervisors = {info.name: info.supervisor for info in infos}
+                    for info in infos:
+                        if info.name.endswith(CLASSIFIER_SUFFIX) and info.parent not in supervisors:
+                            tg.start_soon(self._drop_classifier, info.name)
                     for gone in followers.keys() - supervisors.keys():
                         followers.pop(gone)[0].cancel()
                         await self._forget(gone)
@@ -430,8 +452,11 @@ class Supervision(aid.Plugin):
         holders = ROUTES.get(mode) if mode is not None else None
         if self._tg is None or (supervisor := spec.supervisor) is None or mode is None or holders is None:
             return
-        if reads(request.tool_name, request.input) and any(o.kind == ALLOW_ONCE for o in request.options):
+        kinds = {o.kind for o in request.options}
+        if reads(request.tool_name, request.input) and ALLOW_ONCE in kinds:
             holders = (RULES,)
+        elif spec.supervisor_classifier is not None and {ALLOW_ONCE, REJECT_ONCE} <= kinds:
+            holders = (CLASSIFIER, *holders)
         await self._settle(watched, request.request_id)
         bound = self._worker_bound(spec, request)
         route = Route(request, holders, None if bound is None else time.monotonic() + bound)
@@ -449,6 +474,11 @@ class Supervision(aid.Plugin):
         await self._record(lambda r: r.entered(request.request_id, route.step, route.holder))
         if route.holder == RULES:
             await self._allow_read(watched, request)
+            return
+        if route.holder == CLASSIFIER:
+            if self._tg is not None:
+                route.timer = anyio.CancelScope()
+                self._tg.start_soon(self._classify, watched, route, route.timer)
             return
         if route.holder == SUPERVISOR:
             await self._tell(watched, permission_review_text(watched.name, request, final=route.final, note=note))
@@ -480,6 +510,94 @@ class Supervision(aid.Plugin):
             )
         except AidError as error:
             log.info("read_answer_failed", session=watched.name, request=request.request_id, error=error.message)
+
+    async def _classify(self, watched: Watched, route: Route, scope: anyio.CancelScope) -> None:
+        """Ask the classifier, then act on its verdict: answer, or hand the request on with its reason. A decision
+        elsewhere cancels `scope`; silence or a failure past `CLASSIFIER_WINDOW` hands it on too."""
+        verdict: ClassifierVerdict | None = None
+        problem = "the classifier did not answer in time"
+        with scope, anyio.move_on_after(CLASSIFIER_WINDOW):
+            try:
+                verdict = await self._ask_classifier(watched, route.request)
+            except (AidError, ValidationError) as error:
+                problem = f"the classifier failed: {error}"
+                log.info("classifier_failed", session=watched.name, error=str(error))
+        if scope.cancel_called:
+            return
+        route.timer = None
+        request = route.request
+        try:
+            match verdict:
+                case ClassifierVerdict(verdict="allow"):
+                    option = next(o.option_id for o in request.options if o.kind == ALLOW_ONCE)
+                    await self.client.call(
+                        AnswerPermission(session=watched.name, request_id=request.request_id, option_id=option)
+                    )
+                case ClassifierVerdict(verdict="deny", reason=reason):
+                    option = next(o.option_id for o in request.options if o.kind == REJECT_ONCE)
+                    await self.client.call(
+                        AnswerPermission(
+                            session=watched.name, request_id=request.request_id, option_id=option, text=reason
+                        )
+                    )
+                case ClassifierVerdict(reason=reason):
+                    await self._hand_on(watched, route, StepOutcome.FORWARDED, f"classifier: {reason}")
+                case None:
+                    await self._hand_on(watched, route, StepOutcome.SILENT, problem)
+        except AidError as error:
+            # Answered meanwhile, or the session went: the request ends with its turn.
+            log.info("classifier_verdict_unused", session=watched.name, error=error.message)
+
+    async def _ask_classifier(self, watched: Watched, request: PermissionRequest) -> ClassifierVerdict:
+        """One fresh turn of the supervisor's classifier session, made on first use."""
+        supervisor, classifier = watched.spec.supervisor, watched.spec.supervisor_classifier
+        if supervisor is None or classifier is None:
+            raise AidError("no_classifier", f"{watched.name!r} names no supervisor or classifier")
+        name = await self._classifier_session(supervisor, classifier)
+        session = self.client.session(name)
+        async with self._classifier_locks.setdefault(name, anyio.Lock()):
+            try:
+                result = await session.run(classifier_prompt(watched.name, watched.spec.cwd, request))
+            except anyio.get_cancelled_exc_class():
+                with anyio.CancelScope(shield=True):
+                    with contextlib.suppress(AidError):
+                        await session.cancel()
+                raise
+        return ClassifierVerdict.model_validate(result.output)
+
+    async def _classifier_session(self, supervisor: str, classifier: str) -> str:
+        """The supervisor's classifier session, running `classifier`; made, or remade for another classifier."""
+        name = f"{supervisor[:52]}{CLASSIFIER_SUFFIX}"
+        agent, target = (None, classifier) if ":" in classifier else (classifier, None)
+        try:
+            current = AgentSpecAdapter.validate_python(await self.client.call(GetSpec(session=name)))
+        except AidError:
+            current = None
+        if isinstance(current, NativeSpec) and (current.agent, current.target) == (agent, target):
+            return name
+        if current is not None:
+            await self.client.session(name).delete()
+        base = AgentSpecAdapter.validate_python(await self.client.call(GetSpec(session=supervisor)))
+        native = base if isinstance(base, NativeSpec) else None
+        spec = NativeSpec(
+            cwd=base.cwd,
+            agent=agent,
+            target=target,
+            python_path=native.python_path if native is not None else [],
+            env=native.env if native is not None else {},
+            parent=supervisor,
+            permission=PermissionMode.DENY,
+            aid_tools=False,
+        )
+        await self.client.create(name, spec)
+        return name
+
+    async def _drop_classifier(self, name: str) -> None:
+        """A classifier session whose supervisor went."""
+        try:
+            await self.client.session(name).delete()
+        except AidError as error:
+            log.info("classifier_drop_failed", session=name, error=error.message)
 
     async def _hand_on_after(self, watched: Watched, route: Route, wait: float, timer: anyio.CancelScope) -> None:
         """The holder stayed silent: the next one gets the request. A decision or a forward cancels the timer."""

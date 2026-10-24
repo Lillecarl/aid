@@ -280,7 +280,8 @@ class Verdict:
 
     allowed: bool
     said: str | None = None
-    """`The supervisor said: …` or `The person said: …`; None when nobody gave words."""
+    """`The supervisor said: …`, `aid's <plugin> check said: …` or `The person said: …`; None when nobody gave
+    words."""
 
     def refusal(self, outcome: str) -> str:
         """What a refused tool returns: its outcome, then why, so the agent can act on the reason."""
@@ -433,7 +434,14 @@ class Coding:
             self.always.add(remember)
         said = None
         if decision.text:
-            said = f"{'The supervisor' if decision.by is PermissionDecider.SUPERVISOR else 'The person'} said: {decision.text}"
+            match decision.by:
+                case PermissionDecider.SUPERVISOR:
+                    speaker = "The supervisor"
+                case PermissionDecider.PLUGIN:
+                    speaker = f"aid's {decision.plugin or 'plugin'} check"
+                case _:
+                    speaker = "The person"
+            said = f"{speaker} said: {decision.text}"
         return Verdict(option_id in (YES, ALWAYS), said)
 
     async def close(self) -> None:
