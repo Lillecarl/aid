@@ -151,6 +151,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `anthropic/` → `AnthropicModel` (Messages API, native blocks, `extra_headers` carry betas, automatic caching
   on), else `OpenAIChatModel` (Chat Completions; `OPENAI_COMPATIBLE` maps prefix → base URL + key variable).
   `model_settings`: `api_key`/`api_base`/`max_retries` build the client, the rest goes into each request.
+- `src/aid/prices.py` — models.dev's catalog (`~/.cache/aid/models.dev.json`, refetched daily, stale kept on
+  failure; `AID_MODEL_PRICES` = URL, file or `off`, tests set `off`). The native backend prices each request of a
+  model it built from a name (context tiers included) into `Usage.cost`, a per-turn amount that summaries add;
+  `session_cost` stays the agent's own running total.
 - `src/aid/mcp.py` — a spec's `mcp_servers` as ACP `session/new` params and as Claude Code `--mcp-config` JSON,
   plus the built-in `aid` server (`session_servers`). claude-agent-acp restarts its query when `session/load` gets
   servers other than `session/new` did.

@@ -187,6 +187,8 @@ class _Session:
         # named models.
         if isinstance(item, Usage) and item.session_cost is not None:
             self.latest[item.session_cost.currency] = item.session_cost.amount
+        if isinstance(item, Usage) and item.cost is not None:
+            self.cost[item.cost.currency] = self.cost.get(item.cost.currency, 0.0) + item.cost.amount
 
     def info(self) -> SessionInfo:
         return SessionInfo(

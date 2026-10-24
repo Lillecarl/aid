@@ -586,6 +586,9 @@ class Usage(_Message):
     session_cost: Cost | None = None
     """The agent's own running total for its session, not this turn's share: ACP's `usage_update` cost is
     cumulative. It restarts with the agent's session."""
+    cost: Cost | None = None
+    """This turn's own cost, where aid prices the tokens itself (native, from models.dev: `aid.prices`).
+    Turns add up; None is unknown, not free."""
 
 
 class Output(_Message):

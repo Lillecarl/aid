@@ -40,8 +40,10 @@ from aid.messages import (
 )
 from aid.messaging import ARRIVED, arrived
 from aid.model import AnthropicModel, Model, ModelInfo, OpenAIChatModel, RequestUsage, accumulate, model_for
+from aid.prices import CURRENCY, Price, price_for
 from aid.protocol import (
     AidError,
+    Cost,
     Output,
     Started,
     TextDelta,
@@ -366,6 +368,9 @@ class NativeBackend:
         # Takes the messages waiting for the session (the daemon's inbox), between the steps of a turn.
         self._receive = receive
         self._history_lock = anyio.Lock()
+        # A model object is its owner's to price; aid prices only the transports it builds from a name.
+        self._priced = self._owned is None
+        self._price: Price | None = None
         self._turn: list[ModelMessage] | None = None
         self._in_flight: tuple[list[ToolCallPart], int] | None = None
         coding.compact = self.compact
@@ -389,6 +394,12 @@ class NativeBackend:
         except Exception:
             log.exception("receive_messages_failed")
             return []
+
+    async def _request_price(self) -> Price | None:
+        if not self._priced:
+            self._priced = True
+            self._price = await price_for(self._model.model_name)
+        return self._price
 
     def _preserve_signed_thinking(self) -> bool:
         """Anthropic rejects a signed block whose signature the wire dropped, so keep them whole."""
@@ -452,6 +463,7 @@ class NativeBackend:
                     indexes: dict[int, int] = {}
                     request_usage = RequestUsage()
                     usage_observed = False
+                    price = await self._request_price()
                     truncated = False
                     info = ModelInfo(list(self._tools.values()), self._agent.output_type, self._agent.model_settings)
                     wire = prune_history(
@@ -502,6 +514,10 @@ class NativeBackend:
                                     if request_usage.reasoning_tokens is None
                                     else (usage.thought_tokens or 0) + request_usage.reasoning_tokens,
                                 }
+                            )
+                        if usage_observed and price is not None:
+                            usage = usage.model_copy(
+                                update={"cost": add_cost(usage.cost, price, request_usage, self._model)}
                             )
                         resolved_model = response.model_name or self._model.model_name
                         if resolved_model not in usage.models:
@@ -680,6 +696,15 @@ async def _write_atomic(path: anyio.Path, data: bytes) -> None:
     tmp = path.with_name(path.name + ".tmp")
     await tmp.write_bytes(data)
     await tmp.rename(path)
+
+
+def add_cost(total: Cost | None, price: Price, usage: RequestUsage, model: Model) -> Cost:
+    # Chat Completions counts cache reads inside prompt tokens; Anthropic's Messages API counts them apart.
+    cached = usage.cache_read_tokens if isinstance(model, OpenAIChatModel) else 0
+    amount = price.cost(
+        max(0, usage.input_tokens - cached), usage.cache_read_tokens, usage.cache_write_tokens, usage.output_tokens
+    )
+    return Cost(amount=(total.amount if total is not None else 0.0) + amount, currency=CURRENCY)
 
 
 async def _receive_messages(session: str) -> list[MessageEntry]:

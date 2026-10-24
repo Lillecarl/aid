@@ -2901,6 +2901,17 @@
           ],
           "default": null
         },
+        "cost": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Cost"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "input_tokens": {
           "anyOf": [
             {
@@ -2980,7 +2991,8 @@
         "context_used",
         "context_size",
         "agent",
-        "session_cost"
+        "session_cost",
+        "cost"
       ],
       "title": "Usage",
       "type": "object"

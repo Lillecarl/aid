@@ -37,7 +37,7 @@ def summarize(entries: Iterable[HistoryEntry]) -> SessionSummary:
     turns = starts = requests = 0
     tokens: Counter[str] = Counter()
     models: Counter[str] = Counter()
-    cost: Counter[str] = Counter()
+    cost: dict[str, float] = {}
     agent_sessions: dict[str, None] = {}
     calls: dict[str, _Call] = {}
     # The running agent session's latest cost per currency, added to `cost` when the next session starts.
@@ -46,7 +46,7 @@ def summarize(entries: Iterable[HistoryEntry]) -> SessionSummary:
     for entry in entries:
         match entry.item:
             case Started() as started:
-                cost.update(latest)
+                _add(cost, latest)
                 latest.clear()
                 starts += 1
                 if started.agent_session:
@@ -59,6 +59,8 @@ def summarize(entries: Iterable[HistoryEntry]) -> SessionSummary:
                 models.update(usage.models)
                 if usage.session_cost is not None:
                     latest[usage.session_cost.currency] = usage.session_cost.amount
+                if usage.cost is not None:
+                    _add(cost, {usage.cost.currency: usage.cost.amount})
             case ToolCall() as tool:
                 call = calls.setdefault(tool.tool_call_id, _Call())
                 call.kind = call.kind or tool.kind
@@ -67,7 +69,7 @@ def summarize(entries: Iterable[HistoryEntry]) -> SessionSummary:
                 call.seq = entry.seq
             case _:
                 pass
-    cost.update(latest)
+    _add(cost, latest)
     return SessionSummary(
         turns=turns,
         starts=starts,
@@ -78,6 +80,11 @@ def summarize(entries: Iterable[HistoryEntry]) -> SessionSummary:
         agent_sessions=list(agent_sessions),
         files=files_of(calls.values()),
     )
+
+
+def _add(total: dict[str, float], amounts: dict[str, float]) -> None:
+    for currency, amount in amounts.items():
+        total[currency] = total.get(currency, 0.0) + amount
 
 
 def files_of(calls: Iterable[_Call]) -> list[FileActivity]:

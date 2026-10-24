@@ -16,6 +16,7 @@ from aid.daemon import Daemon
 from aid.launcher import ForkserverLauncher
 from aid.paths import Paths
 from aid.plugins import ENV_PLUGINS_DIST, ENV_PLUGINS_PATH
+from aid.prices import ENV_PRICES
 from aid.spec import AcpSpec, ClaudeTtySpec, NativeSpec, PermissionMode
 from aid.speech import load as load_speech
 from aid.web.highlight import ENV_GRAMMARS, Grammars
@@ -72,13 +73,14 @@ def anyio_backend() -> str:
 @pytest.fixture(scope="session", autouse=True)
 def empty_extension_paths(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]:
     """Keep the plugins of whoever runs the tests out of the sessions: every tier of the plugins path. Set before
-    the forkserver starts, so every worker inherits it."""
-    keys = (ENV_PLUGINS_PATH, ENV_PLUGINS_DIST, "XDG_CONFIG_HOME")
+    the forkserver starts, so every worker inherits it. Prices too: no test fetches models.dev."""
+    keys = (ENV_PLUGINS_PATH, ENV_PLUGINS_DIST, "XDG_CONFIG_HOME", ENV_PRICES)
     previous = {key: os.environ.get(key) for key in keys}
     isolated = str(tmp_path_factory.mktemp("no-extensions"))
     os.environ[ENV_PLUGINS_PATH] = isolated
     os.environ.pop(ENV_PLUGINS_DIST, None)
     os.environ["XDG_CONFIG_HOME"] = isolated
+    os.environ[ENV_PRICES] = "off"
     yield
     for key, value in previous.items():
         if value is None:

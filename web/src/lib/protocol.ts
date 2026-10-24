@@ -576,6 +576,7 @@ export interface Usage {
   cache_write_tokens: number | null;
   context_size: number | null;
   context_used: number | null;
+  cost: Cost | null;
   input_tokens: number | null;
   models: string[];
   output_tokens: number | null;
