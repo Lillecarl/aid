@@ -324,7 +324,8 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   they change. ACP lists no tools: the daemon learns each name from a `PermissionRequest`
   (`_learn_tool`, `tool_group` in spec.py, no `acp` import in the daemon) and `AcpSpec.mode_for` answers it,
   changed live through the worker. aid answers only what the agent asks. claude-tty: `ClaudeTtySpec.tool_permissions`
-  as the same rules at launch (`claude_rules`; ask merged into aid's `--settings` file), no default (Claude's);
+  as the same rules at launch (`claude_rules`; ask merged into aid's `--settings` file), no default (Claude's;
+  measured 2.1.310: a denied tool is gone, an ask tool reaches aid as a PermissionRequest);
   names learned from `PermissionRequest` and `ToolCall.tool` (transcript `tool_use`); a change restarts the
   worker once neither aid's turn nor `working` runs (`restart_pending`, settled from `Activity` too).
   The page's Permissions tab is the only place a person sets modes; the create form sends `ask`.
