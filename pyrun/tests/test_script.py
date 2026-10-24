@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from pyrun import Command
+    from pyrun.files import FileAccess
 
 pytestmark = pytest.mark.anyio
 
@@ -72,6 +73,45 @@ await run("rm", "-rf", "/tmp/nothing-here")
     assert report.printed == "one\ntwo\n"
     assert report.error is not None and "Denied" in report.error
     assert [p.argv[0] for p in report.processes] == ["echo", "echo"]
+
+
+async def test_the_host_decides_file_access_outside_the_working_directory(tmp_path: Path) -> None:
+    work, outside = tmp_path / "work", tmp_path / "outside"
+    work.mkdir()
+    outside.mkdir()
+    (outside / "secret").write_text("s3cret\n")
+    (outside / "tree").mkdir()
+    (outside / "tree" / "leaf").write_text("x")
+    asked: list[FileAccess] = []
+
+    async def reads_only(access: FileAccess) -> bool:
+        asked.append(access)
+        return access.access == "read" or access.path == str(outside / "tree")
+
+    script = f"""
+import os, shutil
+Path("inside.txt").write_text("quiet")
+os.rename("inside.txt", "moved.txt")
+print(Path({str(outside / "secret")!r}).read_text(), end="")
+shutil.rmtree({str(outside / "tree")!r})
+try:
+    os.close(os.open({str(outside / "made")!r}, os.O_WRONLY | os.O_CREAT))
+except PermissionError as error:
+    print("refused:", error)
+"""
+    with anyio.fail_after(TIMEOUT):
+        report = await run_script(script, cwd=work, store=tmp_path / "runs", files=reads_only)
+    assert report.error is None, report.error
+    assert (work / "moved.txt").read_text() == "quiet"
+    assert not (outside / "tree").exists()
+    assert not (outside / "made").exists()
+    assert report.printed.startswith("s3cret\nrefused: pyrun policy refused to write")
+    # One question each: the read, the tree (its contents follow its approval), the refused file.
+    assert [(a.access, a.path, a.event) for a in asked] == [
+        ("read", str(outside / "secret"), "open"),
+        ("write", str(outside / "tree"), "shutil.rmtree"),
+        ("write", str(outside / "made"), "open"),
+    ]
 
 
 async def test_long_output_is_clipped_in_the_report(tmp_path: Path) -> None:

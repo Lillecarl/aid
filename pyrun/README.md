@@ -60,6 +60,12 @@ env it changed, start, end, exit code or signal) and `stdout`, `stderr`, written
 `run`, `cmd`, `sh`, `pyrun` and `Path` in scope. Its host, `pyrun.host.run_script(source, policy=...)`, starts
 it as a child process, answers its policy questions over a pipe, and returns a `Report`.
 
+`run_script(..., files=...)` adds a file guard (`pyrun.files`): an audit hook in the child asks
+`async (FileAccess) -> bool` before each read or write outside `cwd` and the store. Reads of the interpreter's own
+files, `/proc`, `/dev` and `/sys` pass. False raises `PermissionError` in the script; an approved path, a
+directory with everything under it, stays approved for the run. The hook waits synchronously, so the script's event
+loop stops while a question is open. It sees Python-level operations only: a guard against mistakes, not a sandbox.
+
 The report is what an agent reads, in this shape:
 
     $ git status --short                          exit 0    0.04s   k3f9.1

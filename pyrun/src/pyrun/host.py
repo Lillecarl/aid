@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Final
 import anyio
 
 from pyrun.command import Command, cmd
+from pyrun.files import FileAccess
 from pyrun.result import Failed, TimedOut
 from pyrun.scope import Scope, default_store
 from pyrun.script import ERROR_FILE, PRINTED_FILE, SCRIPT_FILE
@@ -21,6 +22,7 @@ if TYPE_CHECKING:
     import os
 
     from pyrun.command import Process
+    from pyrun.files import FilePolicy
     from pyrun.scope import Policy
 
 HOST_GRACE: Final = 10.0
@@ -130,6 +132,7 @@ async def run_script(
     source: str,
     *,
     policy: Policy | None = None,
+    files: FilePolicy | None = None,
     cwd: str | os.PathLike[str] = ".",
     store: str | os.PathLike[str] | None = None,
     time_limit: float | None = None,
@@ -137,7 +140,8 @@ async def run_script(
 ) -> Report:
     """Run `source` with `python -m pyrun.script` and report on it. Everything it starts dies with it.
 
-    `time_limit`: the script's own scope timeout; the report says what was running when it struck."""
+    `files`: asked before each file access outside `cwd` and the store (`pyrun.files`); False raises PermissionError
+    in the script. `time_limit`: the script's own scope timeout; the report says what was running when it struck."""
     store = Path(store) if store is not None else default_store()
     scope = secrets.token_hex(3)
     directory = store / scope
@@ -149,14 +153,16 @@ async def run_script(
         argv += ["--timeout", str(time_limit)]
     if policy is not None:
         argv.append("--policy")
+    if files is not None:
+        argv.append("--files")
     runner = cmd(*argv, timeout=time_limit + HOST_GRACE if time_limit is not None else None, check=False)
     error: str | None = None
     try:
         # The host's own scope records the script's process under the script's directory, and finds whatever
         # the script started even if the script's process dies first: the marks chain.
         async with Scope(store=directory / "host", cwd=cwd), runner.start() as process:
-            if policy is not None:
-                await _answer(process, policy)
+            if policy is not None or files is not None:
+                await _answer(process, policy, files)
             finished = await process.wait()
         if not finished.ok and not (directory / ERROR_FILE).exists():
             error = f"the script runner exited {finished.code}:\n{finished.stderr.tail()}"
@@ -167,21 +173,25 @@ async def run_script(
     return read_report(directory, error)
 
 
-async def _answer(process: Process, policy: Policy) -> None:
+async def _answer(process: Process, policy: Policy | None, files: FilePolicy | None) -> None:
     async with anyio.create_task_group() as tg:
         async for line in process:
             question = json.loads(line)
             if question.get("done"):
                 break
-            tg.start_soon(_decide, process, policy, question)
+            tg.start_soon(_decide, process, policy, files, question)
     await process.close_stdin()
 
 
-async def _decide(process: Process, policy: Policy, question: dict[str, Any]) -> None:
-    command = Command(argv=tuple(question["argv"]), cwd=question.get("cwd"), env=question.get("env") or {})
+async def _decide(process: Process, policy: Policy | None, files: FilePolicy | None, question: dict[str, Any]) -> None:
     reason: str | None = None
     try:
-        allowed = await policy(command)
+        if (asked := question.get("file")) is not None:
+            access = FileAccess(access=asked["access"], path=asked["path"], event=asked["event"])
+            allowed = files is not None and await files(access)
+        else:
+            command = Command(argv=tuple(question["argv"]), cwd=question.get("cwd"), env=question.get("env") or {})
+            allowed = policy is not None and await policy(command)
     except Exception as error:
         allowed, reason = False, f"{type(error).__name__}: {error}"
     answer = {"id": question["id"], "allow": allowed, "reason": reason}
