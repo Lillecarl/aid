@@ -43,6 +43,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Mapping, Sequence
 
     from openai.types import CompletionUsage
+    from openai.types.chat.chat_completion_chunk import ChoiceDelta
 
     from aid.agent import Tool
 
@@ -160,6 +161,10 @@ class Provider:
     """An unauthenticated local server: a missing key is not an error."""
     defaults: Mapping[str, Any] = field(default_factory=dict[str, Any])
     """Request settings the session's `model_settings` override."""
+    headers: Mapping[str, str] = field(default_factory=dict[str, str])
+    """Sent with every request of the client."""
+    stream_usage: bool = True
+    """The server takes `stream_options.include_usage` (Gemini's refuses it)."""
 
 
 OPENAI_COMPATIBLE: Final[dict[str, Provider]] = {
@@ -168,7 +173,9 @@ OPENAI_COMPATIBLE: Final[dict[str, Provider]] = {
     "deepseek": Provider("https://api.deepseek.com/v1", "DEEPSEEK_API_KEY", defaults={"max_tokens": 131072}),
     "openrouter": Provider("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "groq": Provider("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
-    "gemini": Provider("https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY"),
+    "gemini": Provider(
+        "https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY", stream_usage=False
+    ),
     "mistral": Provider("https://api.mistral.ai/v1", "MISTRAL_API_KEY"),
     "xai": Provider("https://api.x.ai/v1", "XAI_API_KEY"),
     "together": Provider("https://api.together.xyz/v1", "TOGETHERAI_API_KEY"),
@@ -223,12 +230,14 @@ def _request_settings(settings: dict[str, Any], provider: Provider | None = None
 
 
 class OpenAIChatModel:
-    """Chat Completions through the OpenAI SDK, for OpenAI and every provider that serves the same API."""
+    """Chat Completions through the OpenAI SDK, for OpenAI and every provider that serves the same API. A provider
+    with quirks subclasses it and overrides `request_settings`, `reasoning` or `usage`."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, provider: Provider | None = None) -> None:
+        """`provider` None: the one `OPENAI_COMPATIBLE` names by the prefix, if any."""
         self.model_name = name
-        provider, self._model = split_name(name)
-        self._provider = OPENAI_COMPATIBLE.get(provider)
+        prefix, self._model = split_name(name)
+        self._provider = provider or OPENAI_COMPATIBLE.get(prefix)
         self._clients: dict[_ClientKey, openai.AsyncOpenAI] = {}
 
     def _client(self, settings: dict[str, Any]) -> openai.AsyncOpenAI:
@@ -238,6 +247,7 @@ class OpenAIChatModel:
                 api_key=key.api_key,
                 base_url=key.base_url,
                 max_retries=key.max_retries,
+                default_headers=dict(self._provider.headers) if self._provider else None,
                 http_client=openai.DefaultAsyncHttpx2Client(),
             )
             self._clients[key] = client
@@ -248,9 +258,28 @@ class OpenAIChatModel:
         for client in clients:
             await client.close()
 
+    def request_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
+        """Each request's keyword arguments from the session's settings, under the provider's defaults."""
+        kwargs = _request_settings(settings, self._provider)
+        if self._provider is None or self._provider.stream_usage:
+            kwargs.setdefault("stream_options", {"include_usage": True})
+        return kwargs
+
+    def reasoning(self, delta: ChoiceDelta) -> str | None:
+        """A streamed delta's reasoning text. DeepSeek and others stream it beside the content as
+        `reasoning_content`; the SDK keeps the extra field."""
+        thought = (delta.model_extra or {}).get("reasoning_content")
+        return thought if isinstance(thought, str) else None
+
+    def usage(self, usage: CompletionUsage) -> RequestUsage:
+        return _openai_usage(usage)
+
+    def wire(self, messages: Sequence[ModelMessage]) -> list[dict[str, Any]]:
+        return wire_messages(messages)
+
     async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
         client = self._client(info.settings)
-        kwargs = _request_settings(info.settings, self._provider)
+        kwargs = self.request_settings(info.settings)
         if info.tools:
             kwargs["tools"] = [tool.definition() for tool in info.tools]
         if info.output_type is not str:
@@ -258,10 +287,8 @@ class OpenAIChatModel:
                 "type": "json_schema",
                 "json_schema": {"name": "output", "schema": TypeAdapter(info.output_type).json_schema()},
             }
-        if split_name(self.model_name)[0] != "gemini":
-            kwargs.setdefault("stream_options", {"include_usage": True})
         stream = await client.chat.completions.create(
-            model=self._model, messages=cast(Any, wire_messages(messages)), stream=True, **kwargs
+            model=self._model, messages=cast(Any, self.wire(messages)), stream=True, **kwargs
         )
         ids: dict[int, str] = {}
         try:
@@ -269,15 +296,14 @@ class OpenAIChatModel:
                 if chunk.model:
                     yield StreamDelta(model_name=chunk.model)
                 if chunk.usage is not None:
-                    yield StreamDelta(usage=_openai_usage(chunk.usage))
+                    yield StreamDelta(usage=self.usage(chunk.usage))
                 for choice in chunk.choices:
                     if choice.finish_reason == "length":
                         yield StreamDelta(truncated=True)
                     delta = choice.delta
                     if delta.content:
                         yield StreamDelta(0, TextPart(delta.content))
-                    # DeepSeek and others stream reasoning beside the content; the SDK keeps the extra field.
-                    if thought := (delta.model_extra or {}).get("reasoning_content"):
+                    if thought := self.reasoning(delta):
                         yield StreamDelta(1, ThinkingPart(thought))
                     for call in delta.tool_calls or []:
                         if call.id:
