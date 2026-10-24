@@ -193,7 +193,7 @@ def emit_to(events: list[SessionEvent]) -> Any:
 
 @asynccontextmanager
 async def wired_backend(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, **spec_kwargs: Any
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str | None, **spec_kwargs: Any
 ) -> AsyncGenerator[NativeBackend]:
     """The test provider on the plugins path, and an open backend wired to it."""
     write_wired_provider(tmp_path / "agents")
@@ -206,7 +206,7 @@ async def wired_backend(
         yield backend
 
 
-async def open_wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str, **spec_kwargs: Any) -> str:
+async def open_wired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, target: str | None, **spec_kwargs: Any) -> str:
     """A session wired to the test provider, one turn run: its stored history as text."""
     async with wired_backend(tmp_path, monkeypatch, target, **spec_kwargs) as backend:
         await backend.prompt("hi", emit_to([]))
@@ -243,6 +243,32 @@ async def test_wiring_names_the_working_directory(tmp_path: Path, monkeypatch: p
 async def test_wiring_skip_drops_named_instructions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stored = await open_wired(tmp_path, monkeypatch, "agents:echo", skip_instructions=["brief"])
     assert system_prompt(stored).startswith("# who\n\nsession s1\n\n# environment")
+
+
+def write_quiet_agent(agents: Path) -> None:
+    """An agent definition that composes no instruction providers."""
+    (agents / "quiet").mkdir(parents=True, exist_ok=True)
+    (agents / "quiet" / "__init__.py").write_text(
+        "import aid\nfrom agents import echo\n\n\n"
+        "class Quiet(aid.AgentDefinition):\n"
+        '    """Composes nothing."""\n\n'
+        "    instruction_providers = ()\n\n"
+        "    def build(self):\n"
+        "        return echo\n"
+    )
+
+
+async def test_an_agent_declares_its_instruction_providers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    write_quiet_agent(tmp_path / "agents")
+    stored = await open_wired(tmp_path, monkeypatch, None, agent="quiet")
+    assert system_prompt(stored).startswith("# environment")
+    assert not any("# brief" in content for content in contents(stored))
+
+
+async def test_a_spec_overrides_the_agents_providers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    write_quiet_agent(tmp_path / "agents")
+    stored = await open_wired(tmp_path, monkeypatch, None, agent="quiet", instruction_providers=["prov"])
+    assert system_prompt(stored).startswith("# brief\n\nShip it.")
 
 
 async def test_wiring_unknown_provider_starts_bare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

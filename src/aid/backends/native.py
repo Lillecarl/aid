@@ -815,11 +815,16 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
     # A loaded conversation, not the fresh system prompt seeded below: that seed is a start, not a resume.
     resumed = bool(history)
 
+    select = spec.instruction_providers
+    if select is None and spec.agent is not None and (definition := catalog.agents.get(spec.agent)) is not None:
+        declared = definition.instruction_providers
+        select = None if declared is None else list(declared)
+
     def refresh_instructions() -> str:
         composed = compose(
             spec.cwd,
             catalog,
-            select=spec.instruction_providers,
+            select=select,
             skip=frozenset(spec.skip_instructions),
             session_name=state_dir.name,
         )

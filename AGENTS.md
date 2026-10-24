@@ -239,7 +239,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   for is aid's; any other (typed into the pane, woken by a channel event) goes to the daemon as `Observed` entries
   under a turn id of its own.
 - `src/aid/agents.py` — `aid.AgentDefinition` and `aid.InstructionsProvider`, interfaces plugins implement. Never
-  import agent plugins in the daemon itself: it asks `aid.catalog` in a subprocess.
+  import agent plugins in the daemon itself: it asks `aid.catalog` in a subprocess. `AgentDefinition.
+  instruction_providers` picks the providers composed for its sessions (the supervisor: none); a spec's overrides.
 - `src/aid/env.py` — agent environments, minus the markers of the Claude session that started us.
 - `src/aid/client.py` — public API: `aid.connect()`, `Client`, `Session.run/stream`.
 - `src/aid/client.py:daemon_call` — what hosted loops await daemon calls through: silence past

@@ -55,5 +55,8 @@ You have no shell, files or editor. Do not ask for them.
 class Supervisor(aid.AgentDefinition):
     """Supervises sessions: answers their risky tool calls, nudges them on, forwards what needs a person."""
 
+    instruction_providers = ()
+    """Its instructions are its own: a coding agent's skills and project files are not its work."""
+
     def build(self) -> Agent:
         return Agent(MODEL, instructions=INSTRUCTIONS, tools=[man_page, tldr_page], toolsets=[aid.supervisor_tools])

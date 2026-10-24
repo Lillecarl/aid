@@ -35,6 +35,9 @@ class AgentDefinition(ABC):
 
     name: ClassVar[str] = ""
     """The name sessions use. Empty means the class name in snake case."""
+    instruction_providers: ClassVar[tuple[str, ...] | None] = None
+    """The instruction providers composed for this agent's sessions, in order; empty for none, None for every one
+    the plugins path offers. A spec's `instruction_providers` overrides it."""
 
     @classmethod
     def agent_name(cls) -> str:
