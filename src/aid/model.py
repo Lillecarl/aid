@@ -175,7 +175,6 @@ class Provider:
 
 OPENAI_COMPATIBLE: Final[dict[str, Provider]] = {
     "openai": Provider(None, "OPENAI_API_KEY"),
-    "openrouter": Provider("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "groq": Provider("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
     "gemini": Provider(
         "https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY", stream_usage=False
@@ -432,19 +431,28 @@ class AnthropicModel:
     """The Messages API through the Anthropic SDK: signed thinking replayed, beta headers and caching passed
     through. `cache_control` defaults to automatic caching of the longest prefix."""
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, provider: Provider | None = None) -> None:
+        """`provider`: another server of the Messages API, its base URL and key variable; None is Anthropic's."""
         self.model_name = name
         self._model = split_name(name)[1]
+        self._provider = provider
         self._clients: dict[_ClientKey, anthropic.AsyncAnthropic] = {}
 
     def _client(self, settings: dict[str, Any]) -> anthropic.AsyncAnthropic:
-        api_key = settings.get("api_key") or os.environ.get(ANTHROPIC_KEY_ENV)
+        key_env = self._provider.key_env if self._provider else ANTHROPIC_KEY_ENV
+        api_key = settings.get("api_key") or os.environ.get(key_env)
         if not api_key:
-            raise AidError("missing_credentials", f"{self.model_name}: set {ANTHROPIC_KEY_ENV}")
+            raise AidError("missing_credentials", f"{self.model_name}: set {key_env}")
         retries = settings.get("max_retries", settings.get("num_retries", 0))
-        key = _ClientKey(settings.get("api_base") or settings.get("base_url"), api_key, retries)
+        base_url = settings.get("api_base") or settings.get("base_url") or (self._provider and self._provider.base_url)
+        key = _ClientKey(base_url, api_key, retries)
         if (client := self._clients.get(key)) is None:
-            client = anthropic.AsyncAnthropic(api_key=key.api_key, base_url=key.base_url, max_retries=key.max_retries)
+            client = anthropic.AsyncAnthropic(
+                api_key=key.api_key,
+                base_url=key.base_url,
+                max_retries=key.max_retries,
+                default_headers=dict(self._provider.headers) if self._provider else None,
+            )
             self._clients[key] = client
         return client
 
