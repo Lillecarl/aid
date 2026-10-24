@@ -98,6 +98,31 @@ async def test_ls_lists_directories_first(daemon: Paths, tmp_path: Path) -> None
     assert "a.py is a file; read it with read" in not_dir
 
 
+async def test_a_script_run_names_the_edits_it_did_not_see(daemon: Paths, tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "a.py").write_text("A = 1\n")
+    script = {"script": "print(open('a.py').read())", "mode": "sync"}
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(work, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(
+                    ("read", {"path": "a.py"}),
+                    ("python", script),
+                    ("edit", {"path": "a.py", "old": "A = 1", "new": "A = 2"}),
+                    ("python", script),
+                    ("apply_edits", {}),
+                    ("python", script),
+                )
+            )
+    _, clean, _, staged, _, applied = str(result.output).split("\n=====\n")
+    note = "[staged, not applied, so this run saw them as on disk: a.py; apply_edits writes them]"
+    assert "A = 1" in staged and note in staged
+    assert "staged, not applied" not in clean
+    assert "A = 2" in applied and "staged, not applied" not in applied
+
+
 async def test_an_absolute_path_is_taken_as_written(daemon: Paths, tmp_path: Path) -> None:
     work = tmp_path / "work"
     work.mkdir()

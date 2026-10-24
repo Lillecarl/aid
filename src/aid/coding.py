@@ -897,14 +897,25 @@ async def python(
     coding = _coding()
     tool_call_id = ctx.tool_call_id or ""
     if mode == "async":
-        return await _python_async(coding, tool_call_id, script, time_limit)
+        return await _python_async(coding, tool_call_id, script, time_limit) + await _unapplied(coding)
     if await _permit_script(coding, tool_call_id, mode, script):
         if mode == "sync":
-            return await _python_oneshot(coding, [sys.executable, "-c", script], mode, time_limit)
-        if mode == "xonsh":
-            return await _python_oneshot(coding, [sys.executable, "-m", "xonsh", "-c", script], mode, time_limit)
-        return await _python_in_loop(coding, script, time_limit)
+            report = await _python_oneshot(coding, [sys.executable, "-c", script], mode, time_limit)
+        elif mode == "xonsh":
+            report = await _python_oneshot(coding, [sys.executable, "-m", "xonsh", "-c", script], mode, time_limit)
+        else:
+            report = await _python_in_loop(coding, script, time_limit)
+        return report + await _unapplied(coding)
     return "not allowed: the script stays unrun"
+
+
+async def _unapplied(coding: Coding) -> str:
+    """A note when edits wait staged: a script reads the disk, and agents test between staging and applying."""
+    await coding.edit(lambda s: s.prune_unchanged())
+    files = sorted({coding.edits.relpath(p) for p in coding.edits.staged()})
+    if not files:
+        return ""
+    return f"\n[staged, not applied, so this run saw them as on disk: {', '.join(files)}; apply_edits writes them]"
 
 
 async def _python_async(coding: Coding, tool_call_id: str, script: str, time_limit: float) -> str:
