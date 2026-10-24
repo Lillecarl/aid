@@ -182,8 +182,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   mid-turn → applied at turn end (or when claude-tty stops `working`), then aid tells the agent (`aid:` sender,
   plain). Continuity measured: Claude Code 2.1.310 resumes across directories (the transcript stays under the old
   project; `find_transcript` globs every project); claude-agent-acp 0.88.0 `session/load`s the same agent session
-  in the new cwd and knows it moved; native history is aid's; native turns name `cwd` in metadata. opencode: not
-  measured.
+  in the new cwd and knows it moved; native history is aid's; native turns name `cwd` in metadata. opencode 1.19.4
+  keeps the conversation but its tools stay in the session's first directory (unsupported; not worked around).
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.
 - Recording: each turn ends with `Usage` (tokens, models, context, the agent's session cost) before `Output`; each
   worker start records `Started` (agent session id, agent, model) under a turn id of its own. What a turn's tokens
