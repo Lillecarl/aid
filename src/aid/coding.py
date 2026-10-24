@@ -54,6 +54,7 @@ from aid.protocol import (
     ToolDiff,
     clip,
 )
+from aid.sandbox import bwrap_argv
 from aid.spec import PermissionMode, match_hook
 from pyrun.host import run_script
 from pyrun.scope import Scope
@@ -66,7 +67,7 @@ if TYPE_CHECKING:
 
     from aid.backends.base import Emit, Notifier
     from aid.backends.permissions import PermissionWaits
-    from aid.spec import Hook
+    from aid.spec import Hook, Sandbox
     from pyrun import Command
     from pyrun.files import FileAccess
 
@@ -307,8 +308,8 @@ class Coding:
     shell: ShellSession | None = None
     """The session's shell, started by the first `shell` call. `cd` and the environment persist between
     calls; it dies with the worker, or sooner on a timeout, which the next call reports as a reset."""
-    shell_argv: tuple[str, ...] = SHELL_ARGV
-    """How the shell starts: bash, or bash under bwrap (`NativeSpec.sandbox`)."""
+    sandbox: Sandbox | None = None
+    """`NativeSpec.sandbox`: what the tools start runs under bwrap; the worker checked it runs."""
     compact: Callable[[str], Awaitable[str]] | None = None
     """Summarize the conversation into a digest; the worker sets it per session, and `compact` calls it."""
     snapshot: Callable[[str], Awaitable[Path]] | None = None
@@ -333,6 +334,17 @@ class Coding:
             return text
         sections = re.split(r"(?m)^(?=--- )", text)
         return "".join(s for s in sections if f"a/{path}\n" in s.split("\n+++", 1)[0] or f"+++ b/{path}\n" in s)
+
+    def confine(self, chdir: Path | None = None, writable: tuple[Path, ...] = ()) -> list[str]:
+        """The argv prefix that puts a process the tools start in the sandbox; empty without one."""
+        if self.sandbox is None:
+            return []
+        return bwrap_argv(
+            self.sandbox,
+            str(self.cwd),
+            chdir=str(chdir) if chdir is not None else None,
+            writable=[str(p) for p in writable],
+        )
 
     def mode_for(self, tool_name: str) -> PermissionMode:
         if (mode := self.overrides.get(tool_name)) is not None:
@@ -410,7 +422,7 @@ class Coding:
         """Run `command` in the session's shell, starting it on first use, and report what it did."""
         first = self.shell is None
         if first:
-            self.shell = ShellSession(cwd=self.cwd, store=self.store, argv=self.shell_argv)
+            self.shell = ShellSession(cwd=self.cwd, store=self.store, argv=(*self.confine(), *SHELL_ARGV))
         assert self.shell is not None
         return _render_shell(await self.shell.run(command, time_limit=time_limit), time_limit, first)
 
@@ -931,6 +943,8 @@ async def python(
     tool_call_id = ctx.tool_call_id or ""
     if mode == "async":
         return await _python_async(coding, tool_call_id, script, time_limit) + await _unapplied(coding)
+    if mode == "in-loop" and coding.sandbox is not None:
+        raise AidError("sandboxed", "this session is sandboxed, and in-loop runs outside it; use async")
     if await _permit_script(coding, tool_call_id, mode, script):
         if mode == "sync":
             report = await _python_oneshot(coding, [sys.executable, "-c", script], mode, time_limit)
@@ -977,6 +991,7 @@ async def _python_async(coding: Coding, tool_call_id: str, script: str, time_lim
         store=coding.store,
         time_limit=time_limit,
         python=sys.executable,
+        prefix=coding.confine(writable=(coding.store,)),
     )
     return report.render()
 
@@ -997,7 +1012,8 @@ async def _python_oneshot(coding: Coding, argv: list[str], mode: str, time_limit
     same task that waits: it cancels no stranger."""
     started = anyio.current_time()
     try:
-        out = await sh(argv[0], *argv[1:]).set(cwd=str(coding.cwd), timeout=time_limit)
+        full = [*coding.confine(), *argv]
+        out = await sh(full[0], *full[1:]).set(cwd=str(coding.cwd), timeout=time_limit)
         code: int | None = 0
     except ResultError as error:
         out, code = error.result.output, error.result.exit_code
@@ -1110,7 +1126,8 @@ async def background(
     task_id = f"bg{coding.task_seq}"
     task_dir = (coding.store / BACKGROUND_DIR / task_id).resolve()
     await anyio.Path(task_dir).mkdir(parents=True, exist_ok=True)
-    cmd = sh(argv[0], *argv[1:]).set(cwd=str(directory))
+    full = [*coding.confine(directory), *argv]
+    cmd = sh(full[0], *full[1:]).set(cwd=str(directory))
     if env:
         cmd = cmd.env(**env)
     runner = Runner(cmd.stdout(task_dir / "stdout").stderr(task_dir / "stderr"))

@@ -1,4 +1,5 @@
-"""bubblewrap around the native `shell` tool's bash (`NativeSpec.sandbox`).
+"""bubblewrap around what a native session's tools start (`NativeSpec.sandbox`): the `shell` tool's bash, `background`
+tasks, and `python` scripts but `in-loop`, which runs in the worker and is refused.
 
 Measured with bubblewrap 0.12.0: in `--ro-bind / /` writes outside the binds fail with EROFS, `/dev/null` takes
 writes under `--dev /dev`, and `--unshare-net` refuses connections. Unix sockets on the read-only root still
@@ -16,14 +17,17 @@ import anyio
 from aid.protocol import AidError
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from aid.spec import Sandbox
 
 BWRAP: Final = "bwrap"
 
 
-def bwrap_argv(sandbox: Sandbox, cwd: str) -> list[str]:
-    """The bwrap prefix for a command that runs in `cwd`."""
-    binds = [arg for path in (cwd, *sandbox.writable) for arg in ("--bind", path, path)]
+def bwrap_argv(sandbox: Sandbox, cwd: str, *, chdir: str | None = None, writable: Sequence[str] = ()) -> list[str]:
+    """The bwrap prefix for a command of the session in `cwd`, started in `chdir` (default `cwd`). `writable` adds
+    to the spec's: a script runner's own store."""
+    binds = [arg for path in (cwd, *sandbox.writable, *writable) for arg in ("--bind", path, path)]
     return [
         BWRAP,
         "--ro-bind",
@@ -37,7 +41,7 @@ def bwrap_argv(sandbox: Sandbox, cwd: str) -> list[str]:
         *([] if sandbox.network else ["--unshare-net"]),
         "--die-with-parent",
         "--chdir",
-        cwd,
+        chdir or cwd,
         "--",
     ]
 

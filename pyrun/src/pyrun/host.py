@@ -21,6 +21,7 @@ from pyrun.script import ERROR_FILE, PRINTED_FILE, SCRIPT_FILE
 
 if TYPE_CHECKING:
     import os
+    from collections.abc import Sequence
 
     from pyrun.command import Process
     from pyrun.files import FilePolicy
@@ -138,18 +139,20 @@ async def run_script(
     store: str | os.PathLike[str] | None = None,
     time_limit: float | None = None,
     python: str = sys.executable,
+    prefix: Sequence[str] = (),
 ) -> Report:
     """Run `source` with `python -m pyrun.script` and report on it. Everything it starts dies with it.
 
     `files`: asked before each file access outside `cwd` and the store (`pyrun.files`); False raises PermissionError
-    in the script. `time_limit`: the script's own scope timeout; the report says what was running when it struck."""
+    in the script. `time_limit`: the script's own scope timeout; the report says what was running when it struck.
+    `prefix` goes before the interpreter, such as a sandbox's argv; the store must stay writable under it."""
     store = Path(store) if store is not None else default_store()
     scope = secrets.token_hex(3)
     directory = store / scope
     await anyio.Path(directory).mkdir(parents=True)
     await anyio.Path(directory / SCRIPT_FILE).write_text(source)
     cwd = await anyio.Path(cwd).resolve()
-    argv = [python, "-m", "pyrun.script", "--store", str(store), "--scope", scope, "--cwd", str(cwd)]
+    argv = [*prefix, python, "-m", "pyrun.script", "--store", str(store), "--scope", scope, "--cwd", str(cwd)]
     if time_limit is not None:
         argv += ["--timeout", str(time_limit)]
     if policy is not None:

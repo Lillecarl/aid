@@ -56,7 +56,6 @@ from aid.protocol import (
     to_json,
 )
 from aid.tools import tool_paths
-from pyrun.shell import SHELL_ARGV
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -798,10 +797,8 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             history = [ModelRequest(parts=[SystemPromptPart(content=composed)])]
     log.info("history_loaded", agent=spec.agent or spec.target, messages=len(history))
     started = Started(pid=os.getpid(), resumed=resumed, agent=spec.agent or spec.target, model=model_name(agent))
-    shell_argv = SHELL_ARGV
     if spec.sandbox is not None:
         await sandbox.check(spec.sandbox, spec.cwd)
-        shell_argv = (*sandbox.bwrap_argv(spec.sandbox, spec.cwd), *SHELL_ARGV)
     coding = Coding(
         cwd=Path(spec.cwd),
         store=Path(state_dir) / RUNS_DIR,
@@ -812,7 +809,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         hooks=tuple(spec.hooks),
         overrides=dict(spec.tool_permissions),
         waits=PermissionWaits(),
-        shell_argv=shell_argv,
+        sandbox=spec.sandbox,
     )
     backend: NativeBackend | None = None
     try:

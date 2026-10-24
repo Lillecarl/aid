@@ -242,9 +242,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `run_script` in a child, each command asked under `python`; file reads and writes outside the cwd under
   `python:read` / `python:write` via pyrun's audit-hook guard, `pyrun/src/pyrun/files.py`: async mode only, not
   `sync`/`xonsh`/`in-loop`; quiet for the run store and reads of interpreter paths, /proc, /dev, /sys).
-  `NativeSpec.sandbox` runs the `shell` tool's bash under bwrap (`src/aid/sandbox.py`: root read-only, cwd and
-  `writable` bound, private /tmp, optional `--unshare-net`); no working bwrap → the worker refuses to start.
-  Unix sockets still connect (nix daemon, aid's sockets); `python` children and `background` stay unconfined.
+  `NativeSpec.sandbox` runs what the tools start under bwrap (`src/aid/sandbox.py`, `Coding.confine`: the shell's
+  bash, `background`, `python` scripts with their run store bound; root read-only, cwd and `writable` bound,
+  private /tmp, optional `--unshare-net`); `in-loop` is refused; no working bwrap → the worker refuses to start.
+  Unix sockets still connect (nix daemon, aid's sockets).
   Results over `SPILL_LIMIT`
   spill to content-addressed files under the session, sent as a stable head plus the path. `compact`
   summarizes the history into a digest through a direct model call. One `Coding` per session, set per

@@ -82,3 +82,35 @@ async def test_a_session_that_asks_for_a_sandbox_never_runs_without_one(daemon: 
         async with aid.connect(daemon) as client:
             with pytest.raises(AidError, match="bwrap is not on PATH"):
                 await (await client.create("boxed", spec)).run(plan(("shell", {"command": "true"})))
+
+
+@needs_bwrap
+async def test_scripts_and_background_tasks_run_in_the_sandbox_too(daemon: Paths, tmp_path: Path) -> None:
+    spec = py_spec(tmp_path, "agents:coder", aid.PermissionMode.ALLOW).model_copy(update={"sandbox": Sandbox()})
+    script = """
+Path("by-script.txt").write_text("inside")
+try:
+    Path("/usr/aid-escape").write_text("root")
+except OSError as error:
+    print(type(error).__name__, error.errno)
+await run("sh", "-c", "echo child > by-child.txt; echo x > /usr/aid-escape || echo child refused")
+"""
+    steps = plan(
+        ("python", {"script": script}),
+        ("background", {"argv": ["sh", "-c", "echo bg > by-bg.txt; echo x > /usr/aid-escape || echo bg refused"]}),
+        ("task_output", {"task_id": "bg1", "wait": 10}),
+        ("python", {"script": "print('hi')", "mode": "in-loop"}),
+    )
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("boxed", spec)
+            result = str((await session.run(steps)).output)
+    assert [(tmp_path / f).read_text().strip() for f in ("by-script.txt", "by-child.txt", "by-bg.txt")] == [
+        "inside",
+        "child",
+        "bg",
+    ]
+    assert "OSError 30" in result  # EROFS
+    assert "child refused" in result
+    assert "bg refused" in result
+    assert "in-loop runs outside it" in result

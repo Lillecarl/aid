@@ -304,9 +304,10 @@ export interface NativeSpec {
   worker_endpoint?: string | null;
 }
 /**
- * bubblewrap around the native `shell` tool's bash (`aid.sandbox`): the filesystem read-only but the session's
- * directory and `writable`, a private /tmp. A session that asks for one never runs without it: no bwrap, or no
- * user namespaces, and the worker refuses to start.
+ * bubblewrap around what a native session's tools start (`aid.sandbox`): the filesystem read-only but the
+ * session's directory and `writable`, a private /tmp. A session that asks for one never runs without it: no bwrap,
+ * or no user namespaces, and the worker refuses to start; `python`'s `in-loop` mode, which no sandbox can hold, is
+ * refused.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Sandbox".
