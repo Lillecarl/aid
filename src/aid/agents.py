@@ -38,6 +38,9 @@ class AgentDefinition(ABC):
     instruction_providers: ClassVar[tuple[str, ...] | None] = None
     """The instruction providers composed for this agent's sessions, in order; empty for none, None for every one
     the plugins path offers. A spec's `instruction_providers` overrides it."""
+    fresh_turns: ClassVar[bool] = False
+    """Each native turn starts from the instructions alone: the engine keeps no earlier turn, so every turn shares
+    one cached prefix. The daemon's transcript still records them all."""
 
     @classmethod
     def agent_name(cls) -> str:

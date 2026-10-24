@@ -381,6 +381,7 @@ class NativeBackend:
         receive: Callable[[], Awaitable[list[MessageEntry]]] | None = None,
         transport: Transport | None = None,
         price_as: str | None = None,
+        fresh_turns: bool = False,
     ) -> None:
         """`transport`: the agent's model, resolved from its name (`aid.providers.resolve`); the backend owns and
         prices it. Without one, a name resolves through `model_for` alone. `price_as`: the name models.dev prices it
@@ -388,6 +389,7 @@ class NativeBackend:
         self._agent = agent
         self._history_file = history_file
         self._history = history
+        self._fresh_turns = fresh_turns
         self._toolsets = toolsets
         self._started = started
         self._scope: anyio.CancelScope | None = None
@@ -494,6 +496,14 @@ class NativeBackend:
             self._coding.emit = None
 
     async def _prompt(self, text: str, emit: Emit) -> Output:
+        if self._fresh_turns:
+            # Only the instructions before the first prompt stay: the same cached prefix for every turn.
+            lead = next(
+                (i for i, m in enumerate(self._history) if any(p.part_kind == "user-prompt" for p in m.parts)),
+                len(self._history),
+            )
+            del self._history[lead:]
+            self._open_tail = 0
         messages: list[ModelMessage] = []
         if not self._history and self._agent.instructions:
             messages.append(ModelRequest(parts=[SystemPromptPart(self._agent.instructions)]))
@@ -815,10 +825,10 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
     # A loaded conversation, not the fresh system prompt seeded below: that seed is a start, not a resume.
     resumed = bool(history)
 
+    definition = catalog.agents.get(spec.agent) if spec.agent is not None else None
     select = spec.instruction_providers
-    if select is None and spec.agent is not None and (definition := catalog.agents.get(spec.agent)) is not None:
-        declared = definition.instruction_providers
-        select = None if declared is None else list(declared)
+    if select is None and definition is not None and definition.instruction_providers is not None:
+        select = list(definition.instruction_providers)
 
     def refresh_instructions() -> str:
         composed = compose(
@@ -876,6 +886,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             receive=functools.partial(_receive_messages, state_dir.name) if spec.aid_tools else None,
             transport=transport,
             price_as=catalog_model(agent.model, catalog.model_providers) if isinstance(agent.model, str) else None,
+            fresh_turns=definition is not None and definition.fresh_turns,
         )
         yield backend
     finally:

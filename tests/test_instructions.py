@@ -271,6 +271,26 @@ async def test_a_spec_overrides_the_agents_providers(tmp_path: Path, monkeypatch
     assert system_prompt(stored).startswith("# brief\n\nShip it.")
 
 
+async def test_fresh_turns_start_from_the_instructions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    agents = tmp_path / "agents"
+    (agents / "fresh").mkdir(parents=True)
+    (agents / "fresh" / "__init__.py").write_text(
+        "import aid\nfrom agents import echo\n\n\n"
+        "class Fresh(aid.AgentDefinition):\n"
+        '    """Forgets each turn."""\n\n'
+        "    fresh_turns = True\n\n"
+        "    def build(self):\n"
+        "        return echo\n"
+    )
+    async with wired_backend(tmp_path, monkeypatch, None, agent="fresh") as backend:
+        first = await backend.prompt("a", emit_to([]))
+        second = await backend.prompt("b", emit_to([]))
+    assert (first.output, second.output) == ("turn 1: echo a", "turn 1: echo b")
+    stored = (tmp_path / "s1" / "history.json").read_text()
+    assert system_prompt(stored).startswith("# brief")
+    assert not any("echo a" in content for content in contents(stored))
+
+
 async def test_wiring_unknown_provider_starts_bare(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stored = await open_wired(tmp_path, monkeypatch, "agents:echo", instruction_providers=["nope"])
     assert system_prompt(stored).startswith("# environment")
