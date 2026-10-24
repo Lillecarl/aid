@@ -17,7 +17,7 @@ import zmq
 import zmq.asyncio
 from pydantic import TypeAdapter, ValidationError
 
-from aid import events, plugin_host, plugins, zap
+from aid import events, plugin_host, plugins, sandbox, zap
 from aid.catalog import listing
 from aid.client import spawn_plugin_client
 from aid.control import AGENT_ID_PREFIX, authorize
@@ -80,6 +80,7 @@ from aid.protocol import (
     SessionTool,
     SetAttention,
     SetPermissions,
+    SetSandbox,
     Started,
     StartFailed,
     StartSession,
@@ -107,6 +108,7 @@ from aid.spec import (
     ClaudeTtySpec,
     NativeSpec,
     PermissionMode,
+    Sandbox,
     tool_group,
 )
 from aid.summary import summarize
@@ -180,6 +182,8 @@ class _Session:
     directory_request: DirectoryRequest | None = None
     tools: list[SessionTool] = field(default_factory=list[SessionTool])
     """What the last worker's Hello listed."""
+    restart_pending: bool = False
+    """A sandbox change waits for the running turn to end before the worker restarts under it."""
     spec_lock: anyio.Lock = field(default_factory=anyio.Lock)
     """Held from reading the spec to writing its change, so two changes never write over each other."""
 
@@ -289,6 +293,7 @@ class _Session:
             model=", ".join(self.models) or (self.started.model if self.started else None),
             permissions=list(self.permissions.values()),
             tools=self.tool_modes(),
+            sandbox=self.spec.sandbox if isinstance(self.spec, NativeSpec) else None,
             permission=None if isinstance(self.spec, ClaudeTtySpec) else self.spec.permission,
             working=self.working or self.turn is not None,
             attention=self.attention,
@@ -803,6 +808,9 @@ class Daemon:
                 await self._move(session, cwd)
                 session.directory_request = None  # A person's own move answers what the agent asked.
                 return Done(id=request.id, data={"cwd": cwd})
+            case SetSandbox():
+                await self._set_sandbox(self._session(request.session), request.sandbox)
+                return Done(id=request.id)
             case RequestDirectory():
                 session = self._session(request.session)
                 cwd = await self._directory(session, request.cwd)
@@ -1111,6 +1119,8 @@ class Daemon:
         if session.directory_request is not None and session.directory_request.approved and self._tg is not None:
             # The move restarts the worker; its message, and what else waits, are delivered after it.
             self._tg.start_soon(self._settle_directory, session)
+        elif session.restart_pending and self._tg is not None:
+            self._tg.start_soon(self._settle_restart, session)
         elif session.inbox and not session.uses_channel and self._tg is not None:
             self._tg.start_soon(self._deliver, session)
 
@@ -1186,6 +1196,38 @@ class Daemon:
             except AidError:
                 # Moved all the same: the next prompt starts it there, and shows why it fails.
                 log.exception("restart_after_move_failed", session=session.name)
+
+    async def _set_sandbox(self, session: _Session, box: Sandbox | None) -> None:
+        if not isinstance(session.spec, NativeSpec):
+            raise AidError("unsupported", f"{session.name!r} is not native: only native sessions run sandboxed")
+        if box is not None:
+            await sandbox.check(box, session.spec.cwd)  # Refused now, not as a worker that fails to start.
+        async with session.spec_lock:
+            spec = session.spec.model_copy(update={"sandbox": box})
+            await (anyio.Path(self._paths.session_dir(session.name)) / SPEC_FILE).write_bytes(
+                AgentSpecAdapter.dump_json(spec)
+            )
+            session.spec = spec
+        detail = "off" if box is None else box.model_dump_json(exclude_defaults=True)
+        await session.history.append(Lifecycle(event="sandboxed", detail=detail), uuid.uuid4().hex)
+        if session.running:
+            session.restart_pending = True
+            await self._settle_restart(session)
+
+    async def _settle_restart(self, session: _Session) -> None:
+        """Restart a worker whose spec changed under it, once no turn runs; then deliver what waits."""
+        if not session.restart_pending or session.busy:
+            return
+        session.restart_pending = False
+        await self._stop(session)
+        try:
+            await self._ensure_running(session)
+        except AidError:
+            # Saved all the same: the next prompt starts it, and shows why it fails.
+            log.exception("restart_failed", session=session.name)
+        if session.inbox and not session.uses_channel and self._tg is not None:
+            self._tg.start_soon(self._deliver, session)
+        await self._publish_changes()
 
     async def _settle_directory(self, session: _Session) -> None:
         """Carry out an approved directory request once no turn runs, and tell the agent how it went."""

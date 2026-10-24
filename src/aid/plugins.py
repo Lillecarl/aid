@@ -86,6 +86,7 @@ NEEDS: Final[dict[str, Grant]] = {
     "send": Grant.MESSAGE,
     "answer_permission": Grant.PERMISSIONS,
     "set_permissions": Grant.PERMISSIONS,
+    "sandbox": Grant.MANAGE,
     "create": Grant.MANAGE,
     "start": Grant.MANAGE,
     "stop": Grant.MANAGE,

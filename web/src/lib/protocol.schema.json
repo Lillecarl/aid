@@ -1321,7 +1321,7 @@
     "JsonValue": {},
     "Lifecycle": {
       "additionalProperties": false,
-      "description": "Something happened to the agent's session outside a turn: interactive Claude compacted its context,\ncleared it (a new agent session follows, with a Started), or ended; or the session moved directory.",
+      "description": "Something happened to the agent's session outside a turn: interactive Claude compacted its context,\ncleared it (a new agent session follows, with a Started), or ended; or the session moved directory, or changed\nits sandbox.",
       "properties": {
         "detail": {
           "anyOf": [
@@ -1339,7 +1339,8 @@
             "compacted",
             "cleared",
             "ended",
-            "moved"
+            "moved",
+            "sandboxed"
           ],
           "type": "string"
         },
@@ -1880,6 +1881,7 @@
           "list": "#/$defs/ListSessions",
           "live": "#/$defs/GetLive",
           "prompt": "#/$defs/Prompt",
+          "sandbox": "#/$defs/SetSandbox",
           "set_permissions": "#/$defs/SetPermissions",
           "start": "#/$defs/StartSession",
           "status": "#/$defs/GetStatus",
@@ -1924,6 +1926,9 @@
         },
         {
           "$ref": "#/$defs/SetPermissions"
+        },
+        {
+          "$ref": "#/$defs/SetSandbox"
         },
         {
           "$ref": "#/$defs/StartSession"
@@ -2611,6 +2616,17 @@
         "runs": {
           "type": "string"
         },
+        "sandbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sandbox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "tools": {
           "items": {
             "$ref": "#/$defs/ToolMode"
@@ -2638,6 +2654,7 @@
         "model",
         "permissions",
         "tools",
+        "sandbox",
         "permission",
         "working",
         "attention",
@@ -2771,6 +2788,40 @@
         "session"
       ],
       "title": "SetPermissions",
+      "type": "object"
+    },
+    "SetSandbox": {
+      "additionalProperties": false,
+      "description": "Change a native session's sandbox (`NativeSpec.sandbox`; None turns it off): saved in its spec, and a\nrunning worker restarts under it, at once when idle, else when its turn ends. Refused when bwrap cannot run\nthe new sandbox here.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "sandbox",
+          "default": "sandbox",
+          "type": "string"
+        },
+        "sandbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sandbox"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session",
+        "sandbox"
+      ],
+      "title": "SetSandbox",
       "type": "object"
     },
     "StartSession": {

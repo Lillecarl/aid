@@ -47,6 +47,7 @@ from aid.protocol import (
     ListSessions,
     Prompt,
     SetPermissions,
+    SetSandbox,
     StartSession,
     StopSession,
     decode_reply,
@@ -88,6 +89,7 @@ type PageRequest = Annotated[
     | CompactSession
     | AnswerPermission
     | SetPermissions
+    | SetSandbox
     | StartSession
     | StopSession
     | DeleteSession

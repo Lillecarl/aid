@@ -9,10 +9,10 @@ import pytest
 from pydantic import ValidationError
 
 import aid
-from aid.protocol import AidError
+from aid.protocol import AidError, Lifecycle, ToolCall
 from aid.sandbox import bwrap_argv
 from aid.spec import Sandbox
-from tests.conftest import py_spec
+from tests.conftest import acp_spec, py_spec
 from tests.test_coding import plan
 
 if TYPE_CHECKING:
@@ -114,3 +114,36 @@ await run("sh", "-c", "echo child > by-child.txt; echo x > /usr/aid-escape || ec
     assert "child refused" in result
     assert "bg refused" in result
     assert "in-loop runs outside it" in result
+
+
+@needs_bwrap
+async def test_a_sandbox_change_restarts_the_worker_when_no_turn_runs(daemon: Paths, tmp_path: Path) -> None:
+    spec = py_spec(tmp_path, "agents:coder", aid.PermissionMode.ALLOW)
+    sleeper = plan(("python", {"script": "import time; time.sleep(1.5)", "mode": "sync"}))
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("boxed", spec)
+            await session.start()
+            first = (await session.status()).pid
+            await session.set_sandbox(Sandbox(network=False))
+            idle = await session.status()
+            during = None
+            async for event in session.stream(sleeper):
+                if isinstance(event, ToolCall) and during is None:
+                    await session.set_sandbox(None)
+                    during = await session.status()
+            while (after := await session.status()).pid in (None, idle.pid):  # noqa: ASYNC110 -- the restart follows the turn's end
+                await anyio.sleep(0.05)
+            entries = [e.item for e in (await session.history(limit=1000)).entries]
+    assert idle.pid != first and idle.sandbox == Sandbox(network=False)
+    assert during is not None and during.pid == idle.pid and during.sandbox is None
+    assert after.sandbox is None
+    assert [e.detail for e in entries if isinstance(e, Lifecycle)] == ['{"network":false}', "off"]
+
+
+async def test_only_native_sessions_take_a_sandbox(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("acp", acp_spec(tmp_path))
+            with pytest.raises(AidError, match="only native sessions"):
+                await session.set_sandbox(Sandbox())

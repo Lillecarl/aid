@@ -66,6 +66,7 @@ from aid.protocol import (
     SessionStatus,
     SessionSummary,
     SetPermissions,
+    SetSandbox,
     StartSession,
     StopSession,
     TextDelta,
@@ -80,7 +81,7 @@ if TYPE_CHECKING:
 
     from aid.paths import Paths
     from aid.protocol import Request, SessionEvent, Usage
-    from aid.spec import AgentSpec, PermissionMode
+    from aid.spec import AgentSpec, PermissionMode, Sandbox
 
 _MESSAGES = TypeAdapter(list[MessageEntry])
 _PLUGINS = TypeAdapter(list[PluginSpec])
@@ -558,6 +559,11 @@ class Session:
         """Change a native session's modes (`SetPermissions`): by tool name, None returning one to its default;
         `default` for the tools that ask for themselves."""
         await self._client.call(SetPermissions(session=self.name, default=default, tools=tools or {}))
+
+    async def set_sandbox(self, sandbox: Sandbox | None) -> None:
+        """Change a native session's sandbox (`SetSandbox`); None turns it off. A running worker restarts under
+        it, when its turn ends if one runs."""
+        await self._client.call(SetSandbox(session=self.name, sandbox=sandbox))
 
     async def change_directory(self, cwd: str) -> str:
         """Move the session to `cwd` (`ChangeDirectory`), relative to its current one; returns the absolute path."""

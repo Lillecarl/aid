@@ -117,6 +117,7 @@ export type PageRequest =
   | CompactSession
   | AnswerPermission
   | SetPermissions
+  | SetSandbox
   | StartSession
   | StopSession
   | DeleteSession
@@ -798,14 +799,15 @@ export interface Started {
 }
 /**
  * Something happened to the agent's session outside a turn: interactive Claude compacted its context,
- * cleared it (a new agent session follows, with a Started), or ended; or the session moved directory.
+ * cleared it (a new agent session follows, with a Started), or ended; or the session moved directory, or changed
+ * its sandbox.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Lifecycle".
  */
 export interface Lifecycle {
   detail: string | null;
-  event: "compacted" | "cleared" | "ended" | "moved";
+  event: "compacted" | "cleared" | "ended" | "moved" | "sandboxed";
   summary: string | null;
   type: "lifecycle";
 }
@@ -886,6 +888,20 @@ export interface SetPermissions {
   tools?: {
     [k: string]: PermissionMode1 | null;
   };
+}
+/**
+ * Change a native session's sandbox (`NativeSpec.sandbox`; None turns it off): saved in its spec, and a
+ * running worker restarts under it, at once when idle, else when its turn ends. Refused when bwrap cannot run
+ * the new sandbox here.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "SetSandbox".
+ */
+export interface SetSandbox {
+  id?: string;
+  op: "sandbox";
+  sandbox: Sandbox | null;
+  session: string;
 }
 /**
  * Start a stopped session's worker without a turn; for interactive Claude, its pane. A running one is left be.
@@ -971,6 +987,7 @@ export interface SessionStatus {
   pid: number | null;
   running: boolean;
   runs: string;
+  sandbox: Sandbox | null;
   tools: ToolMode[];
   working: boolean;
 }

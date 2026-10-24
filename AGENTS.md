@@ -245,7 +245,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `NativeSpec.sandbox` runs what the tools start under bwrap (`src/aid/sandbox.py`, `Coding.confine`: the shell's
   bash, `background`, `python` scripts with their run store bound; root read-only, cwd and `writable` bound,
   private /tmp, optional `--unshare-net`); `in-loop` is refused; no working bwrap → the worker refuses to start.
-  Unix sockets still connect (nix daemon, aid's sockets).
+  Unix sockets still connect (nix daemon, aid's sockets). `SetSandbox` (control, page, `aid sandbox`, plugin
+  `manage`; never agents) checks bwrap in the daemon, saves the spec, records `Lifecycle(sandboxed)` and restarts a
+  running worker, at once when idle, else at turn end (`restart_pending`, `_settle_restart`).
   Results over `SPILL_LIMIT`
   spill to content-addressed files under the session, sent as a stable head plus the path. `compact`
   summarizes the history into a digest through a direct model call. One `Coding` per session, set per

@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from aid.plugins import Grant, PluginSpec
-from aid.spec import AgentKind, AgentSpec, PermissionMode
+from aid.spec import AgentKind, AgentSpec, PermissionMode, Sandbox
 
 PROTOCOL_VERSION = 1
 
@@ -95,6 +95,16 @@ class ChangeDirectory(_Request):
     op: Literal["cd"] = "cd"
     session: str
     cwd: str
+
+
+class SetSandbox(_Request):
+    """Change a native session's sandbox (`NativeSpec.sandbox`; None turns it off): saved in its spec, and a
+    running worker restarts under it, at once when idle, else when its turn ends. Refused when bwrap cannot run
+    the new sandbox here."""
+
+    op: Literal["sandbox"] = "sandbox"
+    session: str
+    sandbox: Sandbox | None
 
 
 class RequestDirectory(_Request):
@@ -413,6 +423,7 @@ type Request = Annotated[
     | StopSession
     | DeleteSession
     | ChangeDirectory
+    | SetSandbox
     | RequestDirectory
     | AnswerDirectory
     | ListAgents
@@ -744,13 +755,14 @@ class Started(_Message):
 
 class Lifecycle(_Message):
     """Something happened to the agent's session outside a turn: interactive Claude compacted its context,
-    cleared it (a new agent session follows, with a Started), or ended; or the session moved directory."""
+    cleared it (a new agent session follows, with a Started), or ended; or the session moved directory, or changed
+    its sandbox."""
 
     type: Literal["lifecycle"] = "lifecycle"
-    event: Literal["compacted", "cleared", "ended", "moved"]
+    event: Literal["compacted", "cleared", "ended", "moved", "sandboxed"]
     detail: str | None = None
     """Why: `manual` or `auto` for a compaction; Claude's exit reason for an end; the new working directory for a
-    move (`ChangeDirectory`)."""
+    move (`ChangeDirectory`); the new sandbox, or `off`, for `SetSandbox`."""
     summary: str | None = None
     """A compaction's summary: what the agent keeps of the conversation before it."""
 
@@ -913,6 +925,8 @@ class SessionStatus(_Message):
     tools: list[ToolMode] = Field(default_factory=list[ToolMode])
     """The tools the worker reported (native, claude-sdk) or the agent asked about (ACP), with the modes the spec
     gives them now."""
+    sandbox: Sandbox | None = None
+    """A native session's sandbox (`NativeSpec.sandbox`)."""
     permission: PermissionMode | None = None
     """The spec's mode for tools without their own: native tools that ask for themselves, other kinds' requests.
     None for claude-tty, which asks in its own pane."""

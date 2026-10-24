@@ -41,7 +41,7 @@ from aid.protocol import (
     TurnError,
     Usage,
 )
-from aid.spec import AcpSpec, ClaudeSdkSpec, ClaudeTtySpec, NativeSpec, PermissionMode
+from aid.spec import AcpSpec, ClaudeSdkSpec, ClaudeTtySpec, NativeSpec, PermissionMode, Sandbox
 from aid.web import OidcConfig, create_app
 from aid.web import serve as serve_web
 from aid.web.app import ENV_ASSETS
@@ -314,6 +314,12 @@ def _parser() -> argparse.ArgumentParser:
     permissions.add_argument(
         "--default", choices=list(PermissionMode), help="the mode of tools that ask for themselves"
     )
+
+    box = sub.add_parser("sandbox", help="run a native session's tools under bwrap, or stop that")
+    box.add_argument("name")
+    box.add_argument("--off", action="store_true", help="run the tools unconfined")
+    box.add_argument("--no-network", action="store_true", help="cut the sandbox off the network")
+    box.add_argument("--writable", action="append", default=[], metavar="PATH", help="absolute; repeatable")
 
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
@@ -610,6 +616,9 @@ async def _client_command(args: argparse.Namespace) -> None:
                 else:
                     for tool in (await session.status()).tools:
                         print(f"{tool.group}\t{tool.name}\t{tool.mode}\t{'set' if tool.set else 'default'}")
+            case "sandbox":
+                chosen = None if args.off else Sandbox(network=not args.no_network, writable=args.writable)
+                await client.session(args.name).set_sandbox(chosen)
             case "stop":
                 await client.session(args.name).stop()
             case "delete":
