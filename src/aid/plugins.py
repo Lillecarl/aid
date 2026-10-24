@@ -40,6 +40,8 @@ from typing import TYPE_CHECKING, Annotated, ClassVar, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
+from aid.messaging import PLUGIN_SENDER
+
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
@@ -117,7 +119,7 @@ ENV_PLUGINS_DIST: Final = "AID_PLUGINS_DIST"
 
 def sender(name: str) -> str:
     """What a message from plugin `name` names as its sender."""
-    return f"plugin:{name}"
+    return f"{PLUGIN_SENDER}{name}"
 
 
 class Plugin(ABC):

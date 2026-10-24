@@ -24,6 +24,7 @@ from aid.control import AGENT_ID_PREFIX, authorize
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
 from aid.inbox import INBOX_FILE, Inbox
 from aid.launcher import CommandLauncher, WorkerArgs
+from aid.messaging import BACKGROUND_SENDER, wake_prompt
 from aid.paths import hook_socket
 from aid.plugins import PLUGIN_FILE, Grant, PluginSpec
 from aid.protocol import (
@@ -235,32 +236,6 @@ class _Session:
             parent=self.spec.parent,
             cost={**self.cost, **self.latest},
         )
-
-
-BACKGROUND_SENDER: Final = "background task "
-"""Prefix of a MessageEntry sender naming a background task report, `background task bg1`. The worker sends
-the task id; the daemon builds the sender. A session named this way would also match, and render as a
-report: absurd, and harmless if it ever happens."""
-
-
-def wake_prompt(messages: list[MessageEntry]) -> str:
-    """The turn that hands messages to an ACP or native session. Background task reports ride as
-    written; person and session messages render as quotes, answered with the send_message tool."""
-    parts = [
-        message.text
-        if message.sender is not None and message.sender.startswith(BACKGROUND_SENDER)
-        else (
-            f"Message from {f'aid session {message.sender!r}' if message.sender else 'a person using aid'}:"
-            f"\n\n{message.text}"
-        )
-        for message in messages
-    ]
-    if any(m.sender and not m.sender.startswith(BACKGROUND_SENDER) for m in messages):
-        parts.append(
-            "Answer a session with the send_message tool, addressed to its name, when its message asks for "
-            "something. Do not answer a message that only acknowledges or thanks."
-        )
-    return "\n\n---\n\n".join(parts)
 
 
 def supervision_cycle(links: dict[str, str | None], name: str, supervisor: str) -> bool:
