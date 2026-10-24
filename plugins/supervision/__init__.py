@@ -113,6 +113,9 @@ ALLOW_ONCE: Final = "allow_once"
 REJECT_ONCE: Final = "reject_once"
 CLASSIFIER: Final = "classifier"
 """The holder before the route's first: a fresh model call that allows, denies, or escalates (`classifier.py`)."""
+TASK_JUDGED: Final = frozenset({"remove"})
+"""Tools the classifier never judges: whether their effect is sound depends on the task, which it does not see.
+Measured: it allowed a remove plan its instructions told it to escalate."""
 CLASSIFIER_SUFFIX: Final = ".classifier"
 """A supervisor's classifier session is `<supervisor[:52]>.classifier`, its `parent` the supervisor."""
 CLASSIFIER_WINDOW: Final = 90.0
@@ -460,7 +463,11 @@ class Supervision(aid.Plugin):
         kinds = {o.kind for o in request.options}
         if reads(request.tool_name, request.input) and ALLOW_ONCE in kinds:
             holders = (RULES,)
-        elif spec.supervisor_classifier is not None and {ALLOW_ONCE, REJECT_ONCE} <= kinds:
+        elif (
+            spec.supervisor_classifier is not None
+            and request.tool_name not in TASK_JUDGED
+            and {ALLOW_ONCE, REJECT_ONCE} <= kinds
+        ):
             holders = (CLASSIFIER, *holders)
         await self._settle(watched, request.request_id)
         bound = self._worker_bound(spec, request)

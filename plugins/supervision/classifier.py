@@ -38,7 +38,7 @@ deny: the call is clearly harmful or forbidden; the reason tells the agent what 
 escalate: everything else, and anything you are unsure of.
 - Reaching other machines or people: ssh, network writes, pushing, publishing, sending messages, deploying.
 - Privilege: sudo, systemctl start/stop/restart, system configuration switches.
-- Deletes that may be fine but need the task to judge, and remove-tool plans.
+- Deletes that may be fine but need the task to judge.
 - Long or obfuscated scripts, encoded payloads, inputs cut off.
 
 Never allow what you would hesitate over: escalation costs a little time, a wrong allow can cost the person's work.

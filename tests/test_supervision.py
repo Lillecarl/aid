@@ -703,6 +703,21 @@ async def test_the_classifier_allows_without_the_supervisor(daemon: Paths, tmp_p
     assert (tmp_path / "made").exists()
 
 
+async def test_a_remove_plan_skips_the_classifier(daemon: Paths, tmp_path: Path) -> None:
+    (tmp_path / "junk").write_text("x")
+    spec = classified_spec(tmp_path, "agents:classifier_allow").model_copy(
+        update={"tool_permissions": {"remove": PermissionMode.SUPERVISOR}}
+    )
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            await client.create("boss", py_spec(tmp_path, "agents:supervisor_answerer"))
+            coder = await client.create("coder", spec)
+            await coder.run(plan(("remove", {"paths": ["junk"]})))
+            await settled_ruling(client)
+            steps = await rulings(client, "SELECT step, holder, outcome FROM ruling_steps ORDER BY step")
+    assert steps.rows == [[0, "supervisor", "decided"]]
+
+
 async def test_the_classifier_denies_with_its_reason(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:

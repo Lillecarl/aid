@@ -274,7 +274,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   A routed request `aid.readonly` calls a plain read (and offering `allow_once`) gets the single holder `rules`:
   the plugin allows it at once, no model asked (`PermissionDecision.by` plugin `supervision`). Else, with
   `spec.supervisor_classifier` (agent name or `module:attr`; default the bundled `classifier`, `classifier.py`,
-  `fresh_turns`, structured `ClassifierVerdict`) and allow/reject options, holder `classifier` comes first: the
+  `fresh_turns`, structured `ClassifierVerdict`), allow/reject options and a tool outside `TASK_JUDGED` (`remove`:
+  a plan's soundness depends on the task; measured, the classifier allowed one it was told to escalate), holder
+  `classifier` comes first: the
   supervisor's session `<supervisor[:52]>.classifier` (parent = supervisor, made on use, remade for another
   classifier, deleted with the supervisor; one request at a time) gets one turn per request. allow/deny answer as
   the plugin (a deny's reason reaches the agent as `aid's supervision check said:`); escalate forwards with the
