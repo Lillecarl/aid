@@ -1,5 +1,5 @@
 """`aid guard`: a plugin that answers permission requests that plainly only read, and leaves the rest for a
-person. A seed for Lillecarl/aid#3: rules, not a model.
+person, by `aid.readonly`'s rules. A seed for Lillecarl/aid#3: rules, not a model.
 
     aid plugin add guard --grant read --grant permissions
     aid guard
@@ -10,14 +10,13 @@ request it allows shows in the history as answered by plugin guard.
 
 from __future__ import annotations
 
-import shlex
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 import structlog
-from pydantic import JsonValue
 
 import aid
 from aid.protocol import AidError
+from aid.readonly import reads
 
 if TYPE_CHECKING:
     from aid.client import Client
@@ -25,34 +24,12 @@ if TYPE_CHECKING:
 
 log = structlog.get_logger(__name__)
 
-READERS: Final = frozenset({"ls", "cat", "head", "tail", "wc", "pwd", "rg", "grep", "stat", "file", "du", "df", "tree"})
-"""Programs that read and print, whatever their arguments. Not `find` (-delete, -exec), `sed` (-i) or `git`."""
-SHELL_SYNTAX: Final = frozenset(";|&$`<>(){}\n\\")
-"""A command string holding any of these is more than one program with its arguments."""
 ALLOW_KIND: Final = "allow_once"
-
-
-def argv_of(tool_input: JsonValue) -> list[str] | None:
-    """The command a tool call runs: pyrun's `argv`, or a shell `command` with no shell syntax in it."""
-    if not isinstance(tool_input, dict):
-        return None
-    fields = cast(dict[str, JsonValue], tool_input)
-    argv = fields.get("argv")
-    if isinstance(argv, list) and argv and all(isinstance(a, str) for a in argv):
-        return cast(list[str], argv)
-    command = fields.get("command")
-    if isinstance(command, str) and command.strip() and not SHELL_SYNTAX & set(command):
-        try:
-            return shlex.split(command)
-        except ValueError:
-            return None
-    return None
 
 
 def verdict(request: PermissionRequest) -> str | None:
     """The option to answer `request` with, or None to leave it for a person."""
-    argv = argv_of(request.input)
-    if argv is None or argv[0] not in READERS:
+    if not reads(request.tool_name, request.input):
         return None
     return next((o.option_id for o in request.options if o.kind == ALLOW_KIND), None)
 

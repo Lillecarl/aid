@@ -126,8 +126,12 @@ on reusable decisions and current boundaries; put long investigations and dated 
   and declined code stays outside with a log; removal stops the task at once. Failures restart after
   `RESTART_DELAY`, give up after `MAX_FAILURES` in `FAIL_WINDOW`. Tests pass `plugin_dirs=[]`; the daemon's own
   environment is what hosted plugins read.
-- `src/aid/guard.py` — `aid guard`: plugin (read, permissions) that allows a request whose command is one
-  program from `READERS` with no shell syntax, and leaves the rest for a person. Seed for aid#3.
+- `src/aid/readonly.py` — pure rules: does a call only read? shlex with punctuation: pipes, `;`, `&&`, `||`;
+  `NAME=literal` statements expand later `$NAME`; output only to /dev/null or another fd. Each program: `READERS`
+  (any args), `PROGRAMS` rules (git/jj/nix subcommands, sed without -i/w/e, find without -delete/-exec, …),
+  `--help`/`--version` alone; credential-shaped paths (`SENSITIVE`) never. Anything unclear is False.
+- `src/aid/guard.py` — `aid guard`: plugin (read, permissions) that allows what `aid.readonly` calls a read, and
+  leaves the rest for a person. Seed for aid#3.
 - `plugins/discord/` — the Discord plugin (read, message): `gateway.py` (the gateway over anyio streams, no
   Discord library — wsproto frames, anyio owns the sockets; resume policy follows the close-code table),
   `rest.py` (channels, messages, interaction answers; 429s honored and retried, the rest raises at once),
