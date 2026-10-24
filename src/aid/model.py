@@ -48,7 +48,15 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Mapping, Sequence
 
     from google import genai
-    from google.genai.types import GenerateContentResponseUsageMetadata
+    from google.genai.types import (
+        ContentDict,
+        FunctionCallDict,
+        FunctionDeclarationDict,
+        FunctionResponseDict,
+        GenerateContentConfigDict,
+        GenerateContentResponseUsageMetadata,
+        PartDict,
+    )
     from openai.types import CompletionUsage
     from openai.types.chat.chat_completion_chunk import ChoiceDelta
 
@@ -559,28 +567,28 @@ def _signature(value: bytes | None) -> dict[str, str]:
     return {"thought_signature": base64.b64encode(value).decode()} if value else {}
 
 
-def _signed(block: dict[str, Any], part: TextPart | ToolCallPart) -> dict[str, Any]:
+def _signed(block: PartDict, part: TextPart | ToolCallPart) -> PartDict:
     if signature := (part.model_extra or {}).get("thought_signature"):
         block["thought_signature"] = base64.b64decode(signature)
     return block
 
 
-def google_contents(messages: Sequence[ModelMessage]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def google_contents(messages: Sequence[ModelMessage]) -> tuple[list[PartDict], list[ContentDict]]:
     """Stored parts as the Gemini API's (system instruction parts, contents), merged by role as
     `anthropic_messages` does. A thought signature goes back on the part that carried it: Gemini 3 refuses a
     function call without its own. Thinking replays only signed."""
-    system: list[dict[str, Any]] = []
-    result: list[dict[str, Any]] = []
+    system: list[PartDict] = []
+    turns: list[tuple[str, list[PartDict]]] = []
     ids: dict[str, str | None] = {}
 
-    def add(role: str, block: dict[str, Any]) -> None:
-        if result and result[-1]["role"] == role:
-            result[-1]["parts"].append(block)
+    def add(role: str, block: PartDict) -> None:
+        if turns and turns[-1][0] == role:
+            turns[-1][1].append(block)
         else:
-            result.append({"role": role, "parts": [block]})
+            turns.append((role, [block]))
 
-    def answer(part: ToolReturnPart | RetryPromptPart, response: dict[str, Any]) -> dict[str, Any]:
-        block: dict[str, Any] = {"name": part.tool_name, "response": response}
+    def answer(part: ToolReturnPart | RetryPromptPart, response: dict[str, str]) -> PartDict:
+        block: FunctionResponseDict = {"name": part.tool_name, "response": response}
         if google_id := ids.get(part.tool_call_id):
             block["id"] = google_id
         return {"function_response": block}
@@ -605,7 +613,7 @@ def google_contents(messages: Sequence[ModelMessage]) -> tuple[list[dict[str, An
                             arguments = part.args_as_dict()
                         except ValueError:
                             arguments = {}
-                        call: dict[str, Any] = {"name": part.tool_name, "args": arguments}
+                        call: FunctionCallDict = {"name": part.tool_name, "args": arguments}
                         if google_id := (part.model_extra or {}).get("google_id"):
                             call["id"] = google_id
                         ids[part.tool_call_id] = google_id
@@ -615,7 +623,7 @@ def google_contents(messages: Sequence[ModelMessage]) -> tuple[list[dict[str, An
             continue
         for part in message.parts:
             match part:
-                case SystemPromptPart() if not result:
+                case SystemPromptPart() if not turns:
                     system.append({"text": part.content})
                 case SystemPromptPart():
                     add("user", {"text": part.content})
@@ -629,15 +637,14 @@ def google_contents(messages: Sequence[ModelMessage]) -> tuple[list[dict[str, An
                     add("user", {"text": part.model_response()})
                 case _:
                     raise ValueError("response part in a model request")
-    return system, result
+    return system, [{"role": role, "parts": parts} for role, parts in turns]
 
 
-def google_tool(definition: dict[str, Any]) -> dict[str, Any]:
-    function = definition["function"]
+def google_tool(tool: Tool) -> FunctionDeclarationDict:
     return {
-        "name": function["name"],
-        "description": function["description"],
-        "parameters_json_schema": function["parameters"],
+        "name": tool.name,
+        "description": tool.description,
+        "parameters_json_schema": tool.arguments.model_json_schema(),
     }
 
 
@@ -663,17 +670,17 @@ class GoogleModel:
         key = _ClientKey(base_url, api_key, retries)
         if (pair := self._clients.get(key)) is None:
             from google import genai  # noqa: PLC0415 -- half a second of every worker's start otherwise
+            from google.genai.types import HttpOptions, HttpRetryOptions  # noqa: PLC0415 -- the same
 
             # Ours, not the SDK's: it would pick aiohttp whenever that is installed.
             http = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
-            options: dict[str, Any] = {"httpx_async_client": http}
-            if key.base_url:
-                options["base_url"] = key.base_url
-            if self._provider and self._provider.headers:
-                options["headers"] = dict(self._provider.headers)
-            if key.max_retries:
-                options["retry_options"] = {"attempts": key.max_retries + 1}
-            pair = (genai.Client(vertexai=False, api_key=key.api_key, http_options=cast(Any, options)), http)
+            options = HttpOptions(
+                httpx_async_client=http,
+                base_url=key.base_url,
+                headers=dict(self._provider.headers) if self._provider and self._provider.headers else None,
+                retry_options=HttpRetryOptions(attempts=key.max_retries + 1) if key.max_retries else None,
+            )
+            pair = (genai.Client(vertexai=False, api_key=key.api_key, http_options=options), http)
             self._clients[key] = pair
         return pair[0]
 
@@ -686,20 +693,26 @@ class GoogleModel:
 
     async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
         client = self._client(info.settings)
-        config = _request_settings(info.settings, self._provider)
-        config["http_options"] = {"timeout": int(config.pop("timeout") * 1000)}
+        from google.genai.types import GenerateContentConfig  # noqa: PLC0415 -- loaded with the client above
+
+        settings = _request_settings(info.settings, self._provider)
         # aid runs the tool loop; the SDK's own would also log a warning on each worker's first request.
-        config["automatic_function_calling"] = {"disable": True}
+        ours: GenerateContentConfigDict = {
+            "http_options": {"timeout": int(settings.pop("timeout") * 1000)},
+            "automatic_function_calling": {"disable": True},
+        }
         if info.tools:
-            config["tools"] = [{"function_declarations": [google_tool(tool.definition()) for tool in info.tools]}]
+            ours["tools"] = [{"function_declarations": [google_tool(tool) for tool in info.tools]}]
         if info.output_type is not str:
-            config["response_mime_type"] = "application/json"
-            config["response_json_schema"] = TypeAdapter(info.output_type).json_schema()
+            ours["response_mime_type"] = "application/json"
+            ours["response_json_schema"] = TypeAdapter(info.output_type).json_schema()
         system, contents = google_contents(messages)
         if system:
-            config["system_instruction"] = {"parts": system}
+            ours["system_instruction"] = {"parts": system}
+        # The session's settings are Google's field names; the SDK's model checks them.
+        config = GenerateContentConfig.model_validate({**settings, **ours})
         stream = await client.aio.models.generate_content_stream(  # pyright: ignore[reportUnknownMemberType] -- PIL, absent, in its contents union
-            model=self._model, contents=cast(Any, contents), config=cast(Any, config)
+            model=self._model, contents=contents, config=config
         )
         calls = 0
         try:
