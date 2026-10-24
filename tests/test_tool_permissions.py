@@ -7,7 +7,7 @@ import anyio
 import pytest
 
 import aid
-from aid.protocol import AidError, Output, PermissionRequest, ToolMode
+from aid.protocol import Output, PermissionRequest, ToolMode
 from aid.spec import ClaudeSdkSpec, PermissionMode
 from tests.conftest import acp_spec, py_spec
 from tests.test_claude_sdk import FAKE_CLAUDE
@@ -101,16 +101,23 @@ async def test_the_default_applies_to_the_tools_that_ask(daemon: Paths, tmp_path
     assert by_name(status.tools)["python"].mode is PermissionMode.ALLOW
 
 
-async def test_other_kinds_take_only_the_default(daemon: Paths, tmp_path: Path) -> None:
+async def test_acp_learns_tools_from_requests_and_answers_each_by_its_mode(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
             session = await client.create("acp", acp_spec(tmp_path))
-            with pytest.raises(AidError, match="one mode"):
-                await session.set_permissions({"Bash": PermissionMode.ALLOW})
-            await session.set_permissions(default=PermissionMode.ASK)
-            status = await session.status()
-    assert status.tools == []
-    assert status.permission is PermissionMode.ASK
+            before = (await session.status()).tools
+            # The fake asks about Bash, and about aid's own `add`, as claude-agent-acp names them.
+            refused = await session.run("spoofed-title")
+            ours = await session.run("aid-tool")
+            learned = by_name((await session.status()).tools)
+            await session.set_permissions({"Bash": PermissionMode.ALLOW})
+            allowed = await session.run("spoofed-title")
+            await session.set_permissions({"mcp__aid__add": PermissionMode.DENY})
+            denied = await session.run("aid-tool")
+    assert before == []
+    assert (refused.output, ours.output, allowed.output, denied.output) == ("no", "yes", "yes", "no")
+    assert (learned["Bash"].group, learned["Bash"].mode, learned["Bash"].set) == ("agent", PermissionMode.DENY, False)
+    assert (learned["mcp__aid__add"].group, learned["mcp__aid__add"].mode) == ("aid", PermissionMode.ALLOW)
 
 
 async def test_claude_sdk_reports_its_tools_after_a_prompt(daemon: Paths, tmp_path: Path) -> None:

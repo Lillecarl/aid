@@ -218,10 +218,9 @@ class AnswerPermission(_Request):
 
 
 class SetPermissions(_Request):
-    """Change a session's permission modes: `default`, the spec's `permission` (any kind with one), and `tools` by
-    name (native and claude-sdk; None returns a tool to its default). Saved in the spec; a running native worker
-    applies them to its next permit, claude-sdk to its next prompt; a request already waiting keeps its own. ACP
-    takes `default` at its next start."""
+    """Change a session's permission modes: `default`, the spec's `permission`, and `tools` by name (None returns a
+    tool to its default); every kind but claude-tty. Saved in the spec; a running worker applies them to its next
+    request (claude-sdk: its next prompt), while a request already waiting keeps its own."""
 
     op: Literal["set_permissions"] = "set_permissions"
     session: str
@@ -912,10 +911,11 @@ class SessionStatus(_Message):
     permissions: list[PermissionRequest] = Field(default_factory=list[PermissionRequest])
     """Requests the agent waits on an answer to."""
     tools: list[ToolMode] = Field(default_factory=list[ToolMode])
-    """The tools the last worker reported (native, claude-sdk), with the modes the spec gives them now."""
+    """The tools the worker reported (native, claude-sdk) or the agent asked about (ACP), with the modes the spec
+    gives them now."""
     permission: PermissionMode | None = None
-    """The spec's mode: native tools that ask for themselves, or every request of the other kinds. None for
-    claude-tty, which asks in its own pane."""
+    """The spec's mode for tools without their own: native tools that ask for themselves, other kinds' requests.
+    None for claude-tty, which asks in its own pane."""
     working: bool = False
     """In a turn: aid's, or one typed into the pane."""
     attention: str | None = None

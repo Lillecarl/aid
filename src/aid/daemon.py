@@ -107,6 +107,7 @@ from aid.spec import (
     ClaudeTtySpec,
     NativeSpec,
     PermissionMode,
+    tool_group,
 )
 from aid.summary import summarize
 
@@ -121,7 +122,7 @@ if TYPE_CHECKING:
     from aid.launcher import Launcher, WorkerHandle
     from aid.paths import Paths
     from aid.plugins import Plugin
-    from aid.protocol import HistoryEntry, HistoryItem, Request
+    from aid.protocol import HistoryEntry, HistoryItem, Request, SessionEvent
     from aid.spec import AgentSpec
 
 log = structlog.get_logger(__name__)
@@ -228,16 +229,20 @@ class _Session:
         return self.spec.kind is AgentKind.CLAUDE_TTY
 
     def tool_modes(self) -> list[ToolMode]:
-        """Each reported tool's mode under the spec now, then the spec's settings for tools none reported. An unset
+        """Each known tool's mode under the spec now, then the spec's settings for tools none reported. An unset
         claude-sdk tool has none: Claude Code's own defaults decide it."""
         spec = self.spec
-        if not isinstance(spec, NativeSpec | ClaudeSdkSpec):
+        if isinstance(spec, ClaudeTtySpec):
             return []
 
         def unset(tool: SessionTool) -> PermissionMode | None:
-            if not isinstance(spec, NativeSpec):
-                return None
-            return spec.permission if tool.asks else PermissionMode.ALLOW
+            match spec:
+                case NativeSpec():
+                    return spec.permission if tool.asks else PermissionMode.ALLOW
+                case AcpSpec():
+                    return spec.mode_for(tool.name)
+                case _:
+                    return None
 
         modes = [
             ToolMode(
@@ -1129,6 +1134,18 @@ class Daemon:
         except OSError:
             log.exception("record_tools_failed", session=session.name)
 
+    async def _learn_tool(self, session: _Session, item: SessionEvent) -> None:
+        """ACP lists no tools up front: a request names one, and the session keeps it."""
+        if (
+            isinstance(session.spec, AcpSpec)
+            and isinstance(item, PermissionRequest)
+            and (name := item.tool_name)
+            and all(tool.name != name for tool in session.tools)
+        ):
+            await self._record_tools(
+                session, [*session.tools, SessionTool(name=name, group=tool_group(name, "agent"), asks=True)]
+            )
+
     async def _set_permissions(self, session: _Session, request: SetPermissions) -> None:
         async with session.spec_lock:
             spec = session.spec
@@ -1136,8 +1153,6 @@ class Daemon:
                 raise AidError("unsupported", f"{session.name!r} asks in its own terminal pane")
             update: dict[str, object] = {"permission": request.default} if request.default else {}
             if request.tools:
-                if not isinstance(spec, NativeSpec | ClaudeSdkSpec):
-                    raise AidError("unsupported", f"{session.name!r} takes one mode, not one per tool")
                 tools = dict(spec.tool_permissions)
                 for name, mode in request.tools.items():
                     if mode is None:
@@ -1417,6 +1432,7 @@ class Daemon:
                             await route.client.send(payload)
                         if (session := self._sessions.get(name)) is not None:
                             session.note(reply.event)
+                            await self._learn_tool(session, reply.event)
                         await self._record(route, reply)
                 case Done() | Failure():
                     if (route := self._routes.pop(reply.id, None)) is not None:

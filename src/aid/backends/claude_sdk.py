@@ -38,7 +38,7 @@ from aid.protocol import (
     ToolCall,
     to_json,
 )
-from aid.spec import PermissionMode
+from aid.spec import PermissionMode, tool_group
 from aid.transcript import items_from_entry
 
 if TYPE_CHECKING:
@@ -60,13 +60,6 @@ SDK_OPTIONS: Final = [
     PermissionChoice(option_id="deny", name="No", kind="reject_once"),
 ]
 """Answers to a `can_use_tool` prompt. Kinds mirror ACP's, so `choose_permission` picks the policy answer."""
-
-
-def tool_group(name: str) -> str:
-    """`claude` for Claude Code's own tools, the server's name for an MCP tool (`mcp__<server>__<tool>`)."""
-    if name.startswith("mcp__") and (server := name.removeprefix("mcp__").split("__", 1)[0]):
-        return server
-    return "claude"
 
 
 def sdk_argv(spec: ClaudeSdkSpec, *, resume: str | None, mcp_config: str | None = None) -> list[str]:
@@ -273,7 +266,7 @@ class ClaudeSdkBackend:
                     self._started = self._started.model_copy(update={"agent_session": session_id})
                 if isinstance(names := message.get("tools"), list):
                     self._tools = [
-                        SessionTool(name=name, group=tool_group(name), asks=False)
+                        SessionTool(name=name, group=tool_group(name, "claude"), asks=False)
                         for name in names
                         if isinstance(name, str)
                     ]

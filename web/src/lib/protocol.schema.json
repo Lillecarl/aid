@@ -94,6 +94,12 @@
           },
           "type": "array"
         },
+        "tool_permissions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PermissionMode"
+          },
+          "type": "object"
+        },
         "worker_ca": {
           "anyOf": [
             {
@@ -2693,7 +2699,7 @@
     },
     "SetPermissions": {
       "additionalProperties": false,
-      "description": "Change a session's permission modes: `default`, the spec's `permission` (any kind with one), and `tools` by\nname (native and claude-sdk; None returns a tool to its default). Saved in the spec; a running native worker\napplies them to its next permit, claude-sdk to its next prompt; a request already waiting keeps its own. ACP\ntakes `default` at its next start.",
+      "description": "Change a session's permission modes: `default`, the spec's `permission`, and `tools` by name (None returns a\ntool to its default); every kind but claude-tty. Saved in the spec; a running worker applies them to its next\nrequest (claude-sdk: its next prompt), while a request already waiting keeps its own.",
       "properties": {
         "default": {
           "anyOf": [

@@ -20,6 +20,13 @@ export type McpServers = McpServer[];
  */
 export type PermissionMode = "allow" | "deny" | "ask";
 /**
+ * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "PermissionMode".
+ */
+export type PermissionMode1 = "allow" | "deny" | "ask";
+/**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Grant".
  */
@@ -36,13 +43,6 @@ export type AgentKind = "acp" | "native" | "claude-tty" | "claude-sdk";
 export type AgentSpec = AcpSpec | NativeSpec | ClaudeTtySpec | ClaudeSdkSpec;
 /**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
- */
-export type PermissionMode1 = "allow" | "deny" | "ask";
-/**
- * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
- *
- * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "PermissionMode".
  */
 export type PermissionMode2 = "allow" | "deny" | "ask";
 /**
@@ -154,6 +154,9 @@ export interface AcpSpec {
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
   supervisor_permissions?: string[];
+  tool_permissions?: {
+    [k: string]: PermissionMode1;
+  };
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
   worker_endpoint?: string | null;
@@ -281,7 +284,7 @@ export interface NativeSpec {
   max_context?: number | null;
   max_requests?: number | null;
   parent?: string | null;
-  permission?: PermissionMode1;
+  permission?: PermissionMode2;
   permission_timeout?: number;
   python_path?: string[];
   seed_history?: string | null;
@@ -293,7 +296,7 @@ export interface NativeSpec {
   supervisor_permissions?: string[];
   target?: string | null;
   tool_permissions?: {
-    [k: string]: PermissionMode2;
+    [k: string]: PermissionMode1;
   };
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
@@ -371,7 +374,7 @@ export interface ClaudeSdkSpec {
   supervisor_permission_timeout?: number;
   supervisor_permissions?: string[];
   tool_permissions?: {
-    [k: string]: PermissionMode2;
+    [k: string]: PermissionMode1;
   };
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
@@ -854,21 +857,20 @@ export interface Prompt {
   text: string;
 }
 /**
- * Change a session's permission modes: `default`, the spec's `permission` (any kind with one), and `tools` by
- * name (native and claude-sdk; None returns a tool to its default). Saved in the spec; a running native worker
- * applies them to its next permit, claude-sdk to its next prompt; a request already waiting keeps its own. ACP
- * takes `default` at its next start.
+ * Change a session's permission modes: `default`, the spec's `permission`, and `tools` by name (None returns a
+ * tool to its default); every kind but claude-tty. Saved in the spec; a running worker applies them to its next
+ * request (claude-sdk: its next prompt), while a request already waiting keeps its own.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "SetPermissions".
  */
 export interface SetPermissions {
-  default?: PermissionMode2 | null;
+  default?: PermissionMode1 | null;
   id?: string;
   op: "set_permissions";
   session: string;
   tools?: {
-    [k: string]: PermissionMode2 | null;
+    [k: string]: PermissionMode1 | null;
   };
 }
 /**
@@ -950,7 +952,7 @@ export interface SessionStatus {
   name: string;
   parent: string | null;
   pending: number;
-  permission: PermissionMode2 | null;
+  permission: PermissionMode1 | null;
   permissions: PermissionRequest[];
   pid: number | null;
   running: boolean;
@@ -965,7 +967,7 @@ export interface SessionStatus {
 export interface ToolMode {
   asks: boolean;
   group: string;
-  mode: PermissionMode2 | null;
+  mode: PermissionMode1 | null;
   name: string;
   set: boolean;
 }

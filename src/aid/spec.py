@@ -120,6 +120,14 @@ class _Spec(BaseModel):
 BUILTIN_MCP_SERVER: Final = "aid"
 
 
+def tool_group(name: str, own: str) -> str:
+    """The server's name for an MCP tool as Claude Code names it (`mcp__<server>__<tool>`), else `own`: the agent's
+    own tools."""
+    if name.startswith("mcp__") and (server := name.removeprefix("mcp__").split("__", 1)[0]):
+        return server
+    return own
+
+
 class _McpServer(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -167,9 +175,21 @@ class AcpSpec(_Spec):
     command: Annotated[list[str], Field(min_length=1)]
     inherit_env: bool = True
     permission: PermissionMode = PermissionMode.DENY
+    """How aid answers a request about a tool `tool_permissions` does not name; aid's own tools are allowed."""
+    tool_permissions: dict[str, PermissionMode] = Field(default_factory=dict[str, PermissionMode])
+    """Modes by the tool name a request carries (claude-agent-acp's `toolCall.name`). aid answers only what the
+    agent asks: a tool the agent runs without asking runs whatever its mode says."""
     permission_timeout: Annotated[float, Field(gt=0)] = 1800
     """Seconds an `ask` request waits for a person before it is refused."""
     mcp_servers: McpServers = Field(default_factory=list[McpServer])
+
+    def mode_for(self, tool_name: str | None) -> PermissionMode:
+        """The tool's own mode, else aid's own tools are approved: whoever put their plugins on the path chose them."""
+        if tool_name is not None and (mode := self.tool_permissions.get(tool_name)) is not None:
+            return mode
+        if self.aid_tools and tool_name is not None and tool_name.startswith(f"mcp__{BUILTIN_MCP_SERVER}__"):
+            return PermissionMode.ALLOW
+        return self.permission
 
 
 class NativeSpec(_Spec):

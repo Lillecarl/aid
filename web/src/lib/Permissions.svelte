@@ -65,7 +65,7 @@
         ? "Tools that ask for themselves"
         : status.kind === "claude-sdk"
           ? "What Claude asks about the rest"
-          : "Every request"}
+          : "Requests about the rest"}
       <select
         value={status.permission}
         disabled={busy}
@@ -75,14 +75,15 @@
         {#each MODES as mode (mode)}<option value={mode}>{mode}</option>{/each}
       </select>
     </label>
-    {#if status.kind === "acp"}
-      <span class="muted">Applies when the session next starts.</span>
-    {/if}
   </div>
-  {#if status.kind === "native" || status.kind === "claude-sdk"}
+  {#if status.kind !== "claude-tty"}
     {#if groups.length === 0}
       <p class="muted">
-        {status.kind === "native" ? "Start the session" : "Send the session a prompt"} to list its tools.
+        {status.kind === "native"
+          ? "Start the session to list its tools."
+          : status.kind === "claude-sdk"
+            ? "Send the session a prompt to list its tools."
+            : "Its tools appear here as the agent asks permission for them."}
       </p>
     {:else}
       <div class="bar" data-testid="permission-actions">

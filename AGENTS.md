@@ -312,7 +312,9 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   from the model's list, ask a `permissions.ask` setting), an unset tool follows Claude's defaults (`ToolMode.mode`
   None), and what Claude asks comes as `can_use_tool` only with `--permission-prompt-tool stdio` (2.1.310). Its
   tools come from each prompt's `system init`; the worker sends `ToolsReported` before the prompt's reply when
-  they change. ACP takes only `default`, at its next start; learning its names from `requested_tool` is next.
+  they change. ACP lists no tools: the daemon learns each name from a `PermissionRequest`
+  (`_learn_tool`, `tool_group` in spec.py, no `acp` import in the daemon) and `AcpSpec.mode_for` answers it,
+  changed live through the worker. aid answers only what the agent asks.
   The page's Permissions tab is the only place a person sets modes; the create form sends `ask`.
 - ACP permission requests: `AcpSpec.permission` allow/deny answers at once; `ask` waits for `AnswerPermission` (web
   card, `aid answer`), refused after `permission_timeout`. The worker's `_Client` emits `PermissionRequest` and

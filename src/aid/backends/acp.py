@@ -43,7 +43,7 @@ from pydantic import BaseModel, Field, ValidationError
 
 from aid.backends.permissions import PermissionWaits
 from aid.env import agent_environment
-from aid.mcp import AID_TOOL_PREFIX, session_servers, to_acp
+from aid.mcp import session_servers, to_acp
 from aid.protocol import (
     Cost,
     Output,
@@ -52,6 +52,7 @@ from aid.protocol import (
     PermissionDecision,
     PermissionRequest,
     SessionEvent,
+    SessionTool,
     Started,
     TextDelta,
     ThoughtDelta,
@@ -209,10 +210,7 @@ def usage_of(response: PromptResponse, context: UsageUpdate | None, model: str |
 
 
 def permission_for(spec: AcpSpec, tool_name: str | None) -> PermissionMode:
-    """aid's own tools are approved: whoever put their plugins on the path chose them."""
-    if spec.aid_tools and tool_name is not None and tool_name.startswith(AID_TOOL_PREFIX):
-        return PermissionMode.ALLOW
-    return spec.permission
+    return spec.mode_for(tool_name)
 
 
 def requested_tool(message: dict[str, Any]) -> tuple[str, str] | None:
@@ -248,6 +246,18 @@ class _Client:
         self.waits = PermissionWaits()
         self.events: MemoryObjectSendStream[SessionEvent] | None = None
         """The running prompt's events; permission requests only come during one."""
+
+    def set_permissions(self, default: PermissionMode | None, tools: dict[str, PermissionMode | None]) -> None:
+        modes = dict(self._spec.tool_permissions)
+        for name, mode in tools.items():
+            if mode is None:
+                modes.pop(name, None)
+            else:
+                modes[name] = mode
+        update: dict[str, object] = {"tool_permissions": modes}
+        if default is not None:
+            update["permission"] = default
+        self._spec = self._spec.model_copy(update=update)
 
     def observe(self, event: StreamEvent) -> None:
         """Runs in the receive loop, before the library dispatches the request to `request_permission`."""
@@ -306,6 +316,13 @@ class AcpBackend:
 
     def started(self) -> Started:
         return self._started
+
+    def session_tools(self) -> list[SessionTool]:
+        """None up front: ACP lists no tools. The daemon learns their names from the requests."""
+        return []
+
+    def set_permissions(self, default: PermissionMode | None, tools: dict[str, PermissionMode | None]) -> None:
+        self._client.set_permissions(default, tools)
 
     def observe(self, event: StreamEvent) -> None:
         """Runs synchronously in the receive loop, so updates keep wire order and precede the prompt response.
