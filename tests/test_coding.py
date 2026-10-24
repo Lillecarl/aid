@@ -98,6 +98,27 @@ async def test_ls_lists_directories_first(daemon: Paths, tmp_path: Path) -> None
     assert "a.py is a file; read it with read" in not_dir
 
 
+async def test_an_absolute_path_is_taken_as_written(daemon: Paths, tmp_path: Path) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "a.py").write_text("A = 1\n")
+    (tmp_path / "secret.txt").write_text("no\n")
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(work, "agents:coder", PermissionMode.ALLOW))
+            result = await session.run(
+                plan(
+                    ("ls", {"path": str(work)}),
+                    ("read", {"path": str(work / "a.py")}),
+                    ("read", {"path": str(tmp_path / "secret.txt")}),
+                )
+            )
+    listed, read, outside = str(result.output).split("\n=====\n")
+    assert listed == "a.py"
+    assert "     1\tA = 1" in read
+    assert "outside the session's directory" in outside
+
+
 async def test_spill_writes_big_results_to_stable_files(tmp_path: Path) -> None:
     coding = Coding(
         cwd=tmp_path,

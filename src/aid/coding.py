@@ -462,9 +462,12 @@ class Coding:
             scope = self.store / record["scope"]
             return inside(scope / record["n"] if record["n"] else scope, record["file"])
         if Path(path).is_absolute():
+            # Absolute is absolute: `inside` would read it as relative to the directory, and name a path there.
             target = Path(path).resolve()
-            if target.is_relative_to(self.store.resolve()) or target.is_relative_to(self.outputs.resolve()):
-                return target
+            roots = (self.cwd.resolve(), self.store.resolve(), self.outputs.resolve())
+            if not any(target.is_relative_to(root) for root in roots):
+                raise AidError("outside", f"{path!r} is outside the session's directory")
+            return target
         return inside(self.cwd, path)
 
 
