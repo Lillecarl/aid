@@ -50,6 +50,15 @@
     rev = "eb21a4352015686c30f5759e8c2f02d70f5371e2";
     narHash = "sha256-DdXmpunIxLL3kCAQ1RrgLskfkyDtzfBqjMMPwWtX2wQ=";
   },
+  # tldr-pages: the supervisor reads a command's page before it judges a call. Pages have no releases worth
+  # pinning (the latest, v2.3, is from 2025-03), so a commit of main.
+  tldr ? builtins.fetchTree {
+    type = "github";
+    owner = "tldr-pages";
+    repo = "tldr";
+    rev = "9ce359759e0917185191d85c2ec7a70df2ca75f5";
+    narHash = "sha256-5A8VDKYIxg3dZXZ57Iw5JZHGfaXecc8/VQVUnEqUMv8=";
+  },
   httpx2 ? builtins.fetchTree {
     type = "github";
     owner = "pydantic";
@@ -74,6 +83,7 @@ let
   shellUi = ui.overrideAttrs { doCheck = false; };
   speechModel = pkgs.callPackage ./nix/speech-model.nix { };
   grammars = pkgs.callPackage ./nix/tree-sitter-grammars.nix { };
+  tldrPages = pkgs.callPackage ./nix/tldr-pages.nix { src = tldr; };
   # The browsers the browser tests drive: chromium's headless shell for the sandbox run, firefox for a
   # developer's `--browser firefox` run. Fixed-output fetches, so the sandbox may use them.
   browsers = pkgs.playwright-driver.browsers.override {
@@ -265,6 +275,7 @@ in
     ui
     speechModel
     grammars
+    tldrPages
     ;
 
   schema = pkgs.writeShellApplication {
@@ -302,6 +313,7 @@ in
         cp -r ${./plugins} $out/share/aid/plugins
         makeWrapper ${venv}/bin/aid $out/bin/aid --set-default AID_WEB_ASSETS ${ui} \
           --set-default AID_TREE_SITTER_GRAMMARS ${grammars} \
+          --set-default AID_TLDR_PAGES ${tldrPages} \
           --set-default AID_PLUGINS_DIST $out/share/aid/plugins
       '';
 
@@ -371,6 +383,7 @@ in
       export AID_WEB_ASSETS=${shellUi}
       export AID_TEST_SPEECH_MODEL=${speechModel}
       export AID_TREE_SITTER_GRAMMARS=${grammars}
+      export AID_TLDR_PAGES=${tldrPages}
       export PLAYWRIGHT_BROWSERS_PATH=${browsers}
       # The element the web build links in; `npm ci` in web/ removes it, and the next shell puts it back.
       mkdir -p ${lib.escapeShellArg (toString ./web)}/node_modules

@@ -50,6 +50,7 @@ from aid.protocol import (
 )
 from aid.spec import AcpSpec, AgentSpecAdapter, ClaudeSdkSpec, NativeSpec, PermissionMode
 
+from .agent import Supervisor as Supervisor
 from .loops import ToolLoopDetector
 from .policy import (
     SEARCH_PAGE,
