@@ -14,6 +14,7 @@ import type {
   LiveChunk,
   PageReply,
   PageRequest,
+  PermissionMode,
   SessionEvent,
   SessionInfo,
   SessionStatus,
@@ -332,6 +333,21 @@ export async function answerPermission(
     request_id: requestId,
     option_id: optionId,
     ...(text == null ? {} : { text }),
+  });
+}
+
+/** Change a session's permission modes: `tools` by name, null returning one to its default (native only), and
+ * `permission`, the mode of native tools that ask for themselves or of every request of other kinds. */
+export async function setPermissions(
+  name: string,
+  tools: Record<string, PermissionMode | null>,
+  permission?: PermissionMode,
+): Promise<void> {
+  await call({
+    op: "set_permissions",
+    session: name,
+    tools,
+    ...(permission === undefined ? {} : { default: permission }),
   });
 }
 

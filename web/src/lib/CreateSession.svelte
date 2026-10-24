@@ -2,6 +2,9 @@
   import * as api from "./api";
   import type { AgentCatalog, AgentKind, AgentSpec, PermissionMode } from "./api";
 
+  // A new session asks; its Permissions tab changes that, per tool for native sessions.
+  const permission: PermissionMode = "ask";
+
   interface Props {
     oncreated: (name: string) => void | Promise<void>;
   }
@@ -12,7 +15,6 @@
   let kind: AgentKind = $state("claude-tty");
   let dir = $state("");
   let command = $state("claude-agent-acp");
-  let permission: PermissionMode = $state("ask");
   let agent = $state("");
   let catalog = $state<AgentCatalog | null>(null);
   let args = $state("");
@@ -123,17 +125,6 @@
       <option value={dir}></option>
     {/each}
   </datalist>
-  {#if kind !== "claude-tty"}
-    <!-- ACP: the agent's own requests. Native: aid.coding's commands and applied edits. -->
-    <label>
-      Tool permissions
-      <select bind:value={permission}>
-        <option value="ask">Ask me</option>
-        <option value="allow">Allow all</option>
-        <option value="deny">Deny all</option>
-      </select>
-    </label>
-  {/if}
   {#if kind === "acp"}
     <label>Command <input bind:value={command} required /></label>
   {:else if kind === "native"}

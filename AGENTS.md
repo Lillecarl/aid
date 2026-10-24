@@ -307,8 +307,9 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   `*` hooks cover all tools. The worker lists its tools in `Hello` (`SessionTool`: name, group by module,
   asks); the daemon keeps them in `tools.json` and shows `SessionStatus.tools` with the spec's modes.
   `SetPermissions` (control, page, `aid permissions`, plugin `permissions`; never agents) writes the spec under
-  `spec_lock`, then the running worker applies it to its next permit. ACP/claude-sdk still take one mode;
-  learned names (ACP `requested_tool`, claude -p `system init` tools) are the next step.
+  `spec_lock`, then the running worker applies it to its next permit. ACP/claude-sdk take only `default`, at
+  their next start; learned names (ACP `requested_tool`, claude -p `system init` tools) are the next step. The
+  page's Permissions tab is the only place a person sets modes; the create form sends `ask`.
 - ACP permission requests: `AcpSpec.permission` allow/deny answers at once; `ask` waits for `AnswerPermission` (web
   card, `aid answer`), refused after `permission_timeout`. The worker's `_Client` emits `PermissionRequest` and
   `PermissionDecision` into the running prompt's events, whatever the mode; the daemon keeps the pending ones in

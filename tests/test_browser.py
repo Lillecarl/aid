@@ -349,6 +349,25 @@ async def test_status_shows_accumulated_cost(page: Page, session_daemon: Paths, 
     assert await cost.text_content() == "0.50 USD"
 
 
+async def test_permissions_tab_sets_checked_tools(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "gated", "agents:coder", PermissionMode.ASK)
+    async with aid.connect(session_daemon) as client:
+        await client.session("gated").start()
+    await open_session(page, "gated")
+    await page.get_by_role("tab", name="Permissions").click()
+    coding = page.get_by_test_id("permission-group").filter(has_text="coding")
+    await coding.locator("legend input").check()
+    await coding.locator("legend input").uncheck()
+    ls = page.get_by_test_id("permission-tool").filter(has=page.get_by_text("ls", exact=True))
+    await ls.get_by_role("checkbox").check()
+    await page.get_by_test_id("permission-actions").get_by_role("button", name="deny").click()
+    await ls.get_by_text("deny", exact=True).wait_for(timeout=TIMEOUT * 1000)
+    async with aid.connect(session_daemon) as client:
+        modes = {t.name: (t.mode, t.set) for t in (await client.session("gated").status()).tools}
+    assert modes["ls"] == (PermissionMode.DENY, True)
+    assert modes["read"] == (PermissionMode.ALLOW, False)
+
+
 async def test_fork_usage_names_the_fork(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     """A fork's tokens ride its answer into the parent; the row names the fork, not a Claude subagent."""
     await seed_session(session_daemon, tmp_path, "forker", "agents:echo")

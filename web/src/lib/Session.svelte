@@ -2,6 +2,7 @@
   import type { AgentKind } from "./api";
   import Chat from "./Chat.svelte";
   import Files from "./Files.svelte";
+  import Permissions from "./Permissions.svelte";
   import Status from "./Status.svelte";
   import Terminal from "./Terminal.svelte";
 
@@ -12,7 +13,7 @@
     ondeleted: () => void | Promise<void>;
   }
 
-  type Tab = "chat" | "files" | "terminal" | "status";
+  type Tab = "chat" | "files" | "terminal" | "permissions" | "status";
   const TAB_KEY = "aid.sessionTab";
 
   let { name, kind, onchange, ondeleted }: Props = $props();
@@ -21,13 +22,16 @@
     { id: "chat", label: "Chat" },
     { id: "files", label: "Files" },
     ...(kind === "claude-tty" ? [{ id: "terminal" as const, label: "Terminal" }] : []),
+    ...(kind === "claude-tty" ? [] : [{ id: "permissions" as const, label: "Permissions" }]),
     { id: "status", label: "Status" },
   ]);
 
   function stored(): Tab {
     try {
       const value = localStorage.getItem(TAB_KEY);
-      return value === "files" || value === "terminal" || value === "status" ? value : "chat";
+      return value === "files" || value === "terminal" || value === "permissions" || value === "status"
+        ? value
+        : "chat";
     } catch {
       return "chat";
     }
@@ -64,8 +68,8 @@
     {/each}
   </div>
 </div>
-<!-- Chat stays mounted while hidden: a prompt it is streaming keeps going. Status mounts only when shown, and
-     streams only while mounted. -->
+<!-- Chat stays mounted while hidden: a prompt it is streaming keeps going. Status and Permissions mount only when
+     shown, and stream only while mounted. -->
 <div class="panel" hidden={tab !== "chat"}>
   <Chat {name} {onchange} {ondeleted} />
 </div>
@@ -77,6 +81,10 @@
 {#if tab === "terminal"}
   <div class="panel">
     <Terminal {name} />
+  </div>
+{:else if tab === "permissions"}
+  <div class="panel scroll">
+    <Permissions {name} />
   </div>
 {:else if tab === "status"}
   <div class="panel">
@@ -117,6 +125,9 @@
     flex-direction: column;
     flex: 1;
     min-height: 0;
+  }
+  .scroll {
+    overflow-y: auto;
   }
   .panel[hidden] {
     display: none;
