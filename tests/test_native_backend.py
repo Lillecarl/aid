@@ -147,7 +147,8 @@ async def test_tool_preserves_pydantic_argument_constraints() -> None:
         return value
 
     tool = Tool(positive)
-    schema = tool.definition()["function"]["parameters"]["properties"]["value"]
+    assert tool.definition()["function"].get("parameters") == tool.arguments.model_json_schema()
+    schema = tool.arguments.model_json_schema()["properties"]["value"]
     assert schema["exclusiveMinimum"] == 0
     assert schema["description"] == "A positive value"
     with pytest.raises(ModelRetry):

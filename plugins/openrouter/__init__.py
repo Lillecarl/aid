@@ -17,11 +17,7 @@ from aid.model import OpenAIChatModel, Provider
 from aid.protocol import ModelCost, ModelEntry
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from openai.types.chat.chat_completion_chunk import ChoiceDelta
-
-    from aid.messages import ModelMessage
 
 KEY_ENV: Final = "OPENROUTER_API_KEY"
 PROVIDER: Final = Provider("https://openrouter.ai/api/v1", KEY_ENV, headers={"X-Title": "aid"})
@@ -92,6 +88,8 @@ class OpenRouterChat(OpenAIChatModel):
     """Asks for OpenRouter's usage accounting, reads its `reasoning` field, and replays no reasoning text: OpenRouter
     takes reasoning back only with the `reasoning_details` aid does not keep."""
 
+    replays_reasoning = False
+
     def request_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
         kwargs = super().request_settings(settings)
         kwargs["extra_body"] = {"usage": {"include": True}, **kwargs.get("extra_body", {})}
@@ -100,12 +98,6 @@ class OpenRouterChat(OpenAIChatModel):
     def reasoning(self, delta: ChoiceDelta) -> str | None:
         thought = (delta.model_extra or {}).get("reasoning")
         return thought if isinstance(thought, str) and thought else super().reasoning(delta)
-
-    def wire(self, messages: Sequence[ModelMessage]) -> list[dict[str, Any]]:
-        wired = super().wire(messages)
-        for message in wired:
-            message.pop("reasoning_content", None)
-        return wired
 
 
 class OpenRouter(aid.ModelProvider):

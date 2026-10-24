@@ -310,7 +310,7 @@ def load_named(catalog: Catalog, name: str) -> Agent:
 
 def aid_toolset(catalog: Catalog) -> Toolset:
     tools = [
-        Tool(t.fn, takes_ctx=False, name=t.name, description=t.description, errors_to_model=True)
+        Tool(t.fn, takes_ctx=False, name=t.name, description=t.description or "", errors_to_model=True)
         for t in catalog.tools.values()
     ]
     return Toolset(tools)
@@ -403,8 +403,6 @@ class NativeBackend:
         functions = [*agent.tools, *(fn for toolset in [*agent.toolsets, *toolsets] for fn in toolset.tools)]
         for fn in functions:
             tool = fn if isinstance(fn, Tool) else Tool(fn)
-            if tool.name is None:
-                raise ValueError("tool has no name")
             if tool.name in tools:
                 raise ValueError(f"duplicate tool {tool.name!r}")
             tools[tool.name] = tool

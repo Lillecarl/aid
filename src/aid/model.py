@@ -8,7 +8,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol
 
 import anthropic
 import anyio
@@ -29,6 +29,7 @@ from anthropic.types import (
     ThinkingDelta,
     ToolUseBlock,
 )
+from openai.types.chat import ChatCompletionAssistantMessageParam
 from pydantic import TypeAdapter
 
 from aid.messages import (
@@ -47,6 +48,7 @@ from aid.protocol import AidError
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Mapping, Sequence
 
+    from anthropic.types import ContentBlockParam, MessageParam, TextBlockParam, ToolParam
     from google import genai
     from google.genai.types import (
         ContentDict,
@@ -58,6 +60,7 @@ if TYPE_CHECKING:
         PartDict,
     )
     from openai.types import CompletionUsage
+    from openai.types.chat import ChatCompletionFunctionToolParam, ChatCompletionMessageParam
     from openai.types.chat.chat_completion_chunk import ChoiceDelta
     from openai.types.shared_params import ResponseFormatJSONObject, ResponseFormatJSONSchema
     from pydantic.json_schema import JsonSchemaValue
@@ -105,20 +108,25 @@ class Transport(Model, Protocol):
     async def aclose(self) -> None: ...
 
 
-def wire_messages(messages: Sequence[ModelMessage]) -> list[dict[str, Any]]:
-    """Stored parts as Chat Completions messages, keeping tool identities and reasoning text."""
-    result: list[dict[str, Any]] = []
+class ReasoningAssistantParam(ChatCompletionAssistantMessageParam, total=False):
+    """An assistant message with its reasoning beside the content, as DeepSeek and others take it back."""
+
+    reasoning_content: str
+
+
+def wire_messages(messages: Sequence[ModelMessage], *, reasoning: bool = True) -> list[ChatCompletionMessageParam]:
+    """Stored parts as Chat Completions messages, keeping tool identities and, with `reasoning`, reasoning text."""
+    result: list[ChatCompletionMessageParam] = []
     for message in messages:
         if isinstance(message, ModelResponse):
             text = "".join(p.content for p in message.parts if isinstance(p, TextPart))
-            content: Any = text or None
             thoughts = [p for p in message.parts if isinstance(p, ThinkingPart)]
             calls = [p for p in message.parts if isinstance(p, ToolCallPart)]
-            if not content and not calls:
+            if not text and not calls:
                 # Providers refuse an assistant message with neither (DeepSeek: 400). A failed request could
                 # store one, and that stored history must still send.
                 continue
-            item: dict[str, Any] = {"role": "assistant", "content": content}
+            item: ReasoningAssistantParam = {"role": "assistant", "content": text or None}
             if calls:
                 item["tool_calls"] = [
                     {
@@ -128,7 +136,7 @@ def wire_messages(messages: Sequence[ModelMessage]) -> list[dict[str, Any]]:
                     }
                     for p in calls
                 ]
-            if thoughts:
+            if thoughts and reasoning:
                 item["reasoning_content"] = "".join(p.content for p in thoughts)
             result.append(item)
         else:
@@ -137,7 +145,7 @@ def wire_messages(messages: Sequence[ModelMessage]) -> list[dict[str, Any]]:
                     case SystemPromptPart():
                         result.append({"role": "system", "content": part.content})
                     case UserPromptPart():
-                        result.append({"role": "user", "content": part.content})
+                        result.append({"role": "user", "content": str(part.content)})
                     case ToolReturnPart():
                         result.append(
                             {"role": "tool", "tool_call_id": part.tool_call_id, "content": part.model_response_str()}
@@ -297,8 +305,11 @@ class OpenAIChatModel:
     def usage(self, usage: CompletionUsage) -> RequestUsage:
         return _openai_usage(usage)
 
-    def wire(self, messages: Sequence[ModelMessage]) -> list[dict[str, Any]]:
-        return wire_messages(messages)
+    replays_reasoning: ClassVar[bool] = True
+    """Reasoning text goes back beside the content (`reasoning_content`); False for a provider that refuses it."""
+
+    def wire(self, messages: Sequence[ModelMessage]) -> list[ChatCompletionMessageParam]:
+        return wire_messages(messages, reasoning=self.replays_reasoning)
 
     def response_format(self, schema: JsonSchemaValue) -> ResponseFormatJSONSchema | ResponseFormatJSONObject:
         """How a request asks for structured output: the schema itself, where the provider takes one."""
@@ -321,9 +332,7 @@ class OpenAIChatModel:
                 # After the leading instructions, so every request keeps the same cached prefix.
                 lead = next((i for i, w in enumerate(wired) if w.get("role") != "system"), len(wired))
                 wired.insert(lead, {"role": "system", "content": note})
-        stream = await client.chat.completions.create(
-            model=self._model, messages=cast(Any, wired), stream=True, **kwargs
-        )
+        stream = await client.chat.completions.create(model=self._model, messages=wired, stream=True, **kwargs)
         ids: dict[int, str] = {}
         try:
             async for chunk in stream:
@@ -387,25 +396,25 @@ ANTHROPIC_LEGACY_MAX_TOKENS: Final = 4096
 """The same for `claude-3*` models, whose limits start at 4096."""
 
 
-def anthropic_messages(messages: Sequence[ModelMessage]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def anthropic_messages(messages: Sequence[ModelMessage]) -> tuple[list[TextBlockParam], list[MessageParam]]:
     """Stored parts as the Messages API's (system, messages). Leading system prompts become `system`; a later one
     stays in place as user text. Consecutive same-role parts share one message, so the tool results of one
     response arrive together. Thinking replays only signed or redacted, as Anthropic produced it."""
-    system: list[dict[str, Any]] = []
-    result: list[dict[str, Any]] = []
+    system: list[TextBlockParam] = []
+    turns: list[tuple[Literal["user", "assistant"], list[ContentBlockParam]]] = []
 
-    def add(role: str, block: dict[str, Any]) -> None:
-        if result and result[-1]["role"] == role:
-            result[-1]["content"].append(block)
+    def add(role: Literal["user", "assistant"], block: ContentBlockParam) -> None:
+        if turns and turns[-1][0] == role:
+            turns[-1][1].append(block)
         else:
-            result.append({"role": role, "content": [block]})
+            turns.append((role, [block]))
 
     for message in messages:
         if isinstance(message, ModelResponse):
             for part in message.parts:
                 match part:
                     case ThinkingPart() if part.model_extra and "redacted_data" in part.model_extra:
-                        add("assistant", {"type": "redacted_thinking", "data": part.model_extra["redacted_data"]})
+                        add("assistant", {"type": "redacted_thinking", "data": str(part.model_extra["redacted_data"])})
                     case ThinkingPart() if part.signature:
                         add("assistant", {"type": "thinking", "thinking": part.content, "signature": part.signature})
                     case TextPart() if part.content:
@@ -424,7 +433,7 @@ def anthropic_messages(messages: Sequence[ModelMessage]) -> tuple[list[dict[str,
             continue
         for part in message.parts:
             match part:
-                case SystemPromptPart() if not result:
+                case SystemPromptPart() if not turns:
                     system.append({"type": "text", "text": part.content})
                 case SystemPromptPart():
                     add("user", {"type": "text", "text": part.content})
@@ -449,12 +458,16 @@ def anthropic_messages(messages: Sequence[ModelMessage]) -> tuple[list[dict[str,
                     add("user", {"type": "text", "text": part.model_response()})
                 case _:
                     raise ValueError("response part in a model request")
-    return system, result
+    return system, [{"role": role, "content": blocks} for role, blocks in turns]
 
 
-def anthropic_tool(definition: dict[str, Any]) -> dict[str, Any]:
+def anthropic_tool(definition: ChatCompletionFunctionToolParam) -> ToolParam:
     function = definition["function"]
-    return {"name": function["name"], "description": function["description"], "input_schema": function["parameters"]}
+    return {
+        "name": function["name"],
+        "description": function.get("description", ""),
+        "input_schema": function.get("parameters", {}),
+    }
 
 
 class AnthropicModel:
@@ -509,7 +522,7 @@ class AnthropicModel:
         system, wire = anthropic_messages(messages)
         if system:
             kwargs["system"] = system
-        stream = await client.messages.create(model=self._model, messages=cast(Any, wire), stream=True, **kwargs)
+        stream = await client.messages.create(model=self._model, messages=wire, stream=True, **kwargs)
         arguments: dict[int, bool] = {}
         try:
             async for event in stream:

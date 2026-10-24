@@ -104,7 +104,7 @@ PYTHON_WRITE: Final = "python:write"
 
 
 def asking_names(tools: Iterable[Tool]) -> frozenset[str]:
-    return frozenset(name for tool in tools if tool.asks for name in (tool.name, *tool.permissions) if name is not None)
+    return frozenset(name for tool in tools if tool.asks for name in (tool.name, *tool.permissions))
 
 
 @dataclass

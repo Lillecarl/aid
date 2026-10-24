@@ -12,6 +12,8 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, create
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from openai.types.chat import ChatCompletionFunctionToolParam
+
     from aid.model import Model
 
 
@@ -27,8 +29,10 @@ class RunContext:
 @dataclass
 class Tool:
     fn: Callable[..., Any]
-    name: str | None = None
-    description: str | None = None
+    name: str = ""
+    """Empty: the function's name."""
+    description: str = ""
+    """Empty: the function's docstring."""
     takes_ctx: bool | None = None
     kind: str | None = None
     """ACP's tool kind (`read`, `edit`, `delete`, `move`, `search`, `execute`, …): the web UI labels the call by it,
@@ -59,7 +63,7 @@ class Tool:
             fields[parameter.name] = (hints.get(parameter.name, Any), default)
         self.arguments = create_model(f"{self.name}Arguments", __config__=ConfigDict(extra="forbid"), **fields)
 
-    def definition(self) -> dict[str, Any]:
+    def definition(self) -> ChatCompletionFunctionToolParam:
         return {
             "type": "function",
             "function": {
