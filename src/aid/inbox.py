@@ -40,6 +40,7 @@ class Inbox:
         return len(self._pending)
 
     def ready(self, *, interrupts_only: bool = False) -> bool:
+        """Whether a message is pending. `interrupts_only`: only `Delivery.INTERRUPT` messages count."""
         return any(_takes(entry, interrupts_only) for entry in self._pending)
 
     async def _save(self, checkpoint: _Checkpoint) -> None:
