@@ -17,6 +17,7 @@ from aid.backends.claude_tty import (
     HOOK_EVENTS,
     HOOK_SCRIPT,
     Screen,
+    ask_settings,
     classify,
     claude_argv,
     hook_settings,
@@ -42,11 +43,12 @@ from aid.protocol import (
     Started,
     TextDelta,
     ToolCall,
+    ToolMode,
     Usage,
     decode_request,
     encode,
 )
-from aid.spec import ClaudeTtySpec, McpHttp
+from aid.spec import ClaudeTtySpec, McpHttp, PermissionMode
 from tests.conftest import acp_spec, fake_spec, needs_pymux
 from tests.fake_claude import COMPACT_SUMMARY, COUNT, MODEL, NOTICE, PERMISSION_INPUT, SUBAGENT_MODEL
 from tests.test_hook import run_hook
@@ -121,6 +123,32 @@ def test_variadic_options_go_before_other_arguments() -> None:
         "id",
         "x",
     ]
+
+
+def test_tool_modes_become_claudes_rules() -> None:
+    modes = {"Read": PermissionMode.ALLOW, "Bash": PermissionMode.DENY, "WebFetch": PermissionMode.ASK}
+    spec = ClaudeTtySpec(cwd="/", tool_permissions=modes)
+    assert claude_argv(spec, ["hi"], "id", resume=False, mcp_config=None, settings="/s") == [
+        "claude",
+        "--allowedTools",
+        "mcp__aid",
+        "Read",
+        "--disallowedTools",
+        "Bash",
+        "--dangerously-load-development-channels",
+        "server:aid",
+        "--settings",
+        "/s",
+        "--session-id",
+        "id",
+        "hi",
+    ]
+    own = {"model": "opus", "permissions": {"ask": ["Edit"], "allow": ["Grep"]}}
+    assert ask_settings(own, ["WebFetch"]) == {
+        "model": "opus",
+        "permissions": {"ask": ["Edit", "WebFetch"], "allow": ["Grep"]},
+    }
+    assert ask_settings(own, []) is own
 
 
 def test_a_persons_settings_join_aids_hooks(tmp_path: Path) -> None:
@@ -200,7 +228,12 @@ async def test_prompt_round_trip(daemon: Paths, tmp_path: Path, pymux_socket: st
     two = 2  # the Bash call's message and the answer's
     assert events == [
         ToolCall(
-            tool_call_id="toolu_fake", title="Bash", kind="execute", status="in_progress", input={"command": "true"}
+            tool_call_id="toolu_fake",
+            tool="Bash",
+            title="Bash",
+            kind="execute",
+            status="in_progress",
+            input={"command": "true"},
         ),
         ToolCall(tool_call_id="toolu_fake", status="completed", output="ok"),
         TextDelta(text="ran it"),
@@ -405,6 +438,38 @@ async def test_stop_resumes_the_same_transcript(daemon: Paths, tmp_path: Path, p
     transcripts = list((tmp_path / "claude-config" / "projects").glob("*/*.jsonl"))
     assert len(transcripts) == 1
     assert second.output == "echo: second"
+
+
+@needs_pymux
+async def test_tool_modes_restart_claude_once_its_turn_ends(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("tty", fake_spec(tmp_path, pymux_socket))
+            await session.run("tool")
+            learned = (await session.status()).tools
+            with pytest.raises(AidError, match="no default"):
+                await session.set_permissions(default=PermissionMode.ASK)
+            before = (await session.status()).pid
+            address = await session.pane()
+            pane = next(p for p in Server(address.socket).panes if p.id == address.pane)
+            await anyio.to_thread.run_sync(pane.send_keys, "hold", False)  # pyrefly: ignore[bad-argument-type] -- pyright accepts run_sync's ParamSpec; exercised at runtime
+            await anyio.to_thread.run_sync(pane.send_key, "Enter")
+            while not (await session.status()).working:  # noqa: ASYNC110 -- the UserPromptSubmit hook says so
+                await anyio.sleep(0.05)
+            await session.set_permissions({"Bash": PermissionMode.DENY, "WebFetch": PermissionMode.ASK})
+            held = await session.status()
+            (tmp_path / "release").touch()
+            while (after := await session.status()).pid in (before, None):  # noqa: ASYNC110 -- the restart follows Stop
+                await anyio.sleep(0.05)
+            rules = json.loads((await session.run("rules")).text)
+    assert learned == [ToolMode(name="Bash", group="claude", asks=False, mode=None, set=False)]
+    assert held.pid == before
+    assert [(t.name, t.mode, t.set) for t in after.tools] == [
+        ("Bash", PermissionMode.DENY, True),
+        ("WebFetch", PermissionMode.ASK, True),
+    ]
+    assert rules["flags"] == {"--allowedTools": ["mcp__aid"], "--disallowedTools": ["Bash"]}
+    assert rules["permissions"] == {"ask": ["WebFetch"]}
 
 
 @needs_pymux

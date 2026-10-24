@@ -351,6 +351,9 @@ export interface ClaudeTtySpec {
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
   supervisor_permissions?: string[];
+  tool_permissions?: {
+    [k: string]: PermissionMode1;
+  };
   trust_cwd?: boolean;
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
@@ -565,6 +568,7 @@ export interface ToolCall {
   paths: string[];
   status: string | null;
   title: string | null;
+  tool: string | null;
   tool_call_id: string;
   type: "tool_call";
 }

@@ -125,7 +125,7 @@ if TYPE_CHECKING:
     from aid.launcher import Launcher, WorkerHandle
     from aid.paths import Paths
     from aid.plugins import Plugin
-    from aid.protocol import HistoryEntry, HistoryItem, Request, SessionEvent
+    from aid.protocol import HistoryEntry, HistoryItem, Request
     from aid.spec import AgentSpec
 
 log = structlog.get_logger(__name__)
@@ -184,7 +184,8 @@ class _Session:
     tools: list[SessionTool] = field(default_factory=list[SessionTool])
     """What the last worker's Hello listed."""
     restart_pending: bool = False
-    """A sandbox change waits for the running turn to end before the worker restarts under it."""
+    """A sandbox change, or interactive Claude's tool modes, wait for the running turn to end before the worker
+    restarts under them."""
     spec_lock: anyio.Lock = field(default_factory=anyio.Lock)
     """Held from reading the spec to writing its change, so two changes never write over each other."""
 
@@ -235,10 +236,8 @@ class _Session:
 
     def tool_modes(self) -> list[ToolMode]:
         """Each known tool's mode under the spec now, then the spec's settings for tools none reported. An unset
-        claude-sdk tool has none: Claude Code's own defaults decide it."""
+        Claude Code tool has none: Claude's own defaults decide it."""
         spec = self.spec
-        if isinstance(spec, ClaudeTtySpec):
-            return []
 
         def unset(tool: SessionTool) -> PermissionMode | None:
             match spec:
@@ -789,6 +788,12 @@ class Daemon:
             case SetPermissions():
                 session = self._session(request.session)
                 await self._set_permissions(session, request)
+                if isinstance(session.spec, ClaudeTtySpec):
+                    # Claude reads its rules at launch only.
+                    if session.running:
+                        session.restart_pending = True
+                        await self._settle_restart(session)
+                    return Done(id=request.id)
                 if not session.running:
                     return Done(id=request.id)
                 self._routes[request.id] = _Route(client, session.name)
@@ -1145,23 +1150,24 @@ class Daemon:
         except OSError:
             log.exception("record_tools_failed", session=session.name)
 
-    async def _learn_tool(self, session: _Session, item: SessionEvent) -> None:
-        """ACP lists no tools up front: a request names one, and the session keeps it."""
-        if (
-            isinstance(session.spec, AcpSpec)
-            and isinstance(item, PermissionRequest)
-            and (name := item.tool_name)
-            and all(tool.name != name for tool in session.tools)
-        ):
-            await self._record_tools(
-                session, [*session.tools, SessionTool(name=name, group=tool_group(name, "agent"), asks=True)]
-            )
+    async def _learn_tool(self, session: _Session, item: HistoryItem) -> None:
+        """ACP and interactive Claude list no tools up front: a request or a call names one, and the session keeps
+        it."""
+        match session.spec, item:
+            case AcpSpec(), PermissionRequest(tool_name=str(name)):
+                learned = SessionTool(name=name, group=tool_group(name, "agent"), asks=True)
+            case ClaudeTtySpec(), PermissionRequest(tool_name=str(name)) | ToolCall(tool=str(name)):
+                learned = SessionTool(name=name, group=tool_group(name, "claude"), asks=False)
+            case _:
+                return
+        if all(tool.name != learned.name for tool in session.tools):
+            await self._record_tools(session, [*session.tools, learned])
 
     async def _set_permissions(self, session: _Session, request: SetPermissions) -> None:
         async with session.spec_lock:
             spec = session.spec
-            if isinstance(spec, ClaudeTtySpec):
-                raise AidError("unsupported", f"{session.name!r} asks in its own terminal pane")
+            if isinstance(spec, ClaudeTtySpec) and request.default is not None:
+                raise AidError("unsupported", f"{session.name!r} has no default: Claude's own defaults decide")
             update: dict[str, object] = {"permission": request.default} if request.default else {}
             if request.tools:
                 tools = dict(spec.tool_permissions)
@@ -1460,6 +1466,7 @@ class Daemon:
                             await session.history.append(reply.item, reply.turn)
                         except OSError:
                             log.exception("record_turn_failed", session=name, turn=reply.turn)
+                        await self._learn_tool(session, reply.item)
                 case Activity():
                     if (session := self._sessions.get(name)) is not None:
                         session.working, session.attention = reply.working, reply.attention
@@ -1467,6 +1474,8 @@ class Daemon:
                             session.mail.set()  # The channel server holds what waits for the turn to end.
                         if not session.busy and session.directory_request is not None and self._tg is not None:
                             self._tg.start_soon(self._settle_directory, session)
+                        elif not session.busy and session.restart_pending and self._tg is not None:
+                            self._tg.start_soon(self._settle_restart, session)
                 case Notify():
                     if (session := self._sessions.get(name)) is not None:
                         await self._notify(session, reply)

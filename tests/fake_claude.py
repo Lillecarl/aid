@@ -1,7 +1,8 @@
 """A stand-in for interactive Claude Code: reads a terminal like it, writes a transcript like it.
 
 Prompts: "slow" waits for Escape; "count" writes one text block per number; "tool" makes a tool call;
-"mcp" says the --mcp-config file; "term" says TERM; "notify" runs the Notification hook; "permission" asks through the PermissionRequest hook and obeys it;
+"mcp" says the --mcp-config file; "rules" says its permission arguments and settings; "hold" waits for a
+`release` file in the cwd; "term" says TERM; "notify" runs the Notification hook; "permission" asks through the PermissionRequest hook and obeys it;
 "permission-pane" asks, then answers yes in the pane while the hook still waits; "subagent" writes a subagent's
 transcript and runs SubagentStop; anything else is echoed.
 Each turn runs the UserPromptSubmit and Stop hooks from --settings. Typed /clear, /compact and /exit run theirs. FAKE_CLAUDE_TRUST=1 shows the trust dialog until a `.fake-trusted` file exists.
@@ -19,6 +20,7 @@ import termios
 import time
 import tty
 import uuid
+from itertools import takewhile
 from pathlib import Path
 from typing import Any
 
@@ -208,6 +210,18 @@ class Fake:
             self.say(os.environ.get("TERM", "unset"))
         elif text == "mcp":
             self.say(Path(self.mcp_config).read_text() if self.mcp_config else "none")
+        elif text == "rules":
+            argv = sys.argv[1:]
+            rules = {
+                flag: list(takewhile(lambda a: not a.startswith("--"), argv[argv.index(flag) + 1 :]))
+                for flag in ("--allowedTools", "--disallowedTools")
+                if flag in argv
+            }
+            self.say(json.dumps({"flags": rules, "permissions": self.settings.get("permissions")}))
+        elif text == "hold":
+            while not Path("release").exists():
+                time.sleep(0.05)
+            self.say("released")
         elif text in ("permission", "permission-pane"):
             self.permission(pane_answers=text == "permission-pane")
         elif text == "subagent":

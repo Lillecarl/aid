@@ -278,6 +278,7 @@ def items_from_entry(raw: dict[str, Any]) -> list[TranscriptItem]:
                     items.append(
                         ToolCall(
                             tool_call_id=block.id,
+                            tool=block.name,
                             title=block.name,
                             kind=TOOL_KINDS.get(block.name or "", "other"),
                             status="in_progress",

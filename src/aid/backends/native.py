@@ -298,6 +298,7 @@ def to_event(part: ToolCallPart | ToolReturnPart | RetryPromptPart, kind: str | 
         except ValueError:
             return ToolCall(
                 tool_call_id=part.tool_call_id,
+                tool=part.tool_name,
                 title=part.tool_name,
                 kind=kind,
                 status="in_progress",
@@ -305,6 +306,7 @@ def to_event(part: ToolCallPart | ToolReturnPart | RetryPromptPart, kind: str | 
             )
         return ToolCall(
             tool_call_id=part.tool_call_id,
+            tool=part.tool_name,
             title=part.tool_name,
             kind=kind,
             status="in_progress",

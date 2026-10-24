@@ -62,7 +62,7 @@ from pydantic import JsonValue
 from aid import hook as hook_command
 from aid.backends.permissions import PermissionWaits
 from aid.env import agent_environment
-from aid.mcp import AID_TOOLS_RULE, MCP_CONFIG_FILE, claude_config, session_servers, write_private
+from aid.mcp import MCP_CONFIG_FILE, claude_config, claude_rules, session_servers, write_private
 from aid.paths import default_paths, hook_socket
 from aid.protocol import (
     Activity,
@@ -211,13 +211,11 @@ def claude_argv(
     # --mcp-config and --allowedTools are variadic: each goes before another option, or it would take the first
     # of the args too. A repeated --allowedTools in the args adds to this one.
     mcp = ["--mcp-config", mcp_config] if mcp_config else []
-    aid = (
-        ["--allowedTools", AID_TOOLS_RULE, "--dangerously-load-development-channels", f"server:{BUILTIN_MCP_SERVER}"]
-        if spec.aid_tools
-        else []
-    )
+    allowed, denied, _ = claude_rules(spec.tool_permissions, aid_tools=spec.aid_tools)
+    rules = [*(["--allowedTools", *allowed] if allowed else []), *(["--disallowedTools", *denied] if denied else [])]
+    channel = ["--dangerously-load-development-channels", f"server:{BUILTIN_MCP_SERVER}"] if spec.aid_tools else []
     session = ["--resume" if resume else "--session-id", session_id]
-    return [*spec.command, *mcp, *aid, "--settings", settings, *session, *args]
+    return [*spec.command, *mcp, *rules, *channel, "--settings", settings, *session, *args]
 
 
 def split_settings(args: list[str]) -> tuple[str | None, list[str]]:
@@ -243,6 +241,15 @@ def read_settings(value: str, cwd: str) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise ValueError(f"--settings {value!r} is not a JSON object")
     return cast(dict[str, Any], document)
+
+
+def ask_settings(own: dict[str, Any], asked: list[str]) -> dict[str, Any]:
+    """`own` with `asked` added to its `permissions.ask` rules. Rules have no command-line flag of their own."""
+    if not asked:
+        return own
+    permissions = dict(own.get("permissions") or {})
+    permissions["ask"] = [*(permissions.get("ask") or []), *asked]
+    return {**own, "permissions": permissions}
 
 
 def hook_settings(control: str, session: str, hook: str, own: dict[str, Any]) -> dict[str, Any]:
@@ -672,7 +679,10 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
     own = await anyio.to_thread.run_sync(read_settings, own_settings, spec.cwd) if own_settings else {}
     settings_file = state_dir / HOOKS_FILE
     settings = hook_settings(
-        default_paths().control, state_dir.name, hook_socket(default_paths().runtime_dir, state_dir.name), own
+        default_paths().control,
+        state_dir.name,
+        hook_socket(default_paths().runtime_dir, state_dir.name),
+        ask_settings(own, claude_rules(spec.tool_permissions, aid_tools=False)[2]),
     )
     await write_private(settings_file, json.dumps(settings), 0o600)
     argv = claude_argv(spec, args, session_id, resume=resume, mcp_config=mcp_config, settings=str(settings_file))

@@ -569,6 +569,8 @@ class ToolCall(_Message):
 
     type: Literal["tool_call"] = "tool_call"
     tool_call_id: str
+    tool: str | None = None
+    """The tool's name, as permission rules name it; None where the agent names none (ACP)."""
     title: str | None = None
     kind: str | None = None
     status: str | None = None

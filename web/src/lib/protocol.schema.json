@@ -662,6 +662,12 @@
           },
           "type": "array"
         },
+        "tool_permissions": {
+          "additionalProperties": {
+            "$ref": "#/$defs/PermissionMode"
+          },
+          "type": "object"
+        },
         "trust_cwd": {
           "default": false,
           "type": "boolean"
@@ -3033,6 +3039,17 @@
           ],
           "default": null
         },
+        "tool": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "tool_call_id": {
           "type": "string"
         },
@@ -3045,6 +3062,7 @@
       "required": [
         "type",
         "tool_call_id",
+        "tool",
         "title",
         "kind",
         "status",

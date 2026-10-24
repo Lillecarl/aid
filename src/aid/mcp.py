@@ -12,10 +12,10 @@ from pydantic import TypeAdapter
 from aid.control import ENV_AGENT_CONNECTION
 from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, default_paths
 from aid.plugins import ENV_PLUGINS_PATH, plugins_path
-from aid.spec import BUILTIN_MCP_SERVER, AgentKind, McpHttp, McpServer, McpSse, McpStdio
+from aid.spec import BUILTIN_MCP_SERVER, AgentKind, McpHttp, McpServer, McpSse, McpStdio, PermissionMode
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
     import anyio
 
@@ -27,6 +27,15 @@ _servers: TypeAdapter[list[McpServer]] = TypeAdapter(list[McpServer])
 # How Claude Code names the built-in server's tools; also a permission rule that allows all of them.
 AID_TOOLS_RULE: Final = f"mcp__{BUILTIN_MCP_SERVER}"
 AID_TOOL_PREFIX: Final = f"{AID_TOOLS_RULE}__"
+
+
+def claude_rules(modes: Mapping[str, PermissionMode], *, aid_tools: bool) -> tuple[list[str], list[str], list[str]]:
+    """Tool modes as Claude Code's permission rules: allowed (aid's own tools first, with `aid_tools`), denied,
+    asked."""
+    allowed = [*([AID_TOOLS_RULE] if aid_tools else []), *(t for t, m in modes.items() if m is PermissionMode.ALLOW)]
+    denied = [t for t, m in modes.items() if m is PermissionMode.DENY]
+    asked = [t for t, m in modes.items() if m is PermissionMode.ASK]
+    return allowed, denied, asked
 
 
 def builtin_server(session: str, *, channel: bool) -> McpStdio:

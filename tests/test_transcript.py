@@ -70,7 +70,12 @@ def test_turn_usage_counts_each_message_once() -> None:
             assistant({"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}),
             [
                 ToolCall(
-                    tool_call_id="toolu_1", title="Bash", kind="execute", status="in_progress", input={"command": "ls"}
+                    tool_call_id="toolu_1",
+                    tool="Bash",
+                    title="Bash",
+                    kind="execute",
+                    status="in_progress",
+                    input={"command": "ls"},
                 )
             ],
         ),
@@ -79,6 +84,7 @@ def test_turn_usage_counts_each_message_once() -> None:
             [
                 ToolCall(
                     tool_call_id="toolu_4",
+                    tool="Read",
                     title="Read",
                     kind="read",
                     status="in_progress",

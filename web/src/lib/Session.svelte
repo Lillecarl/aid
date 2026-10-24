@@ -22,7 +22,7 @@
     { id: "chat", label: "Chat" },
     { id: "files", label: "Files" },
     ...(kind === "claude-tty" ? [{ id: "terminal" as const, label: "Terminal" }] : []),
-    ...(kind === "claude-tty" ? [] : [{ id: "permissions" as const, label: "Permissions" }]),
+    { id: "permissions" as const, label: "Permissions" },
     { id: "status", label: "Status" },
   ]);
 

@@ -86,26 +86,31 @@
 {#if problem}<p class="problem">{problem}</p>{/if}
 {#if status === null}
   <p class="muted">Loading…</p>
-{:else if status.permission === null}
-  <p class="muted">Interactive Claude asks in its own terminal pane.</p>
 {:else}
-  <div class="bar">
-    <label>
-      {status.kind === "native"
-        ? "Tools that ask for themselves"
-        : status.kind === "claude-sdk"
-          ? "What Claude asks about the rest"
-          : "Requests about the rest"}
-      <select
-        value={status.permission}
-        disabled={busy}
-        data-testid="permission-default"
-        onchange={(e) => setDefault(e.currentTarget.value as PermissionMode)}
-      >
-        {#each MODES as mode (mode)}<option value={mode}>{mode}</option>{/each}
-      </select>
-    </label>
-  </div>
+  {#if status.permission === null}
+    <p class="muted">
+      Claude reads these rules when it starts: a change restarts it, when its turn ends if one runs. An ask
+      tool asks in the terminal pane and here.
+    </p>
+  {:else}
+    <div class="bar">
+      <label>
+        {status.kind === "native"
+          ? "Tools that ask for themselves"
+          : status.kind === "claude-sdk"
+            ? "What Claude asks about the rest"
+            : "Requests about the rest"}
+        <select
+          value={status.permission}
+          disabled={busy}
+          data-testid="permission-default"
+          onchange={(e) => setDefault(e.currentTarget.value as PermissionMode)}
+        >
+          {#each MODES as mode (mode)}<option value={mode}>{mode}</option>{/each}
+        </select>
+      </label>
+    </div>
+  {/if}
   {#if status.kind === "native"}
     <fieldset data-testid="sandbox">
       <legend>
@@ -123,66 +128,66 @@
       <button type="button" disabled={busy} onclick={saveSandbox} data-testid="sandbox-save">Save sandbox</button>
     </fieldset>
   {/if}
-  {#if status.kind !== "claude-tty"}
-    {#if groups.length === 0}
-      <p class="muted">
-        {status.kind === "native"
-          ? "Start the session to list its tools."
-          : status.kind === "claude-sdk"
-            ? "Send the session a prompt to list its tools."
+  {#if groups.length === 0}
+    <p class="muted">
+      {status.kind === "native"
+        ? "Start the session to list its tools."
+        : status.kind === "claude-sdk"
+          ? "Send the session a prompt to list its tools."
+          : status.kind === "claude-tty"
+            ? "Its tools appear here as Claude uses them or asks about them."
             : "Its tools appear here as the agent asks permission for them."}
-      </p>
-    {:else}
-      <div class="bar" data-testid="permission-actions">
-        {#each MODES as mode (mode)}
-          <button type="button" disabled={busy || checked.size === 0} onclick={() => setChecked(mode)}
-            >{mode}</button
-          >
-        {/each}
-        <button type="button" disabled={busy || checked.size === 0} onclick={() => setChecked(null)}
-          >default</button
+    </p>
+  {:else}
+    <div class="bar" data-testid="permission-actions">
+      {#each MODES as mode (mode)}
+        <button type="button" disabled={busy || checked.size === 0} onclick={() => setChecked(mode)}
+          >{mode}</button
         >
-        <button type="button" onclick={() => toggle(status?.tools.map((t) => t.name) ?? [], true)}
-          >check all</button
-        >
-        <button type="button" onclick={() => (checked = new Set())}>uncheck all</button>
-        <span class="muted">{checked.size} checked</span>
-      </div>
-      {#each groups as [group, tools] (group)}
-        {@const all = tools.every((t) => checked.has(t.name))}
-        {@const some = tools.some((t) => checked.has(t.name))}
-        <fieldset data-testid="permission-group">
-          <legend>
-            <label>
-              <input
-                type="checkbox"
-                checked={all}
-                indeterminate={some && !all}
-                onchange={(e) => toggle(tools.map((t) => t.name), e.currentTarget.checked)}
-              />
-              {group}
-            </label>
-          </legend>
-          <ul>
-            {#each tools as tool (tool.name)}
-              <li data-testid="permission-tool">
-                <label>
-                  <span class="name">{tool.name}</span>
-                  <span class="mode {tool.mode ?? ''}" class:default={!tool.set}
-                    >{tool.mode === null ? "agent decides" : `${tool.mode}${tool.set ? "" : " (default)"}`}</span
-                  >
-                  <input
-                    type="checkbox"
-                    checked={checked.has(tool.name)}
-                    onchange={(e) => toggle([tool.name], e.currentTarget.checked)}
-                  />
-                </label>
-              </li>
-            {/each}
-          </ul>
-        </fieldset>
       {/each}
-    {/if}
+      <button type="button" disabled={busy || checked.size === 0} onclick={() => setChecked(null)}
+        >default</button
+      >
+      <button type="button" onclick={() => toggle(status?.tools.map((t) => t.name) ?? [], true)}
+        >check all</button
+      >
+      <button type="button" onclick={() => (checked = new Set())}>uncheck all</button>
+      <span class="muted">{checked.size} checked</span>
+    </div>
+    {#each groups as [group, tools] (group)}
+      {@const all = tools.every((t) => checked.has(t.name))}
+      {@const some = tools.some((t) => checked.has(t.name))}
+      <fieldset data-testid="permission-group">
+        <legend>
+          <label>
+            <input
+              type="checkbox"
+              checked={all}
+              indeterminate={some && !all}
+              onchange={(e) => toggle(tools.map((t) => t.name), e.currentTarget.checked)}
+            />
+            {group}
+          </label>
+        </legend>
+        <ul>
+          {#each tools as tool (tool.name)}
+            <li data-testid="permission-tool">
+              <label>
+                <span class="name">{tool.name}</span>
+                <span class="mode {tool.mode ?? ''}" class:default={!tool.set}
+                  >{tool.mode === null ? "agent decides" : `${tool.mode}${tool.set ? "" : " (default)"}`}</span
+                >
+                <input
+                  type="checkbox"
+                  checked={checked.has(tool.name)}
+                  onchange={(e) => toggle([tool.name], e.currentTarget.checked)}
+                />
+              </label>
+            </li>
+          {/each}
+        </ul>
+      </fieldset>
+    {/each}
   {/if}
 {/if}
 

@@ -323,13 +323,16 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   tools come from each prompt's `system init`; the worker sends `ToolsReported` before the prompt's reply when
   they change. ACP lists no tools: the daemon learns each name from a `PermissionRequest`
   (`_learn_tool`, `tool_group` in spec.py, no `acp` import in the daemon) and `AcpSpec.mode_for` answers it,
-  changed live through the worker. aid answers only what the agent asks.
+  changed live through the worker. aid answers only what the agent asks. claude-tty: `ClaudeTtySpec.tool_permissions`
+  as the same rules at launch (`claude_rules`; ask merged into aid's `--settings` file), no default (Claude's);
+  names learned from `PermissionRequest` and `ToolCall.tool` (transcript `tool_use`); a change restarts the
+  worker once neither aid's turn nor `working` runs (`restart_pending`, settled from `Activity` too).
   The page's Permissions tab is the only place a person sets modes; the create form sends `ask`.
 - ACP permission requests: `AcpSpec.permission` allow/deny answers at once; `ask` waits for `AnswerPermission` (web
   card, `aid answer`), refused after `permission_timeout`. The worker's `_Client` emits `PermissionRequest` and
   `PermissionDecision` into the running prompt's events, whatever the mode; the daemon keeps the pending ones in
   `SessionStatus.permissions`. Turn cancel/end answers pending ones `cancelled` (ACP requires it). Requests only
-  come mid-prompt; outside one, `ask` falls back to deny. claude-tty asks in its own pane, not here.
+  come mid-prompt; outside one, `ask` falls back to deny. claude-tty asks in its pane and through the PermissionRequest hook.
 - claude-tty depends on Claude Code's screen and transcript, neither an API. `claude_tty.py` and
   `transcript.py` say what was measured, on which version; re-measure before changing them.
 - libpymux and the `pymux` binary come from one pyterm pin (`default.nix`): the wire protocol still moves.

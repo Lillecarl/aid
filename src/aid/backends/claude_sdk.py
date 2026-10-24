@@ -22,7 +22,7 @@ import structlog
 from aid.backends.acp import choose_permission
 from aid.backends.permissions import PermissionWaits
 from aid.env import agent_environment
-from aid.mcp import AID_TOOLS_RULE, MCP_CONFIG_FILE, claude_config, session_servers, write_private
+from aid.mcp import MCP_CONFIG_FILE, claude_config, claude_rules, session_servers, write_private
 from aid.protocol import (
     AidError,
     Output,
@@ -69,13 +69,7 @@ def sdk_argv(spec: ClaudeSdkSpec, *, resume: str | None, mcp_config: str | None 
     (measured 2.1.310)."""
     # Variadic options: each goes before another option, or it would take what follows too.
     mcp = ["--mcp-config", mcp_config] if mcp_config else []
-    modes = spec.tool_permissions
-    allowed = [
-        *([AID_TOOLS_RULE] if spec.aid_tools else []),
-        *(t for t, m in modes.items() if m is PermissionMode.ALLOW),
-    ]
-    denied = [t for t, m in modes.items() if m is PermissionMode.DENY]
-    asked = [t for t, m in modes.items() if m is PermissionMode.ASK]
+    allowed, denied, asked = claude_rules(spec.tool_permissions, aid_tools=spec.aid_tools)
     argv = [
         *spec.command,
         "-p",

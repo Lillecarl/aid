@@ -268,6 +268,9 @@ class ClaudeTtySpec(_Spec):
     pymux_command: Annotated[list[str], Field(min_length=1)] = Field(default_factory=lambda: ["pymux"])
     mcp_servers: McpServers = Field(default_factory=list[McpServer])
     """Added to the MCP servers Claude Code finds in its own configuration."""
+    tool_permissions: dict[str, PermissionMode] = Field(default_factory=dict[str, PermissionMode])
+    """Modes by Claude Code tool name, as Claude's own rules at launch, as `ClaudeSdkSpec.tool_permissions`: Claude
+    asks an ask tool in its pane, and aid's people through the PermissionRequest hook. A change restarts Claude."""
 
 
 class ClaudeSdkSpec(_Spec):
