@@ -110,6 +110,22 @@ async def test_agent_identity_rejects_supervisor_spoofing_and_administration(
             assert (await intruder.status()).agent != "forged"
 
 
+async def test_an_agent_that_leaves_before_its_answer_does_not_stop_the_daemon(
+    server: tuple[Paths, RecordingLauncher], tmp_path: Path
+) -> None:
+    paths, launcher = server
+    with anyio.fail_after(30):
+        async with aid.connect(paths) as control:
+            await control.create("agent", py_spec(tmp_path, "agents:echo"))
+            async with agent_client(launcher.launches[-1]) as client, client.open_socket(zmq.DEALER) as raw:
+                await raw.send(encode(ListSessions()))
+                await raw.recv()  # Connected: the next request reaches the daemon before the socket closes.
+                await raw.send(encode(GetHistory(session="agent", after=1_000_000, wait=0.5)))
+            # The workers socket refuses a send to a peer that is gone; the answer finds the agent gone.
+            await anyio.sleep(1)
+            assert [s.name for s in await control.sessions()] == ["agent"]
+
+
 async def test_revocation_rejects_an_existing_connection_after_worker_restart(
     server: tuple[Paths, RecordingLauncher], tmp_path: Path
 ) -> None:

@@ -276,7 +276,14 @@ class _Peer:
     agent_key: str | None = None
 
     async def send(self, payload: bytes) -> None:
-        await self.listener.send(self.routing_id, payload)
+        try:
+            await self.listener.send(self.routing_id, payload)
+        except zmq.ZMQError as error:
+            # Agents connect to the workers socket, which is ROUTER_MANDATORY: one that left before its answer
+            # (a deleted session's channel server mid long-poll) makes the send raise. The answer has no reader.
+            if error.errno != zmq.EHOSTUNREACH:
+                raise
+            log.info("reply_undeliverable", agent_key=self.agent_key, plugin=self.plugin)
 
 
 @dataclass(frozen=True)
