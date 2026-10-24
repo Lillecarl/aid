@@ -2,7 +2,7 @@
 (`ModelListing`).
 
 The daemon runs this rather than importing plugins (`listing`). Providers come from three places, the first to
-name a prefix wins: `aid.ModelProvider` plugins, aid's own (anthropic and `aid.model.OPENAI_COMPATIBLE`), and
+name a prefix wins: `aid.ModelProvider` plugins, aid's own (anthropic, google and `aid.model.OPENAI_COMPATIBLE`), and
 models.dev's Chat Completions providers (`aid.providers.catalog_provider`).
 
 A plugin's own list (`ModelProvider.fetch_models`) is cached a day under the cache dir, `models/<provider>.json`,
@@ -22,7 +22,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from aid import models_dev
 from aid.catalog import session_catalog
-from aid.model import OPENAI_COMPATIBLE
+from aid.model import GOOGLE_KEY_ENV, OPENAI_COMPATIBLE
 from aid.models_dev import cache_dir, stale, write_aside
 from aid.protocol import AidError, ModelEntry, ModelListing, ProviderModels
 from aid.providers import catalog_provider, claimed
@@ -64,6 +64,7 @@ def providers(
         name: _row(name, "plugin", cls.key_env, cls.description(), env=env) for name, cls in sorted(plugins.items())
     }
     rows.setdefault("anthropic", _row("anthropic", "builtin", ANTHROPIC_KEY_ENV, env=env))
+    rows.setdefault("google", _row("google", "builtin", GOOGLE_KEY_ENV, env=env))
     for name, provider in OPENAI_COMPATIBLE.items():
         rows.setdefault(name, _row(name, "builtin", provider.key_env, env=env))
     for name in models_dev.provider_names(catalog):

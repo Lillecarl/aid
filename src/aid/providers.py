@@ -4,6 +4,7 @@ A plugin offers one by subclassing `aid.ModelProvider` (`aid.agents`); `aid.disc
 agents. Its `name` is the prefix it claims, and it wins over the generic resolution, which covers:
 
 - `anthropic/`: the Messages API (`AnthropicModel`);
+- `google/`: the Gemini API (`GoogleModel`), named as models.dev names it; `gemini/` is its Chat Completions route;
 - the prefixes in `aid.model.OPENAI_COMPATIBLE`: servers models.dev gives no URL for, and local ones;
 - every models.dev provider whose package is `@ai-sdk/openai-compatible`: its `api`, keyed by its first `env`.
 
@@ -17,7 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Final
 
 from aid import models_dev
-from aid.model import OPENAI_COMPATIBLE, AnthropicModel, OpenAIChatModel, Provider, split_name
+from aid.model import OPENAI_COMPATIBLE, AnthropicModel, GoogleModel, OpenAIChatModel, Provider, split_name
 from aid.protocol import AidError
 
 if TYPE_CHECKING:
@@ -60,6 +61,8 @@ async def resolve(name: str, providers: Mapping[str, type[ModelProvider]], sessi
         raise AidError("unknown_provider", f"{prefix}/ is served as {owner.provider_name()}/: {owner.description()}")
     if prefix == "anthropic":
         return AnthropicModel(name)
+    if prefix == "google":
+        return GoogleModel(name)
     if prefix in OPENAI_COMPATIBLE:
         return OpenAIChatModel(name)
     provider = catalog_provider(await models_dev.catalog(), prefix)

@@ -19,6 +19,7 @@ dependencies = [
   "numpy>=2.0",
   # aid.model: the native backend's transports, built from pins in default.nix.
   "anthropic",
+  "google-genai",
   "openai",
   "pydantic>=2.11",
   # aid.coding: agents edit through pyedit's library and run processes through pyrun (./pyrun).
@@ -62,7 +63,11 @@ testpaths = ["tests"]
 # in a background thread at startup: ~2.7 s holding the GIL in every pytest process, enough to starve tests with
 # short deadlines. Nothing here collects xonsh tests.
 addopts = "--dist loadgroup -p no:xonsh"
-filterwarnings = ["error"]
+filterwarnings = [
+  "error",
+  # google-genai's types module uses typing._UnionGenericAlias at import (googleapis/python-genai#1640).
+  "ignore:'_UnionGenericAlias' is deprecated:DeprecationWarning",
+]
 
 [tool.pyright]
 pythonVersion = "3.14"

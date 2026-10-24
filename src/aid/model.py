@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import base64
+import collections.abc
+import json
 import os
+import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast
 
 import anthropic
 import anyio
+import httpx
 import openai
 from anthropic.types import (
     InputJSONDelta,
@@ -42,6 +47,8 @@ from aid.protocol import AidError
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Mapping, Sequence
 
+    from google import genai
+    from google.genai.types import GenerateContentResponseUsageMetadata
     from openai.types import CompletionUsage
     from openai.types.chat.chat_completion_chunk import ChoiceDelta
 
@@ -150,6 +157,8 @@ def accumulate(response: ModelResponse, indexes: dict[int, int], delta: StreamDe
         previous.content += part.content
         if isinstance(previous, ThinkingPart) and isinstance(part, ThinkingPart) and part.signature:
             previous.signature = (previous.signature or "") + part.signature
+        for key, value in (part.model_extra or {}).items():
+            setattr(previous, key, value)
     elif isinstance(previous, ToolCallPart) and isinstance(part, ToolCallPart):
         previous.tool_name += part.tool_name
         previous.tool_call_id = part.tool_call_id or previous.tool_call_id
@@ -542,6 +551,216 @@ def _anthropic_usage(usage: Any) -> RequestUsage:
     )
 
 
-def model_for(name: str) -> OpenAIChatModel | AnthropicModel:
+GOOGLE_KEY_ENV: Final = "GEMINI_API_KEY"
+
+
+def _signature(value: bytes | None) -> dict[str, str]:
+    """A thought signature as a part's extra field: base64, so history stays JSON."""
+    return {"thought_signature": base64.b64encode(value).decode()} if value else {}
+
+
+def _signed(block: dict[str, Any], part: TextPart | ToolCallPart) -> dict[str, Any]:
+    if signature := (part.model_extra or {}).get("thought_signature"):
+        block["thought_signature"] = base64.b64decode(signature)
+    return block
+
+
+def google_contents(messages: Sequence[ModelMessage]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Stored parts as the Gemini API's (system instruction parts, contents), merged by role as
+    `anthropic_messages` does. A thought signature goes back on the part that carried it: Gemini 3 refuses a
+    function call without its own. Thinking replays only signed."""
+    system: list[dict[str, Any]] = []
+    result: list[dict[str, Any]] = []
+    ids: dict[str, str | None] = {}
+
+    def add(role: str, block: dict[str, Any]) -> None:
+        if result and result[-1]["role"] == role:
+            result[-1]["parts"].append(block)
+        else:
+            result.append({"role": role, "parts": [block]})
+
+    def answer(part: ToolReturnPart | RetryPromptPart, response: dict[str, Any]) -> dict[str, Any]:
+        block: dict[str, Any] = {"name": part.tool_name, "response": response}
+        if google_id := ids.get(part.tool_call_id):
+            block["id"] = google_id
+        return {"function_response": block}
+
+    for message in messages:
+        if isinstance(message, ModelResponse):
+            for part in message.parts:
+                match part:
+                    case ThinkingPart() if part.signature:
+                        add(
+                            "model",
+                            {
+                                "text": part.content,
+                                "thought": True,
+                                "thought_signature": base64.b64decode(part.signature),
+                            },
+                        )
+                    case TextPart() if part.content or part.model_extra:
+                        add("model", _signed({"text": part.content}, part))
+                    case ToolCallPart():
+                        try:
+                            arguments = part.args_as_dict()
+                        except ValueError:
+                            arguments = {}
+                        call: dict[str, Any] = {"name": part.tool_name, "args": arguments}
+                        if google_id := (part.model_extra or {}).get("google_id"):
+                            call["id"] = google_id
+                        ids[part.tool_call_id] = google_id
+                        add("model", _signed({"function_call": call}, part))
+                    case _:
+                        pass
+            continue
+        for part in message.parts:
+            match part:
+                case SystemPromptPart() if not result:
+                    system.append({"text": part.content})
+                case SystemPromptPart():
+                    add("user", {"text": part.content})
+                case UserPromptPart():
+                    add("user", {"text": str(part.content)})
+                case ToolReturnPart():
+                    add("user", answer(part, {"output": part.model_response_str()}))
+                case RetryPromptPart() if part.tool_name:
+                    add("user", answer(part, {"error": part.model_response()}))
+                case RetryPromptPart():
+                    add("user", {"text": part.model_response()})
+                case _:
+                    raise ValueError("response part in a model request")
+    return system, result
+
+
+def google_tool(definition: dict[str, Any]) -> dict[str, Any]:
+    function = definition["function"]
+    return {
+        "name": function["name"],
+        "description": function["description"],
+        "parameters_json_schema": function["parameters"],
+    }
+
+
+class GoogleModel:
+    """The Gemini API (`generateContent`) through Google's SDK, imported on first use: it adds half a second to a
+    worker's start (measured 2026-10-24). Thought signatures replay on their parts; Gemini assigns call ids only
+    sometimes, so aid makes its own and keeps Gemini's beside them."""
+
+    def __init__(self, name: str, provider: Provider | None = None) -> None:
+        """`provider`: another server of the Gemini API, its base URL and key variable; None is Google AI Studio."""
+        self.model_name = name
+        self._model = split_name(name)[1]
+        self._provider = provider
+        self._clients: dict[_ClientKey, tuple[genai.Client, httpx.AsyncClient]] = {}
+
+    def _client(self, settings: dict[str, Any]) -> genai.Client:
+        key_env = self._provider.key_env if self._provider else GOOGLE_KEY_ENV
+        api_key = settings.get("api_key") or os.environ.get(key_env)
+        if not api_key:
+            raise AidError("missing_credentials", f"{self.model_name}: set {key_env}")
+        retries = settings.get("max_retries", settings.get("num_retries", 0))
+        base_url = settings.get("api_base") or settings.get("base_url") or (self._provider and self._provider.base_url)
+        key = _ClientKey(base_url, api_key, retries)
+        if (pair := self._clients.get(key)) is None:
+            from google import genai  # noqa: PLC0415 -- half a second of every worker's start otherwise
+
+            # Ours, not the SDK's: it would pick aiohttp whenever that is installed.
+            http = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
+            options: dict[str, Any] = {"httpx_async_client": http}
+            if key.base_url:
+                options["base_url"] = key.base_url
+            if self._provider and self._provider.headers:
+                options["headers"] = dict(self._provider.headers)
+            if key.max_retries:
+                options["retry_options"] = {"attempts": key.max_retries + 1}
+            pair = (genai.Client(vertexai=False, api_key=key.api_key, http_options=cast(Any, options)), http)
+            self._clients[key] = pair
+        return pair[0]
+
+    async def aclose(self) -> None:
+        clients, self._clients = list(self._clients.values()), {}
+        for client, http in clients:
+            await client.aio.aclose()
+            client.close()
+            await http.aclose()
+
+    async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
+        client = self._client(info.settings)
+        config = _request_settings(info.settings, self._provider)
+        config["http_options"] = {"timeout": int(config.pop("timeout") * 1000)}
+        # aid runs the tool loop; the SDK's own would also log a warning on each worker's first request.
+        config["automatic_function_calling"] = {"disable": True}
+        if info.tools:
+            config["tools"] = [{"function_declarations": [google_tool(tool.definition()) for tool in info.tools]}]
+        if info.output_type is not str:
+            config["response_mime_type"] = "application/json"
+            config["response_json_schema"] = TypeAdapter(info.output_type).json_schema()
+        system, contents = google_contents(messages)
+        if system:
+            config["system_instruction"] = {"parts": system}
+        stream = await client.aio.models.generate_content_stream(  # pyright: ignore[reportUnknownMemberType] -- PIL, absent, in its contents union
+            model=self._model, contents=cast(Any, contents), config=cast(Any, config)
+        )
+        calls = 0
+        try:
+            async for chunk in stream:
+                if chunk.model_version:
+                    yield StreamDelta(model_name=chunk.model_version)
+                if chunk.usage_metadata is not None:
+                    yield StreamDelta(usage=_google_usage(chunk.usage_metadata))
+                for candidate in chunk.candidates or []:
+                    if candidate.finish_reason == "MAX_TOKENS":
+                        yield StreamDelta(truncated=True)
+                    for part in (candidate.content and candidate.content.parts) or []:
+                        extra = _signature(part.thought_signature)
+                        if part.function_call is not None:
+                            call = part.function_call
+                            if call.id:
+                                extra["google_id"] = call.id
+                            yield StreamDelta(
+                                100 + calls,
+                                ToolCallPart(
+                                    call.name or "",
+                                    json.dumps(call.args or {}),
+                                    f"call_{uuid.uuid4().hex[:24]}",
+                                    **extra,
+                                ),
+                            )
+                            calls += 1
+                        elif part.thought:
+                            yield StreamDelta(
+                                1, ThinkingPart(part.text or "", signature=extra.get("thought_signature"))
+                            )
+                        elif part.text or extra:
+                            yield StreamDelta(0, TextPart(part.text or "", **extra))
+        finally:
+            # Typed as an iterator; the SDK returns an async generator, which holds the response open.
+            if isinstance(stream, collections.abc.AsyncGenerator):
+                with anyio.CancelScope(shield=True):
+                    await stream.aclose()
+
+    async def request(self, messages: list[ModelMessage], info: ModelInfo) -> ModelResponse:
+        return await collect(self, messages, info)
+
+
+def _google_usage(usage: GenerateContentResponseUsageMetadata) -> RequestUsage:
+    """Gemini counts cached tokens inside the prompt, as Chat Completions does, and thinking apart from the
+    candidates while billing it as output."""
+    thoughts = usage.thoughts_token_count
+    return RequestUsage(
+        input_tokens=(usage.prompt_token_count or 0) + (usage.tool_use_prompt_token_count or 0),
+        output_tokens=(usage.candidates_token_count or 0) + (thoughts or 0),
+        cache_read_tokens=usage.cached_content_token_count or 0,
+        reasoning_tokens=thoughts,
+    )
+
+
+def model_for(name: str) -> OpenAIChatModel | AnthropicModel | GoogleModel:
     """The transport for a `provider/model` name."""
-    return AnthropicModel(name) if split_name(name)[0] == "anthropic" else OpenAIChatModel(name)
+    match split_name(name)[0]:
+        case "anthropic":
+            return AnthropicModel(name)
+        case "google":
+            return GoogleModel(name)
+        case _:
+            return OpenAIChatModel(name)

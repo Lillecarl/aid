@@ -149,13 +149,22 @@ on reusable decisions and current boundaries; put long investigations and dated 
   channel, no settled-turn notice, not in session lists).
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API, native blocks,
-  `extra_headers` carry betas, automatic caching on) and `OpenAIChatModel` (Chat Completions), each taking a
+  `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions) and `GoogleModel`
+  (Gemini API over google-genai, imported on first use: +0.5 s per worker otherwise; aid's own httpx client, AFC
+  off; `thought_signature` kept base64 on the Text/ToolCall part that carried it, Gemini's call id as `google_id`
+  beside aid's; prompt counts include cache reads; `_UnionGenericAlias` warning filtered in pytest,
+  googleapis/python-genai#1640), each taking a
   `Provider` (base URL, key variable, default request settings, headers). A provider's quirks subclass
   `OpenAIChatModel` (`request_settings`, `reasoning`, `usage`, `wire`), never branch in it. `OPENAI_COMPATIBLE`:
   prefixes models.dev gives no URL for, and local servers. `model_settings`: `api_key`/`api_base`/`max_retries`
   build the client, the rest goes into each request. `model_for(name)`: the table alone, for direct use.
 - `src/aid/providers.py` — `resolve(name, catalog.model_providers)`, in `open_native`: an `aid.ModelProvider`
-  plugin claiming the prefix (async `transport(model)`), else `anthropic/`, else `OPENAI_COMPATIBLE`, else a
+  plugin claiming the prefix (async `transport(model)`), else `anthropic/`, else `google/` (`GEMINI_API_KEY`;
+  models.dev's id, so prices and lists need no mapping; `gemini/` stays the Chat Completions route, unpriced;
+  measured 2026-10-24 on `gemini-3.1-flash-lite`, the cheapest a new key may use (2.5-flash-lite: 404 "no longer
+  available to new users", still in models.dev's list): tool loop with signed calls replayed, thinking tokens
+  counted, no thought text even with `include_thoughts`), else
+  `OPENAI_COMPATIBLE`, else a
   models.dev `@ai-sdk/openai-compatible` provider by its `api` and first `env`. `ModelProvider.catalog_id` names a
   plugin's models.dev id where its prefix differs: that id then resolves to an error naming the plugin's prefix, is
   left out of listings, and prices and backfills the plugin's models (`catalog_model`, `price_as`). Providers are

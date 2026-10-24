@@ -41,7 +41,17 @@ from aid.messages import (
     UserPromptPart,
 )
 from aid.messaging import ARRIVED, arrived
-from aid.model import Model, ModelInfo, OpenAIChatModel, RequestUsage, Transport, accumulate, model_for, split_name
+from aid.model import (
+    GoogleModel,
+    Model,
+    ModelInfo,
+    OpenAIChatModel,
+    RequestUsage,
+    Transport,
+    accumulate,
+    model_for,
+    split_name,
+)
 from aid.prices import CURRENCY, Price, price_for
 from aid.protocol import (
     AidError,
@@ -458,8 +468,9 @@ class NativeBackend:
         return self._price
 
     def _preserve_signed_thinking(self) -> bool:
-        """Anthropic rejects a signed block whose signature the wire dropped, so keep them whole."""
-        return self._model.model_name.startswith("anthropic/")
+        """Anthropic rejects a signed block whose signature the wire dropped, so keep them whole. Gemini's signed
+        thoughts replay the same way."""
+        return self._model.model_name.startswith(("anthropic/", "google/"))
 
     def answer_permission(
         self,
@@ -765,8 +776,8 @@ async def _write_atomic(path: anyio.Path, data: bytes) -> None:
 
 
 def add_cost(total: Cost | None, price: Price, usage: RequestUsage, model: Model) -> Cost:
-    # Chat Completions counts cache reads inside prompt tokens; Anthropic's Messages API counts them apart.
-    cached = usage.cache_read_tokens if isinstance(model, OpenAIChatModel) else 0
+    # Chat Completions and Gemini count cache reads inside prompt tokens; Anthropic's Messages API counts them apart.
+    cached = usage.cache_read_tokens if isinstance(model, OpenAIChatModel | GoogleModel) else 0
     amount = price.cost(
         max(0, usage.input_tokens - cached), usage.cache_read_tokens, usage.cache_write_tokens, usage.output_tokens
     )
