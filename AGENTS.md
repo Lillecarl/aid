@@ -269,6 +269,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `permission_timeout` bounds the route (`_worker_bound`). The supervisor answers only routed requests
   (`person_only`). Stored `supervisor_permissions` (gone): the spec's before-validator maps listed `ask` tools to
   `ask_supervisor`, and the daemon writes each spec file back as the model reads it.
+  A routed request `aid.readonly` calls a plain read (and offering `allow_once`) gets the single holder `rules`:
+  the plugin allows it at once, no model asked (`PermissionDecision.by` plugin `supervision`).
   Rulings (`rulings.py`, `plugin_dir/rulings.db`): every routed request (`rulings`: session, turn, seq, mode, input,
   remove's `plan`, end, allowed, decided_by, said) and its holders (`ruling_steps`: forwarded with note, silent,
   decided, gone); a failed write is logged, never fatal. `query` (`aid.sql.ask`): one read-only statement over

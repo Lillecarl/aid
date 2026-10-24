@@ -643,6 +643,28 @@ async def test_a_forwarded_request_comes_back_to_the_supervisor(daemon: Paths, t
     ]
 
 
+async def test_rules_allow_a_plain_read_before_anyone_is_asked(daemon: Paths, tmp_path: Path) -> None:
+    spec = py_spec(tmp_path, "agents:coder", PermissionMode.ASK).model_copy(
+        update={"supervisor": "boss", "tool_permissions": {"shell": PermissionMode.SUPERVISOR}}
+    )
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:supervisor_answerer"))
+            coder = await client.create("coder", spec)
+            await coder.run(plan(("shell", {"command": "ls -la | head -5"})))
+            coder_items = [e.item for e in (await coder.history(limit=1000)).entries]
+            ruling = await settled_ruling(client)
+            steps = await rulings(client, "SELECT step, holder, outcome FROM ruling_steps")
+            firings = await supervised_firings(boss, "coder", 1)
+            await output_after(boss, firings[0].seq)
+            boss_items = [e.item for e in (await boss.history(limit=1000)).entries]
+    [decision] = [item for item in coder_items if isinstance(item, PermissionDecision)]
+    assert (decision.by, decision.plugin, decision.option_id) == (PermissionDecider.PLUGIN, "supervision", "yes")
+    assert ruling.rows == [["supervisor", "decided", True, "plugin", "supervision", "yes"]]
+    assert steps.rows == [[0, "rules", "decided"]]
+    assert permission_wakes(boss_items) == []
+
+
 async def test_ask_supervisor_hands_back_to_the_person_once(daemon: Paths, tmp_path: Path) -> None:
     """ask_supervisor: the person is silent, the supervisor forwards back, and nothing moves the request again."""
     with anyio.fail_after(TIMEOUT):

@@ -50,6 +50,7 @@ from aid.protocol import (
     TurnError,
     clip,
 )
+from aid.readonly import reads
 from aid.removals import PLANS_FILE
 from aid.spec import AcpSpec, AgentSpecAdapter, ClaudeSdkSpec, NativeSpec, PermissionMode
 from aid.sql import ask
@@ -103,6 +104,9 @@ ROUTES: Final[dict[PermissionMode, tuple[str, ...]]] = {
 }
 """Who holds a request at each step. Each holder but the last hands it on when it forwards or stays silent; the
 last decides, and nothing moves the request further."""
+RULES: Final = "rules"
+"""The holder of a request `aid.readonly` calls a plain read: answered at once, no model asked."""
+ALLOW_ONCE: Final = "allow_once"
 SUPERVISOR_WINDOW: Final = 120.0
 """Seconds the supervisor holds a request it may forward before a person gets it: one review turn."""
 
@@ -426,6 +430,8 @@ class Supervision(aid.Plugin):
         holders = ROUTES.get(mode) if mode is not None else None
         if self._tg is None or (supervisor := spec.supervisor) is None or mode is None or holders is None:
             return
+        if reads(request.tool_name, request.input) and any(o.kind == ALLOW_ONCE for o in request.options):
+            holders = (RULES,)
         await self._settle(watched, request.request_id)
         bound = self._worker_bound(spec, request)
         route = Route(request, holders, None if bound is None else time.monotonic() + bound)
@@ -441,6 +447,9 @@ class Supervision(aid.Plugin):
         """Give the request to its current holder, and arm the handover to the next one unless this is the last."""
         spec, request = watched.spec, route.request
         await self._record(lambda r: r.entered(request.request_id, route.step, route.holder))
+        if route.holder == RULES:
+            await self._allow_read(watched, request)
+            return
         if route.holder == SUPERVISOR:
             await self._tell(watched, permission_review_text(watched.name, request, final=route.final, note=note))
             wait = SUPERVISOR_WINDOW
@@ -461,6 +470,16 @@ class Supervision(aid.Plugin):
             return
         route.timer = anyio.CancelScope()
         self._tg.start_soon(self._hand_on_after, watched, route, wait, route.timer)
+
+    async def _allow_read(self, watched: Watched, request: PermissionRequest) -> None:
+        """Allow a plain read once, as this plugin. A request gone meanwhile was answered by someone else."""
+        option = next(o.option_id for o in request.options if o.kind == ALLOW_ONCE)
+        try:
+            await self.client.call(
+                AnswerPermission(session=watched.name, request_id=request.request_id, option_id=option)
+            )
+        except AidError as error:
+            log.info("read_answer_failed", session=watched.name, request=request.request_id, error=error.message)
 
     async def _hand_on_after(self, watched: Watched, route: Route, wait: float, timer: anyio.CancelScope) -> None:
         """The holder stayed silent: the next one gets the request. A decision or a forward cancels the timer."""
