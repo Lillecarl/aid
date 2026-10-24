@@ -12,13 +12,24 @@
   let busy = $state(false);
   let checked = $state(new Set<string>());
 
-  onMount(() =>
-    api.followStatus(
-      name,
-      (data) => (status = data),
-      (text) => (problem = text),
-    ),
-  );
+  let others: string[] = $state([]);
+
+  onMount(() => {
+    const stops = [
+      api.followStatus(
+        name,
+        (data) => (status = data),
+        (text) => (problem = text),
+      ),
+      api.followSessions(
+        (list) => (others = list.map((s) => s.name).filter((n) => n !== name)),
+        (text) => (problem = text),
+      ),
+    ];
+    return () => stops.forEach((stop) => stop());
+  });
+
+  const setSupervisor = (supervisor: string) => change(() => api.setSupervisor(name, supervisor || null));
 
   const groups = $derived.by(() => {
     const byGroup = new Map<string, ToolMode[]>();
@@ -111,6 +122,19 @@
       </label>
     </div>
   {/if}
+  <label class="supervisor">
+    Supervisor
+    <select
+      value={status.supervisor ?? ""}
+      disabled={busy}
+      data-testid="supervisor"
+      onchange={(e) => setSupervisor(e.currentTarget.value)}
+    >
+      <option value="">none</option>
+      {#each others as other (other)}<option value={other}>{other}</option>{/each}
+    </select>
+    <span class="muted">reviews each turn end, and answers tools in supervisor and ask_supervisor mode</span>
+  </label>
   {#if status.kind === "native"}
     <fieldset data-testid="sandbox">
       <legend>
@@ -243,6 +267,12 @@
   }
   .mode.default {
     opacity: 0.7;
+  }
+  .supervisor {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0.5rem;
   }
   .muted {
     color: var(--muted);

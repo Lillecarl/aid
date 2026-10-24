@@ -69,6 +69,7 @@ from aid.protocol import (
     SessionSummary,
     SetPermissions,
     SetSandbox,
+    SetSupervisor,
     StartSession,
     StopSession,
     TextDelta,
@@ -570,6 +571,10 @@ class Session:
         """Change a native session's sandbox (`SetSandbox`); None turns it off. A running worker restarts under
         it, when its turn ends if one runs."""
         await self._client.call(SetSandbox(session=self.name, sandbox=sandbox))
+
+    async def set_supervisor(self, supervisor: str | None) -> None:
+        """Change the session supervising this one (`SetSupervisor`); None ends supervision."""
+        await self._client.call(SetSupervisor(session=self.name, supervisor=supervisor))
 
     async def change_directory(self, cwd: str) -> str:
         """Move the session to `cwd` (`ChangeDirectory`), relative to its current one; returns the absolute path."""

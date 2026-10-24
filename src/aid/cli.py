@@ -307,7 +307,10 @@ def _parser() -> argparse.ArgumentParser:
     permissions = sub.add_parser("permissions", help="list a native session's tools and modes, or set them")
     permissions.add_argument("name")
     permissions.add_argument(
-        "set", nargs="*", metavar="TOOL=MODE", help="allow, ask or deny; empty returns a tool to its default"
+        "set",
+        nargs="*",
+        metavar="TOOL=MODE",
+        help=f"{', '.join(PermissionMode)}; empty returns a tool to its default",
     )
     permissions.add_argument(
         "--default", choices=list(PermissionMode), help="the mode of tools that ask for themselves"
@@ -318,6 +321,10 @@ def _parser() -> argparse.ArgumentParser:
     box.add_argument("--off", action="store_true", help="run the tools unconfined")
     box.add_argument("--no-network", action="store_true", help="cut the sandbox off the network")
     box.add_argument("--writable", action="append", default=[], metavar="PATH", help="absolute; repeatable")
+
+    supervise = sub.add_parser("supervise", help="set or end the session supervising another")
+    supervise.add_argument("name")
+    supervise.add_argument("supervisor", nargs="?", help="the supervising session; omitted ends supervision")
 
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
@@ -622,6 +629,8 @@ async def _client_command(args: argparse.Namespace) -> None:
             case "sandbox":
                 chosen = None if args.off else Sandbox(network=not args.no_network, writable=args.writable)
                 await client.session(args.name).set_sandbox(chosen)
+            case "supervise":
+                await client.session(args.name).set_supervisor(args.supervisor)
             case "stop":
                 await client.session(args.name).stop()
             case "delete":

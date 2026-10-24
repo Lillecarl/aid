@@ -119,6 +119,7 @@ export type PageRequest =
   | AnswerPermission
   | SetPermissions
   | SetSandbox
+  | SetSupervisor
   | StartSession
   | StopSession
   | DeleteSession
@@ -814,7 +815,7 @@ export interface Started {
  */
 export interface Lifecycle {
   detail: string | null;
-  event: "compacted" | "cleared" | "ended" | "moved" | "sandboxed";
+  event: "compacted" | "cleared" | "ended" | "moved" | "sandboxed" | "supervised";
   summary: string | null;
   type: "lifecycle";
 }
@@ -972,6 +973,20 @@ export interface SetSandbox {
   session: string;
 }
 /**
+ * Change the session that supervises this one (`spec.supervisor`; None ends supervision): saved in its spec,
+ * under the link's rules at creation (the supervisor exists, is not this session, closes no cycle). The worker
+ * keeps running: the supervision plugin picks the change up from the session list.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "SetSupervisor".
+ */
+export interface SetSupervisor {
+  id?: string;
+  op: "supervisor";
+  session: string;
+  supervisor: string | null;
+}
+/**
  * Start a stopped session's worker without a turn; for interactive Claude, its pane. A running one is left be.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -1026,6 +1041,7 @@ export interface SessionInfo {
   parent: string | null;
   permissions: number;
   running: boolean;
+  supervisor: string | null;
   working: boolean;
 }
 /**
@@ -1057,6 +1073,7 @@ export interface SessionStatus {
   running: boolean;
   runs: string;
   sandbox: Sandbox | null;
+  supervisor: string | null;
   tools: ToolMode[];
   working: boolean;
 }

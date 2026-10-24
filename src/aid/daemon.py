@@ -83,6 +83,7 @@ from aid.protocol import (
     SetAttention,
     SetPermissions,
     SetSandbox,
+    SetSupervisor,
     Started,
     StartFailed,
     StartSession,
@@ -225,6 +226,7 @@ class _Session:
             working=self.working or self.turn is not None,
             attention=self.attention,
             parent=self.spec.parent,
+            supervisor=self.spec.supervisor,
         )
 
     @property
@@ -299,14 +301,15 @@ class _Session:
             working=self.working or self.turn is not None,
             attention=self.attention,
             parent=self.spec.parent,
+            supervisor=self.spec.supervisor,
             directory_request=self.directory_request,
             cost={**self.cost, **self.latest},
         )
 
 
 def supervision_cycle(links: dict[str, str | None], name: str, supervisor: str) -> bool:
-    """Whether pointing `name` at `supervisor` closes a cycle through the existing links. Sessions are
-    created oldest-first, so a cycle is unformable through the API; this guards restored specs."""
+    """Whether pointing `name` at `supervisor` closes a cycle through the existing links: a later
+    `SetSupervisor` could close one, and so could restored specs."""
     seen = {name}
     current: str | None = supervisor
     while current is not None and current not in seen:
@@ -826,6 +829,9 @@ class Daemon:
             case SetSandbox():
                 await self._set_sandbox(self._session(request.session), request.sandbox)
                 return Done(id=request.id)
+            case SetSupervisor():
+                await self._set_supervisor(self._session(request.session), request.supervisor)
+                return Done(id=request.id)
             case RequestDirectory():
                 session = self._session(request.session)
                 cwd = await self._directory(session, request.cwd)
@@ -1225,6 +1231,16 @@ class Daemon:
         if session.running:
             session.restart_pending = True
             await self._settle_restart(session)
+
+    async def _set_supervisor(self, session: _Session, supervisor: str | None) -> None:
+        async with session.spec_lock:
+            spec = session.spec.model_copy(update={"supervisor": supervisor})
+            self._check_supervisor(session.name, spec)
+            await (anyio.Path(self._paths.session_dir(session.name)) / SPEC_FILE).write_bytes(
+                AgentSpecAdapter.dump_json(spec)
+            )
+            session.spec = spec
+        await session.history.append(Lifecycle(event="supervised", detail=supervisor or "off"), uuid.uuid4().hex)
 
     async def _settle_restart(self, session: _Session) -> None:
         """Restart a worker whose spec changed under it, once no turn runs; then deliver what waits."""

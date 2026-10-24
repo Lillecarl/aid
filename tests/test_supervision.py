@@ -20,6 +20,7 @@ from aid.protocol import (
     GoalState,
     HistoryEntry,
     HistoryPage,
+    Lifecycle,
     MessageEntry,
     Output,
     PermissionChoice,
@@ -342,6 +343,44 @@ async def test_supervisor_link_validation(daemon: Paths, tmp_path: Path) -> None
                 await client.create("b", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "b"}))
             await client.create("boss", py_spec(tmp_path, "agents:echo"))
             await client.create("coder", py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": "boss"}))
+
+
+async def test_a_supervisor_set_later_holds_to_the_links_rules(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            boss = await client.create("boss", py_spec(tmp_path, "agents:echo"))
+            coder = await client.create("coder", py_spec(tmp_path, "agents:echo"))
+            with pytest.raises(aid.AidError, match="unknown_supervisor"):
+                await coder.set_supervisor("nobody")
+            with pytest.raises(aid.AidError, match="self_supervised"):
+                await coder.set_supervisor("coder")
+            await coder.set_supervisor("boss")
+            with pytest.raises(aid.AidError, match="cycle"):
+                await boss.set_supervisor("coder")
+            listed = {info.name: info.supervisor for info in await client.sessions()}
+            supervised = (await coder.status()).supervisor
+            await coder.set_supervisor(None)
+            ended = (await coder.status()).supervisor
+            events = [e.item for e in (await coder.history()).entries if isinstance(e.item, Lifecycle)]
+    assert listed == {"boss": None, "coder": "boss"}
+    assert (supervised, ended) == ("boss", None)
+    assert [(e.event, e.detail) for e in events] == [("supervised", "boss"), ("supervised", "off")]
+
+
+async def test_a_supervisor_set_later_answers_requests(daemon: Paths, tmp_path: Path) -> None:
+    """The plugin follows a session that gains a supervisor while it runs, from that moment on."""
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            await client.create("boss", py_spec(tmp_path, "agents:supervisor_answerer"))
+            spec = asking_spec(tmp_path, PermissionMode.SUPERVISOR, timeout=60, absent=60)
+            asker = await client.create("coder", spec.model_copy(update={"supervisor": None}))
+            await asker.start()
+            await asker.set_supervisor("boss")
+            with anyio.fail_after(20):
+                result = await asker.run(
+                    plan(("ask_user", {"question": "Which database?", "options": ["postgres", "sqlite"]}))
+                )
+    assert 'The supervisor picked "postgres".' in str(result.output)
 
 
 async def test_supervision_ops_refuse_strangers(daemon: Paths, tmp_path: Path) -> None:

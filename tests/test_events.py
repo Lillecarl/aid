@@ -94,6 +94,7 @@ async def test_the_daemon_publishes_changes(daemon: Paths, tmp_path: Path) -> No
             "working": False,
             "attention": None,
             "parent": None,
+            "supervisor": None,
         }
     ]
     assert idle["name"] == "echo"

@@ -164,18 +164,26 @@ class Supervision(aid.Plugin):
     async def run(self, client: aid.Client) -> None:
         self._client = client
         self._started = time.time()
-        followers: dict[str, anyio.CancelScope] = {}
+        followers: dict[str, tuple[anyio.CancelScope, str | None]] = {}
         async with anyio.create_task_group() as tg:
             self._tg = tg
             async for infos in client.follow_sessions():
-                names = {info.name for info in infos}
-                for gone in followers.keys() - names:
-                    followers.pop(gone).cancel()
+                supervisors = {info.name: info.supervisor for info in infos}
+                for gone in followers.keys() - supervisors.keys():
+                    followers.pop(gone)[0].cancel()
                     self._forget(gone)
                     (self._goals_dir / f"{gone}.json").unlink(missing_ok=True)
-                for name in names - followers.keys():
-                    followers[name] = scope = anyio.CancelScope()
-                    tg.start_soon(self._follow, name, scope)
+                for name, supervisor in supervisors.items():
+                    since: int | None = None
+                    if (held := followers.get(name)) is not None:
+                        if held[1] == supervisor:
+                            continue
+                        # A supervisor set or changed later (`SetSupervisor`): from now, never what was told.
+                        held[0].cancel()
+                        self._forget(name)
+                        since = await self._latest(name)
+                    followers[name] = (scope := anyio.CancelScope(), supervisor)
+                    tg.start_soon(self._follow, name, scope, since)
 
     def _forget(self, name: str) -> None:
         if (watched := self._watched.pop(name, None)) is not None:
@@ -201,18 +209,27 @@ class Supervision(aid.Plugin):
             watched = self._watched.setdefault(name, Watched(name, spec))
         return watched
 
-    async def _follow(self, name: str, scope: anyio.CancelScope) -> None:
+    async def _follow(self, name: str, scope: anyio.CancelScope, since: int | None) -> None:
+        """Follow a supervised session's history after `since`; None: after what whoever ran before told."""
         with scope:
             try:
                 watched = await self._watch(name)
                 if watched.spec.supervisor is None:
                     return
                 session = self.client.session(name)
-                async for entry in session.follow_history(await self._told(name)):
+                async for entry in session.follow_history(await self._told(name) if since is None else since):
                     await self._observe(watched, entry)
             except AidError as error:
                 # The session went between its listing and here: the next list drops it.
                 log.info("supervision_follow_ended", session=name, error=error.message)
+
+    async def _latest(self, name: str) -> int:
+        """The session's newest entry, -1 for none or a session gone meanwhile."""
+        try:
+            page = await self.client.session(name).history(limit=1)
+        except AidError:
+            return -1
+        return page.entries[-1].seq if page.entries else -1
 
     async def _told(self, name: str) -> int:
         """The last entry recorded before this plugin started: whoever ran then told the supervisor about it."""

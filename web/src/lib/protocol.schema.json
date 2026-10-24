@@ -1335,7 +1335,8 @@
             "cleared",
             "ended",
             "moved",
-            "sandboxed"
+            "sandboxed",
+            "supervised"
           ],
           "type": "string"
         },
@@ -2080,7 +2081,8 @@
           "start": "#/$defs/StartSession",
           "status": "#/$defs/GetStatus",
           "stop": "#/$defs/StopSession",
-          "summary": "#/$defs/GetSummary"
+          "summary": "#/$defs/GetSummary",
+          "supervisor": "#/$defs/SetSupervisor"
         },
         "propertyName": "op"
       },
@@ -2126,6 +2128,9 @@
         },
         {
           "$ref": "#/$defs/SetSandbox"
+        },
+        {
+          "$ref": "#/$defs/SetSupervisor"
         },
         {
           "$ref": "#/$defs/StartSession"
@@ -2752,6 +2757,17 @@
         "running": {
           "type": "boolean"
         },
+        "supervisor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "working": {
           "default": false,
           "type": "boolean"
@@ -2764,7 +2780,8 @@
         "permissions",
         "working",
         "attention",
-        "parent"
+        "parent",
+        "supervisor"
       ],
       "title": "SessionInfo",
       "type": "object"
@@ -2913,6 +2930,17 @@
           ],
           "default": null
         },
+        "supervisor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "tools": {
           "items": {
             "$ref": "#/$defs/ToolMode"
@@ -2945,6 +2973,7 @@
         "working",
         "attention",
         "parent",
+        "supervisor",
         "directory_request",
         "cost"
       ],
@@ -3108,6 +3137,40 @@
         "sandbox"
       ],
       "title": "SetSandbox",
+      "type": "object"
+    },
+    "SetSupervisor": {
+      "additionalProperties": false,
+      "description": "Change the session that supervises this one (`spec.supervisor`; None ends supervision): saved in its spec,\nunder the link's rules at creation (the supervisor exists, is not this session, closes no cycle). The worker\nkeeps running: the supervision plugin picks the change up from the session list.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "supervisor",
+          "default": "supervisor",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "supervisor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "op",
+        "session",
+        "supervisor"
+      ],
+      "title": "SetSupervisor",
       "type": "object"
     },
     "StartSession": {

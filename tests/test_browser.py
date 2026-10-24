@@ -369,6 +369,25 @@ async def test_permissions_tab_sets_checked_tools(page: Page, session_daemon: Pa
     assert modes["read"] == (PermissionMode.ALLOW, False)
 
 
+async def test_permissions_tab_sets_the_supervisor(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    await seed_session(session_daemon, tmp_path, "boss", "agents:echo")
+    await seed_session(session_daemon, tmp_path, "worker", "agents:echo")
+    await open_session(page, "worker")
+    await page.get_by_role("tab", name="Permissions").click()
+    picker = page.get_by_test_id("supervisor")
+    await picker.locator("option[value=boss]").wait_for(state="attached", timeout=TIMEOUT * 1000)
+    await picker.select_option("boss")
+    async with aid.connect(session_daemon) as client:
+        with anyio.fail_after(TIMEOUT):
+            while (await client.session("worker").status()).supervisor is None:  # noqa: ASYNC110 -- the page saves it
+                await anyio.sleep(0.05)
+    await picker.select_option("")
+    async with aid.connect(session_daemon) as client:
+        with anyio.fail_after(TIMEOUT):
+            while (await client.session("worker").status()).supervisor is not None:  # noqa: ASYNC110 -- the same
+                await anyio.sleep(0.05)
+
+
 @needs_bwrap
 async def test_permissions_tab_turns_the_sandbox_on(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     await seed_session(session_daemon, tmp_path, "boxed", "agents:coder", PermissionMode.ASK)

@@ -107,6 +107,16 @@ class SetSandbox(_Request):
     sandbox: Sandbox | None
 
 
+class SetSupervisor(_Request):
+    """Change the session that supervises this one (`spec.supervisor`; None ends supervision): saved in its spec,
+    under the link's rules at creation (the supervisor exists, is not this session, closes no cycle). The worker
+    keeps running: the supervision plugin picks the change up from the session list."""
+
+    op: Literal["supervisor"] = "supervisor"
+    session: str
+    supervisor: str | None
+
+
 class RequestDirectory(_Request):
     """An agent asks to move its own session (`ChangeDirectory`). A person answers with `AnswerDirectory`, under
     every permission mode; an approved move waits for the running turn to end. A newer request replaces one still
@@ -432,6 +442,7 @@ type Request = Annotated[
     | DeleteSession
     | ChangeDirectory
     | SetSandbox
+    | SetSupervisor
     | RequestDirectory
     | AnswerDirectory
     | ListAgents
@@ -829,10 +840,11 @@ class Lifecycle(_Message):
     its sandbox."""
 
     type: Literal["lifecycle"] = "lifecycle"
-    event: Literal["compacted", "cleared", "ended", "moved", "sandboxed"]
+    event: Literal["compacted", "cleared", "ended", "moved", "sandboxed", "supervised"]
     detail: str | None = None
     """Why: `manual` or `auto` for a compaction; Claude's exit reason for an end; the new working directory for a
-    move (`ChangeDirectory`); the new sandbox, or `off`, for `SetSandbox`."""
+    move (`ChangeDirectory`); the new sandbox, or `off`, for `SetSandbox`; the new supervisor, or `off`, for
+    `SetSupervisor`."""
     summary: str | None = None
     """A compaction's summary: what the agent keeps of the conversation before it."""
 
@@ -942,6 +954,8 @@ class SessionInfo(_Message):
     """What the agent asks a person to look at, in its own words."""
     parent: str | None = None
     """The spec's `parent`: the session this one works for."""
+    supervisor: str | None = None
+    """The spec's `supervisor`: the session watching this one."""
 
 
 class SessionTool(_Message):
@@ -1006,6 +1020,8 @@ class SessionStatus(_Message):
     """What the agent asks a person to look at, in its own words."""
     parent: str | None = None
     """The spec's `parent`: the session this one works for."""
+    supervisor: str | None = None
+    """The spec's `supervisor`: the session watching this one, and answering its supervisor-mode requests."""
     directory_request: DirectoryRequest | None = None
     """The agent's request to move (`RequestDirectory`), waiting for a person, or approved and waiting for the
     turn to end."""

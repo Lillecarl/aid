@@ -363,6 +363,11 @@ export async function setSandbox(name: string, sandbox: Sandbox | null): Promise
   await call({ op: "sandbox", session: name, sandbox });
 }
 
+/** Change the session supervising this one; null ends supervision. */
+export async function setSupervisor(name: string, supervisor: string | null): Promise<void> {
+  await call({ op: "supervisor", session: name, supervisor });
+}
+
 /** Summarize the session's history into a digest, outside a turn; resolve with the digest. */
 export const compact = async (name: string, instructions?: string): Promise<string> =>
   (await call({
