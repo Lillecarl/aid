@@ -141,12 +141,14 @@ QUIET_NOTIFICATIONS: Final = frozenset({"idle_prompt", "permission_prompt"})
 _PROMPT_LINE = re.compile(r"^❯(\s|$)", re.MULTILINE)
 _TRUST_DIALOG = "trust this folder"
 _CHANNELS_DIALOG = "Loading development channels"
+_API_KEY_DIALOG = "Detected a custom API key"
 
 
 class Screen(Enum):
     STARTING = "starting"
     TRUST = "trust"
     CHANNELS = "channels"
+    API_KEY = "api_key"
     READY = "ready"
 
 
@@ -155,6 +157,8 @@ def classify(capture: str) -> Screen:
         return Screen.TRUST
     if _CHANNELS_DIALOG in capture:
         return Screen.CHANNELS
+    if _API_KEY_DIALOG in capture:
+        return Screen.API_KEY
     if _PROMPT_LINE.search(capture):
         return Screen.READY
     return Screen.STARTING
@@ -631,6 +635,12 @@ async def _wait_ready(pane: Pane, trust: bool) -> None:
             if screen is Screen.CHANNELS:
                 # Its first option, and the default, is "I am using this for local development".
                 await anyio.to_thread.run_sync(pane.send_key, "Enter")
+            if screen is Screen.API_KEY:
+                # Which account pays is the person's choice, not aid's.
+                raise RuntimeError(
+                    "Claude Code asks whether to use ANTHROPIC_API_KEY from its environment; answer it once in "
+                    "Claude Code, or set the session's env to leave the key out"
+                )
             await anyio.sleep(POLL)
 
 

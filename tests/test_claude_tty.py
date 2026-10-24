@@ -72,6 +72,11 @@ TIMEOUT = 30
             "  Channels: server:aid\n\n  ❯ 1. I am using this for local development\n    2. Exit\n",
             Screen.CHANNELS,
         ),
+        (
+            "  Detected a custom API key in your environment\n  ANTHROPIC_API_KEY: sk-ant-...\n"
+            "  Do you want to use this API key?\n    Yes\n  ❯ No (recommended)\n",
+            Screen.API_KEY,
+        ),
         ("loading ❯ not at the start\n", Screen.STARTING),
     ],
 )
