@@ -25,6 +25,7 @@ from aid.protocol import (
     Started,
     TextDelta,
     ToolMode,
+    TurnError,
     Usage,
     decode_reply,
     encode,
@@ -39,6 +40,7 @@ if TYPE_CHECKING:
 
     from aid.launcher import ForkserverLauncher
     from aid.paths import Paths
+    from aid.protocol import HistoryItem
 
 pytestmark = pytest.mark.anyio
 
@@ -382,6 +384,36 @@ async def test_compact_refuses_a_running_turn(daemon: Paths, tmp_path: Path) -> 
                         await client.session("slow").compact()
                     await session.cancel()
     assert events[-1] == Output(output=None, stop_reason="cancelled")
+
+
+async def settled(session: aid.Session) -> list[HistoryItem]:
+    """The history once the session is idle with an answer last."""
+    while True:
+        items = [entry.item for entry in (await session.history(limit=100)).entries]
+        if isinstance(items[-1], Output) and not (await session.status()).busy:
+            return items
+        await anyio.sleep(0.05)
+
+
+async def test_a_message_during_compaction_waits_for_its_end(daemon: Paths, tmp_path: Path) -> None:
+    gate = tmp_path / "gate"
+    spec = py_spec(tmp_path, "agents:slow_summarizer").model_copy(update={"env": {"AID_COMPACT_GATE": str(gate)}})
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client, anyio.create_task_group() as tg:
+            session = await client.create("s", spec)
+            await session.run("first")
+            await session.run("second")
+            tg.start_soon(session.compact)
+            while not gate.with_suffix(".started").exists():  # noqa: ASYNC110 -- a file the worker drops
+                await anyio.sleep(0.05)
+            await client.send_message("s", "a request to answer", sender="peer")
+            gate.touch()
+            items = await settled(session)
+            assert not [item for item in items if isinstance(item, TurnError)]
+            compacted = next(
+                i for i, item in enumerate(items) if isinstance(item, Lifecycle) and item.event == "compacted"
+            )
+            assert any(isinstance(item, Output) for item in items[compacted:])
 
 
 async def test_native_history_survives_daemon_restart(

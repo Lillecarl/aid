@@ -137,6 +137,18 @@ async def _summarize_stream(messages: list[ModelMessage], info: AgentInfo) -> As
 summarizer = Agent(FunctionModel(_summarize, stream_function=_summarize_stream))
 
 
+async def _summarize_at_gate(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+    """A compaction that marks its start, then waits for the test's gate file, so a test can act while it runs."""
+    gate = anyio.Path(os.environ["AID_COMPACT_GATE"])
+    await gate.with_suffix(".started").touch()
+    while not await gate.exists():  # noqa: ASYNC110 -- the gate is a file the test drops; no event crosses the worker boundary
+        await anyio.sleep(0.05)
+    return _summarize(messages, info)
+
+
+slow_summarizer = Agent(FunctionModel(_summarize_at_gate, stream_function=_summarize_stream))
+
+
 async def _think(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaThinkingCalls]:
     """A thinker for the visibility tests: a thought, then the test's gate file, then the rest."""
     yield {0: DeltaThinkingPart(content="hmm, ")}

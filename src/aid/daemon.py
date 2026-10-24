@@ -777,8 +777,17 @@ class Daemon:
                 if session.turn is not None:
                     raise AidError("busy", f"{session.name!r} is in a turn")
                 await self._ensure_running(session)
+                # The compaction holds the session as a turn does: a message arriving meanwhile waits for its
+                # end, where the worker would refuse a wake turn as busy and the message would be lost.
+                session.turn = request.id
                 self._routes[request.id] = _Route(client, session.name)
-                await self._send_worker(session, request)
+                try:
+                    await self._send_worker(session, request)
+                except BaseException:
+                    self._routes.pop(request.id, None)
+                    session.turn = None
+                    raise
+                await self._publish_turn(session.name, request.id, "started", "compact")
                 return None
             case Hook():
                 session = self._session(request.session)
