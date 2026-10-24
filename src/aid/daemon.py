@@ -85,6 +85,7 @@ from aid.protocol import (
     decode_reply,
     decode_request,
     encode,
+    request_id,
     to_json,
 )
 from aid.spec import (
@@ -512,7 +513,7 @@ class Daemon:
             try:
                 request = decode_request(frames[1])
             except ValidationError as error:
-                await client.send(encode(Failure(id="", code="invalid_request", message=str(error))))
+                await client.send(encode(Failure(id=request_id(frames[1]), code="invalid_request", message=str(error))))
                 continue
             self._tg.start_soon(self._handle, client, request)
 
@@ -601,7 +602,8 @@ class Daemon:
             try:
                 request = decode_request(frames[1].bytes)
             except ValidationError as error:
-                await client.send(encode(Failure(id="", code="invalid_request", message=str(error))))
+                failure = Failure(id=request_id(frames[1].bytes), code="invalid_request", message=str(error))
+                await client.send(encode(failure))
                 continue
             spec = self._keys.plugins.get(name)
             if spec is None or not spec.allows(request.op):
@@ -1177,7 +1179,8 @@ class Daemon:
                 try:
                     request = decode_request(payload)
                 except ValidationError:
-                    await client.send(encode(Failure(id="", code="invalid_request", message="invalid agent request")))
+                    failure = Failure(id=request_id(payload), code="invalid_request", message="invalid agent request")
+                    await client.send(encode(failure))
                     continue
                 if self._tg is None:
                     raise RuntimeError("daemon is not serving")

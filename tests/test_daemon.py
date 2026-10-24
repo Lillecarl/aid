@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import anyio
@@ -262,6 +263,26 @@ async def test_a_request_of_several_frames_is_refused(daemon: Paths) -> None:
         ctx.term()
     assert isinstance(refused, Failure)
     assert refused.code == "invalid_request"
+
+
+async def test_an_undecodable_request_fails_its_own_call(daemon: Paths, tmp_path: Path) -> None:
+    """A field this daemon does not know (a newer client's) fails the call that sent it, under its id: a Failure
+    under no id never reaches the waiting call, which then hangs."""
+    spec = json.loads(py_spec(tmp_path, "agents:echo").model_dump_json()) | {"from_a_newer_client": True}
+    request = {"op": "create", "id": "newer-1", "name": "s", "spec": spec}
+    ctx = zmq.asyncio.Context()
+    sock = ctx.socket(zmq.DEALER)
+    sock.connect(daemon.control)
+    try:
+        with anyio.fail_after(TIMEOUT):
+            await sock.send(json.dumps(request).encode())
+            refused = decode_reply(await sock.recv())
+    finally:
+        sock.close(linger=0)
+        ctx.term()
+    assert isinstance(refused, Failure)
+    assert (refused.id, refused.code) == ("newer-1", "invalid_request")
+    assert "from_a_newer_client" in refused.message
 
 
 async def test_a_request_id_in_flight_is_refused(daemon: Paths, tmp_path: Path) -> None:
