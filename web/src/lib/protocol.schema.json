@@ -155,6 +155,12 @@
           },
           "type": "array"
         },
+        "model_providers": {
+          "items": {
+            "$ref": "#/$defs/ProviderInfo"
+          },
+          "type": "array"
+        },
         "plugins": {
           "items": {
             "$ref": "#/$defs/PluginInfo"
@@ -184,6 +190,7 @@
         "agents",
         "tools",
         "providers",
+        "model_providers",
         "plugins",
         "problems"
       ],

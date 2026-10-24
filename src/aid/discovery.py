@@ -15,7 +15,8 @@ cycle drops the plugin and everything that needs it, and the rest come back in d
 an `__init__.py` or a `plugin.toml` to count.
 
 `discover` imports the resolved packages and sorts what each defines by the interfaces it implements:
-`aid.AgentDefinition` (agents), `aid.InstructionsProvider` (session instructions), `@aid.mcptool` (tools) and
+`aid.AgentDefinition` (agents), `aid.InstructionsProvider` (session instructions), `aid.ModelProvider` (who serves a
+`provider/model` prefix), `@aid.mcptool` (tools) and
 `aid.Plugin` (a daemon task, at most one per plugin, registered under the plugin's name). Importing runs the
 plugins' code: call it in a process that may run user code, never the daemon, which imports only plugins with a
 task, and their requirements, after a subprocess (`python -m aid.catalog`) names them.
@@ -39,7 +40,7 @@ from typing import TYPE_CHECKING, Any, Final
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aid import builtin_tools
-from aid.agents import AgentDefinition, InstructionsProvider
+from aid.agents import AgentDefinition, InstructionsProvider, ModelProvider
 from aid.plugins import Plugin
 from aid.tools import McpTool, tool_of
 
@@ -221,6 +222,8 @@ class Catalog:
     """Plugins that loaded, by name, in dependency order."""
     agents: dict[str, type[AgentDefinition]] = field(default_factory=dict[str, "type[AgentDefinition]"])
     providers: dict[str, type[InstructionsProvider]] = field(default_factory=dict[str, "type[InstructionsProvider]"])
+    model_providers: dict[str, type[ModelProvider]] = field(default_factory=dict[str, "type[ModelProvider]"])
+    """By the prefix each serves (`aid.providers`)."""
     tools: dict[str, McpTool] = field(default_factory=dict[str, McpTool])
     plugins: dict[str, type[Plugin]] = field(default_factory=dict[str, "type[Plugin]"])
     """Daemon tasks, by plugin name."""
@@ -244,6 +247,10 @@ class Catalog:
             "providers": [
                 {"name": name, "description": cls.description(), "module": cls.__module__}
                 for name, cls in sorted(self.providers.items())
+            ],
+            "model_providers": [
+                {"name": name, "description": cls.description(), "module": cls.__module__}
+                for name, cls in sorted(self.model_providers.items())
             ],
             "tools": [
                 {"name": name, "description": tool.summary(), "module": tool.fn.__module__}
@@ -300,6 +307,12 @@ def _collect(catalog: Catalog, root: PluginRoot, module: ModuleType) -> None:
                 catalog.problems.append(f"provider {name}: {obj.__module__} loses to {other.__module__}")
             else:
                 catalog.providers[name] = obj
+        elif issubclass(obj, ModelProvider):
+            name = obj.provider_name()
+            if (other := catalog.model_providers.get(name)) is not None and other is not obj:
+                catalog.problems.append(f"model provider {name}: {obj.__module__} loses to {other.__module__}")
+            else:
+                catalog.model_providers[name] = obj
     if len(tasks) > 1:
         names = ", ".join(sorted(cls.__qualname__ for cls in tasks))
         catalog.problems.append(f"plugin {root.name}: defines more than one aid.Plugin ({names})")

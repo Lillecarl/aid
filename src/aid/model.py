@@ -82,6 +82,12 @@ class Model(Protocol):
     async def request(self, messages: list[ModelMessage], info: ModelInfo) -> ModelResponse: ...
 
 
+class Transport(Model, Protocol):
+    """A model aid built from a name: it owns its clients, and whoever resolved it closes them."""
+
+    async def aclose(self) -> None: ...
+
+
 def wire_messages(messages: Sequence[ModelMessage]) -> list[dict[str, Any]]:
     """Stored parts as Chat Completions messages, keeping tool identities and reasoning text."""
     result: list[dict[str, Any]] = []

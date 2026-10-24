@@ -9,6 +9,7 @@ from aid.agents import AgentDefinition as AgentDefinition
 from aid.agents import Instruction as Instruction
 from aid.agents import InstructionsContext as InstructionsContext
 from aid.agents import InstructionsProvider as InstructionsProvider
+from aid.agents import ModelProvider as ModelProvider
 from aid.client import Client as Client
 from aid.client import RunResult as RunResult
 from aid.client import Session as Session

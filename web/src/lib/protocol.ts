@@ -218,6 +218,7 @@ export interface McpSse {
  */
 export interface AgentCatalog {
   agents: AgentInfo[];
+  model_providers: ProviderInfo[];
   plugins: PluginInfo[];
   problems: string[];
   providers: ProviderInfo[];
@@ -228,6 +229,15 @@ export interface AgentCatalog {
  * via the `definition` "AgentInfo".
  */
 export interface AgentInfo {
+  description: string;
+  module: string;
+  name: string;
+}
+/**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ProviderInfo".
+ */
+export interface ProviderInfo {
   description: string;
   module: string;
   name: string;
@@ -245,15 +255,6 @@ export interface PluginInfo {
   path: string;
   requires: string[];
   version: string;
-}
-/**
- * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "ProviderInfo".
- */
-export interface ProviderInfo {
-  description: string;
-  module: string;
-  name: string;
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema

@@ -40,7 +40,7 @@ from aid.messages import (
     UserPromptPart,
 )
 from aid.messaging import ARRIVED, arrived
-from aid.model import AnthropicModel, Model, ModelInfo, OpenAIChatModel, RequestUsage, accumulate, model_for
+from aid.model import Model, ModelInfo, OpenAIChatModel, RequestUsage, Transport, accumulate, model_for
 from aid.prices import CURRENCY, Price, price_for
 from aid.protocol import (
     AidError,
@@ -55,6 +55,7 @@ from aid.protocol import (
     clip,
     to_json,
 )
+from aid.providers import resolve
 from aid.tools import tool_paths
 
 if TYPE_CHECKING:
@@ -354,15 +355,18 @@ class NativeBackend:
         refresh_instructions: Callable[[], str] | None = None,
         open_tail: int = 0,
         receive: Callable[[], Awaitable[list[MessageEntry]]] | None = None,
+        transport: Transport | None = None,
     ) -> None:
+        """`transport`: the agent's model, resolved from its name (`aid.providers.resolve`); the backend owns and
+        prices it. Without one, a name resolves through `model_for` alone."""
         self._agent = agent
         self._history_file = history_file
         self._history = history
         self._toolsets = toolsets
         self._started = started
         self._scope: anyio.CancelScope | None = None
-        self._owned: OpenAIChatModel | AnthropicModel | None = None
-        model = agent.model
+        self._owned: Transport | None = transport
+        model = agent.model if transport is None else transport
         if isinstance(model, str):
             model = self._owned = model_for(model)
         self._model: Model = model
@@ -813,6 +817,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         waits=PermissionWaits(),
         sandbox=spec.sandbox,
     )
+    transport = await resolve(agent.model, catalog.model_providers) if isinstance(agent.model, str) else None
     backend: NativeBackend | None = None
     try:
         backend = NativeBackend(
@@ -827,6 +832,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             refresh_instructions=refresh_instructions,
             open_tail=open_tail,
             receive=functools.partial(_receive_messages, state_dir.name) if spec.aid_tools else None,
+            transport=transport,
         )
         yield backend
     finally:

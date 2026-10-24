@@ -484,6 +484,8 @@ class AgentCatalog(_Message):
     agents: list[AgentInfo]
     tools: list[ToolInfo] = Field(default_factory=list[ToolInfo])
     providers: list[ProviderInfo] = Field(default_factory=list[ProviderInfo])
+    model_providers: list[ProviderInfo] = Field(default_factory=list[ProviderInfo])
+    """`aid.ModelProvider`s, by the prefix each serves; `providers` are instruction providers."""
     plugins: list[PluginInfo] = Field(default_factory=list[PluginInfo])
     problems: list[str]
 

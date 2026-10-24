@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pytest
 
-from aid import prices
+from aid import models_dev
 from aid.backends.native import add_cost
 from aid.model import AnthropicModel, OpenAIChatModel, RequestUsage
 from aid.prices import ENV_PRICES, Price, lookup, price_for
@@ -105,14 +105,14 @@ async def test_a_daily_fetch_that_fails_keeps_the_stale_copy(tmp_path: Path, mon
     def client(**kwargs: Any) -> httpx.AsyncClient:
         return real(transport=httpx.MockTransport(lambda request: served.pop(0)), **kwargs)
 
-    monkeypatch.setattr(prices.httpx, "AsyncClient", client)
+    monkeypatch.setattr(models_dev.httpx, "AsyncClient", client)
     assert await price_for("deepseek/deepseek-flash") is not None
-    cached = prices.cache_file()
+    cached = models_dev.cache_file()
     assert json.loads(cached.read_text()) == CATALOG
     # Fresh: no fetch.
     assert await price_for("anthropic/claude-haiku-5-5") is not None
     assert len(served) == 1
-    old = cached.stat().st_mtime - 2 * prices.MAX_AGE
+    old = cached.stat().st_mtime - 2 * models_dev.MAX_AGE
     os.utime(cached, (old, old))
     assert await price_for("deepseek/deepseek-flash") is not None
     assert not served

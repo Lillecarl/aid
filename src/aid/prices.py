@@ -1,31 +1,18 @@
-"""Model prices from models.dev's catalog, the list opencode prices from, for turns whose engine reports no cost
-(native). Cached under the user's cache dir and fetched again once a day; a failed fetch keeps the stale copy, and
-with no copy at all the cost is unknown, never zero.
-
-`AID_MODEL_PRICES` replaces the source: a URL, a file path, or `off`.
-"""
+"""Model prices from models.dev's catalog (`aid.models_dev`), for turns whose engine reports no cost (native). With
+no catalog at all the cost is unknown, never zero."""
 
 from __future__ import annotations
 
-import json
-import os
-import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Final
 
-import anyio
-import anyio.to_thread
-import httpx
-import structlog
 from pydantic import BaseModel, Field, ValidationError
 
-log = structlog.get_logger(__name__)
+from aid import models_dev
+from aid.models_dev import ENV_SOURCE as ENV_PRICES
 
-ENV_PRICES: Final = "AID_MODEL_PRICES"
-CATALOG_URL: Final = "https://models.dev/api.json"
-MAX_AGE: Final = 24 * 3600
-FETCH_TIMEOUT: Final = 10.0
+__all__ = ["CURRENCY", "ENV_PRICES", "PER", "Price", "lookup", "price_for"]
+
 PER: Final = 1_000_000
 """models.dev prices per million tokens, in USD."""
 CURRENCY: Final = "USD"
@@ -98,45 +85,7 @@ def lookup(catalog: Any, model: str) -> Price | None:
     return entry.cost.price(tuple((tier.tier.size, tier.price()) for tier in entry.cost.tiers))
 
 
-def cache_file() -> Path:
-    base = os.environ.get("XDG_CACHE_HOME") or str(Path.home() / ".cache")
-    return Path(base) / "aid" / "models.dev.json"
-
-
-async def _fetch(url: str, target: Path) -> None:
-    async with httpx.AsyncClient(timeout=FETCH_TIMEOUT, follow_redirects=True) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-    body = response.content
-    json.loads(body)  # Never replace a good copy with something that does not parse.
-    await anyio.Path(target.parent).mkdir(parents=True, exist_ok=True)
-    # Workers refresh it independently: write aside, then rename over.
-    temporary = target.with_suffix(f".{os.getpid()}.tmp")
-    await anyio.Path(temporary).write_bytes(body)
-    await anyio.Path(temporary).replace(target)
-
-
 async def price_for(model: str) -> Price | None:
     """The model's price, or None when the catalog lacks it or cannot be had."""
-    source = os.environ.get(ENV_PRICES, CATALOG_URL)
-    if source == "off":
-        return None
-    if source.startswith(("http://", "https://")):
-        path = cache_file()
-        try:
-            stale = time.time() - path.stat().st_mtime > MAX_AGE
-        except FileNotFoundError:
-            stale = True
-        if stale:
-            try:
-                await _fetch(source, path)
-            except (httpx.HTTPError, OSError, ValueError) as error:
-                log.warning("prices_fetch_failed", url=source, error=repr(error), cached=path.exists())
-    else:
-        path = Path(source)
-    try:
-        catalog: Any = await anyio.to_thread.run_sync(lambda: json.loads(path.read_bytes()))
-    except (OSError, ValueError) as error:
-        log.warning("prices_unreadable", path=str(path), error=repr(error))
-        return None
-    return lookup(catalog, model)
+    catalog = await models_dev.catalog()
+    return None if catalog is None else lookup(catalog, model)
