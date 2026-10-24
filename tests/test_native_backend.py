@@ -234,6 +234,7 @@ async def test_a_response_cut_at_the_output_limit_says_so(tmp_path: Path) -> Non
         ("a scorched, airless wo", "...a scorched, airless world.", "a scorched, airless world."),
         ("from scorching day.\n\nAlmost no", "almost no atmosphere.", "from scorching day.\n\nAlmost no atmosphere."),
         ("near-twin in", "in size, but", "near-twin in size, but"),
+        ("the hottest planet,", ", shrouded in cloud", "the hottest planet, shrouded in cloud"),
         ("430\u202f\u00b0C by", "430 \u00b0C by day", "430\u202f\u00b0C by day"),
         ("a thick carbon-d", "...a thick carbon dioxide sky", "a thick carbon dioxide sky"),
         (

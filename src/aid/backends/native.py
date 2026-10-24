@@ -73,12 +73,13 @@ DEFAULT_DESIRED_MAX: Final = 100_000
 """Tokens the context gauge assumes when the session names no `max_context`. Rule of thumb: half the model's
 window; unknown models err toward compacting early, which fails safe."""
 CONTINUE: Final = (
-    "Your previous answer was cut off at the output token limit. Continue it: start by repeating its last few "
-    "words exactly as written, then go on. Write nothing else."
+    "Your reply above stopped at the output token limit, mid-sentence. Continue it from exactly where it stopped, "
+    "as if it had never been interrupted. Do not restart or summarize it."
 )
 """The request after an answer cut at the output limit. DeepSeek's prefix completion, which would continue it in
-place, refuses any history holding a tool call (measured 2026-10-23), and every session has tools. Asked to start
-at the next character, models drop the space at the cut; the repeated words give `join_continued` an overlap."""
+place, refuses any history holding a tool call (measured 2026-10-23), and every session has tools. Not asked to
+repeat its last words: Claude Haiku 5.5 refused that or restarted the answer in 2 of 3 tries, and continued this
+plainly in 3 of 3 (2026-10-24). `join_continued` still overlaps a repeat a model gives on its own."""
 OVERLAP: Final = 500
 """The longest overlap `join_continued` looks for."""
 LEADERS: Final = " \t\n.\u2026"
@@ -134,7 +135,8 @@ def context_tokens(history: list[ModelMessage], boundary: int, *, preserve_signe
 
 
 def join_continued(answer: str, more: str) -> str:
-    """An answer and its continuation, which repeats the answer's last words, joined at their longest overlap.
+    """An answer and its continuation, joined at their longest overlap when the continuation repeats the answer's
+    last words, as models do unasked.
     Measured on deepseek-flash, a repeat can open with "...", change case, or trade a no-break space for a plain one:
     the match ignores all three. A repeat starts at a word, so the overlap must too: a single repeated word counts,
     and a chance match inside a word does not. A repeat can also rewrite the word the cut split ("carbon-d", then
@@ -166,10 +168,12 @@ def unshown(answer: str, more: str) -> str:
 
 
 def _overlap(answer: str, more: str) -> int:
-    """The longest start of `more` that ends `answer` and starts at a word there, loosely compared; 0 if none."""
+    """The longest start of `more` that ends `answer`, loosely compared, and starts at a word there or with
+    punctuation (Claude Haiku 5.5 repeated the comma a cut ended on); 0 if none."""
     tail, head = _loose(answer[-OVERLAP:]), _loose(more[:OVERLAP])
     for size in range(min(len(tail), len(head)), 0, -1):
-        if tail.endswith(head[:size]) and (size == len(tail) or tail[-size - 1] == " "):
+        boundary = size == len(tail) or tail[-size - 1] == " " or not head[0].isalnum()
+        if boundary and tail.endswith(head[:size]):
             return size
     return 0
 
