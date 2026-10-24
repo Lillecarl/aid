@@ -24,15 +24,15 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal
 
 import anyio
-import anyio.to_thread
-import apsw
 from pydantic import BaseModel
 
 from aid.protocol import AidError
+from aid.sql import Database
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
-    from typing import Concatenate
+    from collections.abc import Iterator
+
+    import apsw
 
 PLANS_FILE: Final = "removals.db"
 SCHEMA_VERSION: Final = 1
@@ -469,14 +469,6 @@ def preview(plan_id: int, removal: Removal, plan: Plan) -> RemovalPreview:
     )
 
 
-def _create(db: apsw.Connection) -> None:
-    db.execute("PRAGMA journal_mode = WAL")
-    db.execute("PRAGMA busy_timeout = 5000")
-    with db:
-        db.execute(SCHEMA)
-        db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
-
-
 def _insert(db: apsw.Connection, removal: Removal, plan: Plan, tool_call_id: str, request_id: str | None) -> int:
     # BEGIN, not `with db`: apsw's context exit may swallow, so pyright sees no return.
     db.execute("BEGIN IMMEDIATE")
@@ -531,37 +523,23 @@ def _outcomes(db: apsw.Connection, plan_id: int, outcomes: dict[str, Outcome]) -
 
 
 class PlanStore:
-    """A session's plans database, written by its worker only, one call at a time off the event loop."""
+    """A session's plans database, written by its worker only."""
 
-    def __init__(self, db: apsw.Connection) -> None:
+    def __init__(self, db: Database) -> None:
         self._db = db
-        self._limiter = anyio.CapacityLimiter(1)
 
     @classmethod
     async def open(cls, path: Path) -> PlanStore:
-        db = await anyio.to_thread.run_sync(apsw.Connection, str(path))
-        store = cls(db)
-        try:
-            await store._run(_create)
-        except BaseException:
-            await store.aclose()
-            raise
-        return store
-
-    async def _run[**P, T](
-        self, call: Callable[Concatenate[apsw.Connection, P], T], *args: P.args, **kwargs: P.kwargs
-    ) -> T:
-        return await anyio.to_thread.run_sync(lambda: call(self._db, *args, **kwargs), limiter=self._limiter)
+        return cls(await Database.open(path, SCHEMA, SCHEMA_VERSION))
 
     async def record(self, removal: Removal, plan: Plan, tool_call_id: str, request_id: str | None) -> int:
-        return await self._run(_insert, removal, plan, tool_call_id, request_id)
+        return await self._db.run(_insert, removal, plan, tool_call_id, request_id)
 
     async def decide(self, plan_id: int, status: PlanStatus, said: str | None = None) -> None:
-        await self._run(_decide, plan_id, status, said)
+        await self._db.run(_decide, plan_id, status, said)
 
     async def outcomes(self, plan_id: int, outcomes: dict[str, Outcome]) -> None:
-        await self._run(_outcomes, plan_id, outcomes)
+        await self._db.run(_outcomes, plan_id, outcomes)
 
     async def aclose(self) -> None:
-        with anyio.CancelScope(shield=True):
-            await anyio.to_thread.run_sync(self._db.close, limiter=self._limiter)
+        await self._db.aclose()

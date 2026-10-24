@@ -361,6 +361,15 @@ class SearchResults(_Message):
     """Matches in the whole history."""
 
 
+class QueryResult(_Message):
+    """A read-only SQL question's answer (`aid.sql.ask`)."""
+
+    columns: list[str]
+    rows: list[list[JsonValue]]
+    truncated: bool
+    """More rows were left past the limit."""
+
+
 class SupervisionFiring(_Message):
     """The daemon woke a supervisor at turn end or for a live suspicion. A suspicion is advisory: the
     supervisor judges it and may interrupt exactly the named turn."""
