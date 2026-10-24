@@ -62,12 +62,13 @@ from pyrun.script import script_frames
 from pyrun.shell import ShellResult, ShellSession
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Awaitable, Callable, Iterable
 
     from aid.backends.base import Emit, Notifier
     from aid.backends.permissions import PermissionWaits
     from aid.spec import Hook
     from pyrun import Command
+    from pyrun.files import FileAccess
 
 log = structlog.get_logger(__name__)
 
@@ -92,6 +93,13 @@ MATCH_LINE_LIMIT: Final = 1000
 """Characters of one matched line a notification carries; the full line waits in task_output."""
 # A pyrun record, as a report names it: `<scope>.<n>/stdout`, or a scope's own file, `<scope>/printed`.
 _RECORD = re.compile(r"^(?P<scope>[0-9a-f]{6})(?:\.(?P<n>\d+))?/(?P<file>[\w.]+)$")
+PYTHON_READ: Final = "python:read"
+PYTHON_WRITE: Final = "python:write"
+"""What a `python` script reads or writes outside the session's directory (`pyrun.files`): asked under these."""
+
+
+def asking_names(tools: Iterable[Tool]) -> frozenset[str]:
+    return frozenset(name for tool in tools if tool.asks for name in (tool.name, *tool.permissions) if name is not None)
 
 
 @dataclass
@@ -279,11 +287,10 @@ class Coding:
     overrides: dict[str, PermissionMode] = field(default_factory=dict[str, PermissionMode])
     """Modes by tool name, `NativeSpec.tool_permissions`; a person changes them while the worker runs."""
     asking: frozenset[str] = field(
-        default_factory=lambda: frozenset(
-            t.name for t in coding_tools.tools if isinstance(t, Tool) and t.asks and t.name
-        )
+        default_factory=lambda: asking_names(t for t in coding_tools.tools if isinstance(t, Tool))
     )
-    """Tools that ask for themselves (`Tool.asks`); the backend sets the session's."""
+    """Names that follow `mode` when unset: tools that ask for themselves (`Tool.asks`) and their further
+    `permissions`; the backend sets the session's."""
     edits: EditSession = field(init=False)
     emit: Emit | None = None
     """The running turn's; the worker sets it before each turn."""
@@ -943,8 +950,22 @@ async def _python_async(coding: Coding, tool_call_id: str, script: str, time_lim
             remember=Path(command.argv[0]).name,
         )
 
+    async def files(access: FileAccess) -> bool:
+        return await coding.permit(
+            tool_call_id,
+            tool_name=PYTHON_READ if access.access == "read" else PYTHON_WRITE,
+            title=f"{access.access} {access.path}",
+            input={"path": access.path, "event": access.event},
+        )
+
     report = await run_script(
-        script, policy=policy, cwd=coding.cwd, store=coding.store, time_limit=time_limit, python=sys.executable
+        script,
+        policy=policy,
+        files=files,
+        cwd=coding.cwd,
+        store=coding.store,
+        time_limit=time_limit,
+        python=sys.executable,
     )
     return report.render()
 
@@ -1267,7 +1288,7 @@ coding_tools: Toolset = Toolset(
         _retrying(compact),
         Tool(_retrying(apply_edits), kind="edit", asks=True),
         Tool(_retrying(ask_user), asks=True),
-        Tool(_retrying(_sees_disk(python)), kind="execute", asks=True),
+        Tool(_retrying(_sees_disk(python)), kind="execute", asks=True, permissions=(PYTHON_READ, PYTHON_WRITE)),
         Tool(_retrying(_sees_disk(shell)), kind="execute", asks=True),
         _retrying(shell_restart),
         Tool(_retrying(_sees_disk(background)), kind="execute", asks=True),

@@ -36,6 +36,9 @@ class Tool:
     asks: bool = False
     """The tool asks the session's permission itself, with its own title and options, and its mode defaults to the
     session's. Any other tool is gated by the loop on its name and arguments, and is allowed unless set otherwise."""
+    permissions: tuple[str, ...] = ()
+    """Further names an `asks` tool asks under (the `python` tool's `python:read`, `python:write`): each its own row
+    in the session's permissions, defaulting to the session's mode."""
     errors_to_model: bool = False
     """Any exception goes back to the model as a retry, as an MCP server answers a failing tool. Otherwise only
     `ModelRetry` does, and other exceptions end the turn."""

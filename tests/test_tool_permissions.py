@@ -138,3 +138,34 @@ async def test_claude_sdk_reports_its_tools_after_a_prompt(daemon: Paths, tmp_pa
     assert (after["Bash"].group, after["Bash"].mode, after["Bash"].set) == ("claude", PermissionMode.DENY, True)
     assert (after["Read"].mode, after["Read"].set) == (None, False)
     assert after["mcp__aid__send_message"].group == "aid"
+
+
+async def test_a_python_script_asks_before_touching_files_outside_its_directory(daemon: Paths, tmp_path: Path) -> None:
+    work, outside = tmp_path / "work", tmp_path / "outside"
+    work.mkdir()
+    outside.mkdir()
+    script = f"""
+Path("here.txt").write_text("quiet")
+try:
+    Path({str(outside / "there.txt")!r}).write_text("loud")
+except PermissionError as error:
+    print("refused")
+"""
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("coder", py_spec(work, "agents:coder", PermissionMode.ASK))
+            requests: list[PermissionRequest] = []
+            output = ""
+            async for event in session.stream(plan(("python", {"script": script}))):
+                if isinstance(event, PermissionRequest):
+                    requests.append(event)
+                    await session.answer(event.request_id, "no")
+                elif isinstance(event, Output):
+                    output = str(event.output)
+            tools = by_name((await session.status()).tools)
+    [request] = requests
+    assert (request.tool_name, request.title) == ("python:write", f"write {outside / 'there.txt'}")
+    assert (work / "here.txt").read_text() == "quiet"
+    assert not (outside / "there.txt").exists()
+    assert "refused" in output
+    assert (tools["python:read"].mode, tools["python:write"].group) == (PermissionMode.ASK, "coding")

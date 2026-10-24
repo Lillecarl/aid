@@ -239,7 +239,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.
 - `src/aid/coding.py` — `aid.coding_tools`, a toolset native agents opt into: list and read, pyedit edits through its
   library (`EditSession`, staged until `apply_edits`; no agent code runs in the worker), and `python` (pyrun
-  `run_script` in a child, each command asked of `NativeSpec.permission`). Results over `SPILL_LIMIT`
+  `run_script` in a child, each command asked under `python`; file reads and writes outside the cwd under
+  `python:read` / `python:write` via pyrun's audit-hook guard, `pyrun/src/pyrun/files.py`). Results over `SPILL_LIMIT`
   spill to content-addressed files under the session, sent as a stable head plus the path. `compact`
   summarizes the history into a digest through a direct model call. One `Coding` per session, set per
   turn in the `CODING` contextvar; tool errors go back to the model as `ModelRetry`. pyedit is built into the

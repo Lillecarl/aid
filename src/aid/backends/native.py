@@ -23,7 +23,7 @@ from aid.agent import Agent, ModelRetry, Tool, Toolset
 from aid.backends.permissions import PermissionWaits
 from aid.catalog import session_catalog
 from aid.client import connect
-from aid.coding import CODING, OUTPUTS_DIR, Coding
+from aid.coding import CODING, OUTPUTS_DIR, Coding, asking_names
 from aid.instructions import compose, environment
 from aid.messages import (
     ModelMessage,
@@ -374,7 +374,7 @@ class NativeBackend:
             tools[tool.name] = tool
         self._tools = tools
         self._coding = coding
-        coding.asking = frozenset(name for name, tool in tools.items() if tool.asks)
+        coding.asking = asking_names(tools.values())
         self._desired_max = desired_max
         self._max_requests = max_requests
         self._refresh_instructions = refresh_instructions
@@ -397,7 +397,11 @@ class NativeBackend:
         return self._started
 
     def session_tools(self) -> list[SessionTool]:
-        return [SessionTool(name=name, group=tool_group(tool), asks=tool.asks) for name, tool in self._tools.items()]
+        return [
+            SessionTool(name=name, group=tool_group(tool), asks=tool.asks)
+            for tool in self._tools.values()
+            for name in (tool.name or "", *tool.permissions)
+        ]
 
     def set_permissions(self, default: PermissionMode | None, tools: dict[str, PermissionMode | None]) -> None:
         if default is not None:
