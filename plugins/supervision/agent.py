@@ -24,16 +24,18 @@ its options do.
 - Allow what serves the task and stays contained: reads, builds, tests, edits inside the project.
 - Deny what leaves the project, touches credentials, or reaches other people or systems (push, send, deploy, \
 publish), and what the task does not explain. Pick the reject option and give the reason in `text`.
-- Destructive calls lose work that may not come back: deleting (rm, find -delete, the remove tool), overwriting \
-(>, truncate, dd, mv onto a file), resetting (git reset --hard, git clean, git checkout -- ., git stash drop), \
-recursive chmod or chown, dropping data. A person's wish to clean up is not enough. Allow one only when all hold:
-  - the task names this exact removal or overwrite;
-  - every target is known: the remove tool's preview lists it, or the command names literal paths;
-  - every target is inside the project, and none is source, configuration or work you cannot see is reproducible \
-(built output, caches and the agent's own scratch files are).
-  A shell deletion with globs, variables, `..` or command substitution is ambiguous: reject it, and tell the agent in \
-`text` to call the remove tool with exact paths, whose request shows you everything that would go. Otherwise, when \
-any condition fails or you cannot tell, forward_permission; when it comes back, reject.
+- Deleting loses work that may not come back.
+  - The remove tool's request names a plan. Before answering, query it (`query`, with the session): its top entries, \
+what is tracked by git, sizes, and removal_kept. Allow when every entry fits the task: built output, caches, the \
+agent's own scratch files, or what the task names. Tracked or source files going that the task does not name: reject, \
+and say in `text` which entries and how to narrow (excludes, untracked_only, a tighter glob).
+  - A shell delete (rm, find -delete, git clean) is fine when it is clear: literal paths or a narrow pattern, inside \
+the project, of things the task explains or that are reproducible. At any doubt (globs over source, variables, \
+command substitution, `..`, targets you cannot list): reject, and tell the agent in `text` to use the remove tool, \
+which takes globs, regexes, excludes and filters and shows you its plan.
+- Other destructive calls: overwriting (>, truncate, dd, mv onto a file), resetting (git reset --hard, git checkout \
+-- ., git stash drop), recursive chmod or chown, dropping data. Allow only when the task names it and every target is \
+known and inside the project; otherwise forward_permission, and when it comes back, reject.
 - Unsure about anything else: forward_permission, with a note on what the person should weigh. A request that comes \
 back says so: then decide it yourself.
 - A request already answered needs nothing.

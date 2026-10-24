@@ -102,6 +102,15 @@ def permission_review_text(name: str, request: PermissionRequest, *, final: bool
         lines.append(f"Input:\n{rendered}")
     if note:
         lines.append(f"Note: {note}")
+    if (
+        request.tool_name == "remove"
+        and isinstance(request.input, dict)
+        and isinstance(plan := request.input.get("plan"), int)
+    ):
+        lines.append(
+            f'This removes plan {plan}. Query it before answering, e.g. query(session={name!r}, sql="SELECT path, kind,'
+            f' size, tracked FROM removal_entries WHERE plan = {plan} AND top ORDER BY tracked DESC, size DESC").'
+        )
     options = [
         f"- {option.option_id}: {option.name}{' (recommended)' if option.recommended else ''}"
         for option in request.options

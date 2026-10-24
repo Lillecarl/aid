@@ -491,6 +491,9 @@ def test_permission_review_text_names_input_options_and_what_is_left() -> None:
     assert "cannot be forwarded" in final
     assert "forward_permission" not in final
     assert "Note: check the target" in final
+    assert "query(" not in text
+    removal = request.model_copy(update={"tool_name": "remove", "input": {"plan": 7, "files": 3}})
+    assert "This removes plan 7. Query it" in permission_review_text("coder", removal, final=False)
 
 
 def test_stored_supervisor_permissions_become_ask_supervisor_modes() -> None:
