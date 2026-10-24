@@ -9,9 +9,10 @@ from typing import Any
 import httpx2
 import openai
 import pytest
+from pydantic import BaseModel
 
 from aid.discovery import discover
-from aid.messages import ModelMessage, ModelRequest, UserPromptPart
+from aid.messages import ModelMessage, ModelRequest, SystemPromptPart, UserPromptPart
 from aid.model import ModelInfo, RequestUsage
 from aid.providers import resolve
 from tests.test_model import event
@@ -56,3 +57,35 @@ async def test_deepseek_serves_its_prefix_with_its_limit_and_cache_hits(monkeypa
         await model.aclose()
     assert [(body["model"], body["max_tokens"]) for body in sent] == [("deepseek-flash", 131072), ("deepseek-flash", 5)]
     assert [(u.input_tokens, u.cache_read_tokens) for u in usages] == [(10, 6)]
+
+
+class Verdict(BaseModel):
+    verdict: str
+
+
+async def test_deepseek_asks_structured_output_in_json_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """DeepSeek refuses `json_schema`: JSON mode, with the schema in a note after the instructions."""
+    sent: list[dict[str, Any]] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        sent.append(json.loads(request.content))
+        body = event({"content": '{"verdict": "ok"}'}) + b"data: [DONE]\n\n"
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+
+    def make_client(**kwargs: Any) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
+
+    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
+    model = await resolve("deepseek/deepseek-flash", discover([PLUGINS], only=["deepseek"]).model_providers)
+    asked: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart("judge"), UserPromptPart("go")])]
+    try:
+        async for _ in model.stream(asked, ModelInfo(output_type=Verdict)):
+            pass
+    finally:
+        await model.aclose()
+    [body] = sent
+    assert body["response_format"] == {"type": "json_object"}
+    assert [m["role"] for m in body["messages"]] == ["system", "system", "user"]
+    assert body["messages"][0]["content"] == "judge"
+    assert '"verdict"' in body["messages"][1]["content"]

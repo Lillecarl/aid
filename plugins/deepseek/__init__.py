@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import replace
 from typing import TYPE_CHECKING, Final
@@ -15,6 +16,8 @@ from aid.protocol import ModelEntry
 
 if TYPE_CHECKING:
     from openai.types import CompletionUsage
+    from openai.types.shared_params import ResponseFormatJSONObject
+    from pydantic.json_schema import JsonSchemaValue
 
 KEY_ENV: Final = "DEEPSEEK_API_KEY"
 PROVIDER: Final = Provider(
@@ -40,7 +43,15 @@ class _Models(BaseModel):
 
 
 class DeepSeekChat(OpenAIChatModel):
-    """Counts cache hits from `prompt_cache_hit_tokens`, which DeepSeek reports beside the standard details."""
+    """Counts cache hits from `prompt_cache_hit_tokens`, which DeepSeek reports beside the standard details.
+    Structured output is JSON mode: DeepSeek refuses `json_schema` ("This response_format type is unavailable
+    now", measured 2026-10-25 on deepseek-flash), and JSON mode wants the shape in the prompt."""
+
+    def response_format(self, schema: JsonSchemaValue) -> ResponseFormatJSONObject:
+        return {"type": "json_object"}
+
+    def schema_note(self, schema: JsonSchemaValue) -> str:
+        return f"Answer with one JSON object, nothing else, valid against this JSON schema:\n{json.dumps(schema)}"
 
     def usage(self, usage: CompletionUsage) -> RequestUsage:
         counted = super().usage(usage)

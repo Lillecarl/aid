@@ -59,6 +59,8 @@ if TYPE_CHECKING:
     )
     from openai.types import CompletionUsage
     from openai.types.chat.chat_completion_chunk import ChoiceDelta
+    from openai.types.shared_params import ResponseFormatJSONObject, ResponseFormatJSONSchema
+    from pydantic.json_schema import JsonSchemaValue
 
     from aid.agent import Tool
 
@@ -298,18 +300,29 @@ class OpenAIChatModel:
     def wire(self, messages: Sequence[ModelMessage]) -> list[dict[str, Any]]:
         return wire_messages(messages)
 
+    def response_format(self, schema: JsonSchemaValue) -> ResponseFormatJSONSchema | ResponseFormatJSONObject:
+        """How a request asks for structured output: the schema itself, where the provider takes one."""
+        return {"type": "json_schema", "json_schema": {"name": "output", "schema": schema}}
+
+    def schema_note(self, schema: JsonSchemaValue) -> str | None:
+        """A system note stating the output schema, for a provider whose JSON mode takes no schema."""
+        return None
+
     async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
         client = self._client(info.settings)
         kwargs = self.request_settings(info.settings)
         if info.tools:
             kwargs["tools"] = [tool.definition() for tool in info.tools]
+        wired = self.wire(messages)
         if info.output_type is not str:
-            kwargs["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {"name": "output", "schema": TypeAdapter(info.output_type).json_schema()},
-            }
+            schema = TypeAdapter(info.output_type).json_schema()
+            kwargs["response_format"] = self.response_format(schema)
+            if (note := self.schema_note(schema)) is not None:
+                # After the leading instructions, so every request keeps the same cached prefix.
+                lead = next((i for i, w in enumerate(wired) if w.get("role") != "system"), len(wired))
+                wired.insert(lead, {"role": "system", "content": note})
         stream = await client.chat.completions.create(
-            model=self._model, messages=cast(Any, self.wire(messages)), stream=True, **kwargs
+            model=self._model, messages=cast(Any, wired), stream=True, **kwargs
         )
         ids: dict[int, str] = {}
         try:
