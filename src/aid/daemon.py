@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 import shlex
 import shutil
 import uuid
@@ -1201,7 +1202,8 @@ class Daemon:
         if not isinstance(session.spec, NativeSpec):
             raise AidError("unsupported", f"{session.name!r} is not native: only native sessions run sandboxed")
         if box is not None:
-            await sandbox.check(box, session.spec.cwd)  # Refused now, not as a worker that fails to start.
+            # Refused now, not as a worker that fails to start; under the environment that worker gets.
+            await sandbox.check(box, session.spec.cwd, {**os.environ, **session.spec.env})
         async with session.spec_lock:
             spec = session.spec.model_copy(update={"sandbox": box})
             await (anyio.Path(self._paths.session_dir(session.name)) / SPEC_FILE).write_bytes(

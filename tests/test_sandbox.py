@@ -147,3 +147,13 @@ async def test_only_native_sessions_take_a_sandbox(daemon: Paths, tmp_path: Path
             session = await client.create("acp", acp_spec(tmp_path))
             with pytest.raises(AidError, match="only native sessions"):
                 await session.set_sandbox(Sandbox())
+
+
+async def test_the_daemon_checks_the_sandbox_on_the_workers_path(daemon: Paths, tmp_path: Path) -> None:
+    spec = py_spec(tmp_path, "agents:coder", PATH="/var/empty")
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("boxed", spec)
+            with pytest.raises(AidError, match="bwrap is not on PATH"):
+                await session.set_sandbox(Sandbox())
+            assert (await session.status()).sandbox is None

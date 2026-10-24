@@ -17,7 +17,7 @@ import anyio
 from aid.protocol import AidError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from aid.spec import Sandbox
 
@@ -46,11 +46,12 @@ def bwrap_argv(sandbox: Sandbox, cwd: str, *, chdir: str | None = None, writable
     ]
 
 
-async def check(sandbox: Sandbox, cwd: str) -> None:
-    """Raise unless the sandbox runs here: a session that asked for one never runs without it."""
-    if shutil.which(BWRAP) is None:
+async def check(sandbox: Sandbox, cwd: str, env: Mapping[str, str] | None = None) -> None:
+    """Raise unless the sandbox runs here: a session that asked for one never runs without it. `env` is the
+    worker's environment when someone else checks for it (the daemon: its own plus the spec's `env`)."""
+    if (bwrap := shutil.which(BWRAP, path=env.get("PATH") if env is not None else None)) is None:
         raise AidError("sandbox_unavailable", f"the session asks for a sandbox, and {BWRAP} is not on PATH")
-    result = await anyio.run_process([*bwrap_argv(sandbox, cwd), "true"], check=False)
+    result = await anyio.run_process([bwrap, *bwrap_argv(sandbox, cwd)[1:], "true"], check=False, env=env)
     if result.returncode != 0:
         reason = result.stderr.decode(errors="replace").strip() or f"exit {result.returncode}"
         raise AidError("sandbox_unavailable", f"the session asks for a sandbox, and {BWRAP} fails here: {reason}")
