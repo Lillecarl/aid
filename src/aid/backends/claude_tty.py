@@ -30,6 +30,13 @@ Each hook asks the worker's own hook socket first (`aid.worker.serve_hooks`) and
 - `/clear` runs SessionEnd (reason clear); later events carry a new session_id and transcript. `/exit` runs
   SessionEnd with reason prompt_input_exit. PreCompact has `trigger`; PostCompact has `compact_summary`.
 - SubagentStop has agent_id, agent_type and agent_transcript_path; one ran after a plain turn, agent_type "".
+
+Rechecked on 2.1.310 (live, Haiku): trust and channels dialogs, a prompt with a Bash call, Esc and its marker.
+New there:
+
+- A turn ended with Esc runs no Stop hook, and no idle_prompt came in three minutes after it.
+- ANTHROPIC_API_KEY in Claude's environment opens "Detected a custom API key" before the prompt; its cursor
+  `❯` is indented, so it never reads as ready.
 """
 
 from __future__ import annotations
