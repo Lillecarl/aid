@@ -383,6 +383,9 @@
           "default": "claude-sdk",
           "type": "string"
         },
+        "mcp_servers": {
+          "$ref": "#/$defs/McpServers"
+        },
         "model": {
           "type": "string"
         },

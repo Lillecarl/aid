@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import anyio
@@ -9,6 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from aid.backends.claude_sdk import SESSION_ID_FILE, ClaudeSdkBackend, open_sdk
+from aid.mcp import AID_TOOLS_RULE, MCP_CONFIG_FILE
 from aid.protocol import (
     AidError,
     Output,
@@ -20,7 +22,7 @@ from aid.protocol import (
     ThoughtDelta,
     ToolCall,
 )
-from aid.spec import AgentKind, ClaudeSdkSpec, PermissionMode
+from aid.spec import BUILTIN_MCP_SERVER, AgentKind, ClaudeSdkSpec, PermissionMode
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -157,6 +159,11 @@ async def test_prompt_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert "hello" in stdin_log.read_text()
     assert "--resume" not in argv_log.read_text()
     assert "--include-partial-messages" in argv_log.read_text()
+    # aid's own MCP server, for send_message and list_sessions, with its tools allowed.
+    assert (
+        f"--mcp-config {tmp_path / 'state' / MCP_CONFIG_FILE} --allowedTools {AID_TOOLS_RULE}" in argv_log.read_text()
+    )
+    assert BUILTIN_MCP_SERVER in json.loads((tmp_path / "state" / MCP_CONFIG_FILE).read_text())["mcpServers"]
     assert "--model opus" in argv_log.read_text()
     assert (tmp_path / "state" / SESSION_ID_FILE).read_text() == FAKE_ID
 

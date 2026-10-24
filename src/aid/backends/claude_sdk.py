@@ -22,6 +22,7 @@ import structlog
 from aid.backends.acp import choose_permission
 from aid.backends.permissions import PermissionWaits
 from aid.env import agent_environment
+from aid.mcp import AID_TOOLS_RULE, MCP_CONFIG_FILE, claude_config, session_servers, write_private
 from aid.protocol import (
     AidError,
     Output,
@@ -60,11 +61,17 @@ SDK_OPTIONS: Final = [
 """Answers to a `can_use_tool` prompt. Kinds mirror ACP's, so `choose_permission` picks the policy answer."""
 
 
-def sdk_argv(spec: ClaudeSdkSpec, *, resume: str | None) -> list[str]:
-    """`claude -p` over stream-json NDJSON, resumed when a session id is persisted."""
+def sdk_argv(spec: ClaudeSdkSpec, *, resume: str | None, mcp_config: str | None = None) -> list[str]:
+    """`claude -p` over stream-json NDJSON, resumed when a session id is persisted. With aid's tools, aid's MCP
+    server comes in `mcp_config` and its tools need no permission."""
+    # Both options are variadic: each goes before another option, or it would take what follows too.
+    mcp = ["--mcp-config", mcp_config] if mcp_config else []
+    aid = ["--allowedTools", AID_TOOLS_RULE] if spec.aid_tools else []
     argv = [
         *spec.command,
         "-p",
+        *mcp,
+        *aid,
         "--verbose",
         "--output-format",
         "stream-json",
@@ -82,10 +89,13 @@ def sdk_argv(spec: ClaudeSdkSpec, *, resume: str | None) -> list[str]:
 class ClaudeSdkBackend:
     """One SDK session: each prompt runs one `claude -p` process to its `result` line."""
 
-    def __init__(self, spec: ClaudeSdkSpec, id_file: anyio.Path, started: Started) -> None:
+    def __init__(
+        self, spec: ClaudeSdkSpec, id_file: anyio.Path, started: Started, mcp_config: str | None = None
+    ) -> None:
         self._spec = spec
         self._id_file = id_file
         self._started = started
+        self._mcp_config = mcp_config
         self._waits = PermissionWaits()
         self._process: Process | None = None
         """The running prompt's process, for `cancel` to kill; one prompt runs at a time."""
@@ -99,7 +109,7 @@ class ClaudeSdkBackend:
 
     async def prompt(self, text: str, emit: Emit) -> Output:
         payload = json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n"
-        argv = sdk_argv(self._spec, resume=self._started.agent_session)
+        argv = sdk_argv(self._spec, resume=self._started.agent_session, mcp_config=self._mcp_config)
         env = agent_environment(self._spec.env, inherit=self._spec.inherit_env)
         chunks: list[str] = []
         stop_reason = "end_turn"
@@ -376,4 +386,9 @@ async def open_sdk(spec: ClaudeSdkSpec, state_dir: anyio.Path) -> AsyncGenerator
         agent="claude-sdk",
         model=spec.model,
     )
-    yield ClaudeSdkBackend(spec, id_file, started)
+    mcp_config: str | None = None
+    if servers := session_servers(spec, state_dir.name):
+        mcp_file = state_dir / MCP_CONFIG_FILE
+        await write_private(mcp_file, json.dumps(claude_config(servers)), 0o600)
+        mcp_config = str(mcp_file)
+    yield ClaudeSdkBackend(spec, id_file, started, mcp_config)

@@ -55,7 +55,7 @@ from pydantic import JsonValue
 from aid import hook as hook_command
 from aid.backends.permissions import PermissionWaits
 from aid.env import agent_environment
-from aid.mcp import AID_TOOLS_RULE, claude_config, session_servers
+from aid.mcp import AID_TOOLS_RULE, MCP_CONFIG_FILE, claude_config, session_servers, write_private
 from aid.paths import default_paths, hook_socket
 from aid.protocol import (
     Activity,
@@ -99,7 +99,6 @@ log = structlog.get_logger(__name__)
 
 SESSION_ID_FILE: Final = "claude-session-id"
 LAUNCHER_FILE: Final = "launch.sh"
-MCP_CONFIG_FILE: Final = "mcp.json"
 PANE_TERMINAL: Final = ("TERM", "COLORTERM", "TERMINFO", "TERMINFO_DIRS")
 # With no client attached a pymux session is 80x24 unless it is started with a size. Claude Code lays out its
 # screen at the width it is given and keeps no record of more, so the size must be right from the start. A client
@@ -632,13 +631,6 @@ async def _wait_ready(pane: Pane, trust: bool) -> None:
             await anyio.sleep(POLL)
 
 
-async def _write_private(path: anyio.Path, text: str, mode: int) -> None:
-    """Environments and MCP headers hold credentials; the file gets its mode before it gets them."""
-    await path.touch(mode=mode)
-    await path.chmod(mode)
-    await path.write_text(text)
-
-
 @asynccontextmanager
 async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGenerator[ClaudeTtyBackend]:
     env = agent_environment(spec.env, inherit=spec.inherit_env)
@@ -654,7 +646,7 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
     mcp_config: str | None = None
     if servers := session_servers(spec, state_dir.name):
         mcp_file = state_dir / MCP_CONFIG_FILE
-        await _write_private(mcp_file, json.dumps(claude_config(servers)), 0o600)
+        await write_private(mcp_file, json.dumps(claude_config(servers)), 0o600)
         mcp_config = str(mcp_file)
     own_settings, args = split_settings(spec.args)
     own = await anyio.to_thread.run_sync(read_settings, own_settings, spec.cwd) if own_settings else {}
@@ -662,11 +654,11 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
     settings = hook_settings(
         default_paths().control, state_dir.name, hook_socket(default_paths().runtime_dir, state_dir.name), own
     )
-    await _write_private(settings_file, json.dumps(settings), 0o600)
+    await write_private(settings_file, json.dumps(settings), 0o600)
     argv = claude_argv(spec, args, session_id, resume=resume, mcp_config=mcp_config, settings=str(settings_file))
 
     launcher = state_dir / LAUNCHER_FILE
-    await _write_private(launcher, launcher_script(env, spec.cwd, argv), 0o700)
+    await write_private(launcher, launcher_script(env, spec.cwd, argv), 0o700)
 
     socket = spec.pymux_socket or str(default_paths().runtime_dir / "pymux.sock")
     server = await _ensure_server(spec, socket)

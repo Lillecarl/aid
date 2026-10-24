@@ -343,6 +343,7 @@ export interface ClaudeSdkSpec {
   hooks?: Hook[];
   inherit_env?: boolean;
   kind: "claude-sdk";
+  mcp_servers?: McpServers;
   model: string;
   parent?: string | null;
   permission?: PermissionMode2;

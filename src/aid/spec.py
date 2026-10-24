@@ -238,6 +238,8 @@ class ClaudeSdkSpec(_Spec):
     """The `claude` program and its fixed arguments. Tests point it at a fake."""
     model: str
     """Passed as `--model`: the model the session runs on."""
+    mcp_servers: McpServers = Field(default_factory=list[McpServer])
+    """Beside aid's own (`aid.mcp.session_servers`), in the `--mcp-config` file each prompt's process reads."""
     inherit_env: bool = True
     permission: PermissionMode = PermissionMode.DENY
     permission_timeout: Annotated[float, Field(gt=0)] = 1800

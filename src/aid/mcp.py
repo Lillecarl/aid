@@ -17,7 +17,9 @@ from aid.spec import BUILTIN_MCP_SERVER, AgentKind, McpHttp, McpServer, McpSse, 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-    from aid.spec import AcpSpec, ClaudeTtySpec
+    import anyio
+
+    from aid.spec import AcpSpec, ClaudeSdkSpec, ClaudeTtySpec
 
 _servers: TypeAdapter[list[McpServer]] = TypeAdapter(list[McpServer])
 
@@ -49,7 +51,18 @@ def builtin_server(session: str, *, channel: bool) -> McpStdio:
     return McpStdio(name=BUILTIN_MCP_SERVER, command=[sys.executable, "-m", "aid.mcp_server"], env=env)
 
 
-def session_servers(spec: AcpSpec | ClaudeTtySpec, session: str) -> list[McpServer]:
+MCP_CONFIG_FILE: Final = "mcp.json"
+"""Where a Claude Code session's `--mcp-config` document lives, in its state directory."""
+
+
+async def write_private(path: anyio.Path, text: str, mode: int) -> None:
+    """Environments and MCP headers hold credentials; the file gets its mode before it gets them."""
+    await path.touch(mode=mode)
+    await path.chmod(mode)
+    await path.write_text(text)
+
+
+def session_servers(spec: AcpSpec | ClaudeTtySpec | ClaudeSdkSpec, session: str) -> list[McpServer]:
     """What a session's agent gets. One function for new and resumed sessions, so both see the same list."""
     if not spec.aid_tools:
         return list(spec.mcp_servers)
