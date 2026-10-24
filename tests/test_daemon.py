@@ -357,6 +357,15 @@ async def test_compact_session(daemon: Paths, tmp_path: Path) -> None:
             assert (await session.run("third")).output == "kept decisions"
 
 
+async def test_a_failed_turn_is_over_when_its_failure_arrives(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("failing", py_spec(tmp_path, "agents:failer"))
+            for _ in range(3):
+                with pytest.raises(aid.AidError, match="agent_error"):
+                    await session.run("go")
+
+
 async def test_compact_refuses_a_running_turn(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:

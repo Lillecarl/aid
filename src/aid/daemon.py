@@ -1496,11 +1496,13 @@ class Daemon:
                         await self._record(route, reply)
                 case Done() | Failure():
                     if (route := self._routes.pop(reply.id, None)) is not None:
-                        if route.client is not None:
-                            await route.client.send(payload)
+                        # The reply tells its client the turn is over: a prompt sent on it found the turn still
+                        # running while the end was being recorded.
                         await self._record(route, reply)
                         reason = "done" if isinstance(reply, Done) else reply.code
                         await self._end_turn(route.session, reply.id, reason)
+                        if route.client is not None:
+                            await route.client.send(payload)
                 case Invocation():
                     log.warning("worker_sent_invocation", worker=name)
             # A turn streams many deltas a second, and they change no status.
