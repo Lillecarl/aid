@@ -33,6 +33,7 @@ CATALOG: dict[str, Any] = {
             "claude-x": {"id": "claude-x", "provider": {"npm": "@ai-sdk/anthropic", "api": f"{ZEN}/anthropic/v1"}},
             "gpt-x": {"id": "gpt-x", "provider": {"npm": "@ai-sdk/openai", "api": f"{ZEN}/openai/v1"}},
             "gemini-x": {"id": "gemini-x", "provider": {"npm": "@ai-sdk/google", "api": f"{ZEN}/google/v1beta"}},
+            "free-x": {"id": "free-x", "cost": {"input": 0, "output": 0}},
         },
     },
     "opencode-go": {
@@ -41,6 +42,7 @@ CATALOG: dict[str, Any] = {
         "env": ["OPENCODE_API_KEY"],
         "models": {
             "go-chat": {"id": "go-chat", "provider": {"api": f"{ZEN}/go/openai/v1"}},
+            "go-free": {"id": "go-free", "cost": {"input": 0, "output": 0}},
             "claude-x": {"id": "claude-x", "provider": {"npm": "@ai-sdk/anthropic", "api": f"{ZEN}/go/anthropic/v1"}},
         },
     },
@@ -152,7 +154,7 @@ async def test_opencode_routes_each_model_by_its_protocol(catalog: None, monkeyp
     # Anthropic's SDK posts to <base>/v1/messages: models.dev's URL plus /messages.
     assert str(claude._client({}).base_url).rstrip("/") == f"{ZEN}/anthropic"  # pyright: ignore[reportPrivateUsage]
     assert claude.model_name == "opencode-zen/claude-x"
-    for unsupported in ("gpt-x", "gemini-x"):
+    for unsupported in ("gpt-x", "gemini-x", "free-x"):
         with pytest.raises(AidError) as caught:
             await provider.transport(unsupported)
         assert caught.value.code == "unsupported_model"
@@ -180,13 +182,32 @@ async def test_opencode_go_is_its_own_gateway_with_its_own_key(catalog: None, mo
         await model.aclose()
 
 
+async def test_opencode_go_names_aid_and_the_conversation(catalog: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    seen = capture(monkeypatch, event({"content": "ok"}))
+    monkeypatch.setenv("OPENCODE_GO_API_KEY", "go")
+    model = await opencode.OpenCodeGo("tty").transport("go-free")
+    go: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart("go")])]
+    try:
+        await model.request(go, ModelInfo())
+        await model.request(go, ModelInfo())
+    finally:
+        await model.aclose()
+    first, second = seen
+    assert first.headers["User-Agent"].startswith("aid/")
+    assert first.headers["x-opencode-session"] == second.headers["x-opencode-session"] == opencode.session_header("tty")
+    assert opencode.session_header("tty") != opencode.session_header("other")
+
+
 async def test_opencode_lists_its_models_and_marks_responses_ones(
     catalog: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     serve(
-        monkeypatch, opencode, {"object": "list", "data": [{"id": "big-pickle"}, {"id": "gpt-x"}, {"id": "gemini-x"}]}
+        monkeypatch,
+        opencode,
+        {"object": "list", "data": [{"id": "big-pickle"}, {"id": "gpt-x"}, {"id": "gemini-x"}, {"id": "free-x"}]},
     )
-    pickle, gpt, gemini = await opencode.OpenCodeZen().fetch_models()
+    pickle, gpt, gemini, free = await opencode.OpenCodeZen().fetch_models()
+    assert (free.id, free.unsupported) == ("free-x", opencode.OpenCodeZen.free_tier)
     assert (pickle.id, pickle.unsupported) == ("big-pickle", None)
     assert (gpt.id, gpt.unsupported) == ("gpt-x", opencode.UNSUPPORTED["@ai-sdk/openai"])
     assert (gemini.id, gemini.unsupported) == ("gemini-x", opencode.UNSUPPORTED["@ai-sdk/google"])

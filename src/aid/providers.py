@@ -50,12 +50,12 @@ def catalog_model(name: str, providers: Mapping[str, type[ModelProvider]]) -> st
     return f"{cls.catalog_name()}/{model}" if cls is not None else name
 
 
-async def resolve(name: str, providers: Mapping[str, type[ModelProvider]]) -> Transport:
+async def resolve(name: str, providers: Mapping[str, type[ModelProvider]], session: str | None = None) -> Transport:
     """The transport for `name`: the plugin provider that claims its prefix, else the generic resolution. A prefix
     nobody knows still resolves; its first request fails unless the settings name an `api_base`."""
     prefix, model = split_name(name)
     if (cls := providers.get(prefix)) is not None:
-        return await cls().transport(model)
+        return await cls(session).transport(model)
     if (owner := claimed(prefix, providers)) is not None:
         raise AidError("unknown_provider", f"{prefix}/ is served as {owner.provider_name()}/: {owner.description()}")
     if prefix == "anthropic":

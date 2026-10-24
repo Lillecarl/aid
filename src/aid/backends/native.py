@@ -834,7 +834,9 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         waits=PermissionWaits(),
         sandbox=spec.sandbox,
     )
-    transport = await resolve(agent.model, catalog.model_providers) if isinstance(agent.model, str) else None
+    transport = (
+        await resolve(agent.model, catalog.model_providers, state_dir.name) if isinstance(agent.model, str) else None
+    )
     backend: NativeBackend | None = None
     try:
         backend = NativeBackend(

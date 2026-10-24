@@ -174,7 +174,11 @@ on reusable decisions and current boundaries; put long investigations and dated 
   reasoning replay (needs `reasoning_details`), public `/models` priced per token. OpenCode: two gateways, two prefixes and
   keys: Zen `opencode-zen/` (models.dev's `opencode`; `OPENCODE_API_KEY`, public `/zen/v1/models`) and Go
   `opencode-go/` (`OPENCODE_GO_API_KEY`, public `/zen/go/v1/models`); per-model protocol from models.dev's `provider.npm`/`api` (Anthropic Messages, Chat
-  Completions; Responses and Gemini models listed `unsupported`). OpenRouter and OpenCode inference is unmeasured (no key). A plugin
+  Completions; Responses and Gemini models listed `unsupported`, and Zen's free models: Zen serves them to OpenCode
+  alone, 403 FreeTierError; aid does not pose as OpenCode). Both send `User-Agent: aid/<version>` and
+  `x-opencode-session` (uuid5 of the aid session, `ModelProvider.session`), as Go asks of other agents; Go answers
+  400 MissingSessionID without it. A list's `unsupported` marks are fetched with it: a plugin change shows after
+  the day's cache. OpenRouter and OpenCode inference is unmeasured (no key). A plugin
   named like a bundled one in an earlier tier shadows it: the example agent is `examples/deepseek_agent`.
 - `NativeSpec.model` (`provider/model`) runs the agent on another model (`session_agent`); the agent's
   `model_settings` follow only within one provider, `NativeSpec.model_settings` go over them. `aid new-py --model`,

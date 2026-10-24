@@ -101,6 +101,11 @@ class ModelProvider(ABC):
     catalog_id: ClassVar[str | None] = None
     """models.dev's id for it, for model details and prices. None: the same as its name."""
 
+    def __init__(self, session: str | None = None) -> None:
+        self.session = session
+        """The aid session the transport serves, for a provider that routes or caches by conversation; None when
+        it lists models."""
+
     @classmethod
     def catalog_name(cls) -> str:
         return cls.catalog_id or cls.provider_name()
