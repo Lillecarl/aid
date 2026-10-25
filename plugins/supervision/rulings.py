@@ -4,6 +4,10 @@ SQL for analysis (`aid supervision query`) and for supervisors (`query`).
 Requests whose mode involves no supervisor never reach it, so routed requests are all its rulings. `plan` names
 a `remove` request's plan in the session's `removals.db` (`aid.removals`); `request_id` joins
 `removal_plans.request_id` too.
+
+An `ask_user` question keeps none of its prose here (`QUESTION`): its text, the answer's words and the holders'
+notes are free text, and a question once held a password the agent made for the person. `session` and `seq` find
+the question in the session's history.
 """
 
 from __future__ import annotations
@@ -56,7 +60,11 @@ CREATE TABLE IF NOT EXISTS ruling_steps (
     PRIMARY KEY (request_id, step)
 ) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS rulings_session ON rulings (session, started);
+UPDATE ruling_steps SET note = NULL
+    WHERE note IS NOT NULL AND request_id IN (SELECT request_id FROM rulings WHERE tool_name = 'ask_user');
+UPDATE rulings SET title = '', said = NULL WHERE tool_name = 'ask_user' AND (title != '' OR said IS NOT NULL);
 """
+QUESTION: Final = "ask_user"
 
 
 class RulingEnd(StrEnum):
@@ -94,7 +102,7 @@ def _started(
             supervisor,
             mode,
             request.tool_name,
-            request.title,
+            "" if request.tool_name == QUESTION else request.title,
             json.dumps(request.input),
             plan if isinstance(plan, int) else None,
             time.time(),
@@ -111,8 +119,9 @@ def _entered(db: apsw.Connection, request_id: str, step: int, holder: str) -> No
 
 def _left(db: apsw.Connection, request_id: str, step: int, outcome: StepOutcome, note: str | None) -> None:
     db.execute(
-        "UPDATE ruling_steps SET left = ?, outcome = ?, note = ? WHERE request_id = ? AND step = ? AND left IS NULL",
-        (time.time(), outcome, note, request_id, step),
+        "UPDATE ruling_steps SET left = ?, outcome = ?, note = CASE WHEN (SELECT tool_name FROM rulings WHERE"
+        " request_id = ?) = ? THEN NULL ELSE ? END WHERE request_id = ? AND step = ? AND left IS NULL",
+        (time.time(), outcome, request_id, QUESTION, note, request_id, step),
     )
 
 
@@ -145,7 +154,7 @@ def _ended(db: apsw.Connection, request: PermissionRequest, step: int, decision:
                 _allowed(kind),
                 decision.by,
                 decision.supervisor or decision.plugin,
-                decision.text,
+                None if request.tool_name == QUESTION else decision.text,
                 request.request_id,
             ),
         )

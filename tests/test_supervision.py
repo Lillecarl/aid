@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import anyio
+import apsw
 import pytest
 
 import aid
@@ -46,6 +47,7 @@ from plugins.supervision.policy import (
     supervision_stuck,
     supervision_text,
 )
+from plugins.supervision.rulings import RULINGS_FILE, SCHEMA
 from tests.conftest import py_spec
 from tests.test_events import subscribed
 
@@ -626,6 +628,7 @@ async def test_a_forwarded_request_comes_back_to_the_supervisor(daemon: Paths, t
             boss_items = [e.item for e in (await boss.history(limit=1000)).entries]
             ruling = await settled_ruling(client)
             steps = await rulings(client, "SELECT step, holder, outcome, note FROM ruling_steps ORDER BY step")
+            prose = await rulings(client, "SELECT title, said FROM rulings")
     assert 'The supervisor picked "postgres".' in str(result.output)
     wakes = permission_wakes(boss_items)
     assert len(wakes) == 2
@@ -637,10 +640,29 @@ async def test_a_forwarded_request_comes_back_to_the_supervisor(daemon: Paths, t
     assert status.attention is None
     assert ruling.rows == [["supervisor", "decided", None, "supervisor", "boss", "0"]]
     assert steps.rows == [
-        [0, "supervisor", "forwarded", "unsure: check the target"],
+        [0, "supervisor", "forwarded", None],
         [1, "person", "silent", None],
         [2, "supervisor", "decided", None],
     ]
+    # Lillecarl/aid#49: a question's text and its holders' notes are free text, and stay in the history only.
+    assert prose.rows == [["", None]]
+
+
+def test_opening_the_rulings_clears_question_prose_written_before(tmp_path: Path) -> None:
+    db = apsw.Connection(str(tmp_path / RULINGS_FILE))
+    db.execute(SCHEMA)
+    db.execute(
+        "INSERT INTO rulings (request_id, session, turn, seq, supervisor, mode, tool_name, title, input, started, said)"
+        " VALUES ('q', 's', 't', 1, 'boss', 'supervisor', 'ask_user', 'the password is hunter2', 'null', 0, 'ok'),"
+        " ('c', 's', 't', 2, 'boss', 'supervisor', 'shell', 'ls', '{}', 0, 'fine')"
+    )
+    db.execute(
+        "INSERT INTO ruling_steps (request_id, step, holder, entered, note)"
+        " VALUES ('q', 0, 'supervisor', 0, 'save hunter2'), ('c', 0, 'supervisor', 0, 'a read')"
+    )
+    db.execute(SCHEMA)
+    rows = list(db.execute("SELECT r.title, r.said, s.note FROM rulings r JOIN ruling_steps s USING (request_id)"))
+    assert sorted(rows) == [("", None, None), ("ls", "fine", "a read")]
 
 
 async def test_rules_allow_a_plain_read_before_anyone_is_asked(daemon: Paths, tmp_path: Path) -> None:
