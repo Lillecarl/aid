@@ -236,7 +236,7 @@ class _ClientKey:
 
 
 def _client_key(name: str, provider: Provider | None, settings: dict[str, Any]) -> _ClientKey:
-    base_url = settings.get("api_base") or settings.get("base_url") or (provider and provider.base_url)
+    base_url = settings.get("api_base") or settings.get("base_url") or (provider.base_url if provider else None)
     if provider is None and not base_url:
         raise AidError(
             "unknown_provider",
@@ -371,7 +371,7 @@ class OpenAIChatModel:
 def _openai_usage(usage: CompletionUsage) -> RequestUsage:
     """`input_tokens` includes cached tokens here, as Chat Completions counts them."""
     prompt = usage.prompt_tokens_details
-    cached = (prompt and prompt.cached_tokens) or 0
+    cached = (prompt.cached_tokens if prompt else None) or 0
     completion = usage.completion_tokens_details
     return RequestUsage(
         input_tokens=usage.prompt_tokens or 0,
@@ -487,7 +487,11 @@ class AnthropicModel:
         if not api_key:
             raise AidError("missing_credentials", f"{self.model_name}: set {key_env}")
         retries = settings.get("max_retries", settings.get("num_retries", 0))
-        base_url = settings.get("api_base") or settings.get("base_url") or (self._provider and self._provider.base_url)
+        base_url = (
+            settings.get("api_base")
+            or settings.get("base_url")
+            or (self._provider.base_url if self._provider else None)
+        )
         key = _ClientKey(base_url, api_key, retries)
         if (client := self._clients.get(key)) is None:
             client = anthropic.AsyncAnthropic(
@@ -692,7 +696,11 @@ class GoogleModel:
         if not api_key:
             raise AidError("missing_credentials", f"{self.model_name}: set {key_env}")
         retries = settings.get("max_retries", settings.get("num_retries", 0))
-        base_url = settings.get("api_base") or settings.get("base_url") or (self._provider and self._provider.base_url)
+        base_url = (
+            settings.get("api_base")
+            or settings.get("base_url")
+            or (self._provider.base_url if self._provider else None)
+        )
         key = _ClientKey(base_url, api_key, retries)
         if (pair := self._clients.get(key)) is None:
             from google import genai  # noqa: PLC0415 -- half a second of every worker's start otherwise
@@ -750,7 +758,7 @@ class GoogleModel:
                 for candidate in chunk.candidates or []:
                     if candidate.finish_reason == "MAX_TOKENS":
                         yield StreamDelta(truncated=True)
-                    for part in (candidate.content and candidate.content.parts) or []:
+                    for part in (candidate.content.parts if candidate.content else None) or []:
                         extra = _signature(part.thought_signature)
                         if part.function_call is not None:
                             call = part.function_call

@@ -142,7 +142,7 @@ def write_fake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, P
 
 
 def make_spec(tmp_path: Path, fake: Path, **kwargs: object) -> ClaudeSdkSpec:
-    return ClaudeSdkSpec(cwd=str(tmp_path), model="opus", command=[str(fake)], **kwargs)  # pyright: ignore[reportArgumentType] -- tests pass valid spec fields
+    return ClaudeSdkSpec.model_validate({"cwd": str(tmp_path), "model": "opus", "command": [str(fake)], **kwargs})
 
 
 async def test_prompt_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -443,9 +443,9 @@ def test_spec_shape() -> None:
     assert spec.command == ["claude"]
     assert spec.permission is PermissionMode.DENY
     with pytest.raises(ValidationError):
-        ClaudeSdkSpec(cwd="/", model="opus", bogus=1)  # pyright: ignore[reportCallIssue] -- extra is forbidden
+        ClaudeSdkSpec.model_validate({"cwd": "/", "model": "opus", "bogus": 1})
     with pytest.raises(ValidationError):
-        spec.model = "haiku"
+        spec.model = "haiku"  # pyrefly: ignore[read-only] -- the frozen model refuses it at runtime
 
 
 async def test_remote_control_url_emitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
