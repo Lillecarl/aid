@@ -227,7 +227,7 @@ async def test_a_response_cut_at_the_output_limit_says_so(tmp_path: Path) -> Non
         result = await session.prompt("go", emit)
     assert result == Output(output="half an ans", stop_reason="max_tokens")
     [retry] = [p for m in await stored(tmp_path) for p in m.parts if isinstance(p, RetryPromptPart)]
-    assert retry.content.endswith("the response hit its output token limit")
+    assert isinstance(retry.content, str) and retry.content.endswith("the response hit its output token limit")
 
 
 @pytest.mark.parametrize(

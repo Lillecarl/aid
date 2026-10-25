@@ -469,7 +469,12 @@ def anthropic_messages(messages: Sequence[ModelMessage]) -> tuple[list[TextBlock
                             arguments = {}
                         add(
                             "assistant",
-                            {"type": "tool_use", "id": part.tool_call_id, "name": part.tool_name, "input": arguments},
+                            {
+                                "type": "tool_use",
+                                "id": part.tool_call_id,
+                                "name": part.tool_name,
+                                "input": {**arguments},
+                            },
                         )
                     case _:
                         pass

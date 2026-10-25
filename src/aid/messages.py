@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Annotated, Any, Literal, cast
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -14,23 +14,25 @@ if TYPE_CHECKING:
 class _Record(BaseModel):
     model_config = ConfigDict(extra="allow")
 
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+    # BaseModel's own signature: pyright gives this field-less base a synthesized __init__ with no parameters, which
+    # the subclasses' positional __init__s could not call. Pydantic validates each field.
+    def __init__(self, **data: Any) -> None:
+        super().__init__(**data)
 
 
 class SystemPromptPart(_Record):
     content: str
     part_kind: Literal["system-prompt"] = "system-prompt"
 
-    def __init__(self, content: str, **kwargs: Any) -> None:
+    def __init__(self, content: str, **kwargs: JsonValue) -> None:
         super().__init__(content=content, **kwargs)
 
 
 class UserPromptPart(_Record):
-    content: Any
+    content: JsonValue
     part_kind: Literal["user-prompt"] = "user-prompt"
 
-    def __init__(self, content: Any, **kwargs: Any) -> None:
+    def __init__(self, content: JsonValue, **kwargs: JsonValue) -> None:
         super().__init__(content=content, **kwargs)
 
 
@@ -38,7 +40,7 @@ class TextPart(_Record):
     content: str
     part_kind: Literal["text"] = "text"
 
-    def __init__(self, content: str, **kwargs: Any) -> None:
+    def __init__(self, content: str, **kwargs: JsonValue) -> None:
         super().__init__(content=content, **kwargs)
 
 
@@ -47,24 +49,26 @@ class ThinkingPart(_Record):
     signature: str | None = None
     part_kind: Literal["thinking"] = "thinking"
 
-    def __init__(self, content: str, signature: str | None = None, **kwargs: Any) -> None:
+    def __init__(self, content: str, signature: str | None = None, **kwargs: JsonValue) -> None:
         super().__init__(content=content, signature=signature, **kwargs)
 
 
 class ToolCallPart(_Record):
     tool_name: str
-    args: str | dict[str, Any]
+    args: str | dict[str, JsonValue]
     tool_call_id: str
     part_kind: Literal["tool-call"] = "tool-call"
 
-    def __init__(self, tool_name: str, args: str | dict[str, Any], tool_call_id: str, **kwargs: Any) -> None:
+    def __init__(
+        self, tool_name: str, args: str | dict[str, JsonValue], tool_call_id: str, **kwargs: JsonValue
+    ) -> None:
         super().__init__(tool_name=tool_name, args=args, tool_call_id=tool_call_id, **kwargs)
 
-    def args_as_dict(self) -> dict[str, Any]:
-        value = json.loads(self.args) if isinstance(self.args, str) else self.args
+    def args_as_dict(self) -> dict[str, JsonValue]:
+        value: JsonValue = json.loads(self.args) if isinstance(self.args, str) else self.args
         if not isinstance(value, dict):
             raise ValueError("tool arguments must be an object")
-        return cast(dict[str, Any], value)
+        return value
 
     def args_as_json_str(self) -> str:
         return self.args if isinstance(self.args, str) else json.dumps(self.args)
@@ -72,12 +76,12 @@ class ToolCallPart(_Record):
 
 class ToolReturnPart(_Record):
     tool_name: str
-    content: Any
+    content: JsonValue
     tool_call_id: str
     outcome: Literal["success", "failed", "denied", "interrupted"] = "success"
     part_kind: Literal["tool-return"] = "tool-return"
 
-    def __init__(self, tool_name: str, content: Any, tool_call_id: str, **kwargs: Any) -> None:
+    def __init__(self, tool_name: str, content: JsonValue, tool_call_id: str, **kwargs: JsonValue) -> None:
         super().__init__(tool_name=tool_name, content=content, tool_call_id=tool_call_id, **kwargs)
 
     def model_response_str(self) -> str:
@@ -85,12 +89,14 @@ class ToolReturnPart(_Record):
 
 
 class RetryPromptPart(_Record):
-    content: Any
+    content: JsonValue
     tool_name: str | None = None
     tool_call_id: str = ""
     part_kind: Literal["retry-prompt"] = "retry-prompt"
 
-    def __init__(self, content: Any, tool_name: str | None = None, tool_call_id: str = "", **kwargs: Any) -> None:
+    def __init__(
+        self, content: JsonValue, tool_name: str | None = None, tool_call_id: str = "", **kwargs: JsonValue
+    ) -> None:
         super().__init__(content=content, tool_name=tool_name, tool_call_id=tool_call_id, **kwargs)
 
     def model_response(self) -> str:
@@ -107,7 +113,7 @@ class ModelRequest(_Record):
     parts: list[Part]
     kind: Literal["request"] = "request"
 
-    def __init__(self, parts: Sequence[Part], **kwargs: Any) -> None:
+    def __init__(self, parts: Sequence[Part], **kwargs: JsonValue) -> None:
         super().__init__(parts=list(parts), **kwargs)
 
 
@@ -116,7 +122,7 @@ class ModelResponse(_Record):
     model_name: str | None = None
     kind: Literal["response"] = "response"
 
-    def __init__(self, parts: Sequence[Part], model_name: str | None = None, **kwargs: Any) -> None:
+    def __init__(self, parts: Sequence[Part], model_name: str | None = None, **kwargs: JsonValue) -> None:
         super().__init__(parts=list(parts), model_name=model_name, **kwargs)
 
 
