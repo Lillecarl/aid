@@ -163,8 +163,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   googleapis/python-genai#1640), each taking a
   `Provider` (base URL, key variable, default request settings, headers). A provider's quirks subclass
   `OpenAIChatModel` (`request_settings`, `reasoning`, `usage`, `wire`), never branch in it. `OPENAI_COMPATIBLE`:
-  prefixes models.dev gives no URL for, and local servers. `model_settings`: `api_key`/`api_base`/`max_retries`
-  build the client, the rest goes into each request. `model_for(name)`: the table alone, for direct use.
+  prefixes models.dev gives no URL for, and local servers. `model_settings` (JSON): `ClientSettings`
+  (`api_key`, `api_base`/`base_url`, `max_retries`; mistyped → `bad_model_settings`) build the client, the rest goes
+  into each request, cast once to the SDK's `…CreateParamsStreaming` (validating it would drop
+  `reasoning_content`). `model_for(name)`: the table alone, for direct use.
 - `src/aid/providers.py` — `resolve(name, catalog.model_providers)`, in `open_native`: an `aid.ModelProvider`
   plugin claiming the prefix (async `transport(model)`), else `anthropic/`, else `google/` (`GEMINI_API_KEY`;
   models.dev's id, so prices and lists need no mapping; `gemini/` stays the Chat Completions route, unpriced;

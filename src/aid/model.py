@@ -8,7 +8,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast
 
 import anthropic
 import anyio
@@ -29,8 +29,10 @@ from anthropic.types import (
     ThinkingDelta,
     ToolUseBlock,
 )
+from anthropic.types.message_create_params import MessageCreateParamsStreaming
 from openai.types.chat import ChatCompletionAssistantMessageParam
-from pydantic import TypeAdapter
+from openai.types.chat.completion_create_params import CompletionCreateParamsStreaming
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from aid.messages import (
     ModelMessage,
@@ -72,7 +74,7 @@ if TYPE_CHECKING:
 class ModelInfo:
     tools: Sequence[Tool] = ()
     output_type: Any = str
-    settings: dict[str, Any] = field(default_factory=dict[str, Any])
+    settings: Mapping[str, JsonValue] = field(default_factory=dict[str, JsonValue])
 
 
 @dataclass
@@ -192,7 +194,7 @@ class Provider:
     key_env: str
     local: bool = False
     """An unauthenticated local server: a missing key is not an error."""
-    defaults: Mapping[str, Any] = field(default_factory=dict[str, Any])
+    defaults: Mapping[str, JsonValue] = field(default_factory=dict[str, JsonValue])
     """Request settings the session's `model_settings` override."""
     headers: Mapping[str, str] = field(default_factory=dict[str, str])
     """Sent with every request of the client."""
@@ -217,9 +219,31 @@ OPENAI_COMPATIBLE: Final[dict[str, Provider]] = {
 """`provider/model` prefixes served through the OpenAI SDK, for servers models.dev names no URL for and local ones.
 Others resolve through `aid.providers`."""
 
-CLIENT_SETTINGS: Final = frozenset({"api_key", "api_base", "base_url", "num_retries", "max_retries"})
-"""`model_settings` keys that configure the SDK client; every other key goes into each request."""
+
+class ClientSettings(BaseModel):
+    """The `model_settings` keys that configure the SDK client; every other key goes into each request."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    api_key: str | None = None
+    base_url: str | None = Field(None, validation_alias=AliasChoices("api_base", "base_url"))
+    max_retries: int = Field(0, validation_alias=AliasChoices("max_retries", "num_retries"))
+
+
+def _setting_names(model: type[BaseModel]) -> frozenset[str]:
+    names: set[str] = set()
+    for name, info in model.model_fields.items():
+        alias = info.validation_alias
+        if isinstance(alias, AliasChoices):
+            names.update(c for c in alias.choices if isinstance(c, str))
+        else:
+            names.add(name)
+    return frozenset(names)
+
+
+CLIENT_SETTINGS: Final = _setting_names(ClientSettings)
 DEFAULT_TIMEOUT: Final = 600
+_TIMEOUT: Final = TypeAdapter(float)
 
 
 def split_name(name: str) -> tuple[str, str]:
@@ -235,26 +259,28 @@ class _ClientKey:
     max_retries: int
 
 
-def _client_key(name: str, provider: Provider | None, settings: dict[str, Any]) -> _ClientKey:
-    base_url = settings.get("api_base") or settings.get("base_url") or (provider.base_url if provider else None)
-    if provider is None and not base_url:
-        raise AidError(
-            "unknown_provider",
-            f"no provider {split_name(name)[0]!r}: use one of {', '.join(OPENAI_COMPATIBLE)}, anthropic, "
-            "or set api_base in model_settings",
-        )
-    key_env = provider.key_env if provider else None
-    api_key = settings.get("api_key") or (os.environ.get(key_env) if key_env else None)
+def client_settings(name: str, settings: Mapping[str, JsonValue]) -> ClientSettings:
+    try:
+        return ClientSettings.model_validate(settings)
+    except ValidationError as e:
+        raise AidError("bad_model_settings", f"{name}: {e}") from e
+
+
+def _client_key(
+    name: str, settings: Mapping[str, JsonValue], key_env: str | None, base_url: str | None, *, local: bool = False
+) -> _ClientKey:
+    """The client's settings over the provider's: `key_env` and `base_url` apply where the settings name none."""
+    client = client_settings(name, settings)
+    api_key = client.api_key or (os.environ.get(key_env) if key_env else None)
     if not api_key:
-        if provider is None or not provider.local:
+        if not local:
             raise AidError("missing_credentials", f"{name}: set {key_env or 'api_key in model_settings'}")
         api_key = "local"
-    retries = settings.get("max_retries", settings.get("num_retries", 0))
-    return _ClientKey(base_url, api_key, retries)
+    return _ClientKey(client.base_url or base_url, api_key, client.max_retries)
 
 
-def _request_settings(settings: dict[str, Any], provider: Provider | None = None) -> dict[str, Any]:
-    kwargs = {**(provider.defaults if provider else {})}
+def _request_settings(settings: Mapping[str, JsonValue], provider: Provider | None = None) -> dict[str, JsonValue]:
+    kwargs: dict[str, JsonValue] = {**(provider.defaults if provider else {})}
     kwargs.update((key, value) for key, value in settings.items() if key not in CLIENT_SETTINGS)
     kwargs.setdefault("timeout", DEFAULT_TIMEOUT)
     return kwargs
@@ -271,8 +297,21 @@ class OpenAIChatModel:
         self._provider = provider or OPENAI_COMPATIBLE.get(prefix)
         self._clients: dict[_ClientKey, openai.AsyncOpenAI] = {}
 
-    def _client(self, settings: dict[str, Any]) -> openai.AsyncOpenAI:
-        key = _client_key(self.model_name, self._provider, settings)
+    def _client(self, settings: Mapping[str, JsonValue]) -> openai.AsyncOpenAI:
+        provider = self._provider
+        if provider is None and client_settings(self.model_name, settings).base_url is None:
+            raise AidError(
+                "unknown_provider",
+                f"no provider {split_name(self.model_name)[0]!r}: use one of {', '.join(OPENAI_COMPATIBLE)}, "
+                "anthropic, or set api_base in model_settings",
+            )
+        key = _client_key(
+            self.model_name,
+            settings,
+            provider.key_env if provider else None,
+            provider.base_url if provider else None,
+            local=provider is not None and provider.local,
+        )
         if (client := self._clients.get(key)) is None:
             client = openai.AsyncOpenAI(
                 api_key=key.api_key,
@@ -289,7 +328,7 @@ class OpenAIChatModel:
         for client in clients:
             await client.close()
 
-    def request_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
+    def request_settings(self, settings: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
         """Each request's keyword arguments from the session's settings, under the provider's defaults."""
         kwargs = _request_settings(settings, self._provider)
         if self._provider is None or self._provider.stream_usage:
@@ -321,18 +360,22 @@ class OpenAIChatModel:
 
     async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
         client = self._client(info.settings)
-        kwargs = self.request_settings(info.settings)
-        if info.tools:
-            kwargs["tools"] = [tool.definition() for tool in info.tools]
         wired = self.wire(messages)
+        # The settings are the session's JSON, under the SDK's keyword names; the SDK and the server check them.
+        request = cast(
+            CompletionCreateParamsStreaming,
+            {**self.request_settings(info.settings), "model": self._model, "messages": wired, "stream": True},
+        )
+        if info.tools:
+            request["tools"] = [tool.definition() for tool in info.tools]
         if info.output_type is not str:
             schema = TypeAdapter(info.output_type).json_schema()
-            kwargs["response_format"] = self.response_format(schema)
+            request["response_format"] = self.response_format(schema)
             if (note := self.schema_note(schema)) is not None:
                 # After the leading instructions, so every request keeps the same cached prefix.
                 lead = next((i for i, w in enumerate(wired) if w.get("role") != "system"), len(wired))
                 wired.insert(lead, {"role": "system", "content": note})
-        stream = await client.chat.completions.create(model=self._model, messages=wired, stream=True, **kwargs)
+        stream = await client.chat.completions.create(**request)
         ids: dict[int, str] = {}
         try:
             async for chunk in stream:
@@ -355,8 +398,8 @@ class OpenAIChatModel:
                         yield StreamDelta(
                             100 + call.index,
                             ToolCallPart(
-                                (function and function.name) or "",
-                                (function and function.arguments) or "",
+                                (function.name if function else None) or "",
+                                (function.arguments if function else None) or "",
                                 ids.get(call.index, ""),
                             ),
                         )
@@ -481,18 +524,10 @@ class AnthropicModel:
         self._provider = provider
         self._clients: dict[_ClientKey, anthropic.AsyncAnthropic] = {}
 
-    def _client(self, settings: dict[str, Any]) -> anthropic.AsyncAnthropic:
-        key_env = self._provider.key_env if self._provider else ANTHROPIC_KEY_ENV
-        api_key = settings.get("api_key") or os.environ.get(key_env)
-        if not api_key:
-            raise AidError("missing_credentials", f"{self.model_name}: set {key_env}")
-        retries = settings.get("max_retries", settings.get("num_retries", 0))
-        base_url = (
-            settings.get("api_base")
-            or settings.get("base_url")
-            or (self._provider.base_url if self._provider else None)
-        )
-        key = _ClientKey(base_url, api_key, retries)
+    def _client(self, settings: Mapping[str, JsonValue]) -> anthropic.AsyncAnthropic:
+        provider = self._provider
+        key_env = provider.key_env if provider else ANTHROPIC_KEY_ENV
+        key = _client_key(self.model_name, settings, key_env, provider.base_url if provider else None)
         if (client := self._clients.get(key)) is None:
             client = anthropic.AsyncAnthropic(
                 api_key=key.api_key,
@@ -510,23 +545,27 @@ class AnthropicModel:
 
     async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
         client = self._client(info.settings)
-        kwargs = _request_settings(info.settings)
-        kwargs.setdefault(
+        system, wire = anthropic_messages(messages)
+        # The settings are the session's JSON, under the SDK's keyword names; the SDK and the server check them.
+        request = cast(
+            MessageCreateParamsStreaming,
+            {**_request_settings(info.settings), "model": self._model, "messages": wire, "stream": True},
+        )
+        request.setdefault(
             "max_tokens", ANTHROPIC_LEGACY_MAX_TOKENS if self._model.startswith("claude-3") else ANTHROPIC_MAX_TOKENS
         )
-        kwargs.setdefault("cache_control", {"type": "ephemeral"})
+        request.setdefault("cache_control", {"type": "ephemeral"})
         if info.tools:
-            kwargs["tools"] = [anthropic_tool(tool.definition()) for tool in info.tools]
+            request["tools"] = [anthropic_tool(tool.definition()) for tool in info.tools]
         if info.output_type is not str:
             schema = TypeAdapter(info.output_type).json_schema()
-            kwargs["output_config"] = {
-                **kwargs.get("output_config", {}),
+            request["output_config"] = {
+                **request.get("output_config", {}),
                 "format": {"type": "json_schema", "schema": schema},
             }
-        system, wire = anthropic_messages(messages)
         if system:
-            kwargs["system"] = system
-        stream = await client.messages.create(model=self._model, messages=wire, stream=True, **kwargs)
+            request["system"] = system
+        stream = await client.messages.create(**request)
         arguments: dict[int, bool] = {}
         try:
             async for event in stream:
@@ -690,18 +729,10 @@ class GoogleModel:
         self._provider = provider
         self._clients: dict[_ClientKey, tuple[genai.Client, httpx.AsyncClient]] = {}
 
-    def _client(self, settings: dict[str, Any]) -> genai.Client:
-        key_env = self._provider.key_env if self._provider else GOOGLE_KEY_ENV
-        api_key = settings.get("api_key") or os.environ.get(key_env)
-        if not api_key:
-            raise AidError("missing_credentials", f"{self.model_name}: set {key_env}")
-        retries = settings.get("max_retries", settings.get("num_retries", 0))
-        base_url = (
-            settings.get("api_base")
-            or settings.get("base_url")
-            or (self._provider.base_url if self._provider else None)
-        )
-        key = _ClientKey(base_url, api_key, retries)
+    def _client(self, settings: Mapping[str, JsonValue]) -> genai.Client:
+        provider = self._provider
+        key_env = provider.key_env if provider else GOOGLE_KEY_ENV
+        key = _client_key(self.model_name, settings, key_env, provider.base_url if provider else None)
         if (pair := self._clients.get(key)) is None:
             from google import genai  # noqa: PLC0415 -- half a second of every worker's start otherwise
             from google.genai.types import HttpOptions, HttpRetryOptions  # noqa: PLC0415 -- the same
@@ -732,7 +763,7 @@ class GoogleModel:
         settings = _request_settings(info.settings, self._provider)
         # aid runs the tool loop; the SDK's own would also log a warning on each worker's first request.
         ours: GenerateContentConfigDict = {
-            "http_options": {"timeout": int(settings.pop("timeout") * 1000)},
+            "http_options": {"timeout": int(_TIMEOUT.validate_python(settings.pop("timeout")) * 1000)},
             "automatic_function_calling": {"disable": True},
         }
         if info.tools:

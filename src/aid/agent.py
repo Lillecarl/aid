@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, get_type_hints
 
 import anyio.to_thread
-from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, create_model
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError, create_model
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -106,7 +106,7 @@ class Agent:
     tools: Sequence[Callable[..., Any] | Tool] = ()
     toolsets: Sequence[Toolset] = ()
     output_type: Any = str
-    model_settings: dict[str, Any] = field(default_factory=dict[str, Any])
+    model_settings: dict[str, JsonValue] = field(default_factory=dict[str, JsonValue])
     output_retries: int = 3
     max_continuations: int | None = 4
     """Requests that continue one answer cut at the output token limit; None: no bound."""

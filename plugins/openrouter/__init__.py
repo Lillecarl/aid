@@ -7,16 +7,18 @@ Unmeasured: no inference call has run through this plugin (no key here). The mod
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Final, overload
+from typing import TYPE_CHECKING, Final, overload
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, JsonValue
 
 import aid
 from aid.model import OpenAIChatModel, Provider
-from aid.protocol import ModelCost, ModelEntry
+from aid.protocol import AidError, ModelCost, ModelEntry
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from openai.types.chat.chat_completion_chunk import ChoiceDelta
 
 KEY_ENV: Final = "OPENROUTER_API_KEY"
@@ -90,9 +92,12 @@ class OpenRouterChat(OpenAIChatModel):
 
     replays_reasoning = False
 
-    def request_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
+    def request_settings(self, settings: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
         kwargs = super().request_settings(settings)
-        kwargs["extra_body"] = {"usage": {"include": True}, **kwargs.get("extra_body", {})}
+        extra = kwargs.get("extra_body") or {}
+        if not isinstance(extra, dict):
+            raise AidError("bad_model_settings", f"{self.model_name}: extra_body must be an object")
+        kwargs["extra_body"] = {"usage": {"include": True}, **extra}
         return kwargs
 
     def reasoning(self, delta: ChoiceDelta) -> str | None:

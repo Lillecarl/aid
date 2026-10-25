@@ -28,6 +28,7 @@ from aid.messages import (
 from aid.model import (
     ANTHROPIC_MAX_TOKENS,
     AnthropicModel,
+    GoogleModel,
     ModelInfo,
     OpenAIChatModel,
     Provider,
@@ -44,6 +45,8 @@ from tests.test_native_backend import backend
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from pydantic import JsonValue
 
 pytestmark = pytest.mark.anyio
 
@@ -528,6 +531,20 @@ async def test_model_names_pick_the_sdk_and_credentials_fail_by_name(monkeypatch
     await local.aclose()
 
 
+@pytest.mark.parametrize(
+    "model", [OpenAIChatModel("groq/llama"), AnthropicModel("anthropic/c"), GoogleModel("google/g")]
+)
+@pytest.mark.parametrize("settings", [{"api_key": 7}, {"api_key": "k", "max_retries": "many"}])
+async def test_a_mistyped_client_setting_fails_before_the_sdk(
+    model: OpenAIChatModel | AnthropicModel | GoogleModel, settings: dict[str, JsonValue]
+) -> None:
+    go: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart("go")])]
+    with pytest.raises(AidError) as caught:
+        await anext(model.stream(go, ModelInfo(settings=settings)))
+    assert caught.value.code == "bad_model_settings"
+    assert model.model_name in caught.value.message
+
+
 def sse(items: list[dict[str, Any]]) -> bytes:
     return "".join(f"event: {item['type']}\ndata: {json.dumps(item)}\n\n" for item in items).encode()
 
@@ -586,7 +603,11 @@ async def test_anthropic_request_is_native_and_passes_headers(monkeypatch: pytes
         ),
     ]
     model = AnthropicModel("anthropic/claude-test")
-    settings = {"api_key": "k", "api_base": "https://example.test", "extra_headers": {"anthropic-beta": "b1"}}
+    settings: dict[str, JsonValue] = {
+        "api_key": "k",
+        "api_base": "https://example.test",
+        "extra_headers": {"anthropic-beta": "b1"},
+    }
     try:
         response = await model.request(history, ModelInfo(tools=[Tool(now)], settings=settings))
     finally:
