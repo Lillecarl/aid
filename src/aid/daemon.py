@@ -871,12 +871,12 @@ class Daemon:
                 return Done(id=request.id)
             case DeleteSession():
                 session = self._session(request.session)
-                await self._stop(session)
-                del self._sessions[session.name]
-                await anyio.to_thread.run_sync(shutil.rmtree, self._paths.session_dir(session.name), True)
-                await anyio.to_thread.run_sync(
-                    Path(hook_socket(self._paths.runtime_dir, session.name).removeprefix("ipc://")).unlink, True
-                )
+                # A start in flight ends first: a worker stopped before it has a handle would keep running.
+                async with session.lock:
+                    await self._stop(session)
+                    forgotten = self._forget(session)
+                if forgotten:
+                    await self._remove_files(session.name)
                 return Done(id=request.id)
             case AddPlugin():
                 holder = self._keys.plugin(request.spec.public_key)
@@ -1004,6 +1004,21 @@ class Daemon:
         )
         return _Session(name, spec, history, Inbox(anyio.Path(self._paths.session_dir(name)) / INBOX_FILE, history))
 
+    def _forget(self, session: _Session) -> bool:
+        """Drop `session` from the table if it is still the one there. A delete and a failed first start can both
+        hold it across an await; only the first to forget it removes its files, and a session made under the same
+        name since is never touched."""
+        if self._sessions.get(session.name) is not session:
+            return False
+        del self._sessions[session.name]
+        return True
+
+    async def _remove_files(self, name: str) -> None:
+        await anyio.to_thread.run_sync(shutil.rmtree, self._paths.session_dir(name), True)
+        await anyio.to_thread.run_sync(
+            Path(hook_socket(self._paths.runtime_dir, name).removeprefix("ipc://")).unlink, True
+        )
+
     def _session(self, name: str) -> _Session:
         if (session := self._sessions.get(name)) is None:
             raise AidError("not_found", f"no session named {name!r}")
@@ -1035,8 +1050,8 @@ class Daemon:
             await session.inbox.initialize()
             await self._ensure_running(session)
         except BaseException:
-            del self._sessions[session.name]
-            await anyio.to_thread.run_sync(shutil.rmtree, session_dir, True)
+            if self._forget(session):
+                await self._remove_files(session.name)
             raise
 
     async def _send_message(self, request: SendMessage) -> None:

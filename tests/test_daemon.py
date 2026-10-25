@@ -491,6 +491,36 @@ async def test_delete_removes_state(daemon: Paths, tmp_path: Path) -> None:
     assert not daemon.session_dir("gone").exists()
 
 
+@pytest.mark.parametrize("target", ["agents:no_such_agent", "agents:echo"])
+async def test_a_delete_during_the_first_start_waits_for_it(daemon: Paths, tmp_path: Path, target: str) -> None:
+    """A delete that arrives while the session's first worker is starting waits for the start to end, then stops
+    what started. Each path removes only the session it holds: no KeyError, no worker or directory left behind."""
+    spec_file = daemon.session_dir("doomed") / "spec.json"
+    deleted: list[str] = []
+
+    async def create(client: aid.Client) -> None:
+        try:
+            await client.create("doomed", py_spec(tmp_path, target))
+        except AidError as e:
+            assert e.code != "internal", e.message
+
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as creator, aid.connect(daemon) as deleter, anyio.create_task_group() as tg:
+            tg.start_soon(create, creator)
+            while not spec_file.exists():  # noqa: ASYNC110 -- the daemon writes it before starting the worker
+                await anyio.sleep(0.005)
+            try:
+                await deleter.session("doomed").delete()
+                deleted.append("deleted")
+            except AidError as e:
+                deleted.append(e.code)
+        async with aid.connect(daemon) as client:
+            assert await client.sessions() == []
+    assert deleted in (["deleted"], ["not_found"]), deleted
+    assert not daemon.session_dir("doomed").exists()
+    assert not (daemon.runtime_dir / "hook-doomed.sock").exists()
+
+
 async def test_tags_merge_into_the_saved_spec(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:
