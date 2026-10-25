@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { SvelteSet } from "svelte/reactivity";
   import * as api from "./api";
   import type {
     DirectoryRequest,
@@ -65,6 +66,19 @@
   // Thinking visibility: live stays open while a thought streams and collapses when the turn records it;
   // collapsed keeps every thought shut.
   let thinking = $state(localStorage.getItem(THINKING_KEY) ?? "live");
+  /** Text rows a person folded to their first line, by row key: survives the window loading and dropping rows. */
+  const folded = new SvelteSet<string>();
+  const FOLDABLE: ReadonlySet<Kind> = new Set(["assistant", "user", "message", "error"]);
+
+  function toggleFold(key: string): void {
+    if (!folded.delete(key)) folded.add(key);
+  }
+
+  /** Every text row to its first line and every box shut; boxes open again one at a time. */
+  function foldAll(): void {
+    for (const row of rows) if (FOLDABLE.has(row.kind)) folded.add(row.key);
+    log?.querySelectorAll("details[open]").forEach((d) => ((d as HTMLDetailsElement).open = false));
+  }
   $effect(() => localStorage.setItem(THINKING_KEY, thinking));
 
   let rows: Row[] = $state([]);
@@ -603,10 +617,21 @@
       <option value="collapsed">Collapsed</option>
     </select>
   </label>
+  <button type="button" data-testid="fold-all" onclick={foldAll}>Fold all</button>
+  <button type="button" data-testid="unfold-all" onclick={() => folded.clear()}>Unfold all</button>
 </div>
 {#snippet rowview(row: Row)}
-  {#if row.kind === "assistant"}
-    <div class="assistant" data-testid="chat-row"><Markdown text={row.text} /></div>
+  {#if FOLDABLE.has(row.kind)}
+    <div class="{row.kind} foldable" class:folded={folded.has(row.key)} data-testid="chat-row"
+      ><button
+        type="button"
+        class="fold"
+        data-testid="fold"
+        aria-expanded={!folded.has(row.key)}
+        title={folded.has(row.key) ? "Unfold" : "Fold to the first line"}
+        onclick={() => toggleFold(row.key)}>{folded.has(row.key) ? "▸" : "▾"}</button
+      >{#if row.kind === "assistant"}<Markdown text={row.text} />{:else}{row.text}{/if}</div
+    >
     {:else if row.kind === "thought"}
       <details class="thought" data-testid="chat-row" open={thinking === "live" && row.seq === undefined}>
         <summary>Thinking <span class="gist">{row.text.trim().split("\n", 1)[0]}</span></summary>
@@ -727,8 +752,12 @@
     margin-bottom: 0.5rem;
   }
   /* app.css makes controls fill their container; beside a label's text that runs past the page edge. */
-  .head select {
+  .head select,
+  .head button {
     width: auto;
+  }
+  .head button {
+    font-size: 0.85em;
   }
   .head label {
     color: var(--muted);
@@ -775,6 +804,35 @@
     text-align: center;
     color: var(--muted);
     font-size: 0.85em;
+  }
+  /* div.: outranks .user's padding shorthand, which comes later. */
+  div.foldable {
+    position: relative;
+    padding-right: 1.8rem;
+  }
+  .fold {
+    position: absolute;
+    top: 0.2rem;
+    right: 0.2rem;
+    padding: 0 0.3rem;
+    line-height: 1.2;
+    font-size: 0.8em;
+    color: var(--muted);
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+  .folded {
+    max-height: 1.6em;
+    overflow: hidden;
+    padding-bottom: 0;
+  }
+  .folded.user,
+  .folded.message {
+    max-height: calc(1.6em + 0.4rem);
+  }
+  .folded :global(p) {
+    margin-top: 0;
   }
   .user,
   .message {

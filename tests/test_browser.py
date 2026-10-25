@@ -336,6 +336,31 @@ async def test_tool_card_names_its_file(page: Page, session_daemon: Paths, tmp_p
     assert "notes.txt" in (await box.get_by_test_id("tool-paths").text_content() or "")
 
 
+async def test_rows_fold_one_at_a_time_and_all_at_once(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """Lillecarl/aid#40: a text row folds to its first line; Fold all also shuts every box."""
+    await anyio.Path(tmp_path / "notes.txt").write_text("remember this\n")
+    await seed_session(session_daemon, tmp_path, "folder", "agents:coder", PermissionMode.ALLOW)
+    await open_session(page, "folder")
+    await send_chat(page, '[\n["read",\n{"path": "notes.txt"}]\n]')
+    await expect_chat_text(page, "remember this")
+    await wait_for_idle(page)
+    box = page.get_by_test_id("tool-box").filter(has_text="notes.txt")
+    await open_details(box.locator("summary"), box.get_by_test_id("tool-paths"))
+    row = page.locator(".user").last
+    tall = await row.bounding_box()
+    await row.get_by_test_id("fold").click()
+    await page.locator(".user.folded").wait_for(timeout=TIMEOUT * 1000)
+    short = await row.bounding_box()
+    assert tall is not None and short is not None and short["height"] < tall["height"]
+    await row.get_by_test_id("fold").click()
+    await page.locator(".user.folded").wait_for(state="detached", timeout=TIMEOUT * 1000)
+    await page.get_by_test_id("fold-all").click()
+    await page.locator(".user.folded").first.wait_for(timeout=TIMEOUT * 1000)
+    assert await page.locator("details[open]").count() == 0
+    await page.get_by_test_id("unfold-all").click()
+    assert await page.locator(".folded").count() == 0
+
+
 async def test_status_shows_accumulated_cost(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     await seed_acp_session(session_daemon, tmp_path, "spender")
     await open_session(page, "spender")
