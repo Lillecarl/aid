@@ -384,11 +384,12 @@ class NativeBackend:
         transport: Transport | None = None,
         price_as: str | None = None,
         fresh_turns: bool = False,
+        offers: Callable[[str], bool] | None = None,
     ) -> None:
         """`transport`: the agent's model, resolved from its name (`aid.providers.resolve`); the backend owns and
         prices it. Without one, a name resolves through `model_for` alone. `price_as`: the name models.dev prices it
         under, where the provider's prefix is not models.dev's id. `desired_max`: the context gauge; None takes half
-        the model's window from models.dev."""
+        the model's window from models.dev. `offers`: the session's tool ceiling; a tool it refuses is never offered."""
         self._agent = agent
         self._history_file = history_file
         self._history = history
@@ -406,6 +407,8 @@ class NativeBackend:
         functions = [*agent.tools, *(fn for toolset in [*agent.toolsets, *toolsets] for fn in toolset.tools)]
         for fn in functions:
             tool = fn if isinstance(fn, Tool) else Tool(fn)
+            if offers is not None and not offers(tool.name):
+                continue
             if tool.name in tools:
                 raise ValueError(f"duplicate tool {tool.name!r}")
             tools[tool.name] = tool
@@ -901,6 +904,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             transport=transport,
             price_as=catalog_model(agent.model, catalog.model_providers) if isinstance(agent.model, str) else None,
             fresh_turns=definition is not None and definition.fresh_turns,
+            offers=spec.offers,
         )
         yield backend
     finally:

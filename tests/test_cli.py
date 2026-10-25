@@ -74,6 +74,17 @@ def test_new_py_max_requests() -> None:
     assert spec.max_requests == 150
 
 
+def test_new_py_takes_a_tool_ceiling() -> None:
+    args = _parser().parse_args(["new-py", "s", "agents:echo", "--tool", "ls", "--tool", "read|outline"])
+    args.agent_command = []
+    spec = _spec(args)
+    assert isinstance(spec, NativeSpec)
+    assert spec.tools == ["ls", "read|outline"]
+    args = _parser().parse_args(["new-py", "s", "agents:echo"])
+    args.agent_command = []
+    assert isinstance(spec := _spec(args), NativeSpec) and spec.tools is None
+
+
 def test_new_takes_tags() -> None:
     args = _parser().parse_args(["new-py", "s", "agents:echo", "--tag", "team=web", "--tag", "x=1=2"])
     args.agent_command = []

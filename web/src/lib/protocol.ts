@@ -51,6 +51,11 @@ export type JsonValue = unknown;
  */
 export type PermissionMode2 = "allow" | "deny" | "ask" | "supervisor" | "ask_supervisor";
 /**
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ToolPattern".
+ */
+export type ToolPattern = string;
+/**
  * How aid answers what an agent asks permission for: an ACP agent's requests, `aid.coding`'s commands.
  */
 export type PermissionMode3 = "allow" | "deny" | "ask" | "supervisor" | "ask_supervisor";
@@ -322,6 +327,7 @@ export interface NativeSpec {
   tool_permissions?: {
     [k: string]: PermissionMode1;
   };
+  tools?: ToolPattern[] | null;
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
   worker_endpoint?: string | null;

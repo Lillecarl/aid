@@ -48,6 +48,18 @@ def _compile_pattern(pattern: str) -> str:
 type HookMatch = Annotated[str, AfterValidator(_compile_pattern)]
 
 
+def _compile_tool_pattern(pattern: str) -> str:
+    try:
+        re.compile(pattern)
+    except re.error as e:
+        raise ValueError(f"invalid tool pattern {pattern!r}: {e}") from e
+    return pattern
+
+
+type ToolPattern = Annotated[str, AfterValidator(_compile_tool_pattern)]
+"""A regex matched against a whole tool name."""
+
+
 def _absolute(paths: list[str]) -> list[str]:
     if relative := [p for p in paths if not p.startswith("/")]:
         raise ValueError(f"sandbox paths must be absolute: {relative}")
@@ -293,6 +305,12 @@ class NativeSpec(_Spec):
     seed_history: str | None = None
     """A history file, absolute, the session starts from when it has none of its own: a fork's copy of its
     parent's conversation. Taken as is, instructions included, so the prompt-cache prefix stays the parent's."""
+    tools: list[ToolPattern] | None = None
+    """The tool ceiling (Lillecarl/aid#50): a tool whose whole name no pattern matches is never offered to the
+    model, whatever its mode; aid's and plugins' tools included. None offers every tool. Agents never set it."""
+
+    def offers(self, tool_name: str) -> bool:
+        return self.tools is None or any(re.fullmatch(pattern, tool_name) for pattern in self.tools)
 
     @model_validator(mode="after")
     def _one_source(self) -> Self:

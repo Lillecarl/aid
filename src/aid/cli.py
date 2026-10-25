@@ -253,6 +253,12 @@ def _parser() -> argparse.ArgumentParser:
     py.add_argument("--model", help="provider/model to run on instead of the agent's own (`aid models` lists them)")
     py.add_argument("--python-path", action="append", default=[], help="prepend to the worker's sys.path")
     py.add_argument(
+        "--tool",
+        action="append",
+        metavar="REGEX",
+        help="offer only tools whose whole name a pattern matches, aid's own included; repeatable (default: all)",
+    )
+    py.add_argument(
         "--max-context",
         type=int,
         help="tokens the context gauge calls full, as a rule of thumb half the model's window",
@@ -488,6 +494,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
         supervisor_nudge_budget=args.supervisor_nudge_budget,
         tags=tags,
+        tools=args.tool,
         **source,
     )
 

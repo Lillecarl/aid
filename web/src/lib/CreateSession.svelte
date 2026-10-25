@@ -24,6 +24,8 @@
   let models = $state<ModelEntry[]>([]);
   let args = $state("");
   let model = $state("");
+  // One regex per line; empty offers every tool (Lillecarl/aid#50).
+  let tools = $state("");
   let trust = $state(false);
   let error = $state("");
   let busy = $state(false);
@@ -39,10 +41,17 @@
         if (program === undefined) throw new Error("the command is empty");
         return { kind, cwd, command: [program, ...rest], permission };
       }
-      case "native":
-        return provider && modelId
-          ? { kind, cwd, agent, permission, model: `${provider}/${modelId}` }
-          : { kind, cwd, agent, permission };
+      case "native": {
+        const patterns = tools.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+        return {
+          kind,
+          cwd,
+          agent,
+          permission,
+          ...(provider && modelId ? { model: `${provider}/${modelId}` } : {}),
+          ...(patterns.length ? { tools: patterns } : {}),
+        };
+      }
       case "claude-tty":
         return { kind, cwd, args: words(args), trust_cwd: trust };
       case "claude-sdk":
@@ -172,7 +181,7 @@
   {:else if kind === "native"}
     <label>
       Agent
-      <select bind:value={agent} required disabled={catalog === null}>
+      <select bind:value={agent} required disabled={catalog === null} data-testid="agent-select">
         {#each catalog?.agents ?? [] as info (info.name)}
           <option value={info.name}>{info.name}</option>
         {/each}
@@ -206,6 +215,11 @@
         </select>
       </label>
     {/if}
+    <label>
+      Tools
+      <textarea bind:value={tools} rows="2" placeholder="every tool; or one regex per line, e.g. ls|read|outline"
+        data-testid="tool-ceiling"></textarea>
+    </label>
   {:else if kind === "claude-sdk"}
     <label>Model <input bind:value={model} required placeholder="opus" /></label>
   {:else}

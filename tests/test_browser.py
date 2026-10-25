@@ -21,6 +21,7 @@ import pytest
 from pydantic import JsonValue
 
 import aid
+from aid.plugins import ENV_PLUGINS_PATH
 from aid.protocol import Cost, Usage
 from aid.spec import PermissionMode, Sandbox
 from tests.browser_harness import (
@@ -91,6 +92,29 @@ async def test_working_directory_starts_at_home_and_completes(page: Page, tmp_pa
     await cwd.fill(f"{tmp_path}/pro")
     option = page.locator(f'#cwd-completions option[value="{tmp_path}/project/"]')
     await option.wait_for(state="attached", timeout=TIMEOUT * 1000)
+
+
+async def test_the_create_form_sets_a_tool_ceiling(
+    page: Page, session_daemon: Paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Lillecarl/aid#50: one regex per line in the form becomes the native spec's `tools`."""
+    # The daemon lists agents in a subprocess that reads the plugins path when asked.
+    monkeypatch.setenv(ENV_PLUGINS_PATH, str(AGENT_DIR))
+    await page.reload()
+    form = page.locator("form").filter(has_text="New session")
+    await form.get_by_label("Name").fill("ceiled")
+    await form.get_by_label("Kind").select_option("native")
+    await page.get_by_test_id("cwd-input").fill(str(tmp_path))
+    agent = page.get_by_test_id("agent-select")
+    await agent.locator("option", has_text="shouter").wait_for(state="attached", timeout=TIMEOUT * 1000)
+    await agent.select_option("shouter")
+    await page.get_by_test_id("tool-ceiling").fill("ls\n  read|outline \n\n")
+    await form.get_by_role("button", name="Create").click()
+    spec_file = session_daemon.state_dir / "sessions" / "ceiled" / "spec.json"
+    with anyio.fail_after(TIMEOUT):
+        while not spec_file.exists():  # noqa: ASYNC110 -- the daemon writes it once the page's request lands
+            await anyio.sleep(0.05)
+    assert json.loads(spec_file.read_text())["tools"] == ["ls", "read|outline"]
 
 
 async def test_slash_cd_moves_the_session(page: Page, session_daemon: Paths, tmp_path: Path) -> None:

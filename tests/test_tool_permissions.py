@@ -5,10 +5,11 @@ from typing import TYPE_CHECKING
 
 import anyio
 import pytest
+from pydantic import ValidationError
 
 import aid
 from aid.protocol import Output, PermissionRequest, ToolMode
-from aid.spec import ClaudeSdkSpec, PermissionMode
+from aid.spec import ClaudeSdkSpec, NativeSpec, PermissionMode
 from tests.conftest import acp_spec, py_spec
 from tests.test_claude_sdk import FAKE_CLAUDE
 from tests.test_coding import plan
@@ -180,3 +181,27 @@ async def test_a_question_left_open_ends_with_the_scripts_time_limit(daemon: Pat
             status = await session.status()
     assert "time limit" in str(result.output)
     assert status.permissions == []
+
+
+async def test_a_tool_ceiling_offers_only_the_tools_it_matches(daemon: Paths, tmp_path: Path) -> None:
+    """Lillecarl/aid#50: a tool whose whole name no pattern matches is never offered, aid's own tools included,
+    and a call to one runs nothing, even under `allow`."""
+    (tmp_path / "a.txt").write_text("a\n")
+    open_spec = py_spec(tmp_path, "agents:coder", PermissionMode.ALLOW)
+    spec = NativeSpec.model_validate({**open_spec.model_dump(), "tools": ["ls", "rea[d]"]})
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("reader", spec)
+            result = await session.run(plan(("shell", {"command": "touch made"}), ("ls", {})))
+            offered = sorted(by_name((await session.status()).tools))
+    assert offered == ["ls", "read"]
+    assert not (tmp_path / "made").exists()
+    assert "a.txt" in str(result.output)
+
+
+def test_a_tool_pattern_matches_the_whole_name() -> None:
+    spec = NativeSpec(cwd="/", target="m:a", tools=["read", "task_.*"])
+    assert [spec.offers(name) for name in ("read", "read_new", "task_stop", "shell")] == [True, False, True, False]
+    assert NativeSpec(cwd="/", target="m:a").offers("shell")
+    with pytest.raises(ValidationError, match="invalid tool pattern"):
+        NativeSpec(cwd="/", target="m:a", tools=["("])
