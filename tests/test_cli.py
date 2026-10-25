@@ -10,6 +10,7 @@ from aid.cli import (
     _history_line,  # pyright: ignore[reportPrivateUsage]
     _parser,  # pyright: ignore[reportPrivateUsage]
     _preload,  # pyright: ignore[reportPrivateUsage]
+    _query_table,  # pyright: ignore[reportPrivateUsage]
     _session_line,  # pyright: ignore[reportPrivateUsage]
     _spec,  # pyright: ignore[reportPrivateUsage]
     _split_agent_command,  # pyright: ignore[reportPrivateUsage]
@@ -18,7 +19,7 @@ from aid.cli import (
     _tool_line,  # pyright: ignore[reportPrivateUsage]
 )
 from aid.launcher import PRELOAD
-from aid.protocol import Cost, HistoryEntry, SessionInfo, ToolCall, Usage
+from aid.protocol import Cost, HistoryEntry, QueryResult, SessionInfo, ToolCall, Usage
 from aid.spec import AgentKind, ClaudeSdkSpec, ClaudeTtySpec, McpHttp, McpStdio, NativeSpec, PermissionMode
 
 if TYPE_CHECKING:
@@ -187,6 +188,18 @@ def test_session_line(info: SessionInfo, line: str) -> None:
 
 def test_list_json() -> None:
     assert _parser().parse_args(["list", "--json"]).json is True
+
+
+def test_query_table_keeps_a_row_on_one_line() -> None:
+    """Columns first, then a row per line; tabs and newlines in a cell are escaped, and None is empty."""
+    result = QueryResult(
+        columns=["session", "input", "allowed"],
+        rows=[["a", '{"command": "x\ty"}', None], ["b", "two\nlines", 1]],
+        truncated=False,
+    )
+    assert _query_table(result) == 'session\tinput\tallowed\na\t{"command": "x\\ty"}\t\nb\ttwo\\nlines\t1'
+    empty = QueryResult(columns=["n"], rows=[], truncated=False)
+    assert _query_table(empty) == "n"
 
 
 @pytest.mark.parametrize(("amount", "shown"), [(0.0011324, "0.0011 USD"), (0.25, "0.25 USD"), (12.345, "12.35 USD")])

@@ -26,6 +26,7 @@ from aid.plugins import ENV_PLUGINS_PATH, Grant, plugins_path
 from aid.protocol import (
     AidError,
     Delivery,
+    JsonValue,
     Lifecycle,
     MessageEntry,
     Output,
@@ -346,6 +347,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     query.add_argument("sql", help="tables: rulings, ruling_steps; with --session also removal_plans, _entries, _kept")
     query.add_argument("--session", help="attach this session's removal plans")
+    query.add_argument("--table", action="store_true", help="tab-separated columns and rows instead of JSON")
 
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
@@ -505,6 +507,21 @@ def _tool_line(call: ToolCall, titles: dict[str, str]) -> str:
         text = " ".join((detail if isinstance(detail, str) else json.dumps(detail)).split())
         parts.append(text if len(text) <= BRIEF else text[: BRIEF - 1] + "…")
     return " ".join(parts)
+
+
+def _query_table(result: QueryResult) -> str:
+    """Column names first, then one line per row, cells tab-separated; a cell's tabs and newlines show as `\\t`
+    and `\\n` so a row stays one line, and None is an empty cell."""
+    lines = ["\t".join(result.columns)]
+    lines += ["\t".join(_cell(value) for value in row) for row in result.rows]
+    return "\n".join(lines)
+
+
+def _cell(value: JsonValue) -> str:
+    """One table cell; `aid.sql` answers with text, numbers, None and a blob's placeholder only."""
+    if value is None:
+        return ""
+    return str(value).replace("\t", "\\t").replace("\n", "\\n")
 
 
 def _history_line(entry: HistoryEntry, titles: dict[str, str]) -> str:
@@ -672,7 +689,13 @@ async def _client_command(args: argparse.Namespace) -> None:
                 await client.session(args.name).set_supervisor(args.supervisor)
             case "supervision":
                 answer = await client.call_plugin("supervision", "query", sql=args.sql, session=args.session)
-                print(QueryResult.model_validate(answer).model_dump_json())
+                result = QueryResult.model_validate(answer)
+                if args.table:
+                    print(_query_table(result))
+                    if result.truncated:
+                        print(f"… more rows past {len(result.rows)}; narrow the query or aggregate", file=sys.stderr)
+                else:
+                    print(result.model_dump_json())
             case "stop":
                 await client.session(args.name).stop()
             case "delete":
