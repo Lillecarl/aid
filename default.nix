@@ -56,8 +56,8 @@
     type = "github";
     owner = "tldr-pages";
     repo = "tldr";
-    rev = "9ce359759e0917185191d85c2ec7a70df2ca75f5";
-    narHash = "sha256-5A8VDKYIxg3dZXZ57Iw5JZHGfaXecc8/VQVUnEqUMv8=";
+    rev = "a25b10bd4b4daa1139e0c8e63c432fe4840945e1";
+    narHash = "sha256-/qr82LO0kAjf6rCh4UeVH8jRPJMKSvM78xLIP40KgtQ=";
   },
   httpx2 ? builtins.fetchTree {
     type = "github";
