@@ -527,6 +527,39 @@ async def test_watch_notifies_a_settled_turn(daemon: Paths, tmp_path: Path) -> N
     assert "echo: turn ended" in text and "echo hello" in text
 
 
+async def test_watch_skips_a_child_made_after_it_started(daemon: Paths, tmp_path: Path) -> None:
+    """A classifier is made on first use, after the watcher read the list: its turns are no person's notice."""
+    bot = FakeBot()
+    try:
+        with anyio.fail_after(TIMEOUT):
+            async with aid.connect(daemon) as control:
+                session = await control.create("boss", py_spec(tmp_path, "agents:echo"))
+                await register_plugin(control, daemon, "telegram", frozenset({Grant.READ, Grant.MESSAGE}))
+                async with aid.connect(daemon, plugin="telegram") as plugin, anyio.create_task_group() as tg:
+                    tg.start_soon(
+                        partial(
+                            watch,
+                            plugin,
+                            bot,
+                            {CHAT},
+                            await Mutes.load(tmp_path / "mutes.json"),
+                            idle_window=0.5,
+                            tick=0.2,
+                        )
+                    )
+                    await anyio.sleep(0.5)  # Time for the subscription to reach the daemon.
+                    child = py_spec(tmp_path, "agents:echo").model_copy(update={"parent": "boss"})
+                    classifier = await control.create("boss.classifier", child)
+                    await classifier.run("unseen")
+                    await anyio.sleep(1.0)  # Past the idle window: a child's turn would have settled by now.
+                    await session.run("hello")
+                    await bot.got.wait()
+                    tg.cancel_scope.cancel()
+    finally:
+        await bot.aclose()
+    assert [text.split(":", 1)[0] for _, text in bot.sent] == ["boss"]
+
+
 async def test_watch_notifies_a_failed_turn(daemon: Paths, tmp_path: Path) -> None:
     bot = FakeBot()
     try:
