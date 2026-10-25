@@ -60,8 +60,10 @@ async def clean_sessions(session_daemon: Paths) -> AsyncIterator[None]:
     instead of accumulating a worker per session until the guest falls over."""
     yield
     async with aid.connect(session_daemon) as client:
+        # Children go with their parent, so only the sessions without one.
         for session in await client.sessions():
-            await client.session(session.name).delete()
+            if session.parent is None:
+                await client.session(session.name).delete()
 
 
 async def test_pwa_is_installable(page: Page, browser_name: str) -> None:
