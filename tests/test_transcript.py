@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import anyio
 import pytest
 
 from aid.protocol import TextDelta, ThoughtDelta, ToolCall, ToolDiff, Usage
 from aid.transcript import (
+    TranscriptEntry,
     TranscriptFollower,
     TranscriptItem,
     TurnEnded,
@@ -21,21 +22,28 @@ from aid.transcript import (
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from pydantic import JsonValue
+
 pytestmark = pytest.mark.anyio
 
 
-def assistant(block: dict[str, Any], stop_reason: str = "tool_use") -> dict[str, Any]:
+def assistant(block: dict[str, JsonValue], stop_reason: str = "tool_use") -> dict[str, JsonValue]:
     return {"type": "assistant", "message": {"id": "msg_1", "stop_reason": stop_reason, "content": [block]}}
 
 
-def tool_result(tool_use_id: str, result: dict[str, Any]) -> dict[str, Any]:
-    block = {"type": "tool_result", "tool_use_id": tool_use_id}
+def tool_result(tool_use_id: str, result: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    block: dict[str, JsonValue] = {"type": "tool_result", "tool_use_id": tool_use_id}
     return {"type": "user", "toolUseResult": result, "message": {"content": [block]}}
 
 
-def billed(message_id: str, model: str, block: dict[str, Any]) -> dict[str, Any]:
-    usage = {"input_tokens": 1, "output_tokens": 10, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 5}
-    message = {"id": message_id, "model": model, "usage": usage, "content": [block]}
+def billed(message_id: str, model: str, block: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    usage: dict[str, JsonValue] = {
+        "input_tokens": 1,
+        "output_tokens": 10,
+        "cache_read_input_tokens": 100,
+        "cache_creation_input_tokens": 5,
+    }
+    message: dict[str, JsonValue] = {"id": message_id, "model": model, "usage": usage, "content": [block]}
     return {"type": "assistant", "message": message}
 
 
@@ -49,7 +57,7 @@ def test_turn_usage_counts_each_message_once() -> None:
         billed("msg_b", "claude-y", {"type": "text", "text": "b"}),
         billed("msg_c", "<synthetic>", {"type": "text", "text": "API error"}),
     ):
-        tally.add(entry)
+        tally.add(TranscriptEntry.model_validate(entry))
     assert tally.usage() == Usage(
         input_tokens=3,
         output_tokens=30,
@@ -162,8 +170,8 @@ def test_turn_usage_counts_each_message_once() -> None:
         ({"type": "attachment"}, []),
     ],
 )
-def test_items_from_entry(entry: dict[str, Any], items: list[TranscriptItem]) -> None:
-    assert items_from_entry(entry) == items
+def test_items_from_entry(entry: dict[str, JsonValue], items: list[TranscriptItem]) -> None:
+    assert items_from_entry(TranscriptEntry.model_validate(entry)) == items
 
 
 def test_find_transcript(tmp_path: Path) -> None:
@@ -189,8 +197,8 @@ def test_find_transcript(tmp_path: Path) -> None:
         (assistant({"type": "text", "text": "hi"}), None),
     ],
 )
-def test_human_prompt(entry: dict[str, Any], text: str | None) -> None:
-    assert human_prompt(entry) == text
+def test_human_prompt(entry: dict[str, JsonValue], text: str | None) -> None:
+    assert human_prompt(TranscriptEntry.model_validate(entry)) == text
 
 
 def test_last_version(tmp_path: Path) -> None:
@@ -205,30 +213,36 @@ def test_last_version(tmp_path: Path) -> None:
 
 async def test_follower_joins_partial_lines_and_sees_late_writes(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
-    path.write_bytes(json.dumps({"n": 0}).encode() + b"\n")
+    path.write_bytes(marked(0))
     follower = TranscriptFollower(path)
-    seen: list[dict[str, Any]] = []
+    seen: list[str | None] = []
 
     async def write() -> None:
         with path.open("ab") as f:
-            line = json.dumps({"n": 1}).encode()
+            line = marked(1)
             f.write(line[:4])
             f.flush()
             await anyio.sleep(0.1)
-            f.write(line[4:] + b"\n" + json.dumps({"n": 2}).encode() + b"\n")
+            f.write(line[4:] + b"not json\n" + marked(2))
 
     with anyio.fail_after(5):
         async with anyio.create_task_group() as tg:
             tg.start_soon(write)
             async for entry in follower.follow():
-                seen.append(entry)
-                if entry["n"] == 2:
+                seen.append(entry.subtype)
+                if entry.subtype == "2":
                     break
-    assert seen == [{"n": 0}, {"n": 1}, {"n": 2}]
+    # A line that is no entry is skipped, not fatal.
+    assert seen == ["0", "1", "2"]
 
 
 async def test_follower_starts_at_offset(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
-    first = json.dumps({"n": 0}).encode() + b"\n"
-    path.write_bytes(first + json.dumps({"n": 1}).encode() + b"\n")
-    assert await TranscriptFollower(path, offset=len(first)).read_new() == [{"n": 1}]
+    first = marked(0)
+    path.write_bytes(first + marked(1))
+    assert [e.subtype for e in await TranscriptFollower(path, offset=len(first)).read_new()] == ["1"]
+
+
+def marked(n: int) -> bytes:
+    """A transcript line told apart by its subtype."""
+    return json.dumps({"type": "system", "subtype": str(n)}).encode() + b"\n"

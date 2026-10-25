@@ -82,6 +82,7 @@ from aid.protocol import (
 )
 from aid.spec import BUILTIN_MCP_SERVER
 from aid.transcript import (
+    TranscriptEntry,
     TranscriptFollower,
     TurnEnded,
     TurnUsage,
@@ -496,7 +497,7 @@ class ClaudeTtyBackend:
         if self._record is not None:
             await self._record(uuid.uuid4().hex, item)
 
-    async def _take(self, entry: dict[str, Any]) -> None:
+    async def _take(self, entry: TranscriptEntry) -> None:
         prompt = human_prompt(entry)
         items = items_from_entry(entry)
         if self._turn is None:

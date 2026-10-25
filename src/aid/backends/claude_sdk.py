@@ -14,7 +14,7 @@ import json
 import os
 import uuid
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final
 
 import anyio
 import structlog
@@ -39,7 +39,7 @@ from aid.protocol import (
     to_json,
 )
 from aid.spec import PermissionMode, tool_group
-from aid.transcript import items_from_entry
+from aid.transcript import TranscriptEntry, items_from_entry
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -283,7 +283,7 @@ class ClaudeSdkBackend:
                 return None  # A subagent's: its own conversation, as the transcript's sidechains are.
             case "user":
                 # Tool results: the same entry shape as the transcript's (`tool_use_result`, snake case here).
-                for item in items_from_entry(cast(dict[str, Any], message)):
+                for item in items_from_entry(TranscriptEntry.model_validate(message)):
                     if isinstance(item, ToolCall):
                         await emit(item)
                 return None
@@ -291,7 +291,7 @@ class ClaudeSdkBackend:
                 # One line per finished content block, after that block's stream events: its text is the turn's
                 # output, and reaches the stream here only if no deltas carried it (an older Claude Code). A tool
                 # call goes out as the transcript path turns it.
-                for item in items_from_entry(cast(dict[str, Any], message)):
+                for item in items_from_entry(TranscriptEntry.model_validate(message)):
                     if isinstance(item, ToolCall):
                         await emit(item)
                 envelope = message.get("message")

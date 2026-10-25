@@ -32,11 +32,11 @@ import json
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final
 
 import anyio
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from watchfiles import (
     awatch,  # pyright: ignore[reportUnknownVariableType] -- its stop_event type names trio, which is not installed
 )
@@ -107,7 +107,7 @@ class _Block(_Lenient):
     name: str | None = None
     tool_use_id: str = ""
     is_error: bool = False
-    input: Any = None
+    input: JsonValue = None
     """A `tool_use` block's arguments."""
     content: str | list[_ResultBlock] | None = None
     """A `tool_result` block's result."""
@@ -144,20 +144,30 @@ class _Origin(_Lenient):
     kind: str = ""
 
 
-class _Entry(_Lenient):
+class TranscriptEntry(_Lenient):
+    """One line of a Claude Code transcript, as far as aid reads it; Claude's stream-json carries the same shape."""
+
     type: str = ""
     subtype: str | None = None
     is_sidechain: bool = Field(False, alias="isSidechain")
     is_meta: bool = Field(False, alias="isMeta")
     origin: _Origin | None = None
     message: _Message = Field(default_factory=_Message)
-    tool_use_result: Any = Field(None, alias="toolUseResult")
+    tool_use_result: JsonValue = Field(None, alias="toolUseResult")
+
+    @classmethod
+    def parse(cls, line: bytes) -> TranscriptEntry | None:
+        """None for a line that is no JSON object, such as one cut short."""
+        try:
+            return cls.model_validate_json(line)
+        except ValidationError:
+            log.warning("transcript_line_skipped", line=line[:120])
+            return None
 
 
-def human_prompt(raw: dict[str, Any]) -> str | None:
+def human_prompt(entry: TranscriptEntry) -> str | None:
     """The text of a prompt a person gave: typed, or pasted as aid pastes. None for anything else, such as a
     channel event, a task notification, a slash command's output or a tool result."""
-    entry = _Entry.model_validate(raw)
     if entry.type != "user" or entry.is_meta or entry.origin is None or entry.origin.kind != "human":
         return None
     return entry.message.text()
@@ -191,7 +201,7 @@ TOOL_KINDS: Final = {
 }
 
 
-def tool_diffs(result: Any) -> list[ToolDiff]:
+def tool_diffs(result: JsonValue) -> list[ToolDiff]:
     """An Edit's or Write's change. The strings are the edit's own, never the whole file an Edit changed."""
     if not isinstance(result, dict):
         return []
@@ -219,8 +229,7 @@ class TurnUsage:
             input_tokens=0, output_tokens=0, cache_read_tokens=0, cache_write_tokens=0, thought_tokens=0, requests=0
         )
 
-    def add(self, raw: dict[str, Any]) -> None:
-        entry = _Entry.model_validate(raw)
+    def add(self, entry: TranscriptEntry) -> None:
         message = entry.message
         if entry.type != "assistant" or message.usage is None or not message.id or message.id in self._seen:
             return
@@ -252,17 +261,12 @@ def usage_since(path: Path, offset: int) -> tuple[Usage, int]:
         data = f.read()
     complete = data[: data.rfind(b"\n") + 1]
     for line in complete.splitlines():
-        try:
-            raw = json.loads(line)
-        except ValueError:
-            continue
-        if isinstance(raw, dict):
-            usage.add(cast(dict[str, Any], raw))
+        if (entry := TranscriptEntry.parse(line)) is not None:
+            usage.add(entry)
     return usage.usage(), offset + len(complete)
 
 
-def items_from_entry(raw: dict[str, Any]) -> list[TranscriptItem]:
-    entry = _Entry.model_validate(raw)
+def items_from_entry(entry: TranscriptEntry) -> list[TranscriptItem]:
     if entry.is_sidechain:
         return []
     blocks = entry.message.content if isinstance(entry.message.content, list) else []
@@ -319,23 +323,15 @@ class TranscriptFollower:
     async def size(self) -> int:
         return (await anyio.Path(self.path).stat()).st_size
 
-    async def read_new(self) -> list[dict[str, Any]]:
+    async def read_new(self) -> list[TranscriptEntry]:
         async with await anyio.open_file(self.path, "rb") as f:
             await f.seek(self.offset)
             data = await f.read()
         self.offset += len(data)
         *lines, self._partial = (self._partial + data).split(b"\n")
-        entries: list[dict[str, Any]] = []
-        for line in lines:
-            if not line.strip():
-                continue
-            try:
-                entries.append(json.loads(line))
-            except json.JSONDecodeError:
-                log.warning("transcript_line_skipped", line=line[:120])
-        return entries
+        return [entry for line in lines if line.strip() and (entry := TranscriptEntry.parse(line)) is not None]
 
-    async def follow(self) -> AsyncIterator[dict[str, Any]]:
+    async def follow(self) -> AsyncIterator[TranscriptEntry]:
         """Yield entries as they are appended. Runs until cancelled."""
         for entry in await self.read_new():
             yield entry
