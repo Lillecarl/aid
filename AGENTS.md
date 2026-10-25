@@ -154,7 +154,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   only from control and `supervise` plugins, recorded after the message), deletes it. A session with a `parent`
   can't fork. At plugin start, leftover forks answer from their recorded Output/TurnError (else "lost") and are
   deleted. Spec `parent` (also on `SessionInfo`/`SessionStatus`): chat plugins skip such sessions (no Discord
-  channel, no settled-turn notice, not in session lists).
+  channel, no settled-turn notice, not in session lists). The parent must exist at create (`unknown_parent`);
+  `DeleteSession` takes its descendants (`_delete_orphans`), and a start deletes sessions whose parent's dir is
+  gone (a parent whose spec fails to load keeps its children).
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API, native blocks,
   `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions) and `GoogleModel`

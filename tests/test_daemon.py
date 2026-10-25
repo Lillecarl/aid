@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from typing import TYPE_CHECKING
 
 import anyio
@@ -489,6 +490,47 @@ async def test_delete_removes_state(daemon: Paths, tmp_path: Path) -> None:
             await session.delete()
             assert await client.sessions() == []
     assert not daemon.session_dir("gone").exists()
+
+
+async def test_a_delete_takes_the_sessions_children(daemon: Paths, tmp_path: Path) -> None:
+    spec = py_spec(tmp_path, "agents:echo")
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            parent = await client.create("p", spec)
+            await client.create("p.child", spec.model_copy(update={"parent": "p"}))
+            await client.create("p.grandchild", spec.model_copy(update={"parent": "p.child"}))
+            await client.create("other", spec)
+            await parent.delete()
+            assert [s.name for s in await client.sessions()] == ["other"]
+            with pytest.raises(AidError) as refused:
+                await client.create("late", spec.model_copy(update={"parent": "p"}))
+            assert refused.value.code == "unknown_parent"
+    assert not daemon.session_dir("p.grandchild").exists()
+
+
+async def test_a_restart_deletes_children_whose_parent_is_gone(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path
+) -> None:
+    """A parent whose files are gone takes its children at the next start. One whose spec does not load is still
+    on disk, so its children stay."""
+    spec = py_spec(tmp_path, "agents:echo")
+    with anyio.fail_after(TIMEOUT):
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
+            async with aid.connect(paths) as client:
+                for name in ("gone", "broken"):
+                    await client.create(name, spec)
+                    await client.create(f"{name}.child", spec.model_copy(update={"parent": name}))
+                await client.create("gone.grandchild", spec.model_copy(update={"parent": "gone.child"}))
+            tg.cancel_scope.cancel()
+        shutil.rmtree(paths.session_dir("gone"))
+        (paths.session_dir("broken") / "spec.json").write_text("{}")
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
+            async with aid.connect(paths) as client:
+                assert [s.name for s in await client.sessions()] == ["broken.child"]
+            tg.cancel_scope.cancel()
+    assert not paths.session_dir("gone.grandchild").exists()
 
 
 @pytest.mark.parametrize("target", ["agents:no_such_agent", "agents:echo"])

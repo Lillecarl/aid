@@ -487,10 +487,12 @@ class Daemon:
         sessions_dir = anyio.Path(self._paths.state_dir) / "sessions"
         if not await sessions_dir.exists():
             return
+        on_disk: set[str] = set()
         async for session_dir in sessions_dir.iterdir():
             spec_file = session_dir / SPEC_FILE
             if not await spec_file.exists():
                 continue
+            on_disk.add(session_dir.name)
             await session_dir.chmod(SESSION_DIR_MODE)
             stored = await spec_file.read_bytes()
             try:
@@ -519,6 +521,12 @@ class Daemon:
             except AidError as error:
                 log.warning("invalid_supervision_link", session=session.name, error=error.message)
                 session.spec = session.spec.model_copy(update={"supervisor": None})
+        # A delete that stopped partway leaves children. A parent whose spec failed to load is kept with its children.
+        while orphans := [s for s in self._sessions.values() if s.spec.parent and s.spec.parent not in on_disk]:
+            for orphan in orphans:
+                log.info("orphan_deleted", session=orphan.name, parent=orphan.spec.parent)
+                on_disk.discard(orphan.name)
+                await self._delete(orphan)
 
     async def _load_plugins(self) -> None:
         plugins_dir = anyio.Path(self._paths.state_dir) / "plugins"
@@ -870,13 +878,8 @@ class Daemon:
                 await self._settle_directory(session)
                 return Done(id=request.id)
             case DeleteSession():
-                session = self._session(request.session)
-                # A start in flight ends first: a worker stopped before it has a handle would keep running.
-                async with session.lock:
-                    await self._stop(session)
-                    forgotten = self._forget(session)
-                if forgotten:
-                    await self._remove_files(session.name)
+                await self._delete(self._session(request.session))
+                await self._delete_orphans()
                 return Done(id=request.id)
             case AddPlugin():
                 holder = self._keys.plugin(request.spec.public_key)
@@ -1013,6 +1016,22 @@ class Daemon:
         del self._sessions[session.name]
         return True
 
+    async def _delete(self, session: _Session) -> None:
+        # A start in flight ends first: a worker stopped before it has a handle would keep running.
+        async with session.lock:
+            await self._stop(session)
+            forgotten = self._forget(session)
+        if forgotten:
+            await self._remove_files(session.name)
+
+    async def _delete_orphans(self) -> None:
+        """Delete every session whose `parent` is gone, then theirs. The parent leaves the table first, so a child
+        created meanwhile is refused (`unknown_parent`) or already in the table for the next sweep."""
+        while orphans := [s for s in self._sessions.values() if s.spec.parent and s.spec.parent not in self._sessions]:
+            for orphan in orphans:
+                log.info("orphan_deleted", session=orphan.name, parent=orphan.spec.parent)
+                await self._delete(orphan)
+
     async def _remove_files(self, name: str) -> None:
         await anyio.to_thread.run_sync(shutil.rmtree, self._paths.session_dir(name), True)
         await anyio.to_thread.run_sync(
@@ -1041,6 +1060,8 @@ class Daemon:
         if request.name in self._sessions:
             raise AidError("exists", f"session {request.name!r} already exists")
         self._check_supervisor(request.name, request.spec)
+        if (parent := request.spec.parent) is not None and parent not in self._sessions:
+            raise AidError("unknown_parent", f"session {request.name!r} names no parent {parent!r}")
         session = self._new_session(request.name, request.spec)
         self._sessions[session.name] = session
         session_dir = anyio.Path(self._paths.session_dir(session.name))
