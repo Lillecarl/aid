@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick } from "svelte";
+  import { onMount, type Snippet, tick } from "svelte";
   import { SvelteSet } from "svelte/reactivity";
   import * as api from "./api";
   import type {
@@ -24,6 +24,8 @@
     name: string;
     onchange: () => void | Promise<void>;
     ondeleted: () => void | Promise<void>;
+    /** Tabs for the sessions linked to this one, at the start of the head row. */
+    linked?: Snippet;
   }
 
   type Kind = "user" | "message" | "assistant" | "thought" | "summary" | "tool" | "permission" | "meta" | "error" | "help";
@@ -57,7 +59,7 @@
   const WINDOW_KEY = "aid.historyWindow";
   const THINKING_KEY = "aid.thinking";
 
-  let { name, onchange, ondeleted }: Props = $props();
+  let { name, onchange, ondeleted, linked }: Props = $props();
 
   // How many rows the page keeps; the rest stay on the server and come back on scroll.
   let windowSize = $state(Number(localStorage.getItem(WINDOW_KEY)) || 300);
@@ -607,6 +609,7 @@
 </script>
 
 <div class="head">
+  {#if linked}<div class="linked" role="tablist" aria-label="Linked sessions">{@render linked()}</div>{/if}
   <label title="How many entries this page keeps; older ones load again when you scroll up.">
     Keep <input type="number" min="50" max="5000" step="50" bind:value={windowSize} /> entries
   </label>
@@ -751,12 +754,18 @@
     gap: 0.25rem 1rem;
     margin-bottom: 0.5rem;
   }
+  .linked {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-right: auto;
+  }
   /* app.css makes controls fill their container; beside a label's text that runs past the page edge. */
   .head select,
-  .head button {
+  .head > button {
     width: auto;
   }
-  .head button {
+  .head > button {
     font-size: 0.85em;
   }
   .head label {

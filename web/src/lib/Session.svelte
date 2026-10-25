@@ -1,14 +1,17 @@
 <script lang="ts">
-  import type { AgentKind } from "./api";
+  import { SvelteSet } from "svelte/reactivity";
+  import type { SessionInfo } from "./api";
   import Chat from "./Chat.svelte";
   import Files from "./Files.svelte";
+  import LinkedTab from "./LinkedTab.svelte";
+  import { family, tabLabel } from "./links";
   import Permissions from "./Permissions.svelte";
   import Status from "./Status.svelte";
   import Terminal from "./Terminal.svelte";
 
   interface Props {
     name: string;
-    kind: AgentKind | undefined;
+    sessions: SessionInfo[];
     onchange: () => void | Promise<void>;
     ondeleted: () => void | Promise<void>;
   }
@@ -16,7 +19,18 @@
   type Tab = "chat" | "files" | "terminal" | "permissions" | "status";
   const TAB_KEY = "aid.sessionTab";
 
-  let { name, kind, onchange, ondeleted }: Props = $props();
+  let { name, sessions, onchange, ondeleted }: Props = $props();
+
+  // The linked tab picked under Chat; every tab shows that session. A tab whose session went away falls back.
+  const linked = $derived(family(sessions, name));
+  let picked: string | null = $state(null);
+  const shown = $derived(picked !== null && linked.includes(picked) ? picked : name);
+  // A linked session's chat mounts when first picked and then stays, like Files: a prompt it streams goes on.
+  const chats = new SvelteSet<string>();
+  $effect(() => {
+    chats.add(shown);
+  });
+  const kind = $derived(sessions.find((s) => s.name === shown)?.kind);
 
   const tabs = $derived<{ id: Tab; label: string }[]>([
     { id: "chat", label: "Chat" },
@@ -54,8 +68,19 @@
   });
 </script>
 
+{#snippet linkedTabs()}
+  {#each linked as other (other)}
+    <LinkedTab
+      name={other}
+      label={tabLabel(sessions, other)}
+      active={other === shown}
+      onselect={() => (picked = other)}
+    />
+  {/each}
+{/snippet}
+
 <div class="head">
-  <h2>{name}</h2>
+  <h2>{name}{#if shown !== name}<span class="viewed">{` › ${tabLabel(sessions, shown)}`}</span>{/if}</h2>
   <div class="tabs" role="tablist">
     {#each tabs as t (t.id)}
       <button
@@ -70,27 +95,42 @@
 </div>
 <!-- Chat stays mounted while hidden: a prompt it is streaming keeps going. Status and Permissions mount only when
      shown, and stream only while mounted. -->
-<div class="panel" hidden={tab !== "chat"}>
-  <Chat {name} {onchange} {ondeleted} />
-</div>
-{#if filesShown}
-  <div class="panel" hidden={tab !== "files"}>
-    <Files {name} />
+{#each [...chats].filter((c) => linked.includes(c)) as chat (chat)}
+  <div class="panel" hidden={tab !== "chat" || chat !== shown}>
+    <Chat
+      name={chat}
+      {onchange}
+      ondeleted={chat === name
+        ? ondeleted
+        : async () => {
+            chats.delete(chat);
+            picked = null;
+            await onchange();
+          }}
+      linked={linked.length > 1 ? linkedTabs : undefined}
+    />
   </div>
-{/if}
-{#if tab === "terminal"}
-  <div class="panel">
-    <Terminal {name} />
-  </div>
-{:else if tab === "permissions"}
-  <div class="panel scroll">
-    <Permissions {name} />
-  </div>
-{:else if tab === "status"}
-  <div class="panel">
-    <Status {name} />
-  </div>
-{/if}
+{/each}
+{#key shown}
+  {#if filesShown}
+    <div class="panel" hidden={tab !== "files"}>
+      <Files name={shown} />
+    </div>
+  {/if}
+  {#if tab === "terminal"}
+    <div class="panel">
+      <Terminal name={shown} />
+    </div>
+  {:else if tab === "permissions"}
+    <div class="panel scroll">
+      <Permissions name={shown} />
+    </div>
+  {:else if tab === "status"}
+    <div class="panel">
+      <Status name={shown} />
+    </div>
+  {/if}
+{/key}
 
 <style>
   .head {
@@ -102,6 +142,10 @@
   }
   h2 {
     margin: 0;
+  }
+  .viewed {
+    color: var(--muted);
+    font-weight: normal;
   }
   .tabs {
     display: flex;

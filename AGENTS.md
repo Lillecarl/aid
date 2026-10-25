@@ -309,7 +309,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   generates `protocol.ts` from it, which `api.ts` re-exports. Never hand-edit either: `tests/test_schema.py` and the
   web build's `types:check` fail on drift. After changing a model: regenerate both.
 - `web/` — the Svelte 5 UI (runes, TypeScript, Vite). `web/default.nix` builds it; `aid web` serves the result
-  from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets.
+  from `AID_WEB_ASSETS`, which the installed `aid` wrapper sets. Linked sessions (`links.ts`): supervisors and
+  sessions under one leave the list (a toggle shows them) and show as tabs in Chat's head of each session they
+  watch, badged from `SessionStatus` (cost, `context_used`); the picked tab drives every session tab. Each picked
+  session's Chat stays mounted, so several `chat-input`s exist: browser tests select `:visible`.
 - `src/aid/sql.py` — apsw (`nix/apsw.nix`, its own SQLite): `Database`, one owner's writes in a worker thread, WAL;
   `ask`, one statement over files attached `mode=ro` under a read-only authorizer (ATTACH/PRAGMA still work on ro
   files), capped in rows, cell size and time (progress handler). `QueryResult` in protocol.

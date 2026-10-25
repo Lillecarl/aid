@@ -32,6 +32,7 @@ from tests.browser_harness import (
     send_chat,
     wait_for_idle,
 )
+from tests.conftest import py_spec
 from tests.test_agents import AGENT_DIR
 from tests.test_sandbox import needs_bwrap
 from tests.web_harness import ALLOWED, ASSETS, TIMEOUT, needs_dex
@@ -411,6 +412,37 @@ async def test_permissions_tab_sets_the_supervisor(page: Page, session_daemon: P
         with anyio.fail_after(TIMEOUT):
             while (await client.session("worker").status()).supervisor is not None:  # noqa: ASYNC110 -- the same
                 await anyio.sleep(0.05)
+
+
+async def test_linked_sessions_are_tabs_under_the_chat(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """Lillecarl/aid#41: a supervisor and its classifier leave the list and show as tabs under each session it
+    watches; a tab switches the whole view to that session."""
+    await seed_session(session_daemon, tmp_path, "boss", "agents:echo")
+    await seed_session(session_daemon, tmp_path, "worker", "agents:echo")
+    async with aid.connect(session_daemon) as client:
+        spec = py_spec(tmp_path, "agents:echo", PermissionMode.DENY).model_copy(update={"parent": "boss"})
+        await client.create("boss.classifier", spec)
+        await client.session("worker").set_supervisor("boss")
+    listing = page.get_by_test_id("session-list")
+    await page.get_by_test_id("show-linked").filter(has_text="Show 2 linked sessions").wait_for(timeout=TIMEOUT * 1000)
+    assert await listing.get_by_role("button").filter(has_text="boss").count() == 0
+    await open_session(page, "worker")
+    tabs = page.locator("[data-testid=linked-tab]:visible")
+    await tabs.filter(has_text="classifier").wait_for(timeout=TIMEOUT * 1000)
+    assert [await t.text_content() for t in await tabs.all()] == ["worker", "boss", "classifier"]
+    await tabs.filter(has_text="boss").click()
+    await page.get_by_role("heading", name="worker \u203a boss").wait_for(timeout=TIMEOUT * 1000)
+    box = page.locator("[data-testid=chat-input]:visible")
+    await box.fill("hello boss")
+    await box.press("Enter")
+    await page.locator("[data-testid=chat-log]:visible").get_by_text("echo hello boss").wait_for(timeout=TIMEOUT * 1000)
+    await page.get_by_role("tab", name="Status").click()
+    await page.get_by_role("tab", name="Chat").click()
+    await page.locator("[data-testid=linked-tab]:visible").filter(has_text="worker").click()
+    await page.get_by_role("heading", name="worker", exact=True).wait_for(timeout=TIMEOUT * 1000)
+    assert await page.locator("[data-testid=chat-log]:visible").get_by_text("echo hello boss").count() == 0
+    await page.get_by_test_id("show-linked").click()
+    await listing.get_by_role("button").filter(has_text="boss.classifier").wait_for(timeout=TIMEOUT * 1000)
 
 
 @needs_bwrap

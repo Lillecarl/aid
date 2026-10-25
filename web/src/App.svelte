@@ -3,6 +3,7 @@
   import * as api from "./lib/api";
   import type { SessionInfo } from "./lib/api";
   import CreateSession from "./lib/CreateSession.svelte";
+  import { linkedOnly } from "./lib/links";
   import Session from "./lib/Session.svelte";
   import SessionList from "./lib/SessionList.svelte";
 
@@ -10,6 +11,10 @@
   let list: SessionInfo[] = $state([]);
   let current: string | null = $state(null);
   let error = $state("");
+  // Supervisors and their classifiers live as tabs under the sessions they watch; the list can still show them.
+  let showLinked = $state(false);
+  const hidden = $derived(linkedOnly(list));
+  const listed = $derived(showLinked ? list : list.filter((s) => !hidden.has(s.name)));
 
   async function refresh(): Promise<void> {
     try {
@@ -43,7 +48,12 @@
 <main>
   <aside>
     <h2>Sessions</h2>
-    <SessionList sessions={list} {current} onselect={(name) => (current = name)} />
+    <SessionList sessions={listed} {current} onselect={(name) => (current = name)} />
+    {#if hidden.size > 0}
+      <button type="button" class="linked" data-testid="show-linked" onclick={() => (showLinked = !showLinked)}
+        >{showLinked ? "Hide" : "Show"} {hidden.size} linked session{hidden.size === 1 ? "" : "s"}</button
+      >
+    {/if}
     {#if error}<p class="error">{error}</p>{/if}
     <CreateSession
       oncreated={async (name) => {
@@ -59,7 +69,7 @@
       {#key current}
         <Session
           name={current}
-          kind={list.find((s) => s.name === current)?.kind}
+          sessions={list}
           onchange={refresh}
           ondeleted={async () => {
             current = null;
@@ -102,6 +112,17 @@
   }
   .empty {
     color: var(--muted);
+  }
+  .linked {
+    width: auto;
+    margin: -1rem 0 1.5rem;
+    font-size: 0.85em;
+    color: var(--muted);
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
   }
   @media (max-width: 700px) {
     main {
