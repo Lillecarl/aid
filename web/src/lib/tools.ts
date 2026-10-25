@@ -55,6 +55,28 @@ export function hasInput(input: unknown): boolean {
   return true;
 }
 
+export type InputField = { key: string; text: string; diff: boolean };
+
+/** An object's arguments as the cards show them: a string as its own lines (a diff in one JSON string is one
+ * line thousands of characters wide), anything else as indented JSON. Null for a non-object. */
+export function inputFields(input: unknown): InputField[] | null {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) return null;
+  return Object.entries(input).map(([key, value]) =>
+    typeof value === "string"
+      ? { key, text: value, diff: key === "diff" || (/^--- /m.test(value) && /^@@ /m.test(value)) }
+      : { key, text: JSON.stringify(value, null, 2), diff: false },
+  );
+}
+
+/** A unified diff line's class: file headers, hunk headers, added and removed lines. */
+export function unifiedClass(line: string): "file" | "hunk" | "add" | "del" | "" {
+  if (line.startsWith("+++ ") || line.startsWith("--- ") || line.startsWith("diff --git ")) return "file";
+  if (line.startsWith("@@")) return "hunk";
+  if (line.startsWith("+")) return "add";
+  if (line.startsWith("-")) return "del";
+  return "";
+}
+
 /** Output as the card shows it: JSON indented, anything else as it came. */
 export function readable(output: string): string {
   const start = output.trimStart()[0];

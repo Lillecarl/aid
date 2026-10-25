@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as api from "./api";
   import type { PermissionDecision, PermissionRequest } from "./api";
+  import InputView from "./InputView.svelte";
   import { command, hasInput } from "./tools";
 
   interface Props {
@@ -52,16 +53,17 @@
   }
 </script>
 
-<div class="permission" data-testid="permission-box" class:open={decision === null}>
-  <div class="head">
+<details class="permission" data-testid="permission-box" class:open={decision === null} open={decision === null}>
+  <summary class="head">
     <span class="label">Permission</span>
     {#if request.tool_name}<span class="tool">{request.tool_name}</span>{/if}
     <span class="title">{request.title ?? request.tool_call_id}</span>
-  </div>
+    {#if decision !== null}<span class="decided">{chosen}{decision.plugin ? ` by plugin ${decision.plugin}` : decision.supervisor ? ` by supervisor ${decision.supervisor}` : BY[decision.by]}</span>{/if}
+  </summary>
   {#if shell !== null}
     <pre>$ {shell}</pre>
   {:else if hasInput(request.input)}
-    <pre>{JSON.stringify(request.input, null, 2)}</pre>
+    <InputView input={request.input} />
   {/if}
   {#if decision === null}
     <div class="choices">
@@ -100,14 +102,18 @@
         onclick={() => answer(null, words)}>Send</button
       >
     </div>
-  {:else}
-    <div class="decided">{chosen}{decision.plugin ? ` by plugin ${decision.plugin}` : decision.supervisor ? ` by supervisor ${decision.supervisor}` : BY[decision.by]}</div>
   {/if}
   {#if error}<div class="error">{error}</div>{/if}
-</div>
+</details>
 
 <style>
+  /* Chat's flow rule cannot reach this root (scoped styles), so the card keeps itself inside the row: without
+     min-width 0 a long line in its pre widens the whole chat. */
   .permission {
+    flex: 1 1 16rem;
+    min-width: 0;
+    max-width: 100%;
+    box-sizing: border-box;
     font-size: 0.9em;
     border: 1px solid var(--line);
     border-radius: 0.3rem;
@@ -124,6 +130,18 @@
     display: flex;
     gap: 0.5rem;
     align-items: baseline;
+    min-width: 0;
+    cursor: pointer;
+    list-style: none;
+  }
+  .head::-webkit-details-marker {
+    display: none;
+  }
+  .permission:not([open]) .title,
+  .decided {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     min-width: 0;
   }
   .label {
@@ -172,6 +190,7 @@
   }
   .decided {
     color: var(--muted);
+    flex-shrink: 1;
   }
   .note {
     color: var(--muted);

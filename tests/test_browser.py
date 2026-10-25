@@ -518,6 +518,50 @@ async def test_an_open_wide_thought_scrolls_nothing_sideways(page: Page, session
     assert overflow == [0, 0]
 
 
+async def test_a_wide_permission_card_scrolls_nothing_sideways(
+    page: Page, session_daemon: Paths, tmp_path: Path
+) -> None:
+    """Lillecarl/aid#38: a request with a long line stays inside the log, and a person can fold it."""
+    await page.set_viewport_size({"width": 375, "height": 800})
+    await seed_session(session_daemon, tmp_path, "widecard", "agents:coder", PermissionMode.ASK)
+    await open_session(page, "widecard")
+    await send_chat(page, json.dumps([["shell", {"command": "echo " + "x" * 600}]]))
+    box = page.get_by_test_id("permission-box")
+    await box.locator("pre").wait_for(timeout=TIMEOUT * 1000)
+    overflow = await page.evaluate(
+        """() => {
+            const log = document.querySelector("[data-testid=chat-log]");
+            const page = document.scrollingElement;
+            return [page.scrollWidth - page.clientWidth, log.scrollWidth - log.clientWidth];
+        }"""
+    )
+    card = await box.bounding_box()
+    log = await page.get_by_test_id("chat-log").bounding_box()
+    assert card is not None and log is not None
+    assert card["x"] + card["width"] <= log["x"] + log["width"]
+    assert overflow == [0, 0]
+    await box.locator("summary").click()
+    await box.locator("pre").wait_for(state="hidden", timeout=TIMEOUT * 1000)
+    await box.locator("summary").click()
+    await box.get_by_role("button", name="Cancel").click()
+    await wait_for_idle(page)
+
+
+async def test_an_edit_request_shows_its_diff_as_lines(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """apply_edits asks with `{"diff": ...}`: one JSON string, shown as diff lines rather than one escaped line."""
+    await anyio.Path(tmp_path / "notes.txt").write_text("old line\n")
+    await seed_session(session_daemon, tmp_path, "editor", "agents:coder", PermissionMode.ASK)
+    await open_session(page, "editor")
+    await send_chat(
+        page, json.dumps([["edit", {"path": "notes.txt", "old": "old line", "new": "new line"}], ["apply_edits", {}]])
+    )
+    box = page.get_by_test_id("permission-box")
+    await box.locator(".l.add", has_text="+new line").wait_for(timeout=TIMEOUT * 1000)
+    assert await box.locator(".l.del", has_text="-old line").count() == 1
+    await box.get_by_role("button", name="Cancel").click()
+    await wait_for_idle(page)
+
+
 async def test_thinking_collapsed_mode(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     gate = tmp_path / "think-gate"
     await seed_session(session_daemon, tmp_path, "quiesce", "agents:thinker", AID_THINK_GATE=str(gate))

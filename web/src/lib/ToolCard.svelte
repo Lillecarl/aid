@@ -1,4 +1,5 @@
 <script lang="ts">
+  import InputView from "./InputView.svelte";
   import { command, type DiffLine, diffLines, gist, hasInput, readable, type Tool } from "./tools";
 
   interface Props {
@@ -37,8 +38,7 @@
       {#if shell !== null}
         <pre class="input">$ {shell}</pre>
       {:else if showInput}
-        <div class="label">input</div>
-        <pre class="input">{JSON.stringify(tool.input, null, 2)}</pre>
+        <InputView input={tool.input} />
       {/if}
       {#each tool.diffs as diff (diff.path)}
         <div class="diff">
