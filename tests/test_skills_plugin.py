@@ -132,6 +132,15 @@ def test_index_holds_descriptions_only(tmp_path: Path, home: Path) -> None:
     assert skills().Skills().load(aid.InstructionsContext(cwd=tmp_path, session_name="s")) == []
 
 
+def test_skills_say_nothing_without_the_skill_tool(tmp_path: Path, home: Path) -> None:
+    """Lillecarl/aid#50: a session whose ceiling withholds `skill` hears of no skill."""
+    write_skill(home / ".claude" / "skills", "deploy", "Ship it.")
+    offered = aid.InstructionsContext(cwd=tmp_path, session_name="s", tools=frozenset({"skill", "read"}))
+    withheld = aid.InstructionsContext(cwd=tmp_path, session_name="s", tools=frozenset({"read"}))
+    assert [i.name for i in skills().Skills().load(offered)] == ["skills", "skill:deploy"]
+    assert skills().Skills().load(withheld) == []
+
+
 def test_skill_tool_loads_body_and_files(tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Skill directories are often symlinks into a store; the files resolve inside the real one."""
     store = tmp_path / "store"

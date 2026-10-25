@@ -130,6 +130,8 @@ class Skills(aid.InstructionsProvider):
     """Agent Skills: each skill's name and description; the `skill` tool loads one."""
 
     def load(self, context: aid.InstructionsContext) -> list[aid.Instruction]:
+        if context.tools is not None and skill.__name__ not in context.tools:
+            return []
         skills = discover(Path(context.cwd).expanduser())
         if not skills:
             return []

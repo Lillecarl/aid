@@ -144,7 +144,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `action:session` directly (100 bytes); Discord messages clip at 1900/2000.
 - `plugins/skills/` — Agent Skills, bundled: an `InstructionsProvider` lists each skill's name and description, the
   `skill` tool loads a body or file. Spec-checked frontmatter (YAML); project `.aid|.agents|.claude/skills` up to the
-  git root, then `AID_SKILLS_PATH`, then the global dirs, then each resolved plugin's `skills/`.
+  git root, then `AID_SKILLS_PATH`, then the global dirs, then each resolved plugin's `skills/`. Lists nothing when
+  `InstructionsContext.tools` (the offered names after the ceiling; None unknown) lacks `skill`.
 - `plugins/forks/` — short-lived forks, bundled, `autostart` (read, prompt, message, manage, supervise). Tool
   `fork(instructions)`: `Coding.snapshot` writes the conversation inside the call (history.json lacks the running
   turn) to `state_dir/forks/`; the plugin creates `<parent[:52]>.fork-<6hex>` from the parent's `NativeSpec` with

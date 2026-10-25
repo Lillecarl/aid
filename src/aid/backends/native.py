@@ -867,6 +867,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             select=select,
             skip=frozenset(spec.skip_instructions),
             session_name=state_dir.name,
+            tools=frozenset(offered),
         )
         context = environment(spec.cwd, state_dir.name, runs_programs=runs_programs, moves=moves)
         return "\n\n".join(filter(None, [agent.instructions, composed, context]))

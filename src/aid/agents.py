@@ -67,12 +67,15 @@ class Instruction(BaseModel):
 
 
 class InstructionsContext(BaseModel):
-    """What a provider loads for: the session's directory, and the session's name."""
+    """What a provider loads for: the session's directory, its name, and the tools it is offered."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     cwd: Path
     session_name: str
+    tools: frozenset[str] | None = None
+    """The names of the tools the session's model is offered, after its tool ceiling (Lillecarl/aid#50); None when
+    unknown. A provider that points at a tool says nothing when it is withheld."""
 
 
 class InstructionsProvider(ABC):

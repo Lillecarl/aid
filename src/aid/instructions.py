@@ -61,6 +61,7 @@ def compose(
     select: list[str] | None = None,
     skip: frozenset[str] = frozenset(),
     session_name: str = "",
+    tools: frozenset[str] | None = None,
 ) -> str:
     """The selected providers' instructions for `cwd`, each under a `# name` header.
 
@@ -70,7 +71,7 @@ def compose(
     """
     table = providers.providers if isinstance(providers, Catalog) else providers
     names = list(table) if select is None else list(select)
-    context = InstructionsContext(cwd=Path(cwd), session_name=session_name)
+    context = InstructionsContext(cwd=Path(cwd), session_name=session_name, tools=tools)
     parts: list[str] = []
     for name in names:
         if (cls := table.get(name)) is None:
