@@ -98,6 +98,9 @@ def match_hook(hooks: list[Hook], tool: str | None, text: str | None) -> Hook | 
     return None
 
 
+TagKey = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:/-]{1,64}$")]
+TagValue = Annotated[str, Field(max_length=256)]
+
 _FIELDS: Final = TypeAdapter(dict[str, object])
 _TOOLS: Final = TypeAdapter(list[str])
 _MODES: Final = TypeAdapter(dict[str, PermissionMode])
@@ -145,6 +148,8 @@ class _Spec(BaseModel):
     parent: str | None = None
     """The session this one works for, such as a fork's parent: its results reach the parent as messages.
     Chat plugins leave such a session out; a person follows it through the parent."""
+    tags: dict[TagKey, TagValue] = Field(default_factory=dict[str, str])
+    """Free-form labels for people and plugins to sort sessions by; aid itself acts on none."""
 
     @model_validator(mode="before")
     @classmethod

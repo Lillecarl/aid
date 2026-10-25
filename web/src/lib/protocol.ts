@@ -120,6 +120,7 @@ export type PageRequest =
   | SetPermissions
   | SetSandbox
   | SetSupervisor
+  | SetTags
   | StartSession
   | StopSession
   | DeleteSession
@@ -157,6 +158,13 @@ export interface AcpSpec {
   supervisor_nudge_budget?: number;
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
+  tags?: {
+    /**
+     * This interface was referenced by `undefined`'s JSON-Schema definition
+     * via the `patternProperty` "^[A-Za-z0-9_.:/-]{1,64}$".
+     */
+    [k: string]: string;
+  };
   tool_permissions?: {
     [k: string]: PermissionMode1;
   };
@@ -303,6 +311,13 @@ export interface NativeSpec {
   supervisor_nudge_budget?: number;
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
+  tags?: {
+    /**
+     * This interface was referenced by `undefined`'s JSON-Schema definition
+     * via the `patternProperty` "^[A-Za-z0-9_.:/-]{1,64}$".
+     */
+    [k: string]: string;
+  };
   target?: string | null;
   tool_permissions?: {
     [k: string]: PermissionMode1;
@@ -358,6 +373,13 @@ export interface ClaudeTtySpec {
   supervisor_nudge_budget?: number;
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
+  tags?: {
+    /**
+     * This interface was referenced by `undefined`'s JSON-Schema definition
+     * via the `patternProperty` "^[A-Za-z0-9_.:/-]{1,64}$".
+     */
+    [k: string]: string;
+  };
   tool_permissions?: {
     [k: string]: PermissionMode1;
   };
@@ -398,6 +420,13 @@ export interface ClaudeSdkSpec {
   supervisor_nudge_budget?: number;
   supervisor_permission_absent_timeout?: number;
   supervisor_permission_timeout?: number;
+  tags?: {
+    /**
+     * This interface was referenced by `undefined`'s JSON-Schema definition
+     * via the `patternProperty` "^[A-Za-z0-9_.:/-]{1,64}$".
+     */
+    [k: string]: string;
+  };
   tool_permissions?: {
     [k: string]: PermissionMode1;
   };
@@ -991,6 +1020,25 @@ export interface SetSupervisor {
   supervisor: string | null;
 }
 /**
+ * Change a session's tags (`spec.tags`): each key set to its value, or removed when the value is None; tags not
+ * named stay. Saved in its spec; the worker keeps running.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "SetTags".
+ */
+export interface SetTags {
+  id?: string;
+  op: "tags";
+  session: string;
+  tags: {
+    /**
+     * This interface was referenced by `undefined`'s JSON-Schema definition
+     * via the `patternProperty` "^[A-Za-z0-9_.:/-]{1,64}$".
+     */
+    [k: string]: string | null;
+  };
+}
+/**
  * Start a stopped session's worker without a turn; for interactive Claude, its pane. A running one is left be.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -1046,6 +1094,9 @@ export interface SessionInfo {
   permissions: number;
   running: boolean;
   supervisor: string | null;
+  tags: {
+    [k: string]: string;
+  };
   working: boolean;
 }
 /**

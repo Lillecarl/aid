@@ -7,6 +7,7 @@ import anyio
 import pytest
 import zmq
 import zmq.asyncio
+from pydantic import ValidationError
 
 import aid
 from aid.daemon import Daemon
@@ -488,6 +489,20 @@ async def test_delete_removes_state(daemon: Paths, tmp_path: Path) -> None:
             await session.delete()
             assert await client.sessions() == []
     assert not daemon.session_dir("gone").exists()
+
+
+async def test_tags_merge_into_the_saved_spec(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            spec = py_spec(tmp_path, "agents:echo").model_copy(update={"tags": {"team": "web", "ticket": "42"}})
+            session = await client.create("tagged", spec)
+            await session.set_tags({"ticket": None, "stage": "review"})
+            listed = {info.name: info.tags for info in await client.sessions()}
+            with pytest.raises(ValidationError):
+                await session.set_tags({"two words": "x"})
+    saved = AgentSpecAdapter.validate_json((daemon.session_dir("tagged") / "spec.json").read_bytes())
+    assert listed == {"tagged": {"team": "web", "stage": "review"}}
+    assert saved.tags == {"team": "web", "stage": "review"}
 
 
 async def test_session_state_is_private(daemon: Paths, tmp_path: Path) -> None:

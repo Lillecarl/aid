@@ -123,6 +123,13 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("worker", help="run one worker; `aid daemon --worker-command` starts it and sends its arguments")
     sessions = sub.add_parser("list", help="list sessions")
     sessions.add_argument("--json", action="store_true", help="one session JSON object per line")
+    sessions.add_argument(
+        "--tag",
+        action="append",
+        default=[],
+        metavar="KEY[=VALUE]",
+        help="only sessions with this tag, or with this key at all; repeat to need several",
+    )
 
     web = sub.add_parser(
         "web",
@@ -161,6 +168,7 @@ def _parser() -> argparse.ArgumentParser:
         p.add_argument("name")
         p.add_argument("--cwd", default=".")
         p.add_argument("--env", action="append", default=[], metavar="KEY=VALUE")
+        p.add_argument("--tag", action="append", default=[], metavar="KEY=VALUE", help="a label; repeatable")
         p.add_argument(
             "--worker-command",
             metavar="COMMAND",
@@ -324,6 +332,10 @@ def _parser() -> argparse.ArgumentParser:
     box.add_argument("--no-network", action="store_true", help="cut the sandbox off the network")
     box.add_argument("--writable", action="append", default=[], metavar="PATH", help="absolute; repeatable")
 
+    tag = sub.add_parser("tag", help="show a session's tags, or set and remove some")
+    tag.add_argument("name")
+    tag.add_argument("tags", nargs="*", metavar="KEY=VALUE", help="KEY= removes the tag; tags not named stay")
+
     supervise = sub.add_parser("supervise", help="set or end the session supervising another")
     supervise.add_argument("name")
     supervise.add_argument("supervisor", nargs="?", help="the supervising session; omitted ends supervision")
@@ -391,6 +403,7 @@ def _mcp_servers(files: Sequence[str]) -> list[McpServer]:
 def _spec(args: argparse.Namespace) -> AgentSpec:
     cwd = str(Path(args.cwd).resolve())
     env = _env(args.env)
+    tags = {key: value for key, value in _tags(args.tag).items() if value is not None}
     if args.worker_command:
         worker_command: list[str] | None = [part for part in shlex.split(args.worker_command) if part]
         if not worker_command:
@@ -419,6 +432,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             supervisor_permission_timeout=args.supervisor_permission_timeout,
             supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
             supervisor_nudge_budget=args.supervisor_nudge_budget,
+            tags=tags,
         )
     if args.command == "new-claude":
         return ClaudeTtySpec(
@@ -436,6 +450,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             supervisor_permission_timeout=args.supervisor_permission_timeout,
             supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
             supervisor_nudge_budget=args.supervisor_nudge_budget,
+            tags=tags,
         )
     if args.command == "new-sdk":
         return ClaudeSdkSpec(
@@ -451,6 +466,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             supervisor_permission_timeout=args.supervisor_permission_timeout,
             supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
             supervisor_nudge_budget=args.supervisor_nudge_budget,
+            tags=tags,
         )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
     source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
@@ -469,6 +485,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         supervisor_permission_timeout=args.supervisor_permission_timeout,
         supervisor_permission_absent_timeout=args.supervisor_permission_absent_timeout,
         supervisor_nudge_budget=args.supervisor_nudge_budget,
+        tags=tags,
         **source,
     )
 
@@ -534,6 +551,8 @@ def _session_line(info: SessionInfo) -> str:
     parts = [info.name, info.kind, "working" if info.working else "running" if info.running else "stopped"]
     if info.permissions:
         parts.append(f"{info.permissions} permission{'s' if info.permissions != 1 else ''}")
+    if info.tags:
+        parts.append(" ".join(f"{key}={value}" for key, value in sorted(info.tags.items())))
     if info.attention:
         parts.append(info.attention)
     return "\t".join(parts)
@@ -561,7 +580,8 @@ async def _client_command(args: argparse.Namespace) -> None:
                 print(args.name)
             case "list":
                 for info in await client.sessions():
-                    print(info.model_dump_json() if args.json else _session_line(info))
+                    if _tagged(info, args.tag):
+                        print(info.model_dump_json() if args.json else _session_line(info))
             case "summary":
                 print((await client.session(args.name).summary()).model_dump_json(indent=2))
             case "history":
@@ -638,6 +658,16 @@ async def _client_command(args: argparse.Namespace) -> None:
             case "sandbox":
                 chosen = None if args.off else Sandbox(network=not args.no_network, writable=args.writable)
                 await client.session(args.name).set_sandbox(chosen)
+            case "tag":
+                session = client.session(args.name)
+                if args.tags:
+                    await session.set_tags(_tags(args.tags))
+                else:
+                    found = next((info for info in await client.sessions() if info.name == args.name), None)
+                    if found is None:
+                        raise SystemExit(f"aid tag: no session {args.name!r}")
+                    for key, value in sorted(found.tags.items()):
+                        print(f"{key}={value}")
             case "supervise":
                 await client.session(args.name).set_supervisor(args.supervisor)
             case "supervision":
@@ -651,6 +681,25 @@ async def _client_command(args: argparse.Namespace) -> None:
                 await _plugin_command(client, args)
             case other:
                 raise SystemExit(f"unknown command {other!r}")
+
+
+def _tags(settings: Sequence[str]) -> dict[str, str | None]:
+    """KEY=VALUE pairs; an empty VALUE is None, which `SetTags` reads as removal."""
+    tags: dict[str, str | None] = {}
+    for setting in settings:
+        key, sep, value = setting.partition("=")
+        if not sep or not key:
+            raise SystemExit(f"aid: {setting!r} is not KEY=VALUE")
+        tags[key] = value or None
+    return tags
+
+
+def _tagged(info: SessionInfo, wanted: Sequence[str]) -> bool:
+    for want in wanted:
+        key, sep, value = want.partition("=")
+        if key not in info.tags or (sep and info.tags[key] != value):
+            return False
+    return True
 
 
 def _tool_modes(settings: list[str]) -> dict[str, PermissionMode | None]:

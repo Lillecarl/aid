@@ -13,6 +13,8 @@ from aid.cli import (
     _session_line,  # pyright: ignore[reportPrivateUsage]
     _spec,  # pyright: ignore[reportPrivateUsage]
     _split_agent_command,  # pyright: ignore[reportPrivateUsage]
+    _tagged,  # pyright: ignore[reportPrivateUsage]
+    _tags,  # pyright: ignore[reportPrivateUsage]
     _tool_line,  # pyright: ignore[reportPrivateUsage]
 )
 from aid.launcher import PRELOAD
@@ -69,6 +71,23 @@ def test_new_py_max_requests() -> None:
     spec = _spec(args)
     assert isinstance(spec, NativeSpec)
     assert spec.max_requests == 150
+
+
+def test_new_takes_tags() -> None:
+    args = _parser().parse_args(["new-py", "s", "agents:echo", "--tag", "team=web", "--tag", "x=1=2"])
+    args.agent_command = []
+    assert _spec(args).tags == {"team": "web", "x": "1=2"}
+    with pytest.raises(SystemExit):
+        _tags(["novalue"])
+    assert _tags(["gone="]) == {"gone": None}
+
+
+@pytest.mark.parametrize(
+    ("wanted", "shown"), [([], True), (["team"], True), (["team=web"], True), (["team=api"], False), (["x"], False)]
+)
+def test_list_filters_by_tag(wanted: list[str], shown: bool) -> None:
+    info = SessionInfo(name="a", kind=AgentKind.NATIVE, running=False, tags={"team": "web"})
+    assert _tagged(info, wanted) is shown
 
 
 def test_new_sdk_builds_spec() -> None:
@@ -155,6 +174,10 @@ def test_tool_line_names_updates_by_their_start() -> None:
         (
             SessionInfo(name="a", kind=AgentKind.NATIVE, running=True, permissions=2, attention="look\there"),
             "a\tnative\trunning\t2 permissions\tlook\there",
+        ),
+        (
+            SessionInfo(name="a", kind=AgentKind.NATIVE, running=False, tags={"z": "1", "a": "b c"}),
+            "a\tnative\tstopped\ta=b c z=1",
         ),
     ],
 )

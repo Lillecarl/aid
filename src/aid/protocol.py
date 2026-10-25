@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from aid.plugins import Grant, PluginSpec
-from aid.spec import AgentKind, AgentSpec, PermissionMode, Sandbox
+from aid.spec import AgentKind, AgentSpec, PermissionMode, Sandbox, TagKey, TagValue
 
 PROTOCOL_VERSION = 1
 
@@ -115,6 +115,15 @@ class SetSupervisor(_Request):
     op: Literal["supervisor"] = "supervisor"
     session: str
     supervisor: str | None
+
+
+class SetTags(_Request):
+    """Change a session's tags (`spec.tags`): each key set to its value, or removed when the value is None; tags not
+    named stay. Saved in its spec; the worker keeps running."""
+
+    op: Literal["tags"] = "tags"
+    session: str
+    tags: dict[TagKey, TagValue | None]
 
 
 class RequestDirectory(_Request):
@@ -452,6 +461,7 @@ type Request = Annotated[
     | ChangeDirectory
     | SetSandbox
     | SetSupervisor
+    | SetTags
     | RequestDirectory
     | AnswerDirectory
     | ListAgents
@@ -965,6 +975,8 @@ class SessionInfo(_Message):
     """The spec's `parent`: the session this one works for."""
     supervisor: str | None = None
     """The spec's `supervisor`: the session watching this one."""
+    tags: dict[str, str] = Field(default_factory=dict[str, str])
+    """The spec's `tags`."""
 
 
 class SessionTool(_Message):

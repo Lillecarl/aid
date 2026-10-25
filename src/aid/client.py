@@ -70,6 +70,7 @@ from aid.protocol import (
     SetPermissions,
     SetSandbox,
     SetSupervisor,
+    SetTags,
     StartSession,
     StopSession,
     TextDelta,
@@ -78,7 +79,7 @@ from aid.protocol import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Sequence
+    from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Mapping, Sequence
 
     from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
@@ -575,6 +576,10 @@ class Session:
     async def set_supervisor(self, supervisor: str | None) -> None:
         """Change the session supervising this one (`SetSupervisor`); None ends supervision."""
         await self._client.call(SetSupervisor(session=self.name, supervisor=supervisor))
+
+    async def set_tags(self, tags: Mapping[str, str | None]) -> None:
+        """Set each tag to its value, or remove it when the value is None (`SetTags`); others stay."""
+        await self._client.call(SetTags(session=self.name, tags=dict(tags)))
 
     async def change_directory(self, cwd: str) -> str:
         """Move the session to `cwd` (`ChangeDirectory`), relative to its current one; returns the absolute path."""

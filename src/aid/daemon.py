@@ -84,6 +84,7 @@ from aid.protocol import (
     SetPermissions,
     SetSandbox,
     SetSupervisor,
+    SetTags,
     Started,
     StartFailed,
     StartSession,
@@ -117,7 +118,7 @@ from aid.spec import (
 from aid.summary import summarize
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Sequence
+    from collections.abc import AsyncGenerator, Mapping, Sequence
 
     from anyio.abc import TaskGroup, TaskStatus
     from anyio.streams.memory import MemoryObjectSendStream
@@ -232,6 +233,7 @@ class _Session:
             attention=self.attention,
             parent=self.spec.parent,
             supervisor=self.spec.supervisor,
+            tags=self.spec.tags,
         )
 
     @property
@@ -848,6 +850,9 @@ class Daemon:
             case SetSupervisor():
                 await self._set_supervisor(self._session(request.session), request.supervisor)
                 return Done(id=request.id)
+            case SetTags():
+                await self._set_tags(self._session(request.session), request.tags)
+                return Done(id=request.id)
             case RequestDirectory():
                 session = self._session(request.session)
                 cwd = await self._directory(session, request.cwd)
@@ -1257,6 +1262,16 @@ class Daemon:
             )
             session.spec = spec
         await session.history.append(Lifecycle(event="supervised", detail=supervisor or "off"), uuid.uuid4().hex)
+
+    async def _set_tags(self, session: _Session, tags: Mapping[str, str | None]) -> None:
+        async with session.spec_lock:
+            kept = {key: value for key, value in session.spec.tags.items() if key not in tags}
+            merged = kept | {key: value for key, value in tags.items() if value is not None}
+            spec = session.spec.model_copy(update={"tags": merged})
+            await (anyio.Path(self._paths.session_dir(session.name)) / SPEC_FILE).write_bytes(
+                AgentSpecAdapter.dump_json(spec)
+            )
+            session.spec = spec
 
     async def _settle_restart(self, session: _Session) -> None:
         """Restart a worker whose spec changed under it, once no turn runs; then deliver what waits."""

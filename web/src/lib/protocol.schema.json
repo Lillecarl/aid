@@ -99,6 +99,15 @@
           "exclusiveMinimum": 0,
           "type": "number"
         },
+        "tags": {
+          "patternProperties": {
+            "^[A-Za-z0-9_.:/-]{1,64}$": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
         "tool_permissions": {
           "additionalProperties": {
             "$ref": "#/$defs/PermissionMode"
@@ -518,6 +527,15 @@
           "exclusiveMinimum": 0,
           "type": "number"
         },
+        "tags": {
+          "patternProperties": {
+            "^[A-Za-z0-9_.:/-]{1,64}$": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
         "tool_permissions": {
           "additionalProperties": {
             "$ref": "#/$defs/PermissionMode"
@@ -683,6 +701,15 @@
           "default": 300,
           "exclusiveMinimum": 0,
           "type": "number"
+        },
+        "tags": {
+          "patternProperties": {
+            "^[A-Za-z0-9_.:/-]{1,64}$": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          "type": "object"
         },
         "tool_permissions": {
           "additionalProperties": {
@@ -1996,6 +2023,15 @@
           "exclusiveMinimum": 0,
           "type": "number"
         },
+        "tags": {
+          "patternProperties": {
+            "^[A-Za-z0-9_.:/-]{1,64}$": {
+              "maxLength": 256,
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
         "target": {
           "anyOf": [
             {
@@ -2126,7 +2162,8 @@
           "status": "#/$defs/GetStatus",
           "stop": "#/$defs/StopSession",
           "summary": "#/$defs/GetSummary",
-          "supervisor": "#/$defs/SetSupervisor"
+          "supervisor": "#/$defs/SetSupervisor",
+          "tags": "#/$defs/SetTags"
         },
         "propertyName": "op"
       },
@@ -2175,6 +2212,9 @@
         },
         {
           "$ref": "#/$defs/SetSupervisor"
+        },
+        {
+          "$ref": "#/$defs/SetTags"
         },
         {
           "$ref": "#/$defs/StartSession"
@@ -2812,6 +2852,12 @@
           ],
           "default": null
         },
+        "tags": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
         "working": {
           "default": false,
           "type": "boolean"
@@ -2825,7 +2871,8 @@
         "working",
         "attention",
         "parent",
-        "supervisor"
+        "supervisor",
+        "tags"
       ],
       "title": "SessionInfo",
       "type": "object"
@@ -3239,6 +3286,46 @@
         "supervisor"
       ],
       "title": "SetSupervisor",
+      "type": "object"
+    },
+    "SetTags": {
+      "additionalProperties": false,
+      "description": "Change a session's tags (`spec.tags`): each key set to its value, or removed when the value is None; tags not\nnamed stay. Saved in its spec; the worker keeps running.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "tags",
+          "default": "tags",
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "tags": {
+          "patternProperties": {
+            "^[A-Za-z0-9_.:/-]{1,64}$": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "op",
+        "session",
+        "tags"
+      ],
+      "title": "SetTags",
       "type": "object"
     },
     "StartSession": {
