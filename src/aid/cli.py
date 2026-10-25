@@ -249,7 +249,12 @@ def _parser() -> argparse.ArgumentParser:
     claude.add_argument("--claude", default="claude", help="the claude executable")
 
     py = with_permission(new("new-py", "create a session running a native agent"))
-    py.add_argument("agent", help="an agent `aid agents` lists, or module:attribute of an aid.Agent")
+    py.add_argument("agent", nargs="?", help="an agent `aid agents` lists, or module:attribute of an aid.Agent")
+    instructions = py.add_mutually_exclusive_group()
+    instructions.add_argument(
+        "--instructions", help="no agent: the session's own instructions; needs --model and --tool (nothing by default)"
+    )
+    instructions.add_argument("--instructions-file", type=Path, help="--instructions, read from a file")
     py.add_argument("--model", help="provider/model to run on instead of the agent's own (`aid models` lists them)")
     py.add_argument("--python-path", action="append", default=[], help="prepend to the worker's sys.path")
     py.add_argument(
@@ -477,7 +482,13 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
             tags=tags,
         )
     python_path = [str(Path(p).resolve()) for p in args.python_path]
-    source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
+    instructions = args.instructions_file.read_text() if args.instructions_file is not None else args.instructions
+    if args.agent is None:
+        source = {"instructions": instructions}
+    elif instructions is not None:
+        raise SystemExit("aid new-py: give an agent or instructions, not both")
+    else:
+        source = {"target": args.agent} if ":" in args.agent else {"agent": args.agent}
     return NativeSpec(
         cwd=cwd,
         env=env,

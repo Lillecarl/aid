@@ -16,6 +16,9 @@
   let dir = $state("");
   let command = $state("claude-agent-acp");
   let agent = $state("");
+  // Not an agent name (those are word characters, dots and dashes): the spec is the agent (Lillecarl/aid#50).
+  const INSTRUCTIONS = "(instructions)";
+  let instructions = $state("");
   let catalog = $state<AgentCatalog | null>(null);
   // Empty: the agent's own model.
   let provider = $state("");
@@ -24,7 +27,7 @@
   let models = $state<ModelEntry[]>([]);
   let args = $state("");
   let model = $state("");
-  // One regex per line; empty offers every tool (Lillecarl/aid#50).
+  // One regex per line; empty offers every tool to an agent, none to instructions (Lillecarl/aid#50).
   let tools = $state("");
   let trust = $state(false);
   let error = $state("");
@@ -43,14 +46,9 @@
       }
       case "native": {
         const patterns = tools.split("\n").map((line) => line.trim()).filter((line) => line !== "");
-        return {
-          kind,
-          cwd,
-          agent,
-          permission,
-          ...(provider && modelId ? { model: `${provider}/${modelId}` } : {}),
-          ...(patterns.length ? { tools: patterns } : {}),
-        };
+        const chosenModel = provider && modelId ? { model: `${provider}/${modelId}` } : {};
+        if (agent === INSTRUCTIONS) return { kind, cwd, instructions, permission, ...chosenModel, tools: patterns };
+        return { kind, cwd, agent, permission, ...chosenModel, ...(patterns.length ? { tools: patterns } : {}) };
       }
       case "claude-tty":
         return { kind, cwd, args: words(args), trust_cwd: trust };
@@ -62,7 +60,9 @@
   async function loadAgents(): Promise<void> {
     try {
       catalog = await api.agents();
-      if (!catalog.agents.some((a) => a.name === agent)) agent = catalog.agents[0]?.name ?? "";
+      if (agent !== INSTRUCTIONS && !catalog.agents.some((a) => a.name === agent)) {
+        agent = catalog.agents[0]?.name ?? INSTRUCTIONS;
+      }
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }
@@ -185,8 +185,15 @@
         {#each catalog?.agents ?? [] as info (info.name)}
           <option value={info.name}>{info.name}</option>
         {/each}
+        <option value={INSTRUCTIONS}>none: instructions, model and tools below</option>
       </select>
     </label>
+    {#if agent === INSTRUCTIONS}
+      <label>
+        Instructions
+        <textarea bind:value={instructions} rows="4" required data-testid="instructions"></textarea>
+      </label>
+    {/if}
     {#if chosen?.description}<p class="hint">{chosen.description}</p>{/if}
     {#if catalog !== null && catalog.agents.length === 0}
       <p class="hint">No agents on the daemon's plugins path.</p>
@@ -196,8 +203,13 @@
     {/each}
     <label>
       Model provider
-      <select bind:value={provider} onchange={() => loadModels(provider)} data-testid="model-provider">
-        <option value="">the agent's own model</option>
+      <select
+        bind:value={provider}
+        onchange={() => loadModels(provider)}
+        required={agent === INSTRUCTIONS}
+        data-testid="model-provider"
+      >
+        <option value="" disabled={agent === INSTRUCTIONS}>the agent's own model</option>
         {#each providers as row (row.name)}
           <option value={row.name}>{row.name}{row.has_key || row.key_env === null ? "" : " (no key)"}</option>
         {/each}
@@ -217,8 +229,12 @@
     {/if}
     <label>
       Tools
-      <textarea bind:value={tools} rows="2" placeholder="every tool; or one regex per line, e.g. ls|read|outline"
-        data-testid="tool-ceiling"></textarea>
+      <textarea
+        bind:value={tools}
+        rows="2"
+        placeholder={`${agent === INSTRUCTIONS ? "none" : "every tool"}; or one regex per line, e.g. ls|read|outline`}
+        data-testid="tool-ceiling"
+      ></textarea>
     </label>
   {:else if kind === "claude-sdk"}
     <label>Model <input bind:value={model} required placeholder="opus" /></label>

@@ -25,7 +25,7 @@ from aid.agent import Agent, ModelRetry, Tool, Toolset
 from aid.backends.permissions import PermissionWaits
 from aid.catalog import session_catalog
 from aid.client import connect
-from aid.coding import CODING, OUTPUTS_DIR, Coding, Verdict, asking_names
+from aid.coding import CODING, OUTPUTS_DIR, Coding, Verdict, asking_names, coding_tools
 from aid.instructions import compose, environment
 from aid.messages import (
     ModelMessage,
@@ -831,6 +831,8 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         agent = await anyio.to_thread.run_sync(load_named, catalog, spec.agent)
     elif spec.target is not None:
         agent = await anyio.to_thread.run_sync(load_target, spec.target)
+    elif spec.instructions is not None and spec.model is not None:
+        agent = Agent(spec.model, instructions=spec.instructions, toolsets=[coding_tools])
     else:
         raise ValueError("the spec names no agent")
     agent = session_agent(agent, spec)
@@ -867,8 +869,8 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         composed = await anyio.to_thread.run_sync(refresh_instructions)
         if composed:
             history = [ModelRequest(parts=[SystemPromptPart(content=composed)])]
-    log.info("history_loaded", agent=spec.agent or spec.target, messages=len(history))
-    started = Started(pid=os.getpid(), resumed=resumed, agent=spec.agent or spec.target, model=model_name(agent))
+    log.info("history_loaded", agent=spec.runs, messages=len(history))
+    started = Started(pid=os.getpid(), resumed=resumed, agent=spec.runs, model=model_name(agent))
     if spec.sandbox is not None:
         await sandbox.check(spec.sandbox, spec.cwd)
     coding = Coding(

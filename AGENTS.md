@@ -406,11 +406,16 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 - Permission modes: `allow`, `deny`, `ask`, `supervisor`, `ask_supervisor` (the last two route through the
   supervision plugin, above; without a supervisor they are `ask`). Engines branch on `PermissionMode.waits`, never
   on `ask` alone; Claude's rules ask for every waiting mode (`claude_rules`).
-- Tool ceiling (Lillecarl/aid#50, phase 1 of 3): `NativeSpec.tools`, regexes fullmatched against tool names
+- Tool ceiling (Lillecarl/aid#50, phases 1-2 of 3): `NativeSpec.tools`, regexes fullmatched against tool names
   (`offers`); the backend never offers a tool none matches, aid's and plugins' included, so a call to one is an
   unknown tool. Above modes, not one of them: `deny` still offers. Set at creation (`aid new-py --tool`, the create
   form's Tools, one regex per line); forks inherit it; agents never set it. Native only: other engines lack the
   field until each enforces it (Claude: `--tools` needs its built-in names; ACP: refuse).
+  Spec as the agent: `NativeSpec.instructions`, a third source beside `agent`/`target`, requires `model` and
+  `tools`; `open_native` builds `Agent(model, instructions, [coding_tools])` plus aid's toolset, so the ceiling
+  picks from every named tool and `tools=[]` offers none. `spec.runs` names it "instructions" (`Started.agent`,
+  `SessionStatus.runs`). `aid new-py NAME --instructions[-file] … --model … --tool …`; the form's agent choice
+  "none". Phase 3: agents spawn such specs, attenuated (#20).
 - Native tool permissions: a mode per tool name. `NativeSpec.tool_permissions` overrides; unset, a `Tool.asks`
   tool (python, shell, background, monitor, apply_edits, remove, ask_user: they permit inside, with their own titles;
   `remove` deletes at once from a plan, below)

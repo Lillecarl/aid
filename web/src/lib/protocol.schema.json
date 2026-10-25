@@ -1833,7 +1833,7 @@
     },
     "NativeSpec": {
       "additionalProperties": false,
-      "description": "A native agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, or `target`, a\n`package.module:attribute` that is an agent itself. Exactly one of them.",
+      "description": "A native agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, `target`, a\n`package.module:attribute` that is an agent itself, or `instructions`, which makes the spec the agent. Exactly\none of them.",
       "properties": {
         "agent": {
           "anyOf": [
@@ -1878,6 +1878,17 @@
                 "type": "string"
               },
               "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "instructions": {
+          "anyOf": [
+            {
+              "type": "string"
             },
             {
               "type": "null"

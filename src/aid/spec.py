@@ -268,12 +268,16 @@ class AcpSpec(_Spec):
 
 
 class NativeSpec(_Spec):
-    """A native agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, or `target`, a
-    `package.module:attribute` that is an agent itself. Exactly one of them."""
+    """A native agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, `target`, a
+    `package.module:attribute` that is an agent itself, or `instructions`, which makes the spec the agent. Exactly
+    one of them."""
 
     kind: Literal[AgentKind.NATIVE] = AgentKind.NATIVE
     agent: Annotated[str, Field(pattern=r"^[\w.-]+$")] | None = None
     target: Annotated[str, Field(pattern=r"^[\w.]+:[\w.]+$")] | None = None
+    instructions: str | None = None
+    """The agent's own instructions, for an agent made from this spec alone: it needs `model` and `tools`, and its
+    tools are every named tool (`aid.coding_tools`, aid's and plugins'), so `tools` alone picks what it gets."""
     model: Annotated[str, Field(pattern=r"^\S+$")] | None = None
     """`provider/model` the session runs on (`aid models` lists them), over the agent's own. The agent's
     `model_settings` follow only to a model of the same provider: they may hold keys another provider refuses."""
@@ -314,9 +318,16 @@ class NativeSpec(_Spec):
 
     @model_validator(mode="after")
     def _one_source(self) -> Self:
-        if (self.agent is None) == (self.target is None):
-            raise ValueError("set exactly one of agent and target")
+        if sum(source is not None for source in (self.agent, self.target, self.instructions)) != 1:
+            raise ValueError("set exactly one of agent, target and instructions")
+        if self.instructions is not None and (self.model is None or self.tools is None):
+            raise ValueError("a spec with instructions sets model and tools")
         return self
+
+    @property
+    def runs(self) -> str:
+        """What the session runs, for people: the agent's name, the target, or "instructions"."""
+        return self.agent or self.target or "instructions"
 
 
 class ClaudeTtySpec(_Spec):

@@ -281,8 +281,9 @@ export interface ToolInfo {
   name: string;
 }
 /**
- * A native agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, or `target`, a
- * `package.module:attribute` that is an agent itself. Exactly one of them.
+ * A native agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, `target`, a
+ * `package.module:attribute` that is an agent itself, or `instructions`, which makes the spec the agent. Exactly
+ * one of them.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "NativeSpec".
@@ -297,6 +298,7 @@ export interface NativeSpec {
   };
   hooks?: Hook[];
   instruction_providers?: string[] | null;
+  instructions?: string | null;
   kind: "native";
   max_context?: number | null;
   max_requests?: number | null;

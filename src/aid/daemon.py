@@ -282,7 +282,7 @@ class _Session:
                 runs = shlex.join([*self.spec.command, *self.spec.args])
                 servers = [s.name for s in self.spec.mcp_servers]
             case NativeSpec():
-                runs, servers = self.spec.agent or self.spec.target or "", []
+                runs, servers = self.spec.runs, []
             case ClaudeSdkSpec():
                 runs, servers = shlex.join([*self.spec.command, "-p", "--model", self.spec.model]), []
         if self.spec.aid_tools and not isinstance(self.spec, NativeSpec):

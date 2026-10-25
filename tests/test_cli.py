@@ -4,6 +4,7 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+from pydantic import ValidationError
 
 # The parsing rules under test are private to the CLI.
 from aid.cli import (
@@ -83,6 +84,32 @@ def test_new_py_takes_a_tool_ceiling() -> None:
     args = _parser().parse_args(["new-py", "s", "agents:echo"])
     args.agent_command = []
     assert isinstance(spec := _spec(args), NativeSpec) and spec.tools is None
+
+
+def test_new_py_makes_an_agent_from_instructions(tmp_path: Path) -> None:
+    args = _parser().parse_args(["new-py", "s", "--instructions", "Read.", "--model", "a/b", "--tool", "read"])
+    args.agent_command = []
+    spec = _spec(args)
+    assert isinstance(spec, NativeSpec)
+    assert (spec.agent, spec.instructions, spec.model, spec.tools, spec.runs) == (
+        None,
+        "Read.",
+        "a/b",
+        ["read"],
+        "instructions",
+    )
+    (file := tmp_path / "instructions.md").write_text("From a file.")
+    args = _parser().parse_args(["new-py", "s", "--instructions-file", str(file), "--model", "a/b", "--tool", "ls"])
+    args.agent_command = []
+    assert isinstance(spec := _spec(args), NativeSpec) and spec.instructions == "From a file."
+    args = _parser().parse_args(["new-py", "s", "--instructions", "Read.", "--model", "a/b"])
+    args.agent_command = []
+    with pytest.raises(ValidationError, match="sets model and tools"):
+        _spec(args)
+    args = _parser().parse_args(["new-py", "s", "agents:echo", "--instructions", "Read."])
+    args.agent_command = []
+    with pytest.raises(SystemExit, match="not both"):
+        _spec(args)
 
 
 def test_new_takes_tags() -> None:
