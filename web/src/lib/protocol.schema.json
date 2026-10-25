@@ -2873,6 +2873,28 @@
         "busy": {
           "type": "boolean"
         },
+        "context_size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "context_used": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "cost": {
           "additionalProperties": {
             "type": "number"
@@ -3019,7 +3041,9 @@
         "parent",
         "supervisor",
         "directory_request",
-        "cost"
+        "cost",
+        "context_used",
+        "context_size"
       ],
       "title": "SessionStatus",
       "type": "object"

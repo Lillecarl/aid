@@ -1060,6 +1060,8 @@ export interface SessionStatus {
   aid_tools: boolean;
   attention: string | null;
   busy: boolean;
+  context_size: number | null;
+  context_used: number | null;
   cost: {
     [k: string]: number;
   };

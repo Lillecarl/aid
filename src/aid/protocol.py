@@ -1037,6 +1037,10 @@ class SessionStatus(_Message):
     cost: dict[str, float] = Field(default_factory=dict[str, float])
     """Per currency, accumulated as SessionSummary.cost: the last cost each agent session reported, summed
     over the agent sessions. Safe here: amounts, never credentials."""
+    context_used: int | None = None
+    """The latest turn's context, as its Usage measured it; None until a turn measured one."""
+    context_size: int | None = None
+    """What `context_used` is measured against (Usage.context_size)."""
 
 
 class PaneAddress(_Message):

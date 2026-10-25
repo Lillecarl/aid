@@ -234,6 +234,7 @@ async def test_acp_usage_is_recorded(daemon: Paths, tmp_path: Path) -> None:
     ]
     # The model the turn used, over the option's value at the start.
     assert (status.agent, status.model) == (f"{AGENT_NAME} {AGENT_VERSION}", RESOLVED_MODEL)
+    assert (status.context_used, status.context_size) == (1234, 200_000)
     assert status.agent_session
 
 

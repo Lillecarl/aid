@@ -170,6 +170,8 @@ class _Session:
     """What the last worker said about its agent. Kept after it exits: the agent session carries on."""
     models: list[str] = field(default_factory=list[str])
     """What the latest turn's Usage named."""
+    context: Usage | None = None
+    """The latest of the agent's own Usage entries that measured its context."""
     cost: dict[str, float] = field(default_factory=dict[str, float])
     """Banked cost per currency: each closed agent session's last reported figure, as SessionSummary.cost."""
     latest: dict[str, float] = field(default_factory=dict[str, float])
@@ -198,8 +200,11 @@ class _Session:
     def note(self, item: HistoryItem) -> None:
         """What a turn's entry changes in the status, whoever started the turn."""
         match item:
-            case Usage(models=models, agent=None) if models:
-                self.models = models
+            case Usage(models=models, agent=None) if models or item.context_used is not None:
+                if models:
+                    self.models = models
+                if item.context_used is not None:
+                    self.context = item
             case PermissionRequest():
                 self.permissions[item.request_id] = item
             case PermissionDecision():
@@ -304,6 +309,8 @@ class _Session:
             supervisor=self.spec.supervisor,
             directory_request=self.directory_request,
             cost={**self.cost, **self.latest},
+            context_used=self.context.context_used if self.context else None,
+            context_size=self.context.context_size if self.context else None,
         )
 
 
