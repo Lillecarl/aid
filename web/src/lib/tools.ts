@@ -100,6 +100,32 @@ export function readable(output: string): string {
   }
 }
 
+/** A file read back with line numbers: the numbers, the file's text, and a closing note such as `… 9 more lines`. */
+export type Numbered = { gutters: string[]; code: string; note: string | null };
+
+// aid's `read` writes `{n:>6}\t`; Claude Code's Read has written `→` in place of the tab.
+const NUMBERED_LINE = /^ *(\d+)[\t→](.*)$/;
+
+/** Output whose every line is numbered (`cat -n` style), split for highlighting; else null. */
+export function numbered(output: string): Numbered | null {
+  const lines = output.split("\n");
+  const notes: string[] = [];
+  while (lines.length > 1 && lines.at(-1)?.startsWith("… ")) notes.unshift(lines.pop() ?? "");
+  // A clip or spill cut inside a line's number leaves digits with no text.
+  if (notes.length && /^ *\d*$/.test(lines.at(-1) ?? "")) lines.pop();
+  const note = notes.length ? notes.join("\n") : null;
+  const gutters: string[] = [];
+  const code: string[] = [];
+  if (!lines.length) return null;
+  for (const line of lines) {
+    const [, number, text] = NUMBERED_LINE.exec(line) ?? [];
+    if (number === undefined || text === undefined) return null;
+    gutters.push(number);
+    code.push(text);
+  }
+  return { gutters, code: code.join("\n"), note };
+}
+
 /** The shell command of a call, when its only interesting argument is one. */
 export function command(input: unknown): string | null {
   if (input === null || typeof input !== "object") return null;

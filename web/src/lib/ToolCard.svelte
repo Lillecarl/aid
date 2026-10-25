@@ -1,7 +1,7 @@
 <script lang="ts">
   import Code from "./Code.svelte";
   import InputView from "./InputView.svelte";
-  import { command, type DiffLine, diffLines, gist, hasInput, readable, type Tool } from "./tools";
+  import { command, type DiffLine, diffLines, gist, hasInput, numbered, readable, type Tool } from "./tools";
 
   interface Props {
     tool: Tool;
@@ -17,6 +17,10 @@
   const showInput = $derived(shell === null && hasInput(tool.input) && !tool.diffs.length);
   const hasDetails = $derived(
     shell !== null || showInput || tool.output !== null || tool.diffs.length > 0 || tool.paths.length > 0,
+  );
+  // A file the call read, by its one path: anything else numbered (a search's hits) spans files.
+  const listing = $derived(
+    tool.output !== null && status !== "failed" && tool.paths.length === 1 ? numbered(tool.output) : null,
   );
   // Only while open: a diff of a big file costs time, and most cards stay closed.
   let open = $state(false);
@@ -51,7 +55,15 @@
       {/each}
       {#if tool.output !== null}
         <div class="label">{status === "failed" ? "error" : "output"}</div>
-        <pre class="output">{readable(tool.output)}</pre>
+        {#if listing}
+          <pre class="output" data-testid="tool-listing"><Code
+              text={listing.code}
+              path={tool.paths[0]}
+              gutters={listing.gutters}
+            />{#if listing.note}<span class="note">{listing.note}</span>{/if}</pre>
+        {:else}
+          <pre class="output">{readable(tool.output)}</pre>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -145,6 +157,9 @@
     color: var(--muted);
     font-size: 0.85em;
     margin-bottom: -0.3rem;
+  }
+  .note {
+    color: var(--muted);
   }
   .failed .output {
     color: var(--bad);

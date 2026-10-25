@@ -448,7 +448,8 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   classes. Grammars: `nix/tree-sitter-grammars.nix` → `AID_TREE_SITTER_GRAMMARS` (wrapper, shell, tests). Same node:
   the later pattern wins, as tree-sitter-highlight does. Unknown capture names fall back by prefix (`CLASSES`).
   Measured: 1 MiB of Python, 1.0 s and 105k spans. The chat's code (`Code.svelte`: fenced blocks by tag, shell
-  commands as bash, tool arguments by key or by the call's `path`) POSTs to `/api/highlight` (CSRF header, 256 Ki
+  commands as bash, tool arguments by key or by the call's `path`, a numbered output of a one-path call as that file
+  with the numbers in a gutter: `tools.numbered`) POSTs to `/api/highlight` (CSRF header, 256 Ki
   chars): a grammar by name or file type, else Pygments' lexer (`highlight.highlight`), else plain. The page caches
   answers and waits for a streaming block to settle.
 - `/api/sessions/{name}/files` and `/file` (`web/files.py`) read the session cwd in aid web itself; every path

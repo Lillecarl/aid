@@ -350,6 +350,40 @@ async def test_a_shell_command_is_highlighted(page: Page, session_daemon: Paths,
     assert "echo 'painted' | tr a-z A-Z" in (await box.locator("code.hl").text_content() or "")
 
 
+async def test_a_read_file_is_highlighted_by_its_path(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """Lillecarl/aid#39: `read` output shows its line numbers apart, the text highlighted as the file's language."""
+    await anyio.Path(tmp_path / "paint.py").write_text("def paint():\n    return 'red'\n")
+    await seed_session(session_daemon, tmp_path, "painter", "agents:coder", PermissionMode.ALLOW)
+    await open_session(page, "painter")
+    await send_chat(page, json.dumps([["read", {"path": "paint.py", "limit": 1}]]))
+    await expect_chat_text(page, "def paint")
+    await wait_for_idle(page)
+    box = page.get_by_test_id("tool-box").filter(has_text="paint.py")
+    listing = box.get_by_test_id("tool-listing")
+    await open_details(box.locator("summary"), listing)
+    await listing.locator("code.hl span.k").first.wait_for(timeout=TIMEOUT * 1000)
+    assert await listing.locator(".gutter").all_text_contents() == ["1"]
+    assert (await listing.locator(".line").all_text_contents()) == ["def paint():\n"]
+    assert "1 more lines" in (await listing.locator(".note").text_content() or "")
+
+
+async def test_a_clipped_read_keeps_its_line_numbers(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """The history clips a long read inside line 199's number: the part line goes, the rest stays numbered."""
+    # 101 characters a numbered line: the 20 000-character clip falls 2 into line 199.
+    lines = [f"v{n:03d} = {'1' * 86}" for n in range(1, 251)]
+    await anyio.Path(tmp_path / "long.py").write_text("\n".join(lines) + "\n")
+    await seed_session(session_daemon, tmp_path, "longread", "agents:coder", PermissionMode.ALLOW)
+    await open_session(page, "longread")
+    await send_chat(page, json.dumps([["read", {"path": "long.py"}]]))
+    await wait_for_idle(page)
+    box = page.get_by_test_id("tool-box").filter(has_text="long.py")
+    listing = box.get_by_test_id("tool-listing")
+    await open_details(box.locator("summary"), listing)
+    gutters = await listing.locator(".gutter").all_text_contents()
+    assert gutters[0] == "1" and gutters[-1] == "198" and len(gutters) == 198
+    assert "more characters" in (await listing.locator(".note").text_content() or "")
+
+
 async def test_rows_fold_one_at_a_time_and_all_at_once(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     """Lillecarl/aid#40: a text row folds to its first line; Fold all also shuts every box."""
     await anyio.Path(tmp_path / "notes.txt").write_text("remember this\n")
