@@ -77,6 +77,7 @@ if TYPE_CHECKING:
 
     from aid.backends.base import Emit, Notifier
     from aid.discovery import Catalog
+    from aid.messages import Part
     from aid.protocol import MessageEntry
     from aid.spec import NativeSpec, PermissionMode
 
@@ -127,7 +128,7 @@ def prune_history(
     pruned: list[ModelMessage] = []
     for index, message in enumerate(history):
         past = index < boundary
-        parts: list[Any] = []
+        parts: list[Part] = []
         changed = False
         for part in message.parts:
             if past and isinstance(part, ThinkingPart):

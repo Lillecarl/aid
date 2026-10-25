@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import anyio
 import zmq
@@ -34,6 +34,7 @@ from aid.protocol import AidError
 
 if TYPE_CHECKING:
     from anyio.streams.memory import MemoryObjectSendStream
+    from pydantic import JsonValue
 
     from aid.protocol import MessageEntry
 
@@ -54,7 +55,7 @@ def instructions(session: str) -> str:
     )
 
 
-def channel_params(message: MessageEntry) -> dict[str, Any]:
+def channel_params(message: MessageEntry) -> dict[str, JsonValue]:
     # Meta keys are identifiers; Claude Code drops any other.
     return {"content": message.text, "meta": {"from": message.sender} if message.sender else {}}
 

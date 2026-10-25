@@ -50,7 +50,8 @@ from aid.protocol import AidError
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Mapping, Sequence
 
-    from anthropic.types import ContentBlockParam, MessageParam, TextBlockParam, ToolParam
+    from anthropic.types import ContentBlockParam, MessageDeltaUsage, MessageParam, TextBlockParam, ToolParam
+    from anthropic.types import Usage as AnthropicUsage
     from google import genai
     from google.genai.types import (
         ContentDict,
@@ -623,13 +624,13 @@ class AnthropicModel:
         return await collect(self, messages, info)
 
 
-def _anthropic_usage(usage: Any) -> RequestUsage:
+def _anthropic_usage(usage: AnthropicUsage | MessageDeltaUsage) -> RequestUsage:
     """Anthropic's `input_tokens` excludes cache reads and writes; aid keeps that split."""
     return RequestUsage(
-        input_tokens=getattr(usage, "input_tokens", None) or 0,
-        output_tokens=getattr(usage, "output_tokens", None) or 0,
-        cache_read_tokens=getattr(usage, "cache_read_input_tokens", None) or 0,
-        cache_write_tokens=getattr(usage, "cache_creation_input_tokens", None) or 0,
+        input_tokens=usage.input_tokens or 0,
+        output_tokens=usage.output_tokens or 0,
+        cache_read_tokens=usage.cache_read_input_tokens or 0,
+        cache_write_tokens=usage.cache_creation_input_tokens or 0,
     )
 
 

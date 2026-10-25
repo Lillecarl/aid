@@ -11,7 +11,7 @@ import json
 from contextlib import asynccontextmanager
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Final, cast
+from typing import TYPE_CHECKING, Annotated, Final
 
 import anyio
 import anyio.to_thread
@@ -44,6 +44,7 @@ from aid.web import auth, files, highlight, theme, zws
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
 
+    from pydantic import JsonValue
     from starlette.requests import Request
     from starlette.types import ASGIApp, Message, Receive, Scope, Send
     from starlette.websockets import WebSocket
@@ -271,10 +272,10 @@ async def pane(websocket: WebSocket) -> None:
                     break
                 if (text := message.get("text")) is None:
                     continue
-                said = json.loads(text)
+                said: JsonValue = json.loads(text)
                 if not isinstance(said, dict):
                     break
-                await stream.send(cast(dict[str, Any], said))
+                await stream.send(said)
             tg.cancel_scope.cancel()
     except StreamRefused as error:
         await websocket.close(code=WS_POLICY_VIOLATION, reason=str(error)[:WS_REASON_MAX])

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import inspect
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, cast, overload
+from typing import TYPE_CHECKING, Any, Final, overload
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -68,5 +68,4 @@ def tool_paths(input: JsonValue) -> list[str]:
     """Files a call touches, from its arguments."""
     if not isinstance(input, dict):
         return []
-    arguments = cast(dict[str, Any], input)
-    return [p for key in PATH_KEYS if isinstance(p := arguments.get(key), str)]
+    return [p for key in PATH_KEYS if isinstance(p := input.get(key), str)]

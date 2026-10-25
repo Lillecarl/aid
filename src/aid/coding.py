@@ -69,6 +69,8 @@ from pyrun.shell import SHELL_ARGV, ShellResult, ShellSession
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Iterable
 
+    from pydantic import JsonValue
+
     from aid.backends.base import Emit, Notifier
     from aid.backends.permissions import PermissionWaits
     from aid.spec import Hook, Sandbox
@@ -384,7 +386,7 @@ class Coding:
         *,
         tool_name: str,
         title: str,
-        input: Any,
+        input: JsonValue,
         remember: str | None = None,
         request_id: str | None = None,
     ) -> Verdict:
@@ -1253,7 +1255,7 @@ async def background(
         ctx.tool_call_id or "",
         tool_name="background",
         title=shlex.join(argv),
-        input={"argv": argv, "cwd": cwd or "."},
+        input={"argv": [*argv], "cwd": cwd or "."},
         remember=Path(argv[0]).name,
     )
     if not verdict.allowed:
@@ -1360,7 +1362,14 @@ async def monitor(
         ctx.tool_call_id or "",
         tool_name="monitor",
         title=f"watch {task_id} {condition.describe()}: {shlex.join(task.argv)}",
-        input={"task_id": task_id, "on": on, "pattern": pattern, "stream": stream, "after": after, "codes": codes},
+        input={
+            "task_id": task_id,
+            "on": on,
+            "pattern": pattern,
+            "stream": stream,
+            "after": after,
+            "codes": None if codes is None else [*codes],
+        },
     )
     if not verdict.allowed:
         return verdict.refusal("nothing is watched")
