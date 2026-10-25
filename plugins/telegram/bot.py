@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import secrets
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final
 
 import anyio
 import httpx
@@ -177,7 +177,7 @@ class _UpdateBody(BaseModel):
 
 
 class _UpdatesBody(_ApiBody):
-    result: list[Any] = []
+    result: list[JsonValue] = []
 
 
 def _body[M: _ApiBody](model: type[M], response: httpx.Response) -> M:
@@ -310,7 +310,7 @@ class Bot:
         taps: list[Callback] = []
         last = offset
         for raw in body.result:
-            fields = cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
+            fields = raw if isinstance(raw, dict) else {}
             update_id = fields.get("update_id")
             if isinstance(update_id, int) and not isinstance(update_id, bool):
                 last = max(last, update_id + 1)

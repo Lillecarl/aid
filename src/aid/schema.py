@@ -11,9 +11,9 @@ make it required. What it sends is in validation mode, where a field with a defa
 from __future__ import annotations
 
 import json
-from typing import Any, cast
+from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 from pydantic.json_schema import GenerateJsonSchema, models_json_schema
 
 from aid.protocol import (
@@ -65,6 +65,7 @@ class _Untitled(GenerateJsonSchema):
     def field_title_should_be_set(self, schema: Any) -> bool:  # pydantic's own type for it is private
         return False
 
+    # Any: pyright 1.1.414 does not narrow pydantic_core's CoreSchema union by its `type` key.
     def field_is_required(self, field: Any, total: bool) -> bool:
         """A Literal with a default is a union's tag (`op`, `kind`, …): a discriminated union refuses input without
         it, whatever the default says."""
@@ -74,19 +75,19 @@ class _Untitled(GenerateJsonSchema):
         return super().field_is_required(field, total)
 
 
-def _tuples_as_items(node: Any) -> Any:
+def _tuples_as_items(node: JsonValue) -> JsonValue:
     """JSON Schema 2020's `prefixItems` as draft 7's `items` list, which is what json2ts reads."""
     if isinstance(node, dict):
-        fixed = {key: _tuples_as_items(value) for key, value in cast(dict[str, Any], node).items()}
+        fixed = {key: _tuples_as_items(value) for key, value in node.items()}
         if "prefixItems" in fixed:
             fixed["items"] = fixed.pop("prefixItems")
         return fixed
     if isinstance(node, list):
-        return [_tuples_as_items(value) for value in cast(list[Any], node)]
+        return [_tuples_as_items(value) for value in node]
     return node
 
 
-def schema() -> dict[str, Any]:
+def schema() -> JsonValue:
     _, document = models_json_schema(
         [(Received, "serialization"), (Sent, "validation")], title="aid protocol", schema_generator=_Untitled
     )
