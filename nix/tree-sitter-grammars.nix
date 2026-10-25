@@ -115,6 +115,7 @@ let
         (js "highlights-jsx.scm")
         (js "highlights.scm")
       ];
+      injections = js "injections.scm";
     };
     typescript = {
       grammar = g.tree-sitter-typescript;
@@ -123,6 +124,7 @@ let
         "${typescriptSrc}/queries/highlights.scm"
         (js "highlights.scm")
       ];
+      injections = js "injections.scm";
     };
     yaml = {
       grammar = g.tree-sitter-yaml;
@@ -141,6 +143,8 @@ let
     mkdir -p $out/${name}
     ln -s ${l.grammar}/parser $out/${name}/parser
     cat ${lib.escapeShellArgs (l.highlights or [ (queries l.grammar "highlights.scm") ])} > $out/${name}/highlights.scm
+    injections=${lib.escapeShellArg (l.injections or (queries l.grammar "injections.scm"))}
+    if [ -f "$injections" ]; then cp "$injections" $out/${name}/injections.scm; fi
   '';
 in
 runCommand "aid-tree-sitter-grammars" { passAsFile = [ "manifest" ]; inherit manifest; } ''

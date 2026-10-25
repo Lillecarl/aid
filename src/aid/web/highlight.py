@@ -6,7 +6,9 @@ shared object and its `highlights.scm`. Spans come back as UTF-16 offsets into t
 string counts.
 
 Precedence follows tree-sitter-highlight (crates/highlight/src/highlight.rs, 0.25): of the patterns that
-capture one node, the last one wins, and a node's capture is drawn over its parent's.
+capture one node, the last one wins, and a node's capture is drawn over its parent's. A grammar's `injections.scm`
+names text another grammar parses (a script in HTML, bash in a Nix builder); that layer is drawn over its host,
+and its plain text keeps the host's class.
 """
 
 from __future__ import annotations
@@ -29,12 +31,18 @@ from pygments.token import (
     _TokenType,  # pyright: ignore[reportPrivateUsage] -- no public name for the token type
 )
 from pygments.util import ClassNotFound
-from tree_sitter import Language, Parser, Query, QueryCursor
+from tree_sitter import Language, Node, Parser, Query, QueryCursor, Range
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
 ENV_GRAMMARS: Final = "AID_TREE_SITTER_GRAMMARS"
+
+INJECTION_DEPTH: Final = 3
+"""Injected layers followed into one another; rust injects rust into every macro."""
+
+# A language named by a comment, as Nix's `/* bash */ ''…''`.
+_LANGUAGE_WORD: Final = re.compile(r"[A-Za-z][\w+#.-]*")
 
 type Span = tuple[int, int, str]
 """Start and end in UTF-16 code units, and the Pygments class."""
@@ -133,6 +141,7 @@ class _Compiled:
     query: Query
     classes: dict[str, str | None]
     """By capture name."""
+    injections: Query | None
 
 
 class Grammars:
@@ -165,19 +174,84 @@ class Grammars:
                 count: int = query.capture_count  # pyright: ignore[reportAssignmentType]  # pyrefly: ignore[bad-assignment]
                 names = (query.capture_name(i) for i in range(count))
                 classes = {name: token_class(name) for name in names}
-                found = self._compiled[language] = _Compiled(lang, query, classes)
+                injected = directory / "injections.scm"
+                injections = Query(lang, injected.read_text()) if injected.exists() else None
+                found = self._compiled[language] = _Compiled(lang, query, classes, injections)
             return found
 
     def highlight(self, path: str, text: str) -> list[Span] | None:
         """None when no grammar knows the file."""
         if (language := self.language_of(path)) is None:
             return None
-        return spans(self.compile(language), text)
+        return self.spans(language, text)
 
     def named(self, name: str) -> str | None:
         """A grammar by its own name (`python`) or by a file type it claims (`py`), as fenced blocks name them."""
         name = name.lower()
         return name if name in self._symbols else self._types.get(name)
+
+    def spans(self, language: str, text: str) -> list[Span]:
+        data = text.encode()
+        layers: list[list[_Capture]] = []
+        self._layer(language, data, None, 0, layers)
+        ids: dict[str, int] = {"": 0}
+        paint = bytearray(len(data))
+        for captured in layers:
+            for start, end, _pattern, cls in captured:
+                index = ids.setdefault(cls, len(ids))
+                paint[start:end] = bytes((index,)) * (end - start)
+        by_id = {index: cls for cls, index in ids.items()}
+        runs = [(m.start(), m.end(), by_id[m.group()[0]]) for m in _RUNS.finditer(paint)]
+        return _utf16(data, runs) if not text.isascii() else runs
+
+    def _layer(
+        self, language: str, data: bytes, ranges: list[Range] | None, depth: int, layers: list[list[_Capture]]
+    ) -> None:
+        """Appends the captures of `data` (within `ranges`) as `language` reads it, then those of its injections."""
+        compiled = self.compile(language)
+        parser = Parser(compiled.language)
+        if ranges is not None:
+            parser.included_ranges = ranges
+        tree = parser.parse(data)
+        captured: list[_Capture] = []
+        for pattern, captures in QueryCursor(compiled.query).matches(tree.root_node):
+            for capture, nodes in captures.items():
+                if (cls := compiled.classes[capture]) is not None:
+                    captured.extend((node.start_byte, node.end_byte, pattern, cls) for node in nodes)
+        # Outer before inner, and for one range the earlier pattern first, so what is painted last wins.
+        captured.sort(key=lambda c: (c[0], -c[1], c[2]))
+        layers.append(captured)
+        if compiled.injections is not None and depth < INJECTION_DEPTH:
+            for child, child_ranges in self._injections(compiled.injections, tree.root_node):
+                self._layer(child, data, child_ranges, depth + 1, layers)
+
+    def _injections(self, query: Query, root: Node) -> list[tuple[str, list[Range]]]:
+        """Each injected language with the ranges one parse of it covers: one node, or a combined pattern's all."""
+        out: list[tuple[str, list[Range]]] = []
+        combined: dict[tuple[int, str], dict[int, Range]] = {}
+        for pattern, captures in QueryCursor(query).matches(root):
+            settings = query.pattern_settings(pattern)
+            named = settings.get("injection.language") or _language_word(captures.get("injection.language"))
+            language = self.named(named) if named else None
+            contents = captures.get("injection.content", [])
+            if language is None or not contents:
+                continue
+            if "injection.combined" in settings:
+                combined.setdefault((pattern, language), {}).update((n.start_byte, n.range) for n in contents)
+            else:
+                out.extend((language, [n.range]) for n in contents)
+        out.extend((language, [found[k] for k in sorted(found)]) for (_p, language), found in combined.items())
+        return out
+
+
+type _Capture = tuple[int, int, int, str]
+"""Start and end byte, pattern index, class."""
+
+
+def _language_word(nodes: list[Node] | None) -> str | None:
+    text = nodes[0].text if nodes else None
+    found = _LANGUAGE_WORD.search(text.decode(errors="replace")) if text else None
+    return found.group() if found else None
 
 
 def highlight(grammars: Grammars | None, language: str | None, path: str | None, text: str) -> list[Span] | None:
@@ -185,7 +259,7 @@ def highlight(grammars: Grammars | None, language: str | None, path: str | None,
     if grammars is not None:
         found = (grammars.named(language) if language else None) or (grammars.language_of(path) if path else None)
         if found is not None:
-            return spans(grammars.compile(found), text)
+            return grammars.spans(found, text)
     try:
         lexer = get_lexer_by_name(language) if language else get_lexer_for_filename(path) if path else None
     except ClassNotFound:
@@ -211,27 +285,7 @@ def lexed(tokens: Iterable[tuple[int, _TokenType, str]]) -> list[Span]:
     return out
 
 
-def spans(compiled: _Compiled, text: str) -> list[Span]:
-    data = text.encode()
-    tree = Parser(compiled.language).parse(data)
-    captured: list[tuple[int, int, int, str]] = []
-    for pattern, captures in QueryCursor(compiled.query).matches(tree.root_node):
-        for capture, nodes in captures.items():
-            if (cls := compiled.classes[capture]) is not None:
-                captured.extend((node.start_byte, node.end_byte, pattern, cls) for node in nodes)
-    # Outer before inner, and for one range the earlier pattern first, so what is painted last wins.
-    captured.sort(key=lambda c: (c[0], -c[1], c[2]))
-    ids: dict[str, int] = {"": 0}
-    paint = bytearray(len(data))
-    for start, end, _pattern, cls in captured:
-        index = ids.setdefault(cls, len(ids))
-        paint[start:end] = bytes((index,)) * (end - start)
-    by_id = {index: cls for cls, index in ids.items()}
-    runs = [(m.start(), m.end(), by_id[m.group()[0]]) for m in _RUNS.finditer(paint)]
-    return _utf16(data, runs) if not text.isascii() else runs
-
-
-# A run of one nonzero class id. Ids stay under 256: a query has far fewer classes than that.
+# A run of one nonzero class id. Ids stay under 256: Pygments has about 80 short classes.
 _RUNS: Final = re.compile(rb"([^\x00])\1*")
 
 

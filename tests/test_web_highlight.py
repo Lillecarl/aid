@@ -87,3 +87,38 @@ def test_pygments_takes_what_no_grammar_knows(grammars: Grammars, grammars_or_no
     assert max(end for _start, end, _cls in found) <= len(text.encode("utf-16-le")) // 2
     assert highlight(None, "no-such-language", None, text) is None
     assert highlight(None, None, None, text) is None
+
+
+def _classes(spans: list[tuple[int, int, str]] | None, text: str) -> dict[str, str]:
+    assert spans is not None
+    return {text[start:end]: cls for start, end, cls in spans}
+
+
+def test_a_script_in_html_is_highlighted_as_javascript(grammars: Grammars) -> None:
+    text = "<p>let</p><script>let x = 1;</script>\n"
+    classes = _classes(grammars.highlight("a.html", text), text)
+    assert classes["let"] == "k"
+    assert classes["1"] == "m"
+
+
+def test_a_nix_builder_script_is_bash_and_its_plain_text_stays_string(grammars: Grammars) -> None:
+    text = "{ x = runCommand \"a\" { } ''\n  echo \"$out\" | grep -v foo\n''; }\n"
+    spans = grammars.highlight("a.nix", text)
+    classes = _classes(spans, text)
+    assert classes["echo"] == "nf"
+    assert spans is not None
+    at = text.index("foo")
+    assert [cls for start, end, cls in spans if start <= at < end] == ["s"]
+
+
+def test_a_comment_names_the_injected_language(grammars: Grammars) -> None:
+    text = "{ y = /* python */ ''\n  def f(): pass\n''; }\n"
+    assert _classes(grammars.highlight("a.nix", text), text)["def"] == "k"
+
+
+def test_an_unknown_injected_language_leaves_the_host(grammars: Grammars) -> None:
+    text = "{ y = /* klingon */ ''\n  def f(): pass\n''; }\n"
+    spans = grammars.highlight("a.nix", text)
+    assert spans is not None
+    at = text.index("def")
+    assert [cls for start, end, cls in spans if start <= at < end] == ["s"]
