@@ -370,6 +370,19 @@ def tool_group(tool: Tool) -> str:
     return module.split(".")[0] or "agent"
 
 
+def session_tools(agent: Agent, toolsets: list[Toolset], offers: Callable[[str], bool] | None) -> dict[str, Tool]:
+    """The tools the model is offered, by name: the agent's and `toolsets`', less what `offers` refuses."""
+    tools: dict[str, Tool] = {}
+    for fn in [*agent.tools, *(fn for toolset in [*agent.toolsets, *toolsets] for fn in toolset.tools)]:
+        tool = fn if isinstance(fn, Tool) else Tool(fn)
+        if offers is not None and not offers(tool.name):
+            continue
+        if tool.name in tools:
+            raise ValueError(f"duplicate tool {tool.name!r}")
+        tools[tool.name] = tool
+    return tools
+
+
 class NativeBackend:
     def __init__(
         self,
@@ -406,16 +419,7 @@ class NativeBackend:
         if isinstance(model, str):
             model = self._owned = model_for(model)
         self._model: Model = model
-        tools: dict[str, Tool] = {}
-        functions = [*agent.tools, *(fn for toolset in [*agent.toolsets, *toolsets] for fn in toolset.tools)]
-        for fn in functions:
-            tool = fn if isinstance(fn, Tool) else Tool(fn)
-            if offers is not None and not offers(tool.name):
-                continue
-            if tool.name in tools:
-                raise ValueError(f"duplicate tool {tool.name!r}")
-            tools[tool.name] = tool
-        self._tools = tools
+        tools = self._tools = session_tools(agent, toolsets, offers)
         self._coding = coding
         coding.asking = asking_names(tools.values())
         self._max_context = desired_max
@@ -852,6 +856,10 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
     if select is None and definition is not None and definition.instruction_providers is not None:
         select = list(definition.instruction_providers)
 
+    offered = session_tools(agent, toolsets, spec.offers)
+    runs_programs = any(tool.kind == "execute" for tool in offered.values())
+    moves = "change_directory" in offered
+
     def refresh_instructions() -> str:
         composed = compose(
             spec.cwd,
@@ -860,7 +868,8 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             skip=frozenset(spec.skip_instructions),
             session_name=state_dir.name,
         )
-        return "\n\n".join(filter(None, [agent.instructions, composed, environment(spec.cwd, state_dir.name)]))
+        context = environment(spec.cwd, state_dir.name, runs_programs=runs_programs, moves=moves)
+        return "\n\n".join(filter(None, [agent.instructions, composed, context]))
 
     open_tail = 0
     if not history and spec.seed_history is not None:

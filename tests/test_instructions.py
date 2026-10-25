@@ -240,6 +240,30 @@ async def test_wiring_names_the_working_directory(tmp_path: Path, monkeypatch: p
     assert "- aid session: s1" in system_prompt(stored)
 
 
+@pytest.mark.parametrize(
+    ("target", "tools", "runs_programs", "moves"),
+    [
+        ("agents:coder", None, True, True),
+        ("agents:coder", ["ls", "read"], False, False),
+        ("agents:echo", None, False, True),
+    ],
+)
+async def test_the_environment_names_only_offered_tools(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    tools: list[str] | None,
+    runs_programs: bool,
+    moves: bool,
+) -> None:
+    """Lillecarl/aid#50: a session without a tool that starts programs hears nothing of the shell or usertee."""
+    async with wired_backend(tmp_path, monkeypatch, target, instruction_providers=[], tools=tools) as backend:
+        await backend.prompt("[]", emit_to([]))  # the coder's empty plan: it answers at once
+    prompt = system_prompt((tmp_path / "s1" / "history.json").read_text())
+    assert ("usertee" in prompt, "the shell starts there" in prompt) == (runs_programs, runs_programs)
+    assert ("change_directory" in prompt) is moves
+
+
 async def test_wiring_skip_drops_named_instructions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stored = await open_wired(tmp_path, monkeypatch, "agents:echo", skip_instructions=["brief"])
     assert system_prompt(stored).startswith("# who\n\nsession s1\n\n# environment")

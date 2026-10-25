@@ -245,7 +245,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `tail` hides. `launcher.install_usertee` writes a shim to `runtime_dir/bin`, first on every worker's PATH (not the
   venv's bin: its `python` would shadow the project's). Frames go to the worker's hook socket (`usertee_text`), on
   to the daemon as `Live`, out on the live topic as `LiveChunk`; the daemon keeps `LIVE_LIMIT` of the current turn
-  for `GetLive`. Never recorded; fails open (cat). Agents learn of it from `instructions.USERTEE`.
+  for `GetLive`. Never recorded; fails open (cat). Agents learn of it from `instructions.USERTEE`;
+  a native session only when offered an `execute`-kind tool (`environment(runs_programs=)`, from `session_tools`).
 - claude-tty follows its transcript for the worker's life (`FollowingBackend.follow`): a turn aid's `prompt()` waits
   for is aid's; any other (typed into the pane, woken by a channel event) goes to the daemon as `Observed` entries
   under a turn id of its own.

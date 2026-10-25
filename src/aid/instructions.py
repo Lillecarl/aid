@@ -31,23 +31,25 @@ USERTEE: Final = (
 aid's MCP server for the rest."""
 
 
-def environment(cwd: Path | str, session_name: str) -> str:
+def environment(cwd: Path | str, session_name: str, *, runs_programs: bool = True, moves: bool = True) -> str:
     """Facts every session needs and no provider owns. Static, so the prompt cache holds: the time travels in
-    each turn's metadata instead.
+    each turn's metadata instead. `runs_programs`: the session is offered a tool that starts programs (the shell,
+    usertee); `moves`: it is offered `change_directory`. A tool ceiling (Lillecarl/aid#50) can withhold both.
 
     Measured 2026-10 on DeepSeek V4.1 Flash: an agent that `cd`ed its shell elsewhere did not know its own
     directory, searched `/` for a pyproject.toml, and worked in another checkout of the same repository.
     """
+    shell = ", and the shell starts there; return to it with this absolute path" if runs_programs else ""
+    how = "`change_directory`, or a person's /cd" if moves else "a person's /cd"
     return "\n".join(
         [
             "# environment",
             "",
-            f"- Working directory: {Path(cwd).resolve()}. Relative paths in file tools resolve against it, and the"
-            " shell starts there; return to it with this absolute path. The session can move (`change_directory`, or a"
-            " person's /cd): each turn's metadata names the directory as it is now.",
+            f"- Working directory: {Path(cwd).resolve()}. Relative paths in file tools resolve against it{shell}. The"
+            f" session can move ({how}): each turn's metadata names the directory as it is now.",
             f"- aid session: {session_name}",
             f"- Platform: {sys.platform}",
-            f"- {USERTEE}",
+            *([f"- {USERTEE}"] if runs_programs else []),
         ]
     )
 
