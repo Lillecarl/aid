@@ -107,10 +107,10 @@ def spawning(**args: JsonValue) -> str:
     return json.dumps([["spawn", {"label": "helper", "instructions": "Echo.", "model": "scripted/echo", **args}]])
 
 
-async def relayed(session: aid.Session, count: int) -> list[MessageEntry]:
+async def relayed(session: aid.Session, count: int, sender: str = "parent.helper") -> list[MessageEntry]:
     while True:
         entries = (await session.history(limit=1000)).entries
-        messages = [e.item for e in entries if isinstance(e.item, MessageEntry) and e.item.sender == "parent.helper"]
+        messages = [e.item for e in entries if isinstance(e.item, MessageEntry) and e.item.sender == sender]
         if len(messages) >= count and not (await session.status()).busy:
             return messages
         await anyio.sleep(0.05)
@@ -132,6 +132,31 @@ async def test_a_child_works_on_a_cut_ceiling_and_its_turns_reach_the_parent(dae
             assert message.text.startswith("turn 1: echo ") and "hello" in message.text
             entries = (await parent.history(limit=1000)).entries
             assert any(isinstance(e.item, Usage) and e.item.agent == "spawned parent.helper" for e in entries)
+            await parent.delete()
+            assert await client.sessions() == []
+
+
+async def test_a_child_offered_spawn_spawns_its_own(daemon: Paths, tmp_path: Path) -> None:
+    """The child's catalog has the plugin's tool through the inherited plugins path; its call names it the caller, so
+    the grandchild's turns reach the child, and the child's reach the parent."""
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            parent = await client.create("parent", parent_spec(tmp_path))
+            await parent.run(spawning(tools=["spawn"], model="scripted/planned"))
+            child = client.session("parent.helper")
+            grand: dict[str, JsonValue] = {
+                "label": "deep",
+                "instructions": "Echo.",
+                "model": "scripted/echo",
+                "tools": [],
+                "task": "hi",
+            }
+            await child.run(json.dumps([["spawn", grand]]))
+            spec = AgentSpecAdapter.validate_python(await client.call(GetSpec(session="parent.helper.deep")))
+            assert isinstance(spec, NativeSpec)
+            assert (spec.parent, spec.model) == ("parent.helper", "scripted/echo")
+            assert "hi" in (await relayed(child, 1, "parent.helper.deep"))[0].text
+            assert "parent.helper.deep" in (await relayed(parent, 1))[0].text
             await parent.delete()
             assert await client.sessions() == []
 

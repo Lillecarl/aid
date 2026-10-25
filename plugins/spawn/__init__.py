@@ -173,7 +173,11 @@ class Spawn(aid.Plugin):
         name = args.get("session")
         if not isinstance(name, str) or (child := self._children.get(name)) is None or child.parent != caller:
             raise AidError("forbidden", f"{name!r} is no session you spawned")
-        await self.client.session(name).delete()
+        try:
+            await self.client.session(name).delete()
+        except AidError as error:
+            if error.code != "not_found":
+                raise
         await self._forget(name)
 
     def _relay_soon(self, name: str) -> None:
@@ -186,8 +190,10 @@ class Spawn(aid.Plugin):
         with scope:
             session = self.client.session(name)
             usage: tuple[str, Usage] | None = None
+            if (child := self._children.get(name)) is None:
+                return
             try:
-                async for entry in session.follow_history(self._children[name].relayed, idle=PRESENCE_CHECK):
+                async for entry in session.follow_history(child.relayed, idle=PRESENCE_CHECK):
                     if entry is None:
                         await session.status()
                         continue
@@ -196,8 +202,10 @@ class Spawn(aid.Plugin):
                             usage = (entry.turn, parents_usage(name, turn))
                         case Output() | TurnError() as ended:
                             turn_usage = usage[1] if usage is not None and usage[0] == entry.turn else None
-                            await self._tell(name, relayed_text(name, ended), turn_usage)
-                            self._children[name] = self._children[name].model_copy(update={"relayed": entry.seq})
+                            await self._tell(name, child.parent, relayed_text(name, ended), turn_usage)
+                            if name not in self._children:
+                                return
+                            self._children[name] = child = child.model_copy(update={"relayed": entry.seq})
                             await self._save()
                         case _:
                             pass
@@ -207,18 +215,20 @@ class Spawn(aid.Plugin):
                 log.info("spawned_session_gone", session=name)
                 await self._forget(name)
 
-    async def _tell(self, name: str, text: str, usage: Usage | None) -> None:
-        parent = self._children[name].parent
+    async def _tell(self, name: str, parent: str, text: str, usage: Usage | None) -> None:
         try:
             await self.client.send_message(parent, text, sender=name, usage=usage)
         except AidError as error:
             log.warning("spawned_turn_undelivered", session=name, parent=parent, code=error.code)
 
     async def _forget(self, name: str) -> None:
-        if self._children.pop(name, None) is not None:
-            await self._save()
+        """Drop the child and stop its relay. The save is shielded: the relay may be what calls this."""
+        known = self._children.pop(name, None) is not None
         if (scope := self._relays.pop(name, None)) is not None:
             scope.cancel()
+        if known:
+            with anyio.CancelScope(shield=True):
+                await self._save()
 
     async def _save(self) -> None:
         async with self._saving:
