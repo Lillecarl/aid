@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 import anyio
 import anyio.to_thread
 import structlog
+from pydantic import ValidationError
 
 from aid import daemon, guard, plugin_host, speech
 from aid.client import connect, register_plugin
@@ -830,3 +831,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         anyio.run(_client_command, args)
     except AidError as error:
         raise SystemExit(f"aid: {error}") from None
+    except ValidationError as error:
+        # A value the request refuses, such as `--limit` past its cap: say which, not a traceback.
+        problems = "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in error.errors())
+        raise SystemExit(f"aid: {error.title}: {problems}") from None
