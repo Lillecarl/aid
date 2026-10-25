@@ -95,8 +95,9 @@
 <style>
   .head {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
-    gap: 1rem;
+    gap: 0.25rem 1rem;
     margin-bottom: 0.5rem;
   }
   h2 {
@@ -104,6 +105,7 @@
   }
   .tabs {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.25rem;
   }
   .tabs button {

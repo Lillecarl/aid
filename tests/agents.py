@@ -6,7 +6,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import anyio
 from pydantic import BaseModel, JsonValue, ValidationError
@@ -161,6 +161,17 @@ async def _think(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator
 
 
 thinker = Agent(FunctionModel(stream_function=_think))
+
+WIDE_THOUGHT: Final = "Planning:\n\n```\n" + "x = 1; " * 60 + "\n```\n\n" + "a" * 300 + "\n"
+
+
+async def _think_wide(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaThinkingCalls]:
+    """A thought with a long code line and a long unbroken token, for layout tests."""
+    yield {0: DeltaThinkingPart(content=WIDE_THOUGHT)}
+    yield "done"
+
+
+wide_thinker = Agent(FunctionModel(stream_function=_think_wide))
 
 
 class Review(BaseModel):

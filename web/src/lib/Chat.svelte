@@ -720,10 +720,15 @@
   }
   .head {
     display: flex;
+    flex-wrap: wrap;
     align-items: baseline;
     justify-content: flex-end;
-    gap: 1rem;
+    gap: 0.25rem 1rem;
     margin-bottom: 0.5rem;
+  }
+  /* app.css makes controls fill their container; beside a label's text that runs past the page edge. */
+  .head select {
+    width: auto;
   }
   .head label {
     color: var(--muted);
@@ -839,6 +844,7 @@
   }
   .buttons {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.5rem;
     margin-top: 0.5rem;
   }

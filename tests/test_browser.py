@@ -498,6 +498,26 @@ async def test_thinking_visible_until_done(page: Page, session_daemon: Paths, tm
     assert "let me think" in (await page.locator("details.thought").text_content() or "")
 
 
+async def test_an_open_wide_thought_scrolls_nothing_sideways(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """Lillecarl/aid#36: a thought with a long code line or token stays inside the log at phone width."""
+    await page.set_viewport_size({"width": 375, "height": 800})
+    await seed_session(session_daemon, tmp_path, "wide", "agents:wide_thinker")
+    await open_session(page, "wide")
+    await send_chat(page, "think")
+    await wait_for_idle(page)
+    await page.locator("details.thought").wait_for(timeout=TIMEOUT * 1000)
+    if not await page.locator("details.thought[open]").count():
+        await open_details(page.locator("details.thought summary"), page.locator("details.thought[open]"))
+    overflow = await page.evaluate(
+        """() => {
+            const log = document.querySelector("[data-testid=chat-log]");
+            const page = document.scrollingElement;
+            return [page.scrollWidth - page.clientWidth, log.scrollWidth - log.clientWidth];
+        }"""
+    )
+    assert overflow == [0, 0]
+
+
 async def test_thinking_collapsed_mode(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     gate = tmp_path / "think-gate"
     await seed_session(session_daemon, tmp_path, "quiesce", "agents:thinker", AID_THINK_GATE=str(gate))
