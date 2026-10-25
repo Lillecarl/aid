@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
-from typing import Any, Literal
+from typing import Literal
+
+from pydantic import JsonValue
 
 from aid.client import connect
 from aid.paths import ENV_SESSION
@@ -43,7 +45,7 @@ async def change_directory(path: str, reason: str) -> str:
 
 
 @mcptool
-async def list_sessions() -> list[dict[str, Any]]:
+async def list_sessions() -> list[JsonValue]:
     """The aid sessions you can message: name, kind, whether its worker is running, and which one is you."""
     me = os.environ.get(ENV_SESSION)
     async with connect() as client:

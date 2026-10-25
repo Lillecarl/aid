@@ -103,6 +103,8 @@ allowed-confusables = ["❯"]
 
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-base-classes = ["pydantic.BaseModel", "aid.protocol._Message", "aid.spec._Spec"]
+# Tool reads a tool's hints with get_type_hints, the return annotation included.
+runtime-evaluated-decorators = ["aid.tools.mcptool"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["aid", "pyrun"]

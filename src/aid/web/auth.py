@@ -16,6 +16,7 @@ from authlib.integrations.starlette_client import OAuth, OAuthError
 from starlette.responses import JSONResponse, PlainTextResponse, RedirectResponse
 
 if TYPE_CHECKING:
+    from pydantic import JsonValue
     from starlette.requests import HTTPConnection, Request
     from starlette.responses import Response
 
@@ -59,7 +60,7 @@ def make_oauth(config: OidcConfig) -> Any:
     return cast(Any, oauth.oidc)  # pyright: ignore[reportUnknownMemberType] -- authlib is untyped
 
 
-def allowed(claims: dict[str, Any], config: OidcConfig) -> str | None:
+def allowed(claims: dict[str, JsonValue], config: OidcConfig) -> str | None:
     """The email to log in as, or None. The provider must have verified it."""
     email = claims.get("email")
     if not isinstance(email, str) or claims.get("email_verified") is not True:
@@ -102,7 +103,8 @@ async def callback(request: Request) -> Response:
     except OAuthError as error:
         log.warning("oidc_callback_failed", error=str(error))
         return PlainTextResponse("login failed", status_code=400)
-    claims = cast(dict[str, Any], token.get("userinfo") or {})
+    userinfo: JsonValue = token.get("userinfo") or {}
+    claims = userinfo if isinstance(userinfo, dict) else {}
     email = allowed(claims, config)
     if email is None:
         log.warning("login_refused", email=claims.get("email"))
