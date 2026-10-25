@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from aid.protocol import AidError
 from aid.spawn import MAX_CHILDREN, MAX_DEPTH, SpawnRequest, child_name, child_spec
@@ -108,6 +109,13 @@ def test_depth_and_children_are_capped() -> None:
 def test_only_native_sessions_spawn() -> None:
     with pytest.raises(AidError, match="native"):
         child_spec("p", AcpSpec(cwd="/", command=["x"]), OFFERED, request(), depth=0, children=0)
+
+
+@pytest.mark.parametrize("label", ["classifier", "fork-0a1b2c", "Upper", "-dash", "a" * 17])
+def test_labels_other_plugins_own_or_names_cannot_hold_are_refused(label: str) -> None:
+    with pytest.raises(ValidationError):
+        request(label=label)
+    request(label="fork-helper")
 
 
 def test_a_child_name_fits_a_session_name() -> None:

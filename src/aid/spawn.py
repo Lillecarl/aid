@@ -8,7 +8,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Annotated, Final
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from aid.protocol import AidError
 from aid.spec import NativeSpec, ToolPattern
@@ -23,6 +23,8 @@ MAX_DEPTH: Final = 3
 LABEL_CHARS: Final = 16
 PARENT_CHARS: Final = 64 - 1 - LABEL_CHARS
 """Characters of the parent's name a child keeps, so `<parent>.<label>` fits the 64 of a name."""
+RESERVED: Final = re.compile(r"classifier|fork-[0-9a-f]{6}")
+"""Labels the supervision and forks plugins own: a child named so would be replaced or deleted by them."""
 
 
 class SpawnRequest(BaseModel):
@@ -34,6 +36,13 @@ class SpawnRequest(BaseModel):
     instructions: Annotated[str, Field(min_length=1)]
     tools: list[ToolPattern]
     model: Annotated[str, Field(pattern=r"^\S+/\S+$")] | None = None
+
+    @field_validator("label")
+    @classmethod
+    def _not_reserved(cls, label: str) -> str:
+        if RESERVED.fullmatch(label):
+            raise ValueError(f"the label {label!r} names a fork or a classifier session, whose plugins delete them")
+        return label
 
 
 def child_name(parent: str, label: str) -> str:
