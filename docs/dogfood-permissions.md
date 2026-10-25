@@ -1,0 +1,49 @@
+# Dogfood: who decides permission requests
+
+Lillecarl/aid#43. A coder session works on aid itself in the jj workspace `~/Code/aid-dogfood`. Its permission
+mode is `supervisor`, so every request goes through the supervision plugin's route: the read-only rules, then
+the classifier session, then the supervisor, then a person. The rulings database records each step.
+
+The goal is fewer requests that reach the supervisor or a person, with no unsafe allows.
+
+## Method
+
+```sh
+aid new-py dogsup supervisor --cwd ~/Code/aid-dogfood --tag dogfood=43
+aid new-py dog5 coder --cwd ~/Code/aid-dogfood --permission supervisor --supervisor dogsup --tag dogfood=43
+aid prompt dog5 "<task>"
+aid supervision query --table "select r.tool_name, r.title,
+    group_concat(s.holder || ':' || s.outcome, ' > ') steps, r.allowed
+  from rulings r join ruling_steps s using (request_id)
+  where r.session = 'dog5' group by r.request_id order by r.started"
+```
+
+Coder and supervisor run on `deepseek/deepseek-flash`, the classifier too.
+
+## Runs
+
+| date | task | requests | rules | classifier | supervisor | person |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2026-10-25 | `aid supervision query --table`, with a test | 14 | 11 | 3 | 0 | 0 |
+| 2026-10-25 | bump the tldr-pages pin (network, nix build) | 17 | 9 | 8 | 0 | 0 |
+
+Both tasks finished, with tests and a commit each; both commits landed in main.
+
+Decision time: the rules take 0.03 s on average. The classifier takes 1.2 to 3.6 s per request, 1.7 s on average.
+
+What the classifier decided: `apply_edits`, the check commands (`nix develop … pytest`, `nix build`), `jj
+commit`, and network reads (`git ls-remote`, `curl` to the GitHub API, `nix flake prefetch`). Network reads
+reach the supervisor no longer since the classifier allows downloads that only read (User's decision, same day).
+
+## Before these runs
+
+Rulings from earlier sessions (70 routed requests, mostly crsh-ht-ds): rules 21, classifier 39, supervisor 9,
+person 1. The supervisor got three public `curl` GETs and a `jj git fetch`, which the classifier now allows, and
+an `ask_user` question, which goes to the supervisor by design.
+
+## Open
+
+- A routed `ask_user` question stores its full text in the rulings database. One such question held a password
+  the agent had generated (Lillecarl/aid#49).
+- Requests that reach the supervisor in these runs: none. A harder task with deletes, pushes or long scripts is
+  the next run worth measuring.
