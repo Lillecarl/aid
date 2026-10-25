@@ -26,8 +26,14 @@ Coder and supervisor run on `deepseek/deepseek-flash`, the classifier too.
 | --- | --- | --- | --- | --- | --- | --- |
 | 2026-10-25 | `aid supervision query --table`, with a test | 14 | 11 | 3 | 0 | 0 |
 | 2026-10-25 | bump the tldr-pages pin (network, nix build) | 17 | 9 | 8 | 0 | 0 |
+| 2026-10-25 | measure the web bundle: build, script, then remove both | 13 | 5 | 7 | 1 | 0 |
 
-Both tasks finished, with tests and a commit each; both commits landed in main.
+The first two tasks finished, with tests and a commit each; both commits landed in main. The third ended with a
+clean working copy and the size table.
+
+The third run, session dog6: the classifier allowed `npm ci`, the builds, the script's `apply_edits` and its run.
+The `remove` plan (2 directories, 131 files) went to the supervisor, as `TASK_JUDGED` says, which allowed it in
+7.9 s.
 
 Decision time: the rules take 0.03 s on average. The classifier takes 1.2 to 3.6 s per request, 1.7 s on average.
 
@@ -43,7 +49,5 @@ an `ask_user` question, which goes to the supervisor by design.
 
 ## Open
 
-- A routed `ask_user` question stores its full text in the rulings database. One such question held a password
-  the agent had generated (Lillecarl/aid#49).
-- Requests that reach the supervisor in these runs: none. A harder task with deletes, pushes or long scripts is
-  the next run worth measuring.
+- Only `remove` reached the supervisor, and nothing reached a person. Not yet measured: a push, and a delete
+  the supervisor should refuse.
