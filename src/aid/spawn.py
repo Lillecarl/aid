@@ -23,6 +23,10 @@ MAX_DEPTH: Final = 3
 LABEL_CHARS: Final = 16
 PARENT_CHARS: Final = 64 - 1 - LABEL_CHARS
 """Characters of the parent's name a child keeps, so `<parent>.<label>` fits the 64 of a name."""
+PREAMBLE: Final = (
+    "You are a session spawned by session {parent}, and you work for it. Each turn you end goes to it as a message "
+    "from you, so answer in your final text; you need no tool to reply. Its messages to you arrive as your prompts."
+)
 RESERVED: Final = re.compile(r"classifier|fork-[0-9a-f]{6}")
 """Labels the supervision and forks plugins own: a child named so would be replaced or deleted by them."""
 
@@ -82,7 +86,7 @@ def child_spec(
             **parent.model_dump(),
             "agent": None,
             "target": None,
-            "instructions": request.instructions,
+            "instructions": f"{PREAMBLE.format(parent=parent_name)}\n\n{request.instructions}",
             "model": model,
             "model_settings": parent.model_settings if same_provider else {},
             "max_context": parent.max_context if model == parent.model else None,

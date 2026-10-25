@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 
 from aid.protocol import AidError
-from aid.spawn import MAX_CHILDREN, MAX_DEPTH, SpawnRequest, child_name, child_spec
+from aid.spawn import MAX_CHILDREN, MAX_DEPTH, PREAMBLE, SpawnRequest, child_name, child_spec
 from aid.spec import AcpSpec, NativeSpec, PermissionMode, Sandbox
 
 OFFERED = ["ls", "read", "outline", "python", "python:read", "python:write", "send_message", "spawn"]
@@ -41,7 +41,8 @@ def test_a_child_gets_the_names_its_patterns_match_as_literals() -> None:
 
 def test_a_child_inherits_what_bounds_its_parent() -> None:
     child = child_spec("p", parent(), OFFERED, request(), depth=0, children=0)
-    assert (child.agent, child.instructions, child.runs, child.parent) == (None, "Read.", "instructions", "p")
+    assert (child.agent, child.runs, child.parent) == (None, "instructions", "p")
+    assert child.instructions == f"{PREAMBLE.format(parent='p')}\n\nRead."
     assert (child.permission, child.tool_permissions) == (PermissionMode.ASK, {"python": PermissionMode.SUPERVISOR})
     assert (child.sandbox, child.supervisor, child.cwd) == (Sandbox(network=False), "boss", "/work")
     assert (child.model, child.model_settings, child.max_context) == (
