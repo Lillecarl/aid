@@ -1,6 +1,7 @@
 <script lang="ts">
   import * as api from "./api";
   import type { PermissionDecision, PermissionRequest } from "./api";
+  import Code from "./Code.svelte";
   import InputView from "./InputView.svelte";
   import { command, hasInput } from "./tools";
 
@@ -61,7 +62,7 @@
     {#if decision !== null}<span class="decided">{chosen}{decision.plugin ? ` by plugin ${decision.plugin}` : decision.supervisor ? ` by supervisor ${decision.supervisor}` : BY[decision.by]}</span>{/if}
   </summary>
   {#if shell !== null}
-    <pre>$ {shell}</pre>
+    <pre>$ <Code text={shell} language="bash" /></pre>
   {:else if hasInput(request.input)}
     <InputView input={request.input} />
   {/if}

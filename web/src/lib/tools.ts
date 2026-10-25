@@ -55,16 +55,28 @@ export function hasInput(input: unknown): boolean {
   return true;
 }
 
-export type InputField = { key: string; text: string; diff: boolean };
+export type InputField = { key: string; text: string; diff: boolean; language: string | null; path: string | null };
+
+// Arguments holding a file's text, highlighted by the call's `path`; and those holding code of a known language.
+const FILE_KEYS: ReadonlySet<string> = new Set(["content", "old", "new", "text"]);
+const CODE_KEYS: Readonly<Record<string, string>> = { script: "python", command: "bash", sql: "sql" };
 
 /** An object's arguments as the cards show them: a string as its own lines (a diff in one JSON string is one
  * line thousands of characters wide), anything else as indented JSON. Null for a non-object. */
 export function inputFields(input: unknown): InputField[] | null {
   if (input === null || typeof input !== "object" || Array.isArray(input)) return null;
-  return Object.entries(input).map(([key, value]) =>
+  const args = input as Record<string, unknown>;
+  const path = typeof args.path === "string" ? args.path : null;
+  return Object.entries(args).map(([key, value]) =>
     typeof value === "string"
-      ? { key, text: value, diff: key === "diff" || (/^--- /m.test(value) && /^@@ /m.test(value)) }
-      : { key, text: JSON.stringify(value, null, 2), diff: false },
+      ? {
+          key,
+          text: value,
+          diff: key === "diff" || (/^--- /m.test(value) && /^@@ /m.test(value)),
+          language: CODE_KEYS[key] ?? null,
+          path: FILE_KEYS.has(key) ? path : null,
+        }
+      : { key, text: JSON.stringify(value, null, 2), diff: false, language: null, path: null },
   );
 }
 

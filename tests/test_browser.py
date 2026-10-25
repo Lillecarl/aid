@@ -337,6 +337,19 @@ async def test_tool_card_names_its_file(page: Page, session_daemon: Paths, tmp_p
     assert "notes.txt" in (await box.get_by_test_id("tool-paths").text_content() or "")
 
 
+async def test_a_shell_command_is_highlighted(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """Lillecarl/aid#39: code the chat shows gets aid web's spans, here bash in a tool card."""
+    await seed_session(session_daemon, tmp_path, "painter", "agents:coder", PermissionMode.ALLOW)
+    await open_session(page, "painter")
+    await send_chat(page, json.dumps([["shell", {"command": "echo 'painted' | tr a-z A-Z"}]]))
+    await expect_chat_text(page, "PAINTED")
+    await wait_for_idle(page)
+    box = page.get_by_test_id("tool-box").filter(has_text="echo")
+    await open_details(box.locator("summary"), box.locator("code.hl"))
+    await box.locator("code.hl span.s, code.hl span.s1, code.hl span.s2").first.wait_for(timeout=TIMEOUT * 1000)
+    assert "echo 'painted' | tr a-z A-Z" in (await box.locator("code.hl").text_content() or "")
+
+
 async def test_rows_fold_one_at_a_time_and_all_at_once(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     """Lillecarl/aid#40: a text row folds to its first line; Fold all also shuts every box."""
     await anyio.Path(tmp_path / "notes.txt").write_text("remember this\n")

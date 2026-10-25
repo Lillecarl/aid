@@ -247,6 +247,15 @@ async function request(
   return response;
 }
 
+/** UTF-16 start, end and Pygments class: what aid web's highlighter answers. */
+export type Span = [number, number, string];
+
+/** Spans for code by its language or its file's path; null when aid web knows neither. */
+export async function highlight(text: string, language: string | null, path: string | null): Promise<Span[] | null> {
+  const response = await request("POST", "/api/highlight", { text, language, path });
+  return ((await response.json()) as { highlights: Span[] | null }).highlights;
+}
+
 export async function me(): Promise<{ email: string }> {
   const data: { email: string; csrf: string } = await (
     await request("GET", "/api/me")

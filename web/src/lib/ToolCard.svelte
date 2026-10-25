@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Code from "./Code.svelte";
   import InputView from "./InputView.svelte";
   import { command, type DiffLine, diffLines, gist, hasInput, readable, type Tool } from "./tools";
 
@@ -36,7 +37,7 @@
       </ul>
     {/if}
       {#if shell !== null}
-        <pre class="input">$ {shell}</pre>
+        <pre class="input">$ <Code text={shell} language="bash" /></pre>
       {:else if showInput}
         <InputView input={tool.input} />
       {/if}

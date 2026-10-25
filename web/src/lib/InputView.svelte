@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Code from "./Code.svelte";
   import { inputFields, unifiedClass } from "./tools";
 
   interface Props {
@@ -19,6 +20,8 @@
         <pre class="diff">{#each field.text.split("\n") as line, k (k)}<span class="l {unifiedClass(line)}"
               >{line}</span
             >{/each}</pre>
+      {:else if field.language || field.path}
+        <pre><Code text={field.text} language={field.language} path={field.path} /></pre>
       {:else}
         <pre>{field.text}</pre>
       {/if}

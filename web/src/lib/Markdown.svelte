@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { MarkedToken } from "marked";
+  import Code from "./Code.svelte";
   import { decodeEntities, parse, safeHref, tokensOf } from "./markdown";
 
   interface Props {
@@ -17,7 +18,9 @@
     {:else if t.type === "heading"}
       <svelte:element this={`h${Math.min(t.depth + 2, 6)}`}>{@render nodes(tokensOf(t))}</svelte:element>
     {:else if t.type === "code"}
-      <pre data-lang={t.lang || null}><code>{t.text}</code></pre>
+      <pre data-lang={t.lang || null}>{#if t.lang}<Code text={t.text} language={t.lang.split(/\s/, 1)[0]} />{:else}<code
+            >{t.text}</code
+          >{/if}</pre>
     {:else if t.type === "blockquote"}
       <blockquote>{@render nodes(tokensOf(t))}</blockquote>
     {:else if t.type === "list"}
