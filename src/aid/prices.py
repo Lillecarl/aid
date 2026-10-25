@@ -4,7 +4,7 @@ no catalog at all the cost is unknown, never zero."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import Final
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -73,12 +73,11 @@ class _Model(BaseModel):
     cost: _ModelCost | None = None
 
 
-def lookup(catalog: Any, model: str) -> Price | None:
+def lookup(catalog: models_dev.ModelsDev | None, model: str) -> Price | None:
     """`provider/model`, as aid names native models; models.dev keys providers the same way."""
-    provider, _, name = model.partition("/")
     try:
-        entry = _Model.model_validate(catalog[provider]["models"][name])
-    except KeyError, TypeError, ValidationError:
+        entry = _Model.model_validate(models_dev.raw_model(catalog, model))
+    except ValidationError:
         return None
     if entry.cost is None:
         return None

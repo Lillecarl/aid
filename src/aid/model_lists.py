@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import anyio
 from pydantic import TypeAdapter, ValidationError
@@ -56,7 +56,9 @@ def _row(
 
 
 def providers(
-    catalog: Any, plugins: Mapping[str, type[ModelProvider]], env: Mapping[str, str] | None = None
+    catalog: models_dev.ModelsDev | None,
+    plugins: Mapping[str, type[ModelProvider]],
+    env: Mapping[str, str] | None = None,
 ) -> list[ProviderModels]:
     """Every provider a name can resolve through, by prefix, without their models."""
     env = os.environ if env is None else env

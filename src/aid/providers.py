@@ -15,7 +15,7 @@ imports no plugin. A failure in `transport` fails the session's start.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from aid import models_dev
 from aid.model import OPENAI_COMPATIBLE, AnthropicModel, GoogleModel, OpenAIChatModel, Provider, split_name
@@ -31,7 +31,7 @@ OPENAI_COMPATIBLE_PACKAGE: Final = "@ai-sdk/openai-compatible"
 """models.dev's package for a provider that serves Chat Completions."""
 
 
-def catalog_provider(catalog: Any, prefix: str) -> Provider | None:
+def catalog_provider(catalog: models_dev.ModelsDev | None, prefix: str) -> Provider | None:
     """A models.dev provider aid can serve as Chat Completions: one with an `api` URL and the compatible package."""
     entry = models_dev.provider(catalog, prefix)
     if entry is None or entry.npm != OPENAI_COMPATIBLE_PACKAGE or not entry.api:

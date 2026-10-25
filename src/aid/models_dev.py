@@ -11,13 +11,13 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Final, cast
+from typing import Final
 
 import anyio
 import anyio.to_thread
 import httpx
 import structlog
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, JsonValue, ValidationError
 
 from aid.protocol import ModelCost, ModelEntry
 
@@ -27,6 +27,9 @@ ENV_SOURCE: Final = "AID_MODEL_PRICES"
 CATALOG_URL: Final = "https://models.dev/api.json"
 MAX_AGE: Final = 24 * 3600
 FETCH_TIMEOUT: Final = 10.0
+
+type ModelsDev = dict[str, JsonValue]
+"""The catalog: raw provider entries by models.dev id, each parsed where it is read (`provider`, `raw_model`)."""
 
 
 class _Limit(BaseModel):
@@ -74,7 +77,7 @@ class CatalogProvider(BaseModel):
     """The AI SDK package that speaks to it: which protocol it serves."""
     env: list[str] = Field(default_factory=list[str])
     """Variables that hold its key, the usual one first."""
-    models: dict[str, Any] = Field(default_factory=dict[str, Any])
+    models: dict[str, JsonValue] = Field(default_factory=dict[str, JsonValue])
     """Raw entries by id; `entries` parses those that parse."""
 
     def entries(self) -> dict[str, ModelEntry]:
@@ -90,26 +93,35 @@ class CatalogProvider(BaseModel):
         return found
 
 
-def provider_names(catalog: Any) -> list[str]:
+def provider_names(catalog: ModelsDev | None) -> list[str]:
     """The catalog's provider ids, sorted; none when there is no catalog."""
-    return sorted(str(name) for name in cast(dict[object, object], catalog)) if isinstance(catalog, dict) else []
+    return sorted(catalog or {})
 
 
-def window(catalog: Any, model: str) -> int | None:
-    """`provider/model`'s context window in tokens, or None when the catalog lacks it."""
+def raw_model(catalog: ModelsDev | None, model: str) -> JsonValue:
+    """`provider/model`'s raw entry, as aid names native models; None when the catalog lacks it."""
     provider_name, _, name = model.partition("/")
+    entry = (catalog or {}).get(provider_name)
+    models = entry.get("models") if isinstance(entry, dict) else None
+    return models.get(name) if isinstance(models, dict) else None
+
+
+def window(catalog: ModelsDev | None, model: str) -> int | None:
+    """`provider/model`'s context window in tokens, or None when the catalog lacks it."""
     try:
-        entry = CatalogModel.model_validate(catalog[provider_name]["models"][name])
-    except KeyError, TypeError, ValidationError:
+        entry = CatalogModel.model_validate(raw_model(catalog, model))
+    except ValidationError:
         return None
     return entry.limit.context if entry.limit else None
 
 
-def provider(catalog: Any, name: str) -> CatalogProvider | None:
+def provider(catalog: ModelsDev | None, name: str) -> CatalogProvider | None:
     """`name`'s entry in `catalog`, or None when it has none or the entry does not parse."""
+    if catalog is None or name not in catalog:
+        return None
     try:
         return CatalogProvider.model_validate(catalog[name])
-    except KeyError, TypeError, ValidationError:
+    except ValidationError:
         return None
 
 
@@ -146,7 +158,7 @@ async def _fetch(url: str, target: Path) -> None:
     await write_aside(target, body)
 
 
-async def catalog() -> Any | None:
+async def catalog() -> ModelsDev | None:
     """The catalog, or None when it is off or cannot be had."""
     source = os.environ.get(ENV_SOURCE, CATALOG_URL)
     if source == "off":
@@ -161,7 +173,11 @@ async def catalog() -> Any | None:
     else:
         path = Path(source)
     try:
-        return await anyio.to_thread.run_sync(lambda: json.loads(path.read_bytes()))
+        document: JsonValue = await anyio.to_thread.run_sync(lambda: json.loads(path.read_bytes()))
     except (OSError, ValueError) as error:
         log.warning("models_dev_unreadable", path=str(path), error=repr(error))
         return None
+    if not isinstance(document, dict):
+        log.warning("models_dev_unreadable", path=str(path), error="not a JSON object")
+        return None
+    return document

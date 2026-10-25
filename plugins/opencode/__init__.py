@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import uuid
 from importlib.metadata import PackageNotFoundError, version
-from typing import TYPE_CHECKING, Any, ClassVar, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
 import httpx
 from pydantic import BaseModel, Field, ValidationError
@@ -60,7 +60,7 @@ class _Models(BaseModel):
     data: list[_Model] = Field(default_factory=list[_Model])
 
 
-def catalog_models(catalog: Any, provider: str) -> dict[str, _CatalogModel]:
+def catalog_models(catalog: models_dev.ModelsDev | None, provider: str) -> dict[str, _CatalogModel]:
     """`provider`'s models as models.dev describes them, by id."""
     entry = models_dev.provider(catalog, provider)
     found: dict[str, _CatalogModel] = {}
