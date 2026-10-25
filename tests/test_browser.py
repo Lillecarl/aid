@@ -458,6 +458,27 @@ async def test_linked_sessions_are_tabs_under_the_chat(page: Page, session_daemo
     await listing.get_by_role("button").filter(has_text="boss.classifier").wait_for(timeout=TIMEOUT * 1000)
 
 
+async def test_tags_label_and_filter_sessions(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """Lillecarl/aid#42: tags are set under a session's heading, shown in the list, and filter it."""
+    await seed_session(session_daemon, tmp_path, "web", "agents:echo")
+    await seed_session(session_daemon, tmp_path, "api", "agents:echo")
+    await open_session(page, "web")
+    await page.get_by_test_id("tag-input").fill("team=front stage=review")
+    await page.get_by_test_id("tag-input").press("Enter")
+    listing = page.get_by_test_id("session-list")
+    await listing.get_by_test_id("tag").filter(has_text="team=front").wait_for(timeout=TIMEOUT * 1000)
+    await page.get_by_role("button", name="Remove tag stage").click()
+    async with aid.connect(session_daemon) as client:
+        with anyio.fail_after(TIMEOUT):
+            while {s.name: s.tags for s in await client.sessions()}["web"] != {"team": "front"}:  # noqa: ASYNC110
+                await anyio.sleep(0.05)
+    await page.get_by_test_id("tag-filter").fill("team=front")
+    await listing.get_by_role("button").filter(has_text="api").wait_for(state="detached", timeout=TIMEOUT * 1000)
+    assert await listing.get_by_role("button").filter(has_text="web").count() == 1
+    await page.get_by_test_id("tag-filter").fill("team=back")
+    await listing.get_by_text("No session has these tags.").wait_for(timeout=TIMEOUT * 1000)
+
+
 @needs_bwrap
 async def test_permissions_tab_turns_the_sandbox_on(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     await seed_session(session_daemon, tmp_path, "boxed", "agents:coder", PermissionMode.ASK)

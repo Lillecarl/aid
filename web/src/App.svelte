@@ -6,6 +6,7 @@
   import { linkedOnly } from "./lib/links";
   import Session from "./lib/Session.svelte";
   import SessionList from "./lib/SessionList.svelte";
+  import { parseFilter, tagged } from "./lib/tags";
 
   let email = $state("");
   let list: SessionInfo[] = $state([]);
@@ -14,7 +15,10 @@
   // Supervisors and their classifiers live as tabs under the sessions they watch; the list can still show them.
   let showLinked = $state(false);
   const hidden = $derived(linkedOnly(list));
-  const listed = $derived(showLinked ? list : list.filter((s) => !hidden.has(s.name)));
+  let filter = $state("");
+  const terms = $derived(parseFilter(filter));
+  const anyTags = $derived(list.some((s) => Object.keys(s.tags).length > 0));
+  const listed = $derived(list.filter((s) => (showLinked || !hidden.has(s.name)) && tagged(s, terms)));
 
   async function refresh(): Promise<void> {
     try {
@@ -48,7 +52,22 @@
 <main>
   <aside>
     <h2>Sessions</h2>
-    <SessionList sessions={listed} {current} onselect={(name) => (current = name)} />
+    {#if anyTags || filter}
+      <input
+        class="filter"
+        type="search"
+        placeholder="key or key=value …"
+        aria-label="Filter sessions by tag"
+        data-testid="tag-filter"
+        bind:value={filter}
+      />
+    {/if}
+    <SessionList
+      sessions={listed}
+      {current}
+      onselect={(name) => (current = name)}
+      empty={terms.length > 0 ? "No session has these tags." : undefined}
+    />
     {#if hidden.size > 0}
       <button type="button" class="linked" data-testid="show-linked" onclick={() => (showLinked = !showLinked)}
         >{showLinked ? "Hide" : "Show"} {hidden.size} linked session{hidden.size === 1 ? "" : "s"}</button
@@ -112,6 +131,11 @@
   }
   .empty {
     color: var(--muted);
+  }
+  .filter {
+    width: 100%;
+    box-sizing: border-box;
+    margin-bottom: 0.5rem;
   }
   .linked {
     width: auto;

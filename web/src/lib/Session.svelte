@@ -7,6 +7,7 @@
   import { family, tabLabel } from "./links";
   import Permissions from "./Permissions.svelte";
   import Status from "./Status.svelte";
+  import Tags from "./Tags.svelte";
   import Terminal from "./Terminal.svelte";
 
   interface Props {
@@ -30,7 +31,8 @@
   $effect(() => {
     chats.add(shown);
   });
-  const kind = $derived(sessions.find((s) => s.name === shown)?.kind);
+  const info = $derived(sessions.find((s) => s.name === shown));
+  const kind = $derived(info?.kind);
 
   const tabs = $derived<{ id: Tab; label: string }[]>([
     { id: "chat", label: "Chat" },
@@ -92,6 +94,7 @@
       >
     {/each}
   </div>
+  {#if info}<Tags name={shown} tags={info.tags} />{/if}
 </div>
 <!-- Chat stays mounted while hidden: a prompt it is streaming keeps going. Status and Permissions mount only when
      shown, and stream only while mounted. -->

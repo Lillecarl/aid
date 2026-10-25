@@ -377,6 +377,11 @@ export async function setSupervisor(name: string, supervisor: string | null): Pr
   await call({ op: "supervisor", session: name, supervisor });
 }
 
+/** Set each tag to its value, or remove it when the value is null; tags not named stay. */
+export async function setTags(name: string, tags: Record<string, string | null>): Promise<void> {
+  await call({ op: "tags", session: name, tags });
+}
+
 /** Summarize the session's history into a digest, outside a turn; resolve with the digest. */
 export const compact = async (name: string, instructions?: string): Promise<string> =>
   (await call({

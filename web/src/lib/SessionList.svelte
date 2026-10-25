@@ -1,13 +1,16 @@
 <script lang="ts">
   import type { SessionInfo } from "./api";
+  import { tagLabels } from "./tags";
 
   interface Props {
     sessions: SessionInfo[];
     current: string | null;
     onselect: (name: string) => void;
+    /** What an empty list says. */
+    empty?: string;
   }
 
-  let { sessions, current, onselect }: Props = $props();
+  let { sessions, current, onselect, empty = "No sessions yet." }: Props = $props();
 </script>
 
 <ul data-testid="session-list">
@@ -18,6 +21,11 @@
         <span class="meta"
           >{session.kind} · {session.working ? "working" : session.running ? "running" : "stopped"}</span
         >
+        {#if Object.keys(session.tags).length > 0}
+          <span class="tags">
+            {#each tagLabels(session.tags) as tag (tag)}<span class="tag" data-testid="tag">{tag}</span>{/each}
+          </span>
+        {/if}
         {#if session.attention}<span class="asks">{session.attention}</span>{/if}
         {#if session.permissions > 0}
           <span class="asks">waits on {session.permissions === 1 ? "an approval" : `${session.permissions} approvals`}</span>
@@ -25,7 +33,7 @@
       </button>
     </li>
   {:else}
-    <li class="none">No sessions yet.</li>
+    <li class="none">{empty}</li>
   {/each}
 </ul>
 
@@ -54,6 +62,20 @@
     color: var(--accent);
     font-size: 0.9em;
     font-weight: 600;
+  }
+  .tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    min-width: 0;
+  }
+  .tag {
+    font-size: 0.8em;
+    padding: 0 0.35rem;
+    border: 1px solid var(--line);
+    border-radius: 0.6rem;
+    color: var(--muted);
+    overflow-wrap: anywhere;
   }
   .meta,
   .none {
