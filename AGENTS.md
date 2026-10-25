@@ -127,9 +127,12 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `RESTART_DELAY`, give up after `MAX_FAILURES` in `FAIL_WINDOW`. Tests pass `plugin_dirs=[]`; the daemon's own
   environment is what hosted plugins read.
 - `src/aid/readonly.py` — pure rules: does a call only read? shlex with punctuation: pipes, `;`, `&&`, `||`;
-  `NAME=literal` statements expand later `$NAME`; output only to /dev/null or another fd. Each program: `READERS`
-  (any args), `PROGRAMS` rules (git/jj/nix subcommands, sed without -i/w/e, find without -delete/-exec, …),
-  `--help`/`--version` alone; credential-shaped paths (`SENSITIVE`) never. Anything unclear is False.
+  `NAME=literal` statements expand later `$NAME` (never before a program: its environment; never a `RUNS_CODE`
+  name); output only to /dev/null or another fd. Each program: `READERS` (any args: nothing in them may write or
+  run a program), `PROGRAMS` rules (git/jj/nix subcommands, sed without -i/w/e/-f, `_without` options that write
+  or run programs: sort -o, fd -x, rg --pre, jj --config, nix unsafe flags, …), `--help`/`--version` alone;
+  credential-shaped paths (`SENSITIVE`) never. Anything unclear is False. A parser, not enforcement: confinement
+  is parked in Lillecarl/aid#44.
 - `src/aid/guard.py` — `aid guard`: plugin (read, permissions) that allows what `aid.readonly` calls a read, and
   leaves the rest for a person. Seed for aid#3.
 - `plugins/discord/` — the Discord plugin (read, message): `gateway.py` (the gateway over anyio streams, no
