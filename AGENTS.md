@@ -157,6 +157,16 @@ on reusable decisions and current boundaries; put long investigations and dated 
   channel, no settled-turn notice, not in session lists). The parent must exist at create (`unknown_parent`);
   `DeleteSession` takes its descendants (`_delete_orphans`), and a start deletes sessions whose parent's dir is
   gone (a parent whose spec fails to load keeps its children).
+- `plugins/spawn/` — persistent children, bundled, `autostart` (read, message, manage, supervise). Tool
+  `spawn(label, instructions, tools, model?, task?)` → `<parent[:47]>.<label>`, an instructions spec from
+  `aid.spawn.child_spec`: model = parent's or one `NativeSpec.spawn_models` (person-set, inherited) fullmatches;
+  `tools` = the parent's offered names (`SessionStatus.tools`, post-ceiling) the patterns match, stored
+  `re.escape`d, a pattern matching none refused; modes, sandbox, hooks, supervisor, env inherited as is;
+  `MAX_DEPTH` 3 ancestors, `MAX_CHILDREN` 8 live per parent. `task` goes to the child as a message from the parent.
+  Each child's `Output`/`TurnError` goes to the parent as a message from the child with its `Usage`
+  (`agent="spawned <name>"`); `children.json` in the plugin dir keeps each child's parent and last relayed seq,
+  saved after the send (a crash between repeats one). A relay checks presence after `PRESENCE_CHECK` quiet.
+  `dismiss(session)`: the parent only.
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API, native blocks,
   `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions) and `GoogleModel`
@@ -410,7 +420,7 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 - Permission modes: `allow`, `deny`, `ask`, `supervisor`, `ask_supervisor` (the last two route through the
   supervision plugin, above; without a supervisor they are `ask`). Engines branch on `PermissionMode.waits`, never
   on `ask` alone; Claude's rules ask for every waiting mode (`claude_rules`).
-- Tool ceiling (Lillecarl/aid#50, phases 1-2 of 3): `NativeSpec.tools`, regexes fullmatched against tool names
+- Tool ceiling (Lillecarl/aid#50): `NativeSpec.tools`, regexes fullmatched against tool names
   (`offers`); the backend never offers a tool none matches, aid's and plugins' included, so a call to one is an
   unknown tool. Above modes, not one of them: `deny` still offers. Set at creation (`aid new-py --tool`, the create
   form's Tools, one regex per line); forks inherit it; agents never set it. Native only: other engines lack the
@@ -419,7 +429,7 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   `tools`; `open_native` builds `Agent(model, instructions, [coding_tools, supervisor_tools])` plus aid's toolset, so the ceiling
   picks from every named tool and `tools=[]` offers none. `spec.runs` names it "instructions" (`Started.agent`,
   `SessionStatus.runs`). `aid new-py NAME --instructions[-file] … --model … --tool …`; the form's agent choice
-  "none". Phase 3: agents spawn such specs, attenuated (#20).
+  "none". Agents spawn such specs through `plugins/spawn/`, attenuated by `aid.spawn.child_spec` (pure).
 - Native tool permissions: a mode per tool name. `NativeSpec.tool_permissions` overrides; unset, a `Tool.asks`
   tool (python, shell, background, monitor, apply_edits, remove, ask_user: they permit inside, with their own titles;
   `remove` deletes at once from a plan, below)

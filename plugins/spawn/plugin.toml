@@ -1,0 +1,3 @@
+version = "0.1.0"
+description = "Spawned sessions: a native session starts children on a ceiling cut from its own tools, and hears each turn they end."
+autostart = true
