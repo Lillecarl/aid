@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final, Literal, TypedDict
 
 from acp.schema import EnvVariable, HttpHeader, HttpMcpServer, McpServerStdio, SseMcpServer
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 from aid.control import ENV_AGENT_CONNECTION
 from aid.paths import ENV_CHANNEL, ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, default_paths
@@ -22,6 +22,25 @@ if TYPE_CHECKING:
     from aid.spec import AcpSpec, ClaudeSdkSpec, ClaudeTtySpec
 
 _servers: TypeAdapter[list[McpServer]] = TypeAdapter(list[McpServer])
+
+
+class ClaudeStdioEntry(TypedDict):
+    type: Literal["stdio"]
+    command: str
+    args: list[str]
+    env: dict[str, str]
+
+
+class ClaudeRemoteEntry(TypedDict):
+    type: Literal["http", "sse"]
+    url: str
+    headers: dict[str, str]
+
+
+class ClaudeMcpConfig(TypedDict):
+    """What `claude --mcp-config` reads."""
+
+    mcpServers: dict[str, ClaudeStdioEntry | ClaudeRemoteEntry]
 
 
 # How Claude Code names the built-in server's tools; also a permission rule that allows all of them.
@@ -92,28 +111,35 @@ def to_acp(server: McpServer) -> McpServerStdio | HttpMcpServer | SseMcpServer:
             return SseMcpServer(type="sse", name=server.name, url=server.url, headers=headers)
 
 
-def claude_config(servers: Iterable[McpServer]) -> dict[str, Any]:
-    """The `{"mcpServers": {...}}` document `claude --mcp-config` reads."""
-    entries: dict[str, Any] = {}
+def claude_config(servers: Iterable[McpServer]) -> ClaudeMcpConfig:
+    entries: dict[str, ClaudeStdioEntry | ClaudeRemoteEntry] = {}
     for server in servers:
         match server:
             case McpStdio():
-                entry = {"type": "stdio", "command": server.command[0], "args": server.command[1:], "env": server.env}
+                entries[server.name] = ClaudeStdioEntry(
+                    type="stdio", command=server.command[0], args=server.command[1:], env=server.env
+                )
             case McpHttp() | McpSse():
-                entry = {"type": server.type, "url": server.url, "headers": server.headers}
-        entries[server.name] = entry
+                entries[server.name] = ClaudeRemoteEntry(type=server.type, url=server.url, headers=server.headers)
     return {"mcpServers": entries}
 
 
-def from_claude_config(document: dict[str, Any]) -> list[McpServer]:
+def from_claude_config(document: JsonValue) -> list[McpServer]:
     """Read a Claude Code `.mcp.json`-style document. Entries without `type` are stdio, as in Claude Code."""
-    servers: list[dict[str, Any]] = []
-    for name, entry in dict(document.get("mcpServers", {})).items():
+    entries = document.get("mcpServers", {}) if isinstance(document, dict) else None
+    if not isinstance(entries, dict):
+        raise ValueError("not a JSON object with an mcpServers object")
+    servers: list[JsonValue] = []
+    for name, entry in entries.items():
+        if not isinstance(entry, dict):
+            raise ValueError(f"mcpServers.{name} is not an object")
         entry = dict(entry)
         kind = entry.pop("type", "stdio")
         if kind == "stdio" and "command" in entry:
-            command = [entry.pop("command"), *entry.pop("args", [])]
-            servers.append({"type": kind, "name": name, "command": command, **entry})
+            args = entry.pop("args", [])
+            if not isinstance(args, list):
+                raise ValueError(f"mcpServers.{name}.args is not a list")
+            servers.append({"type": kind, "name": name, "command": [entry.pop("command"), *args], **entry})
         else:
             servers.append({"type": kind, "name": name, **entry})
     return _servers.validate_python(servers)

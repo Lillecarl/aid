@@ -11,6 +11,7 @@ import anyio.to_thread
 import pytest
 import zmq.asyncio
 from libpymux import Server
+from pydantic import JsonValue, TypeAdapter
 
 import aid
 from aid.backends.claude_tty import (
@@ -145,12 +146,16 @@ def test_tool_modes_become_claudes_rules() -> None:
     ]
     supervised = {"Write": PermissionMode.SUPERVISOR, "Edit": PermissionMode.ASK_SUPERVISOR, **modes}
     assert claude_rules(supervised, aid_tools=False)[2] == ["Write", "Edit", "WebFetch"]
-    own = {"model": "opus", "permissions": {"ask": ["Edit"], "allow": ["Grep"]}}
+    own: dict[str, JsonValue] = {"model": "opus", "permissions": {"ask": ["Edit"], "allow": ["Grep"]}}
     assert ask_settings(own, ["WebFetch"]) == {
         "model": "opus",
         "permissions": {"ask": ["Edit", "WebFetch"], "allow": ["Grep"]},
     }
     assert ask_settings(own, []) is own
+    with pytest.raises(ValueError, match="'permissions' is not a JSON object"):
+        ask_settings({"permissions": ["Edit"]}, ["WebFetch"])
+    with pytest.raises(ValueError, match="'Stop' is not a JSON array"):
+        hook_settings("c", "s", "h", {"hooks": {"Stop": "theirs"}})
 
 
 def test_a_persons_settings_join_aids_hooks(tmp_path: Path) -> None:
@@ -164,10 +169,12 @@ def test_a_persons_settings_join_aids_hooks(tmp_path: Path) -> None:
     merged = hook_settings("ipc:///run/aid/control.sock", "s1", "ipc:///run/aid/hook-s1.sock", own)
 
     assert merged["model"] == "opus"
-    assert set(merged["hooks"]) == set(HOOK_EVENTS)
-    assert merged["hooks"]["Stop"][0] == {"hooks": ["theirs"]}
-    [aid_stop] = merged["hooks"]["Stop"][1]["hooks"]
-    assert shlex.split(aid_stop["command"])[1:] == [
+    hooks = TypeAdapter(dict[str, list[dict[str, list[JsonValue]]]]).validate_python(merged["hooks"])
+    assert set(hooks) == set(HOOK_EVENTS)
+    assert hooks["Stop"][0] == {"hooks": ["theirs"]}
+    [aid_stop] = hooks["Stop"][1]["hooks"]
+    assert isinstance(aid_stop, dict) and isinstance(command := aid_stop["command"], str)
+    assert shlex.split(command)[1:] == [
         HOOK_SCRIPT,
         "ipc:///run/aid/control.sock",
         "s1",

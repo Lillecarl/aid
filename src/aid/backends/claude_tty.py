@@ -51,7 +51,7 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, cast
 
 import anyio
 import anyio.to_thread
@@ -181,10 +181,10 @@ def permission_title(tool_input: JsonValue) -> str | None:
     return None
 
 
-def hook_decision(option_id: str | None) -> dict[str, Any]:
+def hook_decision(option_id: str | None) -> JsonValue:
     """PermissionRequest's answer: allow for the allow option, deny for anything else (a person's cancel too)."""
     if option_id == ALLOW_OPTION:
-        decision: dict[str, Any] = {"behavior": "allow"}
+        decision: JsonValue = {"behavior": "allow"}
     else:
         decision = {"behavior": "deny", "message": "A person refused this in aid."}
     return {"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": decision}}
@@ -235,36 +235,53 @@ def split_settings(args: list[str]) -> tuple[str | None, list[str]]:
     return value, rest
 
 
-def read_settings(value: str, cwd: str) -> dict[str, Any]:
+def read_settings(value: str, cwd: str) -> dict[str, JsonValue]:
     """A --settings value as Claude reads it: JSON text, or a path to a JSON file (relative to the cwd)."""
     text = value if value.lstrip().startswith("{") else (Path(cwd) / value).read_text()
-    document = json.loads(text)
+    document: JsonValue = json.loads(text)
     if not isinstance(document, dict):
         raise ValueError(f"--settings {value!r} is not a JSON object")
-    return cast(dict[str, Any], document)
+    return document
 
 
-def ask_settings(own: dict[str, Any], asked: list[str]) -> dict[str, Any]:
+def _object(document: dict[str, JsonValue], key: str) -> dict[str, JsonValue]:
+    value = document.get(key) or {}
+    if not isinstance(value, dict):
+        raise ValueError(f"settings {key!r} is not a JSON object")
+    return dict(value)
+
+
+def _array(document: dict[str, JsonValue], key: str) -> list[JsonValue]:
+    value = document.get(key) or []
+    if not isinstance(value, list):
+        raise ValueError(f"settings {key!r} is not a JSON array")
+    return list(value)
+
+
+def ask_settings(own: dict[str, JsonValue], asked: list[str]) -> dict[str, JsonValue]:
     """`own` with `asked` added to its `permissions.ask` rules. Rules have no command-line flag of their own."""
     if not asked:
         return own
-    permissions = dict(own.get("permissions") or {})
-    permissions["ask"] = [*(permissions.get("ask") or []), *asked]
+    permissions = _object(own, "permissions")
+    permissions["ask"] = [*_array(permissions, "ask"), *asked]
     return {**own, "permissions": permissions}
 
 
-def hook_settings(control: str, session: str, hook: str, own: dict[str, Any]) -> dict[str, Any]:
+def hook_settings(control: str, session: str, hook: str, own: dict[str, JsonValue]) -> dict[str, JsonValue]:
     """`own` with aid's hook added to each event in HOOK_EVENTS, after any hook `own` has for it. The hook
     command asks the worker on `hook` first and falls back to the daemon on `control` (`aid/hook.py`)."""
-    hooks: dict[str, list[Any]] = {event: list(entries) for event, entries in dict(own.get("hooks") or {}).items()}
+    theirs = _object(own, "hooks")
+    hooks: dict[str, JsonValue] = {}
+    for event in theirs:
+        hooks[event] = _array(theirs, event)
     for event in HOOK_EVENTS:
-        handler: dict[str, Any] = {
+        handler: dict[str, JsonValue] = {
             "type": "command",
             "command": shlex.join([sys.executable, HOOK_SCRIPT, control, session, event, hook]),
         }
         if event in hook_command.WAITING_EVENTS:
             handler["timeout"] = WAITING_HOOK_TIMEOUT
-        hooks.setdefault(event, []).append({"hooks": [handler]})
+        hooks[event] = [*_array(hooks, event), {"hooks": [handler]}]
     return {**own, "hooks": hooks}
 
 

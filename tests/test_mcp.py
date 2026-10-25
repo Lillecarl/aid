@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 import anyio
 import pytest
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 
 import aid
 from aid.control import ENV_AGENT_CONNECTION, AgentConnection
@@ -27,7 +27,7 @@ SERVERS = [
     McpStdio(name="files", command=["/bin/mcp-files", "--root", "/"], env={"TOKEN": "t"}),
     McpHttp(name="web", url="http://127.0.0.1:1/mcp", headers={"Authorization": "Bearer t"}),
 ]
-CLAUDE_CONFIG = {
+CLAUDE_CONFIG: JsonValue = {
     "mcpServers": {
         "files": {"type": "stdio", "command": "/bin/mcp-files", "args": ["--root", "/"], "env": {"TOKEN": "t"}},
         "web": {"type": "http", "url": "http://127.0.0.1:1/mcp", "headers": {"Authorization": "Bearer t"}},
