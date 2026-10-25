@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Final
 
 import anyio
 import structlog
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from aid.backends.acp import choose_permission
 from aid.backends.permissions import PermissionWaits
@@ -36,7 +37,6 @@ from aid.protocol import (
     TextDelta,
     ThoughtDelta,
     ToolCall,
-    to_json,
 )
 from aid.spec import PermissionMode, tool_group
 from aid.transcript import TranscriptEntry, items_from_entry
@@ -45,7 +45,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
 
     from anyio.abc import Process
-    from pydantic import JsonValue
 
     from aid.backends.base import Emit
     from aid.spec import ClaudeSdkSpec
@@ -60,6 +59,63 @@ SDK_OPTIONS: Final = [
     PermissionChoice(option_id="deny", name="No", kind="reject_once"),
 ]
 """Answers to a `can_use_tool` prompt. Kinds mirror ACP's, so `choose_permission` picks the policy answer."""
+
+
+class _Lenient(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+
+class _Delta(_Lenient):
+    type: str = ""
+    text: str = ""
+    thinking: str = ""
+
+
+class _StreamEvent(_Lenient):
+    delta: _Delta | None = None
+
+
+class _ToolPrompt(_Lenient):
+    """A `control_request`'s request; `can_use_tool` asks about one tool call."""
+
+    subtype: str = ""
+    tool_name: str | None = None
+    action_description: str | None = None
+    description: str | None = None
+    display_name: str | None = None
+    tool_use_id: str = ""
+    input: JsonValue = None
+
+    @property
+    def title(self) -> str | None:
+        return self.action_description or self.description or self.display_name
+
+
+class _RemoteUrls(_Lenient):
+    session_url: str = ""
+    connect_url: str = ""
+
+
+class _ControlAnswer(_Lenient):
+    """A `control_response`'s response: the bridge's answer to a request aid sent."""
+
+    request_id: str | None = None
+    subtype: str = ""
+    response: _RemoteUrls | str | None = None
+
+
+class _SdkLine(TranscriptEntry):
+    """One NDJSON line of `claude -p --output-format stream-json`. A `user` or `assistant` line is shaped as a
+    transcript entry (`tool_use_result` in snake case); the other types add the fields below."""
+
+    session_id: str = ""
+    tools: list[str] = Field(default_factory=list[str])
+    event: _StreamEvent | None = None
+    parent_tool_use_id: str | None = None
+    request_id: str = ""
+    request: _ToolPrompt | None = None
+    response: _ControlAnswer | None = None
+    result: JsonValue = None
 
 
 def sdk_argv(spec: ClaudeSdkSpec, *, resume: str | None, mcp_config: str | None = None) -> list[str]:
@@ -243,47 +299,34 @@ class ClaudeSdkBackend:
         """Handle one NDJSON line as it arrives; returns a new stop reason for a result line, else None."""
         if not line.strip():
             return None
-        parsed: JsonValue
         try:
-            parsed = json.loads(line)
-        except ValueError:
+            message = _SdkLine.model_validate_json(line)
+        except ValidationError:
             log.warning("sdk_malformed_line", line=line[:200])
             return None
-        if not isinstance(parsed, dict):
-            return None
-        message = parsed
-        match message.get("type"):
-            case "system" if message.get("subtype") == "init":
-                session_id = message.get("session_id")
-                if isinstance(session_id, str) and session_id:
-                    await self._id_file.write_text(session_id)
-                    self._started = self._started.model_copy(update={"agent_session": session_id})
-                if isinstance(names := message.get("tools"), list):
+        match message.type:
+            case "system" if message.subtype == "init":
+                if message.session_id:
+                    await self._id_file.write_text(message.session_id)
+                    self._started = self._started.model_copy(update={"agent_session": message.session_id})
+                if "tools" in message.model_fields_set:
                     self._tools = [
-                        SessionTool(name=name, group=tool_group(name, "claude"), asks=False)
-                        for name in names
-                        if isinstance(name, str)
+                        SessionTool(name=name, group=tool_group(name, "claude"), asks=False) for name in message.tools
                     ]
                 return None
             case "stream_event":
-                event = message.get("event")
-                delta = event.get("delta") if isinstance(event, dict) else None
-                if isinstance(delta, dict):
-                    match delta.get("type"), delta.get("text"), delta.get("thinking"):
-                        case "text_delta", str(text), _ if text:
-                            self._streamed = True
-                            await emit(TextDelta(text=text))
-                        # Claude Haiku 5.5 sends thinking deltas with no text (display "updates"): nothing to show.
-                        case "thinking_delta", _, str(thought) if thought:
-                            await emit(ThoughtDelta(text=thought))
-                        case _:
-                            pass
+                delta = message.event.delta if message.event else None
+                if delta is not None and delta.type == "text_delta" and delta.text:
+                    self._streamed = True
+                    await emit(TextDelta(text=delta.text))
+                # Claude Haiku 5.5 sends thinking deltas with no text (display "updates"): nothing to show.
+                elif delta is not None and delta.type == "thinking_delta" and delta.thinking:
+                    await emit(ThoughtDelta(text=delta.thinking))
                 return None
-            case "assistant" | "user" if message.get("parent_tool_use_id") is not None:
+            case "assistant" | "user" if message.parent_tool_use_id is not None:
                 return None  # A subagent's: its own conversation, as the transcript's sidechains are.
             case "user":
-                # Tool results: the same entry shape as the transcript's (`tool_use_result`, snake case here).
-                for item in items_from_entry(TranscriptEntry.model_validate(message)):
+                for item in items_from_entry(message):
                     if isinstance(item, ToolCall):
                         await emit(item)
                 return None
@@ -291,44 +334,37 @@ class ClaudeSdkBackend:
                 # One line per finished content block, after that block's stream events: its text is the turn's
                 # output, and reaches the stream here only if no deltas carried it (an older Claude Code). A tool
                 # call goes out as the transcript path turns it.
-                for item in items_from_entry(TranscriptEntry.model_validate(message)):
+                for item in items_from_entry(message):
                     if isinstance(item, ToolCall):
                         await emit(item)
-                envelope = message.get("message")
-                content: JsonValue = envelope.get("content", []) if isinstance(envelope, dict) else []
+                content = message.message.content
                 for block in content if isinstance(content, list) else []:
-                    if not isinstance(block, dict) or block.get("type") != "text":
+                    if block.type != "text" or not block.text:
                         continue
-                    text = block.get("text")
-                    if not isinstance(text, str):
-                        continue
-                    chunks.append(text)
+                    chunks.append(block.text)
                     if not self._streamed:
-                        await emit(TextDelta(text=text))
+                        await emit(TextDelta(text=block.text))
                 self._streamed = False
                 return None
             case "control_request":
-                request = message.get("request", {})
-                if isinstance(request, dict) and request.get("subtype") == "can_use_tool":
-                    await self._answer_tool(message, request, emit, respond)
+                if message.request is not None and message.request.subtype == "can_use_tool":
+                    await self._answer_tool(message.request_id, message.request, emit, respond)
                 return None
             case "control_response":
-                await self._handle_remote_response(message, emit)
+                if message.response is not None:
+                    await self._handle_remote_response(message.response, emit)
                 return None
             case "result":
-                if not chunks:
-                    fallback = message.get("result")
-                    if isinstance(fallback, str):
-                        chunks.append(fallback)
-                subtype = message.get("subtype")
-                return subtype if isinstance(subtype, str) else "end_turn"
+                if not chunks and isinstance(message.result, str):
+                    chunks.append(message.result)
+                return message.subtype or "end_turn"
             case _:
                 return None
 
     async def _answer_tool(
         self,
-        message: dict[str, JsonValue],
-        request: dict[str, JsonValue],
+        request_id: str,
+        request: _ToolPrompt,
         emit: Emit,
         respond: Callable[[str, bool], Awaitable[None]],
     ) -> None:
@@ -337,19 +373,14 @@ class ClaudeSdkBackend:
         Mirrors the ACP backend: ALLOW answers allow, DENY refuses, ASK emits a PermissionRequest and waits for an
         answer, refused after `permission_timeout`. A cancelled wait raises loudly; the turn ends.
         """
-        tool_name = request.get("tool_name")
-        title = request.get("action_description") or request.get("description") or request.get("display_name")
-        tool_use_id = request.get("tool_use_id")
         permission = PermissionRequest(
             request_id=uuid.uuid4().hex,
-            tool_call_id=tool_use_id if isinstance(tool_use_id, str) else "",
-            tool_name=tool_name if isinstance(tool_name, str) else None,
-            title=title if isinstance(title, str) else None,
-            input=to_json(request.get("input")),
+            tool_call_id=request.tool_use_id,
+            tool_name=request.tool_name,
+            title=request.title,
+            input=request.input,
             options=list(SDK_OPTIONS),
-            mode=self._spec.tool_permissions.get(
-                tool_name if isinstance(tool_name, str) else "", self._spec.permission
-            ),
+            mode=self._spec.tool_permissions.get(request.tool_name or "", self._spec.permission),
         )
         await emit(permission)
         mode = permission.mode or self._spec.permission
@@ -375,38 +406,24 @@ class ClaudeSdkBackend:
         await emit(decision)
         if decision.by is PermissionDecider.CANCEL:
             raise AidError("sdk_cancelled", "turn cancelled during permission wait")
-        request_id = message.get("request_id")
-        if isinstance(request_id, str) and request_id:
+        if request_id:
             await respond(request_id, decision.option_id == "allow")
         else:
             log.warning("sdk_permission_without_request_id", tool=permission.tool_name)
 
-    async def _handle_remote_response(self, message: dict[str, JsonValue], emit: Emit) -> None:
+    async def _handle_remote_response(self, response: _ControlAnswer, emit: Emit) -> None:
         """The bridge's answer to this turn's Remote Control enable: emit its URLs, or log why not.
 
         A failed enable never fails the turn: the phone link is additive, the work stands without it.
         """
-        response = message.get("response")
-        if (
-            self._rc_id is None
-            or not isinstance(response, dict)
-            or response.get("request_id") != self._rc_id
-            or response.get("subtype") != "success"
-        ):
+        if self._rc_id is None or response.request_id != self._rc_id or response.subtype != "success":
             return
         self._rc_id = None
-        urls = response.get("response")
-        session_url = urls.get("session_url") if isinstance(urls, dict) else None
-        connect_url = urls.get("connect_url") if isinstance(urls, dict) else None
-        if not isinstance(session_url, str) or not session_url:
-            log.warning("sdk_remote_failed", detail=str(response.get("response"))[:200])
+        urls = response.response
+        if not isinstance(urls, _RemoteUrls) or not urls.session_url:
+            log.warning("sdk_remote_failed", detail=str(urls)[:200])
             return
-        await emit(
-            RemoteControl(
-                session_url=session_url,
-                connect_url=connect_url if isinstance(connect_url, str) else "",
-            )
-        )
+        await emit(RemoteControl(session_url=urls.session_url, connect_url=urls.connect_url))
 
 
 @asynccontextmanager
