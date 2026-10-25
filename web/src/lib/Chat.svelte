@@ -779,6 +779,7 @@
   .user,
   .message {
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
     background: var(--code-bg);
     border-left: 3px solid var(--accent);
     padding: 0.4rem 0.6rem;
@@ -830,12 +831,14 @@
     padding-left: 0.6rem;
   }
   .meta {
+    overflow-wrap: anywhere;
     color: var(--muted);
     font-size: 0.8em;
     text-align: right;
   }
   .error {
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
     color: var(--bad);
   }
   .listening {
