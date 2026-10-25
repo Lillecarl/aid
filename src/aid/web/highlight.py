@@ -1,4 +1,5 @@
-"""Syntax highlighting for the file viewer, by tree-sitter, as Pygments short token classes (`theme.CODE`).
+"""Syntax highlighting for the file viewer and the chat, by tree-sitter, as Pygments short token classes
+(`theme.CODE`). A language no grammar knows falls back to Pygments' own lexer, same classes.
 
 The grammars are a directory (`nix/tree-sitter-grammars.nix`): `languages.json`, and per language a `parser`
 shared object and its `highlights.scm`. Spans come back as UTF-16 offsets into the text, which is what a browser
@@ -16,9 +17,22 @@ import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
+# Both take untyped **options.
+from pygments.lexers import (
+    get_lexer_by_name,  # pyright: ignore[reportUnknownVariableType]
+    get_lexer_for_filename,  # pyright: ignore[reportUnknownVariableType]
+)
+from pygments.token import (
+    STANDARD_TYPES,
+    _TokenType,  # pyright: ignore[reportPrivateUsage] -- no public name for the token type
+)
+from pygments.util import ClassNotFound
 from tree_sitter import Language, Parser, Query, QueryCursor
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 ENV_GRAMMARS: Final = "AID_TREE_SITTER_GRAMMARS"
 
@@ -159,6 +173,42 @@ class Grammars:
         if (language := self.language_of(path)) is None:
             return None
         return spans(self.compile(language), text)
+
+    def named(self, name: str) -> str | None:
+        """A grammar by its own name (`python`) or by a file type it claims (`py`), as fenced blocks name them."""
+        name = name.lower()
+        return name if name in self._symbols else self._types.get(name)
+
+
+def highlight(grammars: Grammars | None, language: str | None, path: str | None, text: str) -> list[Span] | None:
+    """By tree-sitter when a grammar knows `language` or `path`, else by Pygments; None when neither does."""
+    if grammars is not None:
+        found = (grammars.named(language) if language else None) or (grammars.language_of(path) if path else None)
+        if found is not None:
+            return spans(grammars.compile(found), text)
+    try:
+        lexer = get_lexer_by_name(language) if language else get_lexer_for_filename(path) if path else None
+    except ClassNotFound:
+        return None
+    return None if lexer is None else lexed(lexer.get_tokens_unprocessed(text))
+
+
+def _short(token: _TokenType) -> str:
+    while token not in STANDARD_TYPES and token.parent is not None:
+        token = token.parent
+    return STANDARD_TYPES.get(token, "")
+
+
+def lexed(tokens: Iterable[tuple[int, _TokenType, str]]) -> list[Span]:
+    """Pygments' tokens as spans, in UTF-16 units; plain text draws nothing."""
+    out: list[Span] = []
+    units = 0
+    for _index, token, value in tokens:
+        size = len(value.encode("utf-16-le")) // 2
+        if cls := _short(token):
+            out.append((units, units + size, cls))
+        units += size
+    return out
 
 
 def spans(compiled: _Compiled, text: str) -> list[Span]:

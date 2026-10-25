@@ -43,6 +43,8 @@ dependencies = [
   "wsproto>=1.2",
   # aid web's highlighter. The grammars come from AID_TREE_SITTER_GRAMMARS (nix/tree-sitter-grammars.nix).
   "tree-sitter>=0.25",
+  # Its lexers highlight what no grammar knows; theme.py takes its styles. (Present via rich too.)
+  "pygments>=2.19",
   "watchfiles>=1.0",
   # The skills plugin: SKILL.md frontmatter is YAML (Agent Skills).
   "pyyaml>=6.0",

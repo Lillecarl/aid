@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from aid.web.highlight import token_class
+from aid.web.highlight import highlight, token_class
 from tests.conftest import needs_grammars
 
 if TYPE_CHECKING:
@@ -70,3 +70,20 @@ def test_capture_names_fall_back_to_their_prefix() -> None:
     assert token_class("function.builtin") == "nb"
     assert token_class("string.special.symbol") == "ss"
     assert token_class("spell") is None
+
+
+def test_a_fenced_tag_names_a_grammar_by_name_or_file_type(grammars: Grammars) -> None:
+    assert grammars.named("python") == grammars.named("py") == grammars.named("PY") == "python"
+    assert highlight(grammars, "py", None, "def f(): pass\n") == grammars.highlight("a.py", "def f(): pass\n")
+
+
+@pytest.mark.parametrize("grammars_or_none", [True, False])
+def test_pygments_takes_what_no_grammar_knows(grammars: Grammars, grammars_or_none: bool) -> None:
+    text = "[core]\n  é = 😀\n"
+    found = highlight(grammars if grammars_or_none else None, "ini", None, text)
+    assert found is not None
+    assert (0, 6, "k") in found or any(cls == "k" for _s, _e, cls in found)
+    # Ends count UTF-16 units: the emoji takes two.
+    assert max(end for _start, end, _cls in found) <= len(text.encode("utf-16-le")) // 2
+    assert highlight(None, "no-such-language", None, text) is None
+    assert highlight(None, None, None, text) is None

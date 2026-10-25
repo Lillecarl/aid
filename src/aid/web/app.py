@@ -39,7 +39,7 @@ from starlette.websockets import WebSocketDisconnect
 from aid.client import connect
 from aid.protocol import AidError
 from aid.speech import Transcription
-from aid.web import auth, files, theme, zws
+from aid.web import auth, files, highlight, theme, zws
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -137,6 +137,35 @@ async def read_file(request: Request) -> Response:
     if grammars is not None and view.text is not None:
         view.highlights = await anyio.to_thread.run_sync(grammars.highlight, view.path, view.text)
     return JSONResponse(view.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
+
+
+HIGHLIGHT_LIMIT: Final = 256 * 1024
+"""Characters of code one highlight request may carry: a chat block, never a whole repository."""
+
+
+class HighlightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: Annotated[str, Field(max_length=HIGHLIGHT_LIMIT)]
+    language: str | None = None
+    """A fenced block's tag (`python`, `py`, `sh`), or a Pygments lexer name."""
+    path: str | None = None
+    """When no language is named: the file the text comes from, by its name."""
+
+
+@api
+async def highlight_code(request: Request) -> Response:
+    """Spans for code the chat shows. POST for the body's size; it changes nothing, yet costs CPU, so it wants the
+    CSRF header like a change would."""
+    if not auth.csrf_ok(request):
+        return PlainTextResponse("bad CSRF token", status_code=403)
+    body = await request.body()
+    if len(body) > 4 * HIGHLIGHT_LIMIT:
+        return PlainTextResponse("too large", status_code=413)
+    asked = HighlightRequest.model_validate_json(body)
+    grammars: Grammars | None = request.app.state.grammars
+    found = await anyio.to_thread.run_sync(highlight.highlight, grammars, asked.language, asked.path, asked.text)
+    return JSONResponse({"highlights": found})
 
 
 @api
@@ -348,6 +377,7 @@ def create_app(
             Route("/api/sessions/{name}/files", list_files, methods=["GET"]),
             Route("/api/sessions/{name}/file", read_file, methods=["GET"]),
             Route("/api/speech", speech, methods=["GET"]),
+            Route("/api/highlight", highlight_code, methods=["POST"]),
             WebSocketRoute("/api/transcribe", transcribe),
             WebSocketRoute("/api/sessions/{name}/pane", pane),
             WebSocketRoute("/api/zws/control", zws.control),

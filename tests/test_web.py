@@ -141,6 +141,27 @@ async def test_dirs_complete_a_working_directory(web: Web, tmp_path: Path) -> No
     assert all(d.startswith(str(Path.home())) for d in home["dirs"])
 
 
+async def test_highlight_wants_the_csrf_header(web: Web) -> None:
+    body = {"text": "def f(): pass\n", "language": "python"}
+    with anyio.fail_after(TIMEOUT):
+        async with httpx.AsyncClient() as client:
+            await login(client, web, ALLOWED)
+            csrf = (await client.get(f"{web.url}/api/me")).json()["csrf"]
+            refused = await client.post(f"{web.url}/api/highlight", json=body)
+            found = await client.post(f"{web.url}/api/highlight", json=body, headers={"X-CSRF-Token": csrf})
+            unknown = await client.post(
+                f"{web.url}/api/highlight", json={"text": "x", "language": "nope"}, headers={"X-CSRF-Token": csrf}
+            )
+            big = await client.post(
+                f"{web.url}/api/highlight", json={"text": "x" * (1 << 20)}, headers={"X-CSRF-Token": csrf}
+            )
+    assert refused.status_code == 403
+    assert found.status_code == 200
+    assert [str(v) for v in found.json()["highlights"][0]] == ["0", "3", "k"]
+    assert unknown.json() == {"highlights": None}
+    assert big.status_code == 413
+
+
 async def test_account_off_the_allowlist_is_refused(web: Web) -> None:
     with anyio.fail_after(TIMEOUT):
         async with httpx.AsyncClient() as client:
