@@ -1187,10 +1187,10 @@ def request_id(data: bytes) -> str:
     """The id a request that fails to decode was sent under, for the Failure that answers it: a client waits for
     its own id, and a reply under none never reaches it. "" when the frame names none."""
     try:
-        message: object = json.loads(data)
+        message: JsonValue = json.loads(data)
     except ValueError:
         return ""
-    identity = cast(dict[str, object], message).get("id") if isinstance(message, dict) else None
+    identity = message.get("id") if isinstance(message, dict) else None
     return identity if isinstance(identity, str) else ""
 
 

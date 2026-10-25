@@ -59,6 +59,7 @@ from aid.zap import Keypair, connect_curve
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup
+    from pydantic import JsonValue
 
     from aid.backends.base import Backend
     from aid.protocol import HistoryItem, SessionEvent, SessionTool
@@ -131,12 +132,11 @@ async def serve(
 def usertee_text(data: bytes) -> str | None:
     """The text of a `usertee` frame (`aid/usertee.py`), or None for any other frame. Its op is local to this
     socket, never a daemon request."""
-    message: object = json.loads(data)
+    message: JsonValue = json.loads(data)
     if not isinstance(message, dict):
         return None
-    fields = cast(dict[str, object], message)
-    text = fields.get("text")
-    return text if fields.get("op") == "usertee" and isinstance(text, str) else None
+    text = message.get("text")
+    return text if message.get("op") == "usertee" and isinstance(text, str) else None
 
 
 def describe(error: BaseException) -> str:

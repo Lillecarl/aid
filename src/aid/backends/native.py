@@ -75,6 +75,8 @@ from aid.tools import tool_paths
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
 
+    from pydantic import JsonValue
+
     from aid.backends.base import Emit, Notifier
     from aid.discovery import Catalog
     from aid.messages import Part
@@ -223,7 +225,7 @@ def turn_metadata(used: int, desired_max: int, cwd: str | None = None) -> UserPr
     provider's prefix cache and Anthropic's binding of thinking to the conversation before it both need the
     history to only grow (measured 2026-10-23 on claude-haiku-5-5: a stripped per-request part left the cache
     unread and flagged the replayed thinking `prefix_binding_mismatch`)."""
-    meta: dict[str, object] = {"context_pct": round(used / desired_max * 100), "unixtime": int(time.time())}
+    meta: dict[str, JsonValue] = {"context_pct": round(used / desired_max * 100), "unixtime": int(time.time())}
     if cwd is not None:
         # The instructions name the directory once, at the start; a session can move since (`ChangeDirectory`).
         meta["cwd"] = cwd
