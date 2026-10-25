@@ -240,7 +240,7 @@ async def test_a_spec_with_instructions_is_the_agent(daemon: Paths, tmp_path: Pa
             **base.model_dump(exclude={"target"}),
             "instructions": "You only list files.",
             "model": "scripted/planned",
-            "tools": ["ls", "send_message"],
+            "tools": ["ls", "send_message", "goals"],
         }
     )
     with anyio.fail_after(TIMEOUT):
@@ -249,7 +249,7 @@ async def test_a_spec_with_instructions_is_the_agent(daemon: Paths, tmp_path: Pa
             result = await session.run(plan(("shell", {"command": "touch made"}), ("ls", {})))
             status = await session.status()
             history = [entry.item for entry in (await session.history()).entries]
-    assert sorted(by_name(status.tools)) == ["ls", "send_message"]
+    assert sorted(by_name(status.tools)) == ["goals", "ls", "send_message"]
     assert status.runs == "instructions"
     assert not (work / "made").exists()
     assert "a.txt" in str(result.output)

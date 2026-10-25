@@ -277,7 +277,8 @@ class NativeSpec(_Spec):
     target: Annotated[str, Field(pattern=r"^[\w.]+:[\w.]+$")] | None = None
     instructions: str | None = None
     """The agent's own instructions, for an agent made from this spec alone: it needs `model` and `tools`, and its
-    tools are every named tool (`aid.coding_tools`, aid's and plugins'), so `tools` alone picks what it gets."""
+    tools are every named tool (`aid.coding_tools`, `aid.supervisor_tools`, aid's and plugins'), so `tools` alone
+    picks what it gets."""
     model: Annotated[str, Field(pattern=r"^\S+$")] | None = None
     """`provider/model` the session runs on (`aid models` lists them), over the agent's own. The agent's
     `model_settings` follow only to a model of the same provider: they may hold keys another provider refuses."""

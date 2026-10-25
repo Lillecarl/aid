@@ -70,6 +70,7 @@ from aid.protocol import (
 )
 from aid.providers import catalog_model, resolve
 from aid.removals import PLANS_FILE
+from aid.supervision import supervisor_tools
 from aid.tools import tool_paths
 
 if TYPE_CHECKING:
@@ -839,7 +840,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
     elif spec.target is not None:
         agent = await anyio.to_thread.run_sync(load_target, spec.target)
     elif spec.instructions is not None and spec.model is not None:
-        agent = Agent(spec.model, instructions=spec.instructions, toolsets=[coding_tools])
+        agent = Agent(spec.model, instructions=spec.instructions, toolsets=[coding_tools, supervisor_tools])
     else:
         raise ValueError("the spec names no agent")
     agent = session_agent(agent, spec)
