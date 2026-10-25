@@ -29,11 +29,13 @@
   let model = $state("");
   // One regex per line; empty offers every tool to an agent, none to instructions (Lillecarl/aid#50).
   let tools = $state("");
+  let spawnModels = $state("");
   let trust = $state(false);
   let error = $state("");
   let busy = $state(false);
 
   const words = (text: string): string[] => text.split(/\s+/).filter((word) => word !== "");
+  const lines = (text: string): string[] => text.split("\n").map((line) => line.trim()).filter((line) => line !== "");
 
   function spec(): AgentSpec {
     // Completions end in "/"; Claude Code names its project directory after the cwd as given.
@@ -45,10 +47,14 @@
         return { kind, cwd, command: [program, ...rest], permission };
       }
       case "native": {
-        const patterns = tools.split("\n").map((line) => line.trim()).filter((line) => line !== "");
+        const patterns = lines(tools);
         const chosenModel = provider && modelId ? { model: `${provider}/${modelId}` } : {};
-        if (agent === INSTRUCTIONS) return { kind, cwd, instructions, permission, ...chosenModel, tools: patterns };
-        return { kind, cwd, agent, permission, ...chosenModel, ...(patterns.length ? { tools: patterns } : {}) };
+        const spawn = lines(spawnModels).length ? { spawn_models: lines(spawnModels) } : {};
+        if (agent === INSTRUCTIONS) {
+          return { kind, cwd, instructions, permission, ...chosenModel, tools: patterns, ...spawn };
+        }
+        const ceiling = patterns.length ? { tools: patterns } : {};
+        return { kind, cwd, agent, permission, ...chosenModel, ...ceiling, ...spawn };
       }
       case "claude-tty":
         return { kind, cwd, args: words(args), trust_cwd: trust };
@@ -234,6 +240,15 @@
         rows="2"
         placeholder={`${agent === INSTRUCTIONS ? "none" : "every tool"}; or one regex per line, e.g. ls|read|outline`}
         data-testid="tool-ceiling"
+      ></textarea>
+    </label>
+    <label>
+      Spawn models
+      <textarea
+        bind:value={spawnModels}
+        rows="1"
+        placeholder="children run on this session's model; or one provider/model regex per line"
+        data-testid="spawn-models"
       ></textarea>
     </label>
   {:else if kind === "claude-sdk"}

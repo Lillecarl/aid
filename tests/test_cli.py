@@ -86,6 +86,12 @@ def test_new_py_takes_a_tool_ceiling() -> None:
     assert isinstance(spec := _spec(args), NativeSpec) and spec.tools is None
 
 
+def test_new_py_takes_the_models_children_may_run_on() -> None:
+    args = _parser().parse_args(["new-py", "s", "agents:echo", "--spawn-model", "deepseek/.*"])
+    args.agent_command = []
+    assert isinstance(spec := _spec(args), NativeSpec) and spec.spawn_models == ["deepseek/.*"]
+
+
 def test_new_py_makes_an_agent_from_instructions(tmp_path: Path) -> None:
     args = _parser().parse_args(["new-py", "s", "--instructions", "Read.", "--model", "a/b", "--tool", "read"])
     args.agent_command = []

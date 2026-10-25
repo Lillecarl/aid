@@ -264,6 +264,12 @@ def _parser() -> argparse.ArgumentParser:
         help="offer only tools whose whole name a pattern matches, aid's own included; repeatable (default: all)",
     )
     py.add_argument(
+        "--spawn-model",
+        action="append",
+        metavar="REGEX",
+        help="a provider/model spawned children may run on besides this session's own; repeatable",
+    )
+    py.add_argument(
         "--max-context",
         type=int,
         help="tokens the context gauge calls full, as a rule of thumb half the model's window",
@@ -506,6 +512,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         supervisor_nudge_budget=args.supervisor_nudge_budget,
         tags=tags,
         tools=args.tool,
+        spawn_models=args.spawn_model,
         **source,
     )
 

@@ -313,6 +313,7 @@ export interface NativeSpec {
   sandbox?: Sandbox | null;
   seed_history?: string | null;
   skip_instructions?: string[];
+  spawn_models?: ToolPattern[] | null;
   supervisor?: string | null;
   supervisor_classifier?: string | null;
   supervisor_nudge_budget?: number;

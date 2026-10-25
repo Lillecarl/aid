@@ -52,12 +52,12 @@ def _compile_tool_pattern(pattern: str) -> str:
     try:
         re.compile(pattern)
     except re.error as e:
-        raise ValueError(f"invalid tool pattern {pattern!r}: {e}") from e
+        raise ValueError(f"invalid pattern {pattern!r}: {e}") from e
     return pattern
 
 
 type ToolPattern = Annotated[str, AfterValidator(_compile_tool_pattern)]
-"""A regex matched against a whole tool name."""
+"""A regex matched against a whole name: a tool's, or a model's."""
 
 
 def _absolute(paths: list[str]) -> list[str]:
@@ -313,6 +313,10 @@ class NativeSpec(_Spec):
     tools: list[ToolPattern] | None = None
     """The tool ceiling (Lillecarl/aid#50): a tool whose whole name no pattern matches is never offered to the
     model, whatever its mode; aid's and plugins' tools included. None offers every tool. Agents never set it."""
+
+    spawn_models: list[ToolPattern] | None = None
+    """Models this session's spawned children may run on besides its own: regexes fullmatched against
+    `provider/model`. Children inherit it unchanged. Agents never set it."""
 
     def offers(self, tool_name: str) -> bool:
         return self.tools is None or any(re.fullmatch(pattern, tool_name) for pattern in self.tools)

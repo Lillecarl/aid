@@ -1997,6 +1997,20 @@
           },
           "type": "array"
         },
+        "spawn_models": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/ToolPattern"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "supervisor": {
           "anyOf": [
             {

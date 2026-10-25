@@ -270,5 +270,5 @@ def test_a_tool_pattern_matches_the_whole_name() -> None:
     spec = NativeSpec(cwd="/", target="m:a", tools=["read", "task_.*"])
     assert [spec.offers(name) for name in ("read", "read_new", "task_stop", "shell")] == [True, False, True, False]
     assert NativeSpec(cwd="/", target="m:a").offers("shell")
-    with pytest.raises(ValidationError, match="invalid tool pattern"):
+    with pytest.raises(ValidationError, match="invalid pattern"):
         NativeSpec(cwd="/", target="m:a", tools=["("])
