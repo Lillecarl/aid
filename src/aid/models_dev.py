@@ -95,6 +95,16 @@ def provider_names(catalog: Any) -> list[str]:
     return sorted(str(name) for name in cast(dict[object, object], catalog)) if isinstance(catalog, dict) else []
 
 
+def window(catalog: Any, model: str) -> int | None:
+    """`provider/model`'s context window in tokens, or None when the catalog lacks it."""
+    provider_name, _, name = model.partition("/")
+    try:
+        entry = CatalogModel.model_validate(catalog[provider_name]["models"][name])
+    except KeyError, TypeError, ValidationError:
+        return None
+    return entry.limit.context if entry.limit else None
+
+
 def provider(catalog: Any, name: str) -> CatalogProvider | None:
     """`name`'s entry in `catalog`, or None when it has none or the entry does not parse."""
     try:

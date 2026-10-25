@@ -52,7 +52,9 @@ from aid.model import (
     model_for,
     split_name,
 )
-from aid.prices import CURRENCY, Price, price_for
+from aid.models_dev import catalog as models_catalog
+from aid.models_dev import window
+from aid.prices import CURRENCY, Price, lookup
 from aid.protocol import (
     AidError,
     Cost,
@@ -91,8 +93,8 @@ FORK_SNAPSHOTS: Final = 16
 """Snapshots kept: a fork copies its seed when it opens, so only recent ones are still unread."""
 NOT_FORKED: Final = "Not run in this fork: the parent session runs it."
 DEFAULT_DESIRED_MAX: Final = 100_000
-"""Tokens the context gauge assumes when the session names no `max_context`. Rule of thumb: half the model's
-window; unknown models err toward compacting early, which fails safe."""
+"""Tokens the context gauge assumes when the session names no `max_context` and models.dev knows no window for the
+model; a known window gives half of it. Unknown models err toward compacting early, which fails safe."""
 CONTINUE: Final = (
     "Your reply above stopped at the output token limit, mid-sentence. Continue it from exactly where it stopped, "
     "as if it had never been interrupted. Do not restart or summarize it."
@@ -374,7 +376,7 @@ class NativeBackend:
         toolsets: list[Toolset],
         started: Started,
         coding: Coding,
-        desired_max: int = DEFAULT_DESIRED_MAX,
+        desired_max: int | None = None,
         max_requests: int | None = None,
         refresh_instructions: Callable[[], str] | None = None,
         open_tail: int = 0,
@@ -385,7 +387,8 @@ class NativeBackend:
     ) -> None:
         """`transport`: the agent's model, resolved from its name (`aid.providers.resolve`); the backend owns and
         prices it. Without one, a name resolves through `model_for` alone. `price_as`: the name models.dev prices it
-        under, where the provider's prefix is not models.dev's id."""
+        under, where the provider's prefix is not models.dev's id. `desired_max`: the context gauge; None takes half
+        the model's window from models.dev."""
         self._agent = agent
         self._history_file = history_file
         self._history = history
@@ -409,7 +412,8 @@ class NativeBackend:
         self._tools = tools
         self._coding = coding
         coding.asking = asking_names(tools.values())
-        self._desired_max = desired_max
+        self._max_context = desired_max
+        self._desired_max = desired_max or DEFAULT_DESIRED_MAX
         self._max_requests = max_requests
         self._refresh_instructions = refresh_instructions
         # Messages at the history's end that the next turn sends unpruned: a fork's copy of the turn its parent was
@@ -420,7 +424,7 @@ class NativeBackend:
         self._receive = receive
         self._history_lock = anyio.Lock()
         # A model object is its owner's to price; aid prices only the transports it builds from a name.
-        self._priced = self._owned is None
+        self._looked_up = self._owned is None
         self._price: Price | None = None
         self._turn: list[ModelMessage] | None = None
         self._in_flight: tuple[list[ToolCallPart], int] | None = None
@@ -462,10 +466,21 @@ class NativeBackend:
             log.exception("receive_messages_failed")
             return []
 
+    async def _look_up(self) -> None:
+        """Price and context window from models.dev, once, for a model the backend resolved from a name."""
+        if self._looked_up:
+            return
+        self._looked_up = True
+        catalog = await models_catalog()
+        if catalog is None:
+            return
+        name = self._price_as or self._model.model_name
+        self._price = lookup(catalog, name)
+        if self._max_context is None and (size := window(catalog, name)):
+            self._desired_max = size // 2
+
     async def _request_price(self) -> Price | None:
-        if not self._priced:
-            self._priced = True
-            self._price = await price_for(self._price_as or self._model.model_name)
+        await self._look_up()
         return self._price
 
     def _preserve_signed_thinking(self) -> bool:
@@ -502,6 +517,7 @@ class NativeBackend:
             )
             del self._history[lead:]
             self._open_tail = 0
+        await self._look_up()
         messages: list[ModelMessage] = []
         if not self._history and self._agent.instructions:
             messages.append(ModelRequest(parts=[SystemPromptPart(self._agent.instructions)]))
@@ -877,7 +893,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             toolsets,
             started,
             coding,
-            desired_max=spec.max_context if spec.max_context is not None else DEFAULT_DESIRED_MAX,
+            desired_max=spec.max_context,
             max_requests=spec.max_requests,
             refresh_instructions=refresh_instructions,
             open_tail=open_tail,

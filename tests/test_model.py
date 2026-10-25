@@ -37,6 +37,7 @@ from aid.model import (
     model_for,
     wire_messages,
 )
+from aid.prices import ENV_PRICES
 from aid.protocol import AidError, SessionEvent, Usage
 from aid.spec import NativeSpec
 from tests.test_native_backend import backend
@@ -112,6 +113,34 @@ async def test_openai_transport_tool_loop_and_usage(tmp_path: Path, monkeypatch:
     assert all(m.model_name == "local" for m in history if isinstance(m, ModelResponse))
     assert any(isinstance(p, ToolReturnPart) and p.content == 5 for m in history for p in m.parts)
     assert (tmp_path / "history.json").read_bytes().count(b"[Session metadata]") == 1
+
+
+@pytest.mark.parametrize(("max_context", "gauge"), [(None, 32_000), (5_000, 5_000)])
+async def test_the_gauge_is_half_the_model_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, max_context: int | None, gauge: int
+) -> None:
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps({"openai": {"models": {"local": {"id": "local", "limit": {"context": 64_000}}}}}))
+    monkeypatch.setenv(ENV_PRICES, str(catalog))
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        data = event({"content": "hi"}) + event({}, usage={"prompt_tokens": 10, "completion_tokens": 1})
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=data + b"data: [DONE]\n\n")
+
+    def make_client(**kwargs: Any) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
+
+    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    events: list[SessionEvent] = []
+
+    async def emit(item: SessionEvent) -> None:
+        events.append(item)
+
+    agent = Agent("openai/local", model_settings={"api_key": "test-gauge", "api_base": "https://example.test/v1"})
+    async with backend(tmp_path, agent, desired_max=max_context) as session:
+        await session.prompt("hello", emit)
+    usage = next(item for item in events if isinstance(item, Usage))
+    assert usage.context_size == gauge
 
 
 async def test_openai_stream_cancellation_closes_transport(monkeypatch: pytest.MonkeyPatch) -> None:

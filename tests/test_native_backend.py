@@ -61,7 +61,7 @@ async def backend(
     *,
     history: list[ModelMessage] | None = None,
     max_requests: int | None = None,
-    desired_max: int = DEFAULT_DESIRED_MAX,
+    desired_max: int | None = None,
     open_tail: int = 0,
     receive: Callable[[], Awaitable[list[MessageEntry]]] | None = None,
 ) -> AsyncGenerator[NativeBackend]:
