@@ -8,7 +8,6 @@ plugin edited since the last listing.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -46,7 +45,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="python -m aid.catalog")
     parser.add_argument("--path", action="append", type=Path, help="a plugins directory, instead of the tiers")
     args = parser.parse_args()
-    print(json.dumps(discover(args.path if args.path is not None else plugins_path()).describe()))
+    print(discover(args.path if args.path is not None else plugins_path()).describe().model_dump_json())
 
 
 if __name__ == "__main__":

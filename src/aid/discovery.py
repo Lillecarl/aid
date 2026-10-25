@@ -35,13 +35,14 @@ import sys
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aid import builtin_tools
 from aid.agents import AgentDefinition, InstructionsProvider, ModelProvider
-from aid.plugins import Plugin
+from aid.plugins import Grant, Plugin
+from aid.protocol import AgentCatalog, AgentInfo, PluginInfo, ProviderInfo, ToolInfo
 from aid.tools import McpTool, tool_of
 
 if TYPE_CHECKING:
@@ -234,43 +235,43 @@ class Catalog:
     """Plugins that failed to resolve or import, and names offered twice. A problem hides one plugin or one name,
     never the catalog."""
 
-    def describe(self) -> dict[str, Any]:
-        def task(name: str) -> list[str] | None:
+    def describe(self) -> AgentCatalog:
+        def task(name: str) -> list[Grant] | None:
             cls = self.plugins.get(name)
-            return None if cls is None else sorted(grant.value for grant in cls.grants)
+            return None if cls is None else sorted(cls.grants, key=lambda grant: grant.value)
 
-        return {
-            "agents": [
-                {"name": name, "description": cls.description(), "module": cls.__module__}
+        return AgentCatalog(
+            agents=[
+                AgentInfo(name=name, description=cls.description(), module=cls.__module__)
                 for name, cls in sorted(self.agents.items())
             ],
-            "providers": [
-                {"name": name, "description": cls.description(), "module": cls.__module__}
+            providers=[
+                ProviderInfo(name=name, description=cls.description(), module=cls.__module__)
                 for name, cls in sorted(self.providers.items())
             ],
-            "model_providers": [
-                {"name": name, "description": cls.description(), "module": cls.__module__}
+            model_providers=[
+                ProviderInfo(name=name, description=cls.description(), module=cls.__module__)
                 for name, cls in sorted(self.model_providers.items())
             ],
-            "tools": [
-                {"name": name, "description": tool.summary(), "module": tool.fn.__module__}
+            tools=[
+                ToolInfo(name=name, description=tool.summary(), module=tool.fn.__module__)
                 for name, tool in sorted(self.tools.items())
             ],
-            "plugins": [
-                {
-                    "name": name,
-                    "version": root.manifest.version,
-                    "description": self.descriptions.get(name, ""),
-                    "path": str(root.path),
-                    "requires": root.manifest.requires,
-                    "autostart": root.manifest.autostart,
-                    "grants": task(name),
-                    "declined": self.declined.get(name),
-                }
+            plugins=[
+                PluginInfo(
+                    name=name,
+                    version=root.manifest.version,
+                    description=self.descriptions.get(name, ""),
+                    path=str(root.path),
+                    requires=root.manifest.requires,
+                    autostart=root.manifest.autostart,
+                    grants=task(name),
+                    declined=self.declined.get(name),
+                )
                 for name, root in self.roots.items()
             ],
-            "problems": self.problems,
-        }
+            problems=self.problems,
+        )
 
 
 def _owned(owner: str, plugin: str) -> bool:

@@ -16,7 +16,7 @@ from aid.messages import ModelMessage, ModelRequest, UserPromptPart
 from aid.model import AnthropicModel, ModelInfo, OpenAIChatModel, Provider
 from aid.model_lists import providers
 from aid.models_dev import ENV_SOURCE
-from aid.protocol import AidError
+from aid.protocol import AidError, ProviderInfo
 from aid.providers import catalog_model, catalog_provider, claimed, resolve
 from aid.spec import NativeSpec
 
@@ -97,8 +97,8 @@ async def test_a_plugin_provider_wins_its_prefix(
     found = discover([tmp_path / "plugins"])
     assert found.problems == []
     assert list(found.model_providers) == ["zen"]
-    assert found.describe()["model_providers"] == [
-        {"name": "zen", "description": "Zen through its own plugin.", "module": name}
+    assert found.describe().model_providers == [
+        ProviderInfo(name="zen", description="Zen through its own plugin.", module=name)
     ]
     monkeypatch.setenv("PLUGIN_KEY", "k")
     model = await resolve("zen/big-model", found.model_providers)

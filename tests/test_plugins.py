@@ -16,6 +16,7 @@ from aid.protocol import (
     PermissionDecider,
     PermissionDecision,
     PermissionRequest,
+    ToolInfo,
     Usage,
 )
 from aid.spec import PermissionMode
@@ -59,7 +60,7 @@ def test_discovers_plugins_tools_declined_and_problems() -> None:
 
 def test_describe_names_versions_grants_and_declined() -> None:
     described = discover([PLUGIN_DIR]).describe()
-    plugins = {plugin["name"]: plugin for plugin in described["plugins"]}
+    plugins = {plugin.name: plugin.model_dump(mode="json") for plugin in described.plugins}
     assert sorted(plugins) == ["abstractish", "alpha", "broken_gate", "gated", "plugintools"]
     assert plugins["alpha"] == {
         "name": "alpha",
@@ -74,9 +75,9 @@ def test_describe_names_versions_grants_and_declined() -> None:
     assert plugins["abstractish"]["requires"] == ["alpha"]
     assert plugins["abstractish"]["grants"] is None
     assert plugins["gated"]["declined"] == "needs a token"
-    assert [tool for tool in described["tools"] if tool["module"] == "plugintools"] == [
-        {"name": "add", "description": "Add two numbers.", "module": "plugintools"},
-        {"name": "whoami", "description": "The plugin tool that names itself.", "module": "plugintools"},
+    assert [tool for tool in described.tools if tool.module == "plugintools"] == [
+        ToolInfo(name="add", description="Add two numbers.", module="plugintools"),
+        ToolInfo(name="whoami", description="The plugin tool that names itself.", module="plugintools"),
     ]
 
 

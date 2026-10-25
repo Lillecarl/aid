@@ -94,7 +94,7 @@ def test_discovers_providers_and_lists_problems() -> None:
 
 
 def test_describe_rows_validate_as_agent_catalog() -> None:
-    described = AgentCatalog.model_validate(discover([PROVIDER_DIR]).describe())
+    described = AgentCatalog.model_validate_json(discover([PROVIDER_DIR]).describe().model_dump_json())
     assert [(provider.name, provider.module) for provider in described.providers] == [
         ("briefing", "briefing"),
         ("custom-provider", "briefing"),

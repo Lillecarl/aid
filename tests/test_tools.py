@@ -29,7 +29,7 @@ TIMEOUT = 30
 
 
 async def test_discover_finds_tools() -> None:
-    described = discover([AGENT_DIR]).describe()["tools"]
+    described = [tool.model_dump() for tool in discover([AGENT_DIR]).describe().tools]
     assert described == [
         {"name": "add", "description": "Add two numbers.", "module": "tooling"},
         {

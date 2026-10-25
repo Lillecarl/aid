@@ -79,7 +79,7 @@ def test_a_manifest_alone_makes_a_data_plugin(tmp_path: Path) -> None:
     plugin(tmp_path, "data_only", 'description = "Skills only."', code=None)
     catalog = discover([tmp_path])
     assert list(catalog.roots) == ["data_only"]
-    assert catalog.describe()["plugins"][0]["description"] == "Skills only."
+    assert catalog.describe().plugins[0].description == "Skills only."
     assert "data_only" not in loaded()
 
 
