@@ -923,7 +923,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             receive=functools.partial(_receive_messages, state_dir.name) if spec.aid_tools else None,
             transport=transport,
             price_as=catalog_model(agent.model, catalog.model_providers) if isinstance(agent.model, str) else None,
-            fresh_turns=definition is not None and definition.fresh_turns,
+            fresh_turns=spec.fresh_turns or (definition is not None and definition.fresh_turns),
             offers=spec.offers,
         )
         yield backend

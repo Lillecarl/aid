@@ -335,6 +335,10 @@ class NativeSpec(_Spec):
     spawn_models: list[ToolPattern] | None = None
     """Models this session's spawned children may run on besides its own: regexes fullmatched against
     `provider/model`. Children inherit it unchanged. Agents never set it."""
+    fresh_turns: bool = False
+    """Start each turn from the instructions alone, as an agent definition's `fresh_turns` does: the engine history
+    is cut back before each prompt, the transcript keeps every turn. For work in independent units, each prompt
+    carrying what the unit needs."""
     private: Private | None = None
     """Keep the session's content among private sessions and listed model hosts. Native only: other engines pick
     their own endpoints. Children and forks inherit it; agents never set it."""

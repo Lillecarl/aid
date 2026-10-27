@@ -1866,6 +1866,10 @@
           },
           "type": "object"
         },
+        "fresh_turns": {
+          "default": false,
+          "type": "boolean"
+        },
         "hooks": {
           "items": {
             "$ref": "#/$defs/Hook"

@@ -296,6 +296,7 @@ export interface NativeSpec {
   env?: {
     [k: string]: string;
   };
+  fresh_turns?: boolean;
   hooks?: Hook[];
   instruction_providers?: string[] | null;
   instructions?: string | null;
