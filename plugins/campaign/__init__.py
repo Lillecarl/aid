@@ -46,6 +46,8 @@ if TYPE_CHECKING:
 log = structlog.get_logger(__name__)
 
 PLUGIN: Final = "campaign"
+BUSY: Final = "busy"
+"""The daemon's refusal of a prompt to a session in a turn."""
 NAME_CHARS: Final = 24
 AUDITOR_TOOLS: Final = ("ls", "read", "outline", "search", "report_finding")
 SUPERVISOR_TOOLS: Final = (
@@ -287,6 +289,8 @@ class Campaigns(aid.Plugin):
         return found
 
     async def _status(self, name: str | None) -> JsonValue:
+        # Sampled before the reads below: a drive may end while they run, and its rows are written before that.
+        running = set(self._running)
         result: list[JsonValue] = []
         for campaign in await self.store.campaigns():
             if name is not None and campaign.name != name:
@@ -312,7 +316,7 @@ class Campaigns(aid.Plugin):
                     "name": campaign.name,
                     "state": campaign.state,
                     "error": campaign.error,
-                    "running": campaign.name in self._running,
+                    "running": campaign.name in running,
                     "repos": repos,
                 }
             )
@@ -338,8 +342,11 @@ class Campaigns(aid.Plugin):
 
     async def _campaign_run(self, config: CampaignConfig) -> None:
         client = self.client
-        if config.name not in {info.name for info in await client.sessions()}:
+        root = next((info for info in await client.sessions() if info.name == config.name), None)
+        if root is None:
             await client.create(config.name, root_spec(config))
+        elif root.tags.get("campaign") != config.name:
+            raise AidError("exists", f"a session {config.name!r} exists that this campaign did not make")
         names = await _repositories(config)
         await self.store.add_repos(config.name, list(zip(names, session_names(config.name, names), strict=True)))
         limiter = anyio.CapacityLimiter(config.concurrency)
@@ -386,19 +393,26 @@ class Campaigns(aid.Plugin):
         store = self.store
         await _idle(session)
         start = unit.start_seq
+        if start is not None and await _newest_seq(session) < start:
+            # The session was deleted and made again: the seq belongs to a history that is gone.
+            start = None
         if start is None:
             start = await _newest_seq(session)
             await store.unit_started(unit, start)
         attempts, error = unit.attempts, unit.error
         missing = uncovered(path, unit.files, await _calls_since(session, start))
         while missing and attempts < config.attempts:
-            attempts += 1
             try:
                 await session.run(unit_prompt(brief, [f for f in unit.files if f.path in missing]))
                 error = None
             except AidError as failure:
+                if failure.code == BUSY:
+                    # A turn the unit never asked for, such as a supervisor's message waking the session.
+                    await _idle(session)
+                    continue
                 error = f"{failure.code}: {failure.message}"
                 log.warning("unit_turn_failed", session=session.name, unit=unit.idx, error=error)
+            attempts += 1
             missing = uncovered(path, unit.files, await _calls_since(session, start))
             await store.unit_attempted(unit, attempts, missing, error)
             if missing and error is not None:

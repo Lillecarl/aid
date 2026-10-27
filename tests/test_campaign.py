@@ -17,7 +17,7 @@ from aid.protocol import CallPlugin, GetSpec, QueryResult, ToolCall
 from aid.spec import AgentSpecAdapter, NativeSpec
 from plugins.campaign import CampaignConfig, session_names
 from plugins.campaign.store import CAMPAIGN_FILE
-from tests.conftest import TESTS
+from tests.conftest import TESTS, py_spec
 from tests.models import HOST
 from tests.test_campaign_units import git_repo
 
@@ -126,9 +126,10 @@ async def status(client: aid.Client, name: str) -> dict[str, JsonValue]:
 
 
 async def settled(client: aid.Client, name: str) -> list[dict[str, JsonValue]]:
-    """The campaign's repositories once it runs no more: polled, as the plugin publishes no event."""
+    """The campaign's repositories once it runs no more: polled, as the plugin publishes no event. The stored state
+    leaves `running` only after every repository's rows are written."""
     campaign = await status(client, name)
-    while campaign["running"]:
+    while campaign["state"] == "running":
         await anyio.sleep(0.1)
         campaign = await status(client, name)
     repos = campaign["repos"]
@@ -268,6 +269,46 @@ async def test_the_root_session_supervises_each_repository(
     assert infos["audit.alpha"].supervisor == "audit"
     assert isinstance(boss, NativeSpec) and boss.agent == "supervisor" and boss.private is not None
     assert boss.tools is not None and not {"man_page", "tldr_page"} & set(boss.tools)
+
+
+async def test_a_recreated_session_is_audited_afresh(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    root = tmp_path / "tree"
+    await repos(root)
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            await client.call_plugin("campaign", "start", config=config(tmp_path, root, repos=["alpha"]))
+            await settled(client, "audit")
+            await client.session("audit.alpha").delete()
+        db = apsw.Connection(str(paths.plugin_dir("campaign") / CAMPAIGN_FILE))
+        with db:
+            db.execute("UPDATE units SET state = 'running'")
+            db.execute("UPDATE repos SET state = 'briefed'")
+            db.execute("UPDATE campaigns SET state = 'running'")
+        db.close()
+        async with serving(paths, launcher) as client:
+            [alpha] = await settled(client, "audit")
+            reads = await read_paths(client, "audit.alpha")
+    assert alpha["units"] == {"done": 2}
+    assert sorted(reads) == ["a.py", "b.py", "c.py"]
+
+
+async def test_a_campaign_never_adopts_a_session_it_did_not_make(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    root = tmp_path / "tree"
+    await repos(root)
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            await client.create("audit", py_spec(tmp_path, "agents:echo"))
+            await client.call_plugin("campaign", "start", config=config(tmp_path, root))
+            await settled(client, "audit")
+            campaign = await status(client, "audit")
+    assert campaign["state"] == "paused"
+    assert "did not make" in str(campaign["error"])
 
 
 async def test_only_the_operator_runs_campaigns(

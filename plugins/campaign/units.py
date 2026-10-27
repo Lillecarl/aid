@@ -59,6 +59,13 @@ async def tracked(repo: Path) -> list[str]:
     return [name for name in result.stdout.decode().split("\0") if name]
 
 
+def _utf8(content: bytes) -> str | None:
+    try:
+        return content.decode()
+    except UnicodeDecodeError:
+        return None
+
+
 def examine(repo: Path, names: Iterable[str], limits: Limits) -> tuple[list[FileInfo], list[Skipped]]:
     """The files worth a model's reading, and why each other one is left out. Blocking: run it in a thread."""
     files: list[FileInfo] = []
@@ -77,8 +84,12 @@ def examine(repo: Path, names: Iterable[str], limits: Limits) -> tuple[list[File
             skipped.append(Skipped(path=name, reason=f"{size} bytes"))
         elif b"\0" in (content := path.read_bytes())[:SNIFF_BYTES]:
             skipped.append(Skipped(path=name, reason="binary"))
+        elif (text := _utf8(content)) is None:
+            # `read` decodes strictly and calls anything else binary: such a file could never be covered.
+            skipped.append(Skipped(path=name, reason="not UTF-8"))
         else:
-            files.append(FileInfo(path=name, lines=len(content.decode(errors="replace").splitlines()), size=size))
+            # As `read` numbers them: `str.splitlines`, form feeds and lone carriage returns included.
+            files.append(FileInfo(path=name, lines=len(text.splitlines()), size=size))
     return files, skipped
 
 

@@ -50,18 +50,25 @@ def test_examine_keeps_text_files_within_limits(tmp_path: Path) -> None:
         "blob.bin": b"\0\1\2",
         "vendor/lib.js": b"y\n",
         "empty": b"",
+        "latin.txt": "caf\u00e9\n".encode("latin-1"),
+        "paged.c": b"a\n\x0cb\n",
     }
     for name, content in files.items():
         (tmp_path / name).write_bytes(content)
     (tmp_path / "link.py").symlink_to(tmp_path / "a.py")
     limits = Limits(max_file_bytes=100, exclude=["vendor/**"])
     kept, skipped = examine(tmp_path, [*files, "link.py", "gone.py"], limits)
-    assert kept == [FileInfo(path="a.py", lines=2, size=8), FileInfo(path="empty", lines=0, size=0)]
+    assert kept == [
+        FileInfo(path="a.py", lines=2, size=8),
+        FileInfo(path="empty", lines=0, size=0),
+        FileInfo(path="paged.c", lines=3, size=5),
+    ]
     assert {s.path: s.reason for s in skipped} == {
         "big.txt": "200 bytes",
         "blob.bin": "binary",
         "vendor/lib.js": "excluded",
         "link.py": "not a file",
+        "latin.txt": "not UTF-8",
         "gone.py": "not a file",
     }
 
