@@ -8,7 +8,7 @@ import json
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
 
 import anthropic
 import anyio
@@ -109,6 +109,27 @@ class Transport(Model, Protocol):
     """A model aid built from a name: it owns its clients, and whoever resolved it closes them."""
 
     async def aclose(self) -> None: ...
+
+
+@runtime_checkable
+class Hosted(Protocol):
+    """A model that says where its requests go: what a private session (`NativeSpec.private`) needs to run on it."""
+
+    def host(self, settings: Mapping[str, JsonValue]) -> str:
+        """The host name of the base URL this model's client uses with `settings`."""
+        ...
+
+
+def check_host(model: object, settings: Mapping[str, JsonValue], hosts: Sequence[str]) -> None:
+    """Refuse a model whose requests go to a host not in `hosts`, or that cannot say where they go."""
+    if not isinstance(model, Hosted):
+        raise AidError("private_host", f"{model_label(model)} cannot say which host it sends to")
+    if (host := model.host(settings)) not in hosts:
+        raise AidError("private_host", f"{model_label(model)} sends to {host!r}, which is not one of {list(hosts)}")
+
+
+def model_label(model: object) -> str:
+    return str(getattr(model, "model_name", type(model).__name__))
 
 
 class ReasoningAssistantParam(ChatCompletionAssistantMessageParam, total=False):
@@ -323,6 +344,9 @@ class OpenAIChatModel:
             )
             self._clients[key] = client
         return client
+
+    def host(self, settings: Mapping[str, JsonValue]) -> str:
+        return self._client(settings).base_url.host
 
     async def aclose(self) -> None:
         clients, self._clients = list(self._clients.values()), {}
@@ -544,6 +568,9 @@ class AnthropicModel:
             self._clients[key] = client
         return client
 
+    def host(self, settings: Mapping[str, JsonValue]) -> str:
+        return self._client(settings).base_url.host
+
     async def aclose(self) -> None:
         clients, self._clients = list(self._clients.values()), {}
         for client in clients:
@@ -754,6 +781,11 @@ class GoogleModel:
             pair = (genai.Client(vertexai=False, api_key=key.api_key, http_options=options), http)
             self._clients[key] = pair
         return pair[0]
+
+    def host(self, settings: Mapping[str, JsonValue]) -> str:
+        # google-genai keeps the URL it sends to only here: aid's own setting is None for its default.
+        base_url = self._client(settings)._api_client._http_options.base_url  # pyright: ignore[reportPrivateUsage] -- no public accessor
+        return httpx.URL(base_url or "").host
 
     async def aclose(self) -> None:
         clients, self._clients = list(self._clients.values()), {}

@@ -49,6 +49,7 @@ from aid.model import (
     RequestUsage,
     Transport,
     accumulate,
+    check_host,
     model_for,
     split_name,
 )
@@ -905,6 +906,9 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
     )
     backend: NativeBackend | None = None
     try:
+        if spec.private is not None:
+            # Before the first request, on the settings every request and compaction use.
+            check_host(transport or agent.model, agent.model_settings, spec.private.hosts)
         backend = NativeBackend(
             agent,
             history_file,
@@ -930,3 +934,5 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             finally:
                 if backend is not None:
                     await backend.aclose()
+                elif transport is not None:
+                    await transport.aclose()

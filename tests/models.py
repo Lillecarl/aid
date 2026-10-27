@@ -23,7 +23,9 @@ from aid.messaging import ARRIVED
 from aid.model import ModelInfo, RequestUsage, StreamDelta, accumulate
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable
+    from collections.abc import AsyncGenerator, Callable, Mapping
+
+    from pydantic import JsonValue
 
 AgentInfo = ModelInfo
 
@@ -45,8 +47,15 @@ type DeltaToolCalls = dict[int, DeltaToolCall]
 type DeltaThinkingCalls = dict[int, DeltaThinkingPart]
 
 
+HOST = "model.test"
+"""Where the test models say their requests go: a private session's spec lists it to run on them."""
+
+
 class FunctionModel:
     model_name = "function:test"
+
+    def host(self, settings: Mapping[str, JsonValue]) -> str:
+        return HOST
 
     def __init__(
         self, function: Callable[..., Any] | None = None, *, stream_function: Callable[..., Any] | None = None
@@ -116,6 +125,9 @@ def example(schema: dict[str, Any]) -> Any:
 class TestModel:
     __test__ = False
     model_name = "test"
+
+    def host(self, settings: Mapping[str, JsonValue]) -> str:
+        return HOST
 
     def __init__(
         self,

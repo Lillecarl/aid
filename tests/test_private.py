@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import anyio
@@ -10,14 +11,18 @@ from pydantic import ValidationError
 import aid
 from aid import events
 from aid.client import register_plugin
+from aid.model import AnthropicModel, GoogleModel, OpenAIChatModel, check_host
 from aid.plugins import Grant
 from aid.protocol import AidError, CallPlugin, GetHistory, SendMessage, SessionInfosAdapter
 from aid.spec import AcpSpec, NativeSpec, PermissionMode, Private
 from tests.conftest import py_spec
+from tests.models import HOST
 from tests.test_agent_control import RecordingLauncher, agent_client, server
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from pydantic import JsonValue
 
     from aid.paths import Paths
 
@@ -26,7 +31,7 @@ pytestmark = pytest.mark.anyio
 __all__ = ["server"]
 
 TIMEOUT = 30
-HOSTS = Private(hosts=["vllm.example"])
+HOSTS = Private(hosts=[HOST])
 
 
 def private_spec(tmp_path: Path, target: str = "agents:echo", **fields: object) -> NativeSpec:
@@ -40,6 +45,41 @@ def test_private_is_native_only_and_names_bare_hosts() -> None:
     for hosts in ([], ["https://vllm.example"], ["vllm.example:8000"], ["VLLM.example"]):
         with pytest.raises(ValidationError):
             Private(hosts=hosts)
+
+
+async def test_a_transport_names_the_host_its_client_sends_to(monkeypatch: pytest.MonkeyPatch) -> None:
+    for variable in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "VLLM_API_KEY", "OPENAI_API_KEY"):
+        monkeypatch.setenv(variable, "fake")
+    vllm: dict[str, JsonValue] = {"api_base": "https://vllm.example/v1"}
+    cases: list[tuple[OpenAIChatModel | AnthropicModel | GoogleModel, dict[str, JsonValue], str]] = [
+        (OpenAIChatModel("vllm/glm"), vllm, "vllm.example"),
+        (OpenAIChatModel("vllm/glm"), {}, "localhost"),
+        (OpenAIChatModel("openai/gpt-x"), {}, "api.openai.com"),
+        (AnthropicModel("anthropic/claude-haiku-5-5"), {}, "api.anthropic.com"),
+        (AnthropicModel("anthropic/claude-haiku-5-5"), vllm, "vllm.example"),
+        (GoogleModel("google/gemini-3.1-flash-lite"), {}, "generativelanguage.googleapis.com"),
+    ]
+    try:
+        assert [model.host(settings) for model, settings, _ in cases] == [host for _, _, host in cases]
+        check_host(cases[0][0], vllm, ["vllm.example"])
+        with pytest.raises(AidError, match="'localhost', which is not one of"):
+            check_host(cases[1][0], {}, ["vllm.example"])
+        with pytest.raises(AidError, match="cannot say which host"):
+            check_host(object(), {}, ["vllm.example"])
+    finally:
+        for model, _, _ in cases:
+            await model.aclose()
+
+
+async def test_a_private_session_on_an_unlisted_host_never_starts(
+    server: tuple[Paths, RecordingLauncher], tmp_path: Path
+) -> None:
+    paths, _ = server
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(paths) as control:
+            elsewhere = private_spec(tmp_path, private={"hosts": ["vllm.example"]})
+            with pytest.raises(AidError, match=re.escape(f"sends to {HOST!r}")):
+                await control.create("elsewhere", elsewhere)
 
 
 async def test_privacy_holds_across_parents_and_supervisors(
