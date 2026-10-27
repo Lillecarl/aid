@@ -92,7 +92,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `permissions`, `manage`, `supervise`, `private`; `NEEDS` maps op → grant, unlisted ops no plugin may send). Sockets
   `plugins.sock` (ROUTER), `plugin-events.sock` and `plugin-private-events.sock` (PUB), all CURVE; `_plugin_loop`
   checks each request against the grants as they are now → `forbidden`. The daemon stamps what a plugin cannot
-  claim: a message's sender is `plugin:<name>`, `AnswerPermission.plugin` is the connection's (None on control) → `PermissionDecision.by=plugin` + name.
+  claim: a message's sender is `plugin:<name>`, `AnswerPermission.plugin` is the connection's (None on control) →
+  `PermissionDecision.by=plugin` + name.
   Calls: a plugin overriding `Plugin.call(caller, method, args)` serves them (`plugin_host.run` → `serve_calls`,
   `ServeCalls` renewed every `SERVE_RENEW`, no grant needed); `CallPlugin` from a session tool or control gets
   `caller` stamped (agent connection → its session; control → as sent, None = operator), goes out as an
@@ -311,7 +312,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   remove's `plan`, end, allowed, decided_by, said) and its holders (`ruling_steps`: forwarded with note, silent,
   decided, gone); a failed write is logged, never fatal. `query` (`aid.sql.ask`): one read-only statement over
   `rulings` and, with a session, its `removals.db`; a supervisor names only its own sessions and must supervise one,
-  the operator (`aid supervision query`, JSON) any.
+  and reads `rulings`/`ruling_steps` as temp tables of its own sessions' rows, copied before the question with the
+  file detached (`aid.sql.Excerpt`; not views: SQLite flattens a view and names it as reader of a joined raw table,
+  so an authorizer leaks); the operator (`aid supervision query`, JSON) any, unscoped.
   Bundled agent `supervisor` (`agent.py`, `deepseek/deepseek-flash`): supervisor tools plus `reference.py`'s
   read-only `man_page` (`man -P cat`, fixed argv, command-shaped names only) and `tldr_page`
   (`AID_TLDR_PAGES`, `nix/tldr-pages.nix`, pinned tldr-pages main); no shell, files or editor by design (User).

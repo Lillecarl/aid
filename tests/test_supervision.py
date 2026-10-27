@@ -386,6 +386,40 @@ async def test_a_supervisor_set_later_answers_requests(daemon: Paths, tmp_path: 
     assert 'The supervisor picked "postgres".' in str(result.output)
 
 
+async def test_a_supervisor_queries_only_its_own_sessions_rulings(daemon: Paths, tmp_path: Path) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            for boss, worker in (("boss", "coder"), ("rival", "other")):
+                await client.create(boss, py_spec(tmp_path, "agents:echo"))
+                await client.create(worker, py_spec(tmp_path, "agents:echo").model_copy(update={"supervisor": boss}))
+            db = apsw.Connection(str(daemon.plugin_dir("supervision") / RULINGS_FILE))
+            with db:
+                db.execute(
+                    "INSERT INTO rulings (request_id, session, turn, seq, supervisor, mode, title, input, started)"
+                    " VALUES ('a', 'coder', 't', 1, 'boss', 'supervisor', 'mine', '{}', 0),"
+                    " ('b', 'other', 't', 1, 'rival', 'supervisor', 'theirs', '{}', 0)"
+                )
+                db.execute(
+                    "INSERT INTO ruling_steps (request_id, step, holder, entered)"
+                    " VALUES ('a', 0, 'supervisor', 0), ('b', 0, 'supervisor', 0)"
+                )
+            db.close()
+            mine = "SELECT r.title, s.request_id FROM rulings r JOIN ruling_steps s USING (request_id)"
+            while True:
+                try:
+                    answer = await sup(client, "boss", "query", sql=mine)
+                    break
+                except aid.AidError as error:
+                    if error.code != "not_supervising":
+                        raise
+                    await anyio.sleep(0.05)
+            assert QueryResult.model_validate(answer).rows == [["mine", "a"]]
+            with pytest.raises(aid.AidError, match="no such table"):
+                await sup(client, "boss", "query", sql="SELECT title FROM raw.rulings")
+            everything = QueryResult.model_validate(await client.call_plugin("supervision", "query", sql=mine))
+            assert sorted(everything.rows) == [["mine", "a"], ["theirs", "b"]]
+
+
 async def test_supervision_ops_refuse_strangers(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:

@@ -13,6 +13,7 @@ Bundled and on by default (`autostart`): the daemon keeps only the links and the
 from __future__ import annotations
 
 import contextlib
+import json
 import time
 import uuid
 from collections import deque
@@ -54,7 +55,7 @@ from aid.protocol import (
 from aid.readonly import reads
 from aid.removals import PLANS_FILE
 from aid.spec import AcpSpec, AgentSpecAdapter, ClaudeSdkSpec, NativeSpec, PermissionMode
-from aid.sql import ask
+from aid.sql import Excerpt, ask
 
 from .agent import Supervisor as Supervisor
 from .classifier import Classifier as Classifier
@@ -775,10 +776,25 @@ class Supervision(aid.Plugin):
 
     async def _query(self, caller: str | None, session: str | None, sql: str) -> QueryResult:
         """Read-only SQL over the rulings, and with `session` over its removal plans. A supervisor names only a
-        session it supervises, and must supervise one to ask at all; the operator (None) names any."""
+        session it supervises, must supervise one to ask at all, and sees the rulings of its own sessions alone;
+        the operator (None) names any and sees all."""
         if not sql.strip():
             raise AidError("empty_query", "a query needs SQL")
-        attach = {"supervision": default_paths().plugin_dir(self.plugin_name()) / RULINGS_FILE}
+        rulings = default_paths().plugin_dir(self.plugin_name()) / RULINGS_FILE
+        attach: dict[str, Path] = {}
+        excerpts: list[Excerpt] = []
+        if caller is None:
+            attach["supervision"] = rulings
+        else:
+            # Rulings carry tool inputs; one supervisor's would leak another's sessions, private ones included.
+            mine = json.dumps([w.name for w in self._watched.values() if w.spec.supervisor == caller])
+            ours = "SELECT value FROM json_each(:mine)"
+            tables = {
+                "rulings": f"SELECT * FROM raw.rulings WHERE session IN ({ours})",
+                "ruling_steps": "SELECT s.* FROM raw.ruling_steps s JOIN raw.rulings r USING (request_id)"
+                f" WHERE r.session IN ({ours})",
+            }
+            excerpts.append(Excerpt(rulings, "raw", tables, {"mine": mine}))
         if session is not None:
             if caller is None:
                 await self.client.call(GetSpec(session=session))
@@ -787,7 +803,7 @@ class Supervision(aid.Plugin):
             attach["session"] = default_paths().session_dir(session) / PLANS_FILE
         elif caller is not None and not any(w.spec.supervisor == caller for w in self._watched.values()):
             raise AidError("not_supervising", f"{caller!r} supervises no session")
-        return await ask(attach, sql)
+        return await ask(attach, sql, excerpts=excerpts)
 
     async def _search(self, name: str, query: str, limit: int) -> SearchResults:
         """Entries whose rendered line holds `query`, newest first, over the whole history."""

@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from aid.protocol import AidError
-from aid.sql import CELL_CHARS, Database, ask
+from aid.sql import CELL_CHARS, Database, Excerpt, ask
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -65,6 +65,24 @@ async def test_a_question_only_reads(tmp_path: Path, sql: str) -> None:
     with pytest.raises(AidError):
         await ask({"one": path}, sql)
     assert (await ask({"one": path}, "SELECT count(*) FROM things")).rows == [[4]]
+
+
+async def test_an_excerpt_is_all_a_question_reads_of_its_source(tmp_path: Path) -> None:
+    path = await things(tmp_path)
+    small = Excerpt(path, "raw", {"small": "SELECT name, size FROM raw.things WHERE size <= :most"}, {"most": "2"})
+    seen = await ask({}, "SELECT name FROM small ORDER BY size", excerpts=[small])
+    assert seen.rows == [["a"], ["b"]]
+    for sql in (
+        "SELECT name FROM raw.things",
+        "SELECT name FROM things",
+        "SELECT sql FROM raw.sqlite_master",
+        "SELECT s.name FROM small s JOIN raw.things t USING (name)",
+        "ATTACH 'things.db' AS raw",
+        "INSERT INTO small VALUES ('z', 1)",
+    ):
+        with pytest.raises(AidError) as refused:
+            await ask({}, sql, excerpts=[small])
+        assert refused.value.code == "query_failed"
 
 
 async def test_a_long_question_is_interrupted(tmp_path: Path) -> None:

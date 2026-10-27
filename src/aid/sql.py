@@ -8,6 +8,7 @@ runs under an authorizer that admits reading alone: `mode=ro` stops writes to a 
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
 import anyio
@@ -18,7 +19,7 @@ import apsw.ext
 from aid.protocol import AidError, QueryResult
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping, Sequence
     from pathlib import Path
     from typing import Concatenate
 
@@ -76,6 +77,21 @@ def _authorize(op: int, _p1: str | None, _p2: str | None, _db: str | None, _view
     return apsw.SQLITE_OK if op in READING else apsw.SQLITE_DENY
 
 
+@dataclass(frozen=True)
+class Excerpt:
+    """Part of a database a question may read: `tables` (name → SELECT over `source` attached as `schema`, with
+    `bindings`) become temporary tables, and `source` is detached before the question runs.
+
+    Not views over an attached file: SQLite flattens a view into the query that reads it, and then names the view
+    as the reader of the file's tables there too, so an authorizer cannot tell a join with the file from the view
+    (measured on apsw's SQLite, 2026-10-27)."""
+
+    source: Path
+    schema: str
+    tables: Mapping[str, str]
+    bindings: Mapping[str, str] = field(default_factory=dict[str, str])
+
+
 def _value(value: apsw.SQLiteValue) -> JsonValue:
     match value:
         case str() if len(value) > CELL_CHARS:
@@ -86,9 +102,22 @@ def _value(value: apsw.SQLiteValue) -> JsonValue:
             return f"<{len(memoryview(value))} bytes>"
 
 
-def _ask(attach: dict[str, Path], sql: str, limit: int, seconds: float) -> QueryResult:
+def _excerpt(db: apsw.Connection, excerpt: Excerpt) -> None:
+    if not excerpt.source.exists():
+        return
+    db.execute("ATTACH ? AS ?", (f"{excerpt.source.as_uri()}?mode=ro", excerpt.schema))
+    try:
+        for name, select in excerpt.tables.items():
+            db.execute(f"CREATE TEMP TABLE {name} AS {select}", excerpt.bindings)
+    finally:
+        db.execute("DETACH ?", (excerpt.schema,))
+
+
+def _ask(attach: Mapping[str, Path], sql: str, limit: int, seconds: float, excerpts: Sequence[Excerpt]) -> QueryResult:
     db = apsw.Connection(":memory:", flags=apsw.SQLITE_OPEN_READWRITE | apsw.SQLITE_OPEN_URI)
     try:
+        for excerpt in excerpts:
+            _excerpt(db, excerpt)
         for name, path in attach.items():
             if path.exists():
                 db.execute("ATTACH ? AS ?", (f"{path.as_uri()}?mode=ro", name))
@@ -112,7 +141,14 @@ def _ask(attach: dict[str, Path], sql: str, limit: int, seconds: float) -> Query
         db.close()
 
 
-async def ask(attach: dict[str, Path], sql: str, *, limit: int = ROWS, seconds: float = SECONDS) -> QueryResult:
+async def ask(
+    attach: Mapping[str, Path],
+    sql: str,
+    *,
+    limit: int = ROWS,
+    seconds: float = SECONDS,
+    excerpts: Sequence[Excerpt] = (),
+) -> QueryResult:
     """Answer one read-only statement over the databases in `attach` (schema name → file; a missing file is
-    left out), up to `limit` rows, interrupted after `seconds`."""
-    return await anyio.to_thread.run_sync(_ask, attach, sql, limit, seconds)
+    left out) and the `excerpts`, up to `limit` rows, interrupted after `seconds`."""
+    return await anyio.to_thread.run_sync(_ask, attach, sql, limit, seconds, excerpts)
