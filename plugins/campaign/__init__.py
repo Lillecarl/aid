@@ -24,7 +24,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 import aid
 from aid.history import MAX_PAGE
 from aid.paths import default_paths
-from aid.protocol import AidError, ToolCall
+from aid.protocol import AidError, HistoryEntry
 from aid.spec import NativeSpec, PermissionMode, Private
 
 from .store import (
@@ -38,7 +38,7 @@ from .store import (
     Unit,
     UnitState,
 )
-from .units import BRIEF_PROMPT, Limits, chunk, examine, tracked, uncovered, unit_prompt
+from .units import BRIEF_PROMPT, END_TURN, Limits, chunk, credited, examine, tracked, uncovered, unit_prompt
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup
@@ -50,7 +50,6 @@ log = structlog.get_logger(__name__)
 PLUGIN: Final = "campaign"
 BUSY: Final = "busy"
 """The daemon's refusal of a prompt to a session in a turn."""
-END_TURN: Final = "end_turn"
 NAME_CHARS: Final = 24
 AUDITOR_TOOLS: Final = ("ls", "read", "outline", "search", "report_finding")
 SUPERVISOR_TOOLS: Final = (
@@ -173,15 +172,19 @@ async def _repositories(config: CampaignConfig) -> list[str]:
     return sorted([d.name async for d in root.iterdir() if await (d / ".git").exists()])
 
 
-async def _calls_since(session: aid.Session, seq: int) -> list[tuple[str, ToolCall]]:
-    """Every tool call event recorded after `seq`, with its turn."""
-    calls: list[tuple[str, ToolCall]] = []
+async def _since(session: aid.Session, seq: int) -> list[HistoryEntry]:
+    entries: list[HistoryEntry] = []
     while True:
         page = await session.history(after=seq, limit=MAX_PAGE)
-        calls.extend((e.turn, e.item) for e in page.entries if isinstance(e.item, ToolCall))
+        entries.extend(page.entries)
         if not page.entries or not page.has_newer:
-            return calls
+            return entries
         seq = page.entries[-1].seq
+
+
+def _read(path: Path, unit: Unit, entries: list[HistoryEntry]) -> set[str]:
+    """The unit's files read in full by turns in `entries` that ended."""
+    return {f.path for f in unit.files} - set(uncovered(path, unit.files, credited(entries)))
 
 
 async def _newest_seq(session: aid.Session) -> int:
@@ -189,7 +192,7 @@ async def _newest_seq(session: aid.Session) -> int:
     return page.entries[-1].seq if page.entries else -1
 
 
-async def _answered(session: aid.Session, prompt: str) -> RunResult[JsonValue]:
+async def _ended(session: aid.Session, prompt: str) -> RunResult[JsonValue]:
     """A turn that ended on its own: one cut off (`max_tokens`, measured on vLLM's GLM spending a 4000-token budget
     on reasoning) has not answered, and counts as failed."""
     result = await session.run(prompt)
@@ -403,7 +406,7 @@ class Campaigns(aid.Plugin):
         while True:
             await _idle(session)
             try:
-                result = await _answered(session, BRIEF_PROMPT)
+                result = await _ended(session, BRIEF_PROMPT)
                 return result.output if isinstance(result.output, str) else str(result.output)
             except AidError as failure:
                 if failure.code == BUSY:
@@ -415,40 +418,33 @@ class Campaigns(aid.Plugin):
                 await anyio.sleep(config.backoff)
 
     async def _unit(self, config: CampaignConfig, session: aid.Session, path: Path, brief: str, unit: Unit) -> None:
+        """Attempts until every file is read in turns that ended (`credited`), or the attempts run out. Each attempt
+        records where it begins; a resumed unit credits what its cut attempt recorded, so a failed, cut-off or
+        interrupted turn, or a session made again, needs no case of its own."""
         store = self.store
-        await _idle(session)
-        start = unit.start_seq
-        if start is not None and await _newest_seq(session) < start:
-            # The session was deleted and made again: the seq belongs to a history that is gone.
-            start = None
-        if start is None:
-            start = await _newest_seq(session)
-            await store.unit_started(unit, start)
+        covered = set(unit.covered)
+        if unit.start_seq is not None:
+            covered |= _read(path, unit, await _since(session, unit.start_seq))
         attempts, error = unit.attempts, unit.error
-        missing = uncovered(path, unit.files, await _calls_since(session, start))
-        # Read is not audited: a turn that failed after its reads never reported, and the next fresh turn remembers
-        # nothing of them. So a failed turn's reads count for nothing, and only a turn that ends ends the unit.
-        while (missing or error is not None) and attempts < config.attempts:
-            if error is not None:
-                await _idle(session)
-                await anyio.sleep(config.backoff)
-                start = await _newest_seq(session)
-                await store.unit_started(unit, start)
-                missing = [file.path for file in unit.files]
+        missing = [f.path for f in unit.files if f.path not in covered]
+        while missing and attempts < config.attempts:
+            await _idle(session)
+            start = await _newest_seq(session)
+            await store.attempt_started(unit, start)
             try:
-                await _answered(session, unit_prompt(brief, [f for f in unit.files if f.path in missing]))
-                error = None
+                result = await session.run(unit_prompt(brief, [f for f in unit.files if f.path in missing]))
+                error = None if result.stop_reason == END_TURN else f"stopped at {result.stop_reason}"
             except AidError as failure:
                 if failure.code == BUSY:
-                    # A turn the unit never asked for, such as a supervisor's message waking the session.
-                    await _idle(session)
+                    # A turn the unit never asked for, such as a supervisor's message, woke the session first.
                     continue
                 error = f"{failure.code}: {failure.message}"
                 log.warning("unit_turn_failed", session=session.name, unit=unit.idx, error=error)
             attempts += 1
-            missing = uncovered(path, unit.files, await _calls_since(session, start))
-            await store.unit_attempted(unit, attempts, missing, error)
-        if error is not None:
-            await store.unit_ended(unit, UnitState.FAILED)
-        else:
-            await store.unit_ended(unit, UnitState.INCOMPLETE if missing else UnitState.DONE)
+            covered |= _read(path, unit, await _since(session, start))
+            missing = [f.path for f in unit.files if f.path not in covered]
+            await store.attempt_ended(unit, attempts, sorted(covered), missing, error)
+            if missing and error is not None:
+                await anyio.sleep(config.backoff)
+        unread = UnitState.FAILED if error is not None else UnitState.INCOMPLETE
+        await store.unit_ended(unit, unread if missing else UnitState.DONE)

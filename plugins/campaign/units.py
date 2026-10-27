@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Final
 import anyio
 from pydantic import BaseModel, ConfigDict, Field
 
-from aid.protocol import AidError, ToolCall
+from aid.protocol import AidError, HistoryEntry, Output, ToolCall
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -21,6 +21,7 @@ READ_LINES: Final = 2000
 """`aid.coding.READ_LIMIT`, the lines a `read` without `limit` returns: not imported, so the daemon need not load
 aid.coding."""
 SNIFF_BYTES: Final = 8192
+END_TURN: Final = "end_turn"
 
 
 class FileInfo(BaseModel):
@@ -155,6 +156,15 @@ def _covers(ranges: Sequence[tuple[int, int]], lines: int) -> bool:
             return False
         reached = max(reached, past)
     return reached > lines
+
+
+def credited(entries: Iterable[HistoryEntry]) -> list[tuple[str, ToolCall]]:
+    """The tool call events of turns that ended on their own (`Output` with `end_turn`). A turn that failed, was cut
+    off at its output limit or never ended (a daemon stopped mid-answer) never answered for what it read, and the
+    next fresh turn remembers none of it: its reads earn nothing."""
+    listed = list(entries)
+    ended = {e.turn for e in listed if isinstance(e.item, Output) and e.item.stop_reason == END_TURN}
+    return [(e.turn, e.item) for e in listed if isinstance(e.item, ToolCall) and e.turn in ended]
 
 
 def uncovered(repo: Path, files: Sequence[FileInfo], calls: Iterable[tuple[str, ToolCall]]) -> list[str]:

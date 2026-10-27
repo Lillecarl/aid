@@ -7,8 +7,8 @@ import anyio
 import pytest
 
 from aid.coding import READ_LIMIT
-from aid.protocol import AidError, ToolCall
-from plugins.campaign.units import READ_LINES, FileInfo, Limits, chunk, examine, tracked, uncovered
+from aid.protocol import AidError, HistoryEntry, ToolCall
+from plugins.campaign.units import READ_LINES, FileInfo, Limits, chunk, credited, examine, tracked, uncovered
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -106,6 +106,29 @@ def test_a_file_is_covered_only_when_completed_reads_return_every_line(tmp_path:
     assert uncovered(tmp_path, [long, short, empty], calls) == []
     outside = [call("8", tool="read", status="completed", input={"path": "../repo2/short.py"})]
     assert uncovered(tmp_path / "x", [short], outside) == ["src/short.py"]
+
+
+def test_only_turns_that_ended_earn_their_reads() -> None:
+    def entry(seq: int, turn: str, item: JsonValue) -> HistoryEntry:
+        return HistoryEntry.model_validate({"seq": seq, "at": 0, "turn": turn, "item": item})
+
+    read: JsonValue = {
+        "type": "tool_call",
+        "tool_call_id": "c",
+        "tool": "read",
+        "status": "completed",
+        "input": {"path": "x"},
+    }
+    entries = [
+        entry(0, "ended", read),
+        entry(1, "ended", {"type": "output", "output": "ok", "stop_reason": "end_turn"}),
+        entry(2, "cut", read),
+        entry(3, "cut", {"type": "output", "output": "", "stop_reason": "max_tokens"}),
+        entry(4, "failed", read),
+        entry(5, "failed", {"type": "error", "code": "agent_error", "message": "ReadError"}),
+        entry(6, "interrupted", read),
+    ]
+    assert [turn for turn, _ in credited(entries)] == ["ended"]
 
 
 def test_calls_numbered_afresh_each_turn_stay_apart(tmp_path: Path) -> None:

@@ -181,10 +181,11 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `fresh_turns`, `instruction_providers=[]` (nothing from the audited tree composes), parent root, supervisor root if
   `supervise`. `units.py` (pure): `git ls-files`, skip excluded/links/oversized/binary, chunk by file and byte caps;
   `uncovered`: a file is read when completed `read` calls' `[offset, offset+limit)` ranges cover every line, events
-  merged per (turn, tool_call_id) (models renumber calls each turn). Brief turn, then a turn per unit; unread files
-  prompted again (brief included: turns are fresh) until `attempts`; turn errors back off. `store.py`
-  (`campaign.db`): campaigns, repos, units with `start_seq`; a resumed `running` unit checks coverage since it before
-  prompting. Calls wait for `_ready` (stored campaigns launched).
+  merged per (turn, tool_call_id) (models renumber calls each turn); `credited`: only turns ending in `Output` with
+  `end_turn` earn their reads (failed, cut off at max_tokens or never ended earn nothing: one rule, no cases). Brief
+  turn, then a turn per unit; unread files prompted again (brief included: turns are fresh) until `attempts`; failed
+  turns back off; a busy refusal costs no attempt. `store.py` (`campaign.db`, migrations): units keep `covered` and
+  the running attempt's `start_seq`; a resume credits what that attempt recorded. Calls wait for `_ready`.
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API, native blocks,
   `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions) and `GoogleModel`

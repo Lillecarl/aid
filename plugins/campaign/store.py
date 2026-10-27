@@ -1,7 +1,7 @@
 """A campaign's state, in the plugin's own database: every step resumes from these rows alone.
 
-A unit records the history seq before its first prompt (`start_seq`): coverage is measured over everything the
-session recorded after it, so a restart checks what was read before prompting again.
+A unit records the history seq before each attempt (`start_seq`) and, after it, the files read in full (`covered`):
+a restart credits what the cut attempt recorded before prompting again.
 """
 
 from __future__ import annotations
@@ -26,7 +26,8 @@ if TYPE_CHECKING:
     import apsw
 
 CAMPAIGN_FILE: Final = "campaign.db"
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
+MIGRATIONS: Final = {1: "ALTER TABLE units ADD COLUMN covered TEXT"}
 SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS campaigns (
     name TEXT PRIMARY KEY,
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS units (
     state TEXT NOT NULL,
     attempts INTEGER NOT NULL DEFAULT 0,
     start_seq INTEGER,
+    covered TEXT,
     missing TEXT,
     error TEXT,
     started REAL,
@@ -120,6 +122,9 @@ class Unit(BaseModel):
     state: UnitState
     attempts: int
     start_seq: int | None
+    """Where the running attempt began in the session's history: a resumed unit credits what it recorded since."""
+    covered: list[str]
+    """Files earlier attempts read every line of, in turns that ended."""
     missing: list[str]
     error: str | None
 
@@ -140,7 +145,7 @@ def _repo(row: apsw.SQLiteValues) -> Repo:
 
 
 def _unit(row: apsw.SQLiteValues) -> Unit:
-    campaign, repo, idx, files, state, attempts, start_seq, missing, error = row
+    campaign, repo, idx, files, state, attempts, start_seq, covered, missing, error = row
     return Unit.model_validate(
         {
             "campaign": campaign,
@@ -150,6 +155,7 @@ def _unit(row: apsw.SQLiteValues) -> Unit:
             "state": state,
             "attempts": attempts,
             "start_seq": start_seq,
+            "covered": _PATHS.validate_json(covered) if isinstance(covered, str) else [],
             "missing": _PATHS.validate_json(missing) if isinstance(missing, str) else [],
             "error": error,
         }
@@ -208,7 +214,7 @@ class CampaignStore:
     @classmethod
     async def open(cls, path: Path) -> CampaignStore:
         await anyio.Path(path).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        return cls(await Database.open(path, SCHEMA, SCHEMA_VERSION))
+        return cls(await Database.open(path, SCHEMA, SCHEMA_VERSION, MIGRATIONS))
 
     async def aclose(self) -> None:
         await self._db.aclose()
@@ -265,14 +271,14 @@ class CampaignStore:
             lambda db: [
                 _unit(row)
                 for row in db.execute(
-                    "SELECT campaign, repo, idx, files, state, attempts, start_seq, missing, error FROM units"
+                    "SELECT campaign, repo, idx, files, state, attempts, start_seq, covered, missing, error FROM units"
                     " WHERE campaign = ? AND repo = ? ORDER BY idx",
                     (campaign, repo),
                 )
             ]
         )
 
-    async def unit_started(self, unit: Unit, start_seq: int) -> None:
+    async def attempt_started(self, unit: Unit, start_seq: int) -> None:
         await self._db.run(
             lambda db: db.execute(
                 "UPDATE units SET state = ?, start_seq = ?, started = ? WHERE campaign = ? AND repo = ? AND idx = ?",
@@ -280,11 +286,22 @@ class CampaignStore:
             )
         )
 
-    async def unit_attempted(self, unit: Unit, attempts: int, missing: Sequence[str], error: str | None) -> None:
+    async def attempt_ended(
+        self, unit: Unit, attempts: int, covered: Sequence[str], missing: Sequence[str], error: str | None
+    ) -> None:
         await self._db.run(
             lambda db: db.execute(
-                "UPDATE units SET attempts = ?, missing = ?, error = ? WHERE campaign = ? AND repo = ? AND idx = ?",
-                (attempts, json.dumps(list(missing)), error, unit.campaign, unit.repo, unit.idx),
+                "UPDATE units SET attempts = ?, start_seq = NULL, covered = ?, missing = ?, error = ?"
+                " WHERE campaign = ? AND repo = ? AND idx = ?",
+                (
+                    attempts,
+                    json.dumps(list(covered)),
+                    json.dumps(list(missing)),
+                    error,
+                    unit.campaign,
+                    unit.repo,
+                    unit.idx,
+                ),
             )
         )
 

@@ -305,7 +305,19 @@ async def _audit_flakily(messages: list[ModelMessage], info: AgentInfo) -> Async
         yield delta
 
 
+async def _audit_then_hang(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    """As the auditor, but the first time it would answer a unit it drops the `AID_HANG_GATE` file and hangs: a test
+    stops the daemon there, mid-answer. The file outlives the worker, so the next one answers."""
+    async for delta in _auditing_stream(messages, lazy=False):
+        gate = anyio.Path(os.environ["AID_HANG_GATE"])
+        if isinstance(delta, str) and ": read" in delta and not await gate.exists():
+            await gate.touch()
+            await anyio.sleep_forever()
+        yield delta
+
+
 auditor = Agent(FunctionModel(stream_function=_audit))
+hanging_auditor = Agent(FunctionModel(stream_function=_audit_then_hang))
 flaky_auditor = Agent(FunctionModel(stream_function=_audit_flakily))
 lazy_auditor = Agent(FunctionModel(stream_function=_audit_lazily))
 

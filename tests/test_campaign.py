@@ -44,6 +44,7 @@ MODELS = {
     "auditor": agents.auditor,
     "lazy": agents.lazy_auditor,
     "flaky": agents.flaky_auditor,
+    "hanging": agents.hanging_auditor,
     "echo": agents.echo,
 }
 
@@ -297,7 +298,7 @@ async def test_a_restart_resumes_without_reading_again(
             await client.call_plugin("campaign", "start", config=config(tmp_path, root, repos=["alpha"]))
             [alpha] = await settled(client, "audit")
         assert alpha["state"] == "done"
-        # As a daemon stopped mid-unit leaves it: the unit running, its reads already in the history.
+        # As a daemon stopped between a unit's answer and its row leaves it: running, reads and answer recorded.
         db = apsw.Connection(str(paths.plugin_dir("campaign") / CAMPAIGN_FILE))
         with db:
             db.execute("UPDATE units SET state = 'running' WHERE idx = 0")
@@ -330,6 +331,33 @@ async def test_the_root_session_supervises_each_repository(
     assert boss.tools is not None and not {"man_page", "tldr_page"} & set(boss.tools)
 
 
+async def test_a_unit_stopped_before_its_answer_is_audited_again(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    root = tmp_path / "tree"
+    await repos(root)
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            fields: dict[str, JsonValue] = {
+                "model": "scripted/hanging",
+                "repos": ["alpha"],
+                "limits": {"unit_files": 3},
+                "env": {ENV_PLUGINS_PATH: str(tmp_path / "worker-plugins"), "AID_HANG_GATE": str(tmp_path / "hung")},
+            }
+            config(tmp_path, root)  # The worker plugins directory, before its path goes into `fields`.
+            await client.call_plugin("campaign", "start", config=config(tmp_path, root, **fields))
+            # The daemon stops while the model hangs over its answer: the reads are recorded, the answer is not.
+            while not (tmp_path / "hung").exists():  # noqa: ASYNC110 -- the worker drops a file; no event crosses to here
+                await anyio.sleep(0.1)
+            assert sorted(await read_paths(client, "audit.alpha")) == ["a.py", "b.py", "c.py"]
+        async with serving(paths, launcher) as client:
+            [alpha] = await settled(client, "audit")
+            reads = await read_paths(client, "audit.alpha")
+    assert alpha["units"] == {"done": 1}
+    assert reads.count("a.py") == 2
+
+
 async def test_a_recreated_session_is_audited_afresh(
     paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -340,10 +368,12 @@ async def test_a_recreated_session_is_audited_afresh(
         async with serving(paths, launcher) as client:
             await client.call_plugin("campaign", "start", config=config(tmp_path, root, repos=["alpha"]))
             await settled(client, "audit")
+            # Its attempt cut short, as the stored rows say below, in a session then made again: the attempt's seq
+            # belongs to a history that is gone, and earns nothing.
             await client.session("audit.alpha").delete()
         db = apsw.Connection(str(paths.plugin_dir("campaign") / CAMPAIGN_FILE))
         with db:
-            db.execute("UPDATE units SET state = 'running'")
+            db.execute("UPDATE units SET state = 'running', covered = NULL")
             db.execute("UPDATE repos SET state = 'briefed'")
             db.execute("UPDATE campaigns SET state = 'running'")
         db.close()
