@@ -37,6 +37,8 @@ PLUGINS = Path(__file__).parent.parent / "plugins"
 SCRIPTED = """\
 import agents
 import aid
+from aid.messages import TextPart
+from aid.model import StreamDelta
 
 MODELS = {
     "auditor": agents.auditor,
@@ -46,8 +48,13 @@ MODELS = {
 }
 
 
+CUT = []
+
+
 class Scripted(aid.ModelProvider):
     async def transport(self, model: str) -> "_Model":
+        if model == "cutoff":
+            return _Cutoff(model, agents.auditor.model)
         return _Model(model, MODELS[model].model)
 
 
@@ -67,6 +74,18 @@ class _Model:
 
     async def aclose(self) -> None:
         pass
+
+
+# The auditor, its first unit answer lost to the output limit, as GLM spent max_tokens on reasoning: nothing grew,
+# so the engine stops at max_tokens instead of asking to continue.
+class _Cutoff(_Model):
+    async def stream(self, messages, info):
+        async for delta in self._model.stream(messages, info):
+            if isinstance(delta.part, TextPart) and ": read" in delta.part.content and not CUT:
+                CUT.append(1)
+                yield StreamDelta(truncated=True)
+                return
+            yield delta
 """
 
 
@@ -219,6 +238,22 @@ async def test_a_turn_that_fails_after_its_reads_is_audited_again(
     assert (alpha["state"], alpha["units"]) == ("done", {"done": 1})
     assert reads.count("a.py") == 2
     assert QueryResult.model_validate(findings).rows == [["a.py"], ["a.py"]]
+
+
+async def test_an_answer_cut_off_at_the_output_limit_is_audited_again(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    root = tmp_path / "tree"
+    await repos(root)
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            fields: dict[str, JsonValue] = {"model": "scripted/cutoff", "repos": ["alpha"], "limits": {"unit_files": 3}}
+            await client.call_plugin("campaign", "start", config=config(tmp_path, root, **fields))
+            [alpha] = await settled(client, "audit")
+            reads = await read_paths(client, "audit.alpha")
+    assert (alpha["state"], alpha["units"]) == ("done", {"done": 1})
+    assert reads.count("a.py") == 2
 
 
 async def test_attempts_run_out_on_a_file_never_read(

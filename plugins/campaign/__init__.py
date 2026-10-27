@@ -43,11 +43,14 @@ from .units import BRIEF_PROMPT, Limits, chunk, examine, tracked, uncovered, uni
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup
 
+    from aid.client import RunResult
+
 log = structlog.get_logger(__name__)
 
 PLUGIN: Final = "campaign"
 BUSY: Final = "busy"
 """The daemon's refusal of a prompt to a session in a turn."""
+END_TURN: Final = "end_turn"
 NAME_CHARS: Final = 24
 AUDITOR_TOOLS: Final = ("ls", "read", "outline", "search", "report_finding")
 SUPERVISOR_TOOLS: Final = (
@@ -184,6 +187,15 @@ async def _calls_since(session: aid.Session, seq: int) -> list[tuple[str, ToolCa
 async def _newest_seq(session: aid.Session) -> int:
     page = await session.history(limit=1)
     return page.entries[-1].seq if page.entries else -1
+
+
+async def _answered(session: aid.Session, prompt: str) -> RunResult[JsonValue]:
+    """A turn that ended on its own: one cut off (`max_tokens`, measured on vLLM's GLM spending a 4000-token budget
+    on reasoning) has not answered, and counts as failed."""
+    result = await session.run(prompt)
+    if result.stop_reason != END_TURN:
+        raise AidError("stopped", f"the turn stopped at {result.stop_reason}")
+    return result
 
 
 async def _idle(session: aid.Session) -> None:
@@ -391,8 +403,8 @@ class Campaigns(aid.Plugin):
         while True:
             await _idle(session)
             try:
-                answer = (await session.run(BRIEF_PROMPT)).output
-                return answer if isinstance(answer, str) else str(answer)
+                result = await _answered(session, BRIEF_PROMPT)
+                return result.output if isinstance(result.output, str) else str(result.output)
             except AidError as failure:
                 if failure.code == BUSY:
                     continue
@@ -424,7 +436,7 @@ class Campaigns(aid.Plugin):
                 await store.unit_started(unit, start)
                 missing = [file.path for file in unit.files]
             try:
-                await session.run(unit_prompt(brief, [f for f in unit.files if f.path in missing]))
+                await _answered(session, unit_prompt(brief, [f for f in unit.files if f.path in missing]))
                 error = None
             except AidError as failure:
                 if failure.code == BUSY:
