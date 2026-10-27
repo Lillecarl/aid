@@ -27,7 +27,7 @@ import anyio.to_thread
 import structlog
 
 from aid import usertee, worker
-from aid.control import ENV_AGENT_CONNECTION, AgentConnection
+from aid.control import ENV_AGENT_CONNECTION, ENV_MODEL_SLOTS, AgentConnection
 from aid.log import configure_logging
 from aid.paths import ENV_RUNTIME_DIR, ENV_SESSION, ENV_STATE_DIR, hook_socket
 from aid.spec import AgentSpecAdapter
@@ -66,6 +66,8 @@ class WorkerArgs:
     daemon_runtime_dir: str
     daemon_state_dir: str
     """The daemon's own paths, so code in the worker that calls `aid.connect()` finds this daemon."""
+    model_slots: str = "{}"
+    """The daemon's model slots as JSON, host → capacity (`aid.slots`): the worker knows them without asking."""
 
     def to_json(self) -> str:
         return json.dumps(dataclasses.asdict(self))
@@ -121,6 +123,7 @@ def process_main(args: WorkerArgs) -> None:
     os.environ[ENV_SESSION] = args.name
     os.environ[ENV_RUNTIME_DIR] = args.daemon_runtime_dir
     os.environ[ENV_STATE_DIR] = args.daemon_state_dir
+    os.environ[ENV_MODEL_SLOTS] = args.model_slots
     if (bin_dir := install_usertee(args.daemon_runtime_dir)) is not None:
         os.environ["PATH"] = os.pathsep.join([bin_dir, os.environ.get("PATH", "")])
     os.environ[ENV_AGENT_CONNECTION] = AgentConnection(

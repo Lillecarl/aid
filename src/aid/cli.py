@@ -122,6 +122,13 @@ def _parser() -> argparse.ArgumentParser:
         help="let sessions name their own worker command (runs as the daemon, with the session's worker "
         "credentials: only where session creators are trusted)",
     )
+    daemon_cmd.add_argument(
+        "--model-slots",
+        action="append",
+        metavar="HOST=N",
+        default=[],
+        help="at most N requests to model host HOST at once, across all sessions (a self-hosted server); repeatable",
+    )
     sub.add_parser("worker", help="run one worker; `aid daemon --worker-command` starts it and sends its arguments")
     sessions = sub.add_parser("list", help="list sessions")
     sessions.add_argument("--json", action="store_true", help="one session JSON object per line")
@@ -873,6 +880,16 @@ def _launcher(args: argparse.Namespace) -> Launcher:
     return CommandLauncher(shlex.split(args.worker_command), args.worker_endpoint, trust_pem=trust_pem)
 
 
+def _model_slots(given: list[str]) -> dict[str, int]:
+    slots: dict[str, int] = {}
+    for item in given:
+        host, _, count = item.partition("=")
+        if not host or not count.isdigit() or int(count) < 1:
+            raise SystemExit(f"aid daemon: --model-slots takes HOST=N with N at least 1, not {item!r}")
+        slots[host] = int(count)
+    return slots
+
+
 async def _serve(args: argparse.Namespace) -> None:
     launcher = _launcher(args)
     async with anyio.create_task_group() as tg:
@@ -883,6 +900,7 @@ async def _serve(args: argparse.Namespace) -> None:
                 launcher,
                 workers_listen=args.workers_listen,
                 allow_worker_command=args.allow_worker_command,
+                model_slots=_model_slots(args.model_slots),
             )
         )
         with anyio.open_signal_receiver(signal.SIGTERM, signal.SIGINT) as signals:

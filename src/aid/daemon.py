@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 import shlex
 import shutil
@@ -29,6 +30,7 @@ from aid.messaging import AID_SENDER, BACKGROUND_SENDER, wake_prompt
 from aid.paths import hook_socket
 from aid.plugins import PLUGIN_FILE, Grant, PluginSpec
 from aid.protocol import (
+    AcquireModelSlot,
     Activity,
     AddPlugin,
     AidError,
@@ -72,6 +74,7 @@ from aid.protocol import (
     Prompt,
     PublishSupervision,
     ReceiveMessages,
+    ReleaseModelSlot,
     RemovePlugin,
     RequestDirectory,
     SendMessage,
@@ -104,6 +107,7 @@ from aid.protocol import (
     request_id,
     to_json,
 )
+from aid.slots import ModelSlots
 from aid.spec import (
     BUILTIN_MCP_SERVER,
     AcpSpec,
@@ -384,17 +388,20 @@ class Daemon:
         workers_listen: Sequence[str] = (),
         allow_worker_command: bool = False,
         plugin_dirs: Sequence[Path] | None = None,
+        model_slots: Mapping[str, int] | None = None,
     ) -> None:
         """`workers_listen`: endpoints for workers besides `paths.workers`, such as `ws://` for remote ones.
         `allow_worker_command`: let sessions name their own worker command. It runs as the daemon with the
         session's worker credentials, so only allow it where session creators are trusted.
         `plugin_dirs`: where in-process plugins load from; None means the standard tiers
-        (`aid.plugins.plugins_path`). Tests pass `[]` for no hosted plugins."""
+        (`aid.plugins.plugins_path`). Tests pass `[]` for no hosted plugins.
+        `model_slots`: model hosts and how many requests each takes at once, across all sessions (`aid.slots`)."""
         self._paths = paths
         self._launcher = launcher
         self._workers_listen = list(workers_listen)
         self._allow_worker_command = allow_worker_command
         self._plugin_dirs = list(plugin_dirs) if plugin_dirs is not None else None
+        self._slots = ModelSlots(model_slots or {})
         self._hosted: dict[str, anyio.CancelScope] = {}
         """Supervised plugin tasks running now, by name: removing the registration cancels the scope."""
         self._disabled_plugins: set[str] = set()
@@ -971,6 +978,12 @@ class Daemon:
                 self._call_targets[client.plugin] = client
                 self._hooks[client.plugin] = frozenset(request.hooks)
                 return Done(id=request.id)
+            case AcquireModelSlot():
+                await self._slots.acquire(request.host, request.token, request.session or "")
+                return Done(id=request.id)
+            case ReleaseModelSlot():
+                self._slots.release(request.token)
+                return Done(id=request.id)
             case GetSpec():
                 return Done(id=request.id, data=to_json(self._session(request.session).spec))
             case SetAttention():
@@ -1487,6 +1500,7 @@ class Daemon:
                 state_dir=str(self._paths.session_dir(session.name)),
                 daemon_runtime_dir=str(self._paths.runtime_dir),
                 daemon_state_dir=str(self._paths.state_dir),
+                model_slots=json.dumps(self._slots.capacities()),
             )
             try:
                 handle = await self._launcher_for(session).launch(args)
@@ -1528,6 +1542,7 @@ class Daemon:
             self._keys.revoke(session.name, public_key)
             self._keys.revoke_agent(session.name, agent_key)
             log.info("worker_exited", session=session.name, pid=handle.pid, code=code)
+            self._slots.release_session(session.name)
             session.exit_code = code
             if session.handle is handle:
                 session.handle = None
@@ -1713,6 +1728,17 @@ class Daemon:
 
 
 async def run(
-    paths: Paths, launcher: Launcher, *, workers_listen: Sequence[str] = (), allow_worker_command: bool = False
+    paths: Paths,
+    launcher: Launcher,
+    *,
+    workers_listen: Sequence[str] = (),
+    allow_worker_command: bool = False,
+    model_slots: Mapping[str, int] | None = None,
 ) -> None:
-    await Daemon(paths, launcher, workers_listen=workers_listen, allow_worker_command=allow_worker_command).serve()
+    await Daemon(
+        paths,
+        launcher,
+        workers_listen=workers_listen,
+        allow_worker_command=allow_worker_command,
+        model_slots=model_slots,
+    ).serve()

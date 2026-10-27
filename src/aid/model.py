@@ -108,6 +108,10 @@ class Model(Protocol):
 class Transport(Model, Protocol):
     """A model aid built from a name: it owns its clients, and whoever resolved it closes them."""
 
+    cache_reads_in_prompt: bool
+    """Its usage counts cache reads inside the prompt tokens (Chat Completions, Gemini), not apart (Anthropic's
+    Messages API): pricing subtracts them once."""
+
     async def aclose(self) -> None: ...
 
 
@@ -311,6 +315,8 @@ def _request_settings(settings: Mapping[str, JsonValue], provider: Provider | No
 class OpenAIChatModel:
     """Chat Completions through the OpenAI SDK, for OpenAI and every provider that serves the same API. A provider
     with quirks subclasses it and overrides `request_settings`, `reasoning` or `usage`."""
+
+    cache_reads_in_prompt: bool = True
 
     def __init__(self, name: str, provider: Provider | None = None) -> None:
         """`provider` None: the one `OPENAI_COMPATIBLE` names by the prefix, if any."""
@@ -550,6 +556,8 @@ class AnthropicModel:
     """The Messages API through the Anthropic SDK: signed thinking replayed, beta headers and caching passed
     through. `cache_control` defaults to automatic caching of the longest prefix."""
 
+    cache_reads_in_prompt: bool = False
+
     def __init__(self, name: str, provider: Provider | None = None) -> None:
         """`provider`: another server of the Messages API, its base URL and key variable; None is Anthropic's."""
         self.model_name = name
@@ -757,6 +765,8 @@ class GoogleModel:
     """The Gemini API (`generateContent`) through Google's SDK, imported on first use: it adds half a second to a
     worker's start (measured 2026-10-24). Thought signatures replay on their parts; Gemini assigns call ids only
     sometimes, so aid makes its own and keeps Gemini's beside them."""
+
+    cache_reads_in_prompt: bool = True
 
     def __init__(self, name: str, provider: Provider | None = None) -> None:
         """`provider`: another server of the Gemini API, its base URL and key variable; None is Google AI Studio."""

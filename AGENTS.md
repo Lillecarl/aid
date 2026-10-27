@@ -186,6 +186,14 @@ on reusable decisions and current boundaries; put long investigations and dated 
   turn, then a turn per unit; unread files prompted again (brief included: turns are fresh) until `attempts`; failed
   turns back off; a busy refusal costs no attempt. `store.py` (`campaign.db`, migrations): units keep `covered` and
   the running attempt's `start_seq`; a resume credits what that attempt recorded. Calls wait for `_ready`.
+- `src/aid/slots.py` — model slots: `aid daemon --model-slots HOST=N` caps requests in flight to a model host across
+  every session (a self-hosted server's best batch load). The table reaches a worker at launch (`WorkerArgs.model_slots`
+  → `AID_MODEL_SLOTS`; none outside a worker); `open_native` wraps a limited host's model in `Slotted`, calling
+  `host()` only when the table names hosts: each request (stream, request, compaction)
+  holds a slot (`AcquireModelSlot`, FIFO) and releases it in a shielded `finally`, a cancelled wait too. The daemon's
+  `ModelSlots` frees a session's slots when its worker exits (waits first, else its own next waiter inherits) and
+  refuses a late acquire whose release overtook it (separate connections). Pricing asks the transport
+  (`Transport.cache_reads_in_prompt`), never its class: wrappers hide classes.
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API, native blocks,
   `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions) and `GoogleModel`

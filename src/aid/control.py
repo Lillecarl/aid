@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict, Field
 
 from aid.protocol import (
+    AcquireModelSlot,
     AidError,
     CallPlugin,
     CompactSession,
@@ -18,6 +19,7 @@ from aid.protocol import (
     ListModels,
     ListSessions,
     ReceiveMessages,
+    ReleaseModelSlot,
     RequestDirectory,
     SendMessage,
 )
@@ -26,6 +28,8 @@ if TYPE_CHECKING:
     from aid.protocol import Request
 
 ENV_AGENT_CONNECTION = "AID_AGENT_CONNECTION"
+ENV_MODEL_SLOTS = "AID_MODEL_SLOTS"
+"""The daemon's model slots in a worker, JSON host → capacity (`aid.slots`)."""
 AGENT_ID_PREFIX = "agent:"
 
 
@@ -59,6 +63,10 @@ def authorize(request: Request, session: str) -> Request:
             return request.model_copy(update={"sender": session, "usage": None})
         case CallPlugin():
             return request.model_copy(update={"caller": session})
+        case AcquireModelSlot():
+            return request.model_copy(update={"session": session})
+        case ReleaseModelSlot():
+            return request
         case CompactSession() | ReceiveMessages() | Hook() | RequestDirectory() if request.session == session:
             return request
         case _:

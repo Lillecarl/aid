@@ -42,10 +42,9 @@ from aid.messages import (
 )
 from aid.messaging import ARRIVED, arrived
 from aid.model import (
-    GoogleModel,
+    Hosted,
     Model,
     ModelInfo,
-    OpenAIChatModel,
     RequestUsage,
     Transport,
     accumulate,
@@ -71,6 +70,7 @@ from aid.protocol import (
 )
 from aid.providers import catalog_model, resolve
 from aid.removals import PLANS_FILE
+from aid.slots import Slotted, limited_hosts
 from aid.supervision import supervisor_tools
 from aid.tools import tool_paths
 
@@ -818,8 +818,7 @@ async def _write_atomic(path: anyio.Path, data: bytes) -> None:
 
 
 def add_cost(total: Cost | None, price: Price, usage: RequestUsage, model: Model) -> Cost:
-    # Chat Completions and Gemini count cache reads inside prompt tokens; Anthropic's Messages API counts them apart.
-    cached = usage.cache_read_tokens if isinstance(model, OpenAIChatModel | GoogleModel) else 0
+    cached = usage.cache_read_tokens if getattr(model, "cache_reads_in_prompt", False) else 0
     amount = price.cost(
         max(0, usage.input_tokens - cached), usage.cache_read_tokens, usage.cache_write_tokens, usage.output_tokens
     )
@@ -909,6 +908,17 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         if spec.private is not None:
             # Before the first request, on the settings every request and compaction use.
             check_host(transport or agent.model, agent.model_settings, spec.private.hosts)
+        # Every request to a host the daemon limits waits for one of its slots: compaction too, through the model.
+        model: object = transport if transport is not None else agent.model
+        if (
+            (limited := limited_hosts())
+            and isinstance(model, Hosted)
+            and (host := model.host(agent.model_settings)) in limited
+        ):
+            if transport is not None:
+                transport = Slotted(transport, host)
+            elif not isinstance(agent.model, str):
+                agent = dataclasses.replace(agent, model=Slotted(agent.model, host))
         backend = NativeBackend(
             agent,
             history_file,

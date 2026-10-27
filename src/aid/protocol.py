@@ -213,6 +213,24 @@ class ReceiveMessages(_Request):
     wait: Annotated[float, Field(ge=0, le=60)] = 25
 
 
+class AcquireModelSlot(_Request):
+    """Answer once `token` holds one of the daemon's slots for model `host` (`aid.slots`). An agent connection asks
+    for its own session."""
+
+    op: Literal["model_slot"] = "model_slot"
+    host: str
+    token: Annotated[str, Field(min_length=1, max_length=64)]
+    session: str | None = None
+    """Stamped from the agent connection: whose worker's exit frees the slot."""
+
+
+class ReleaseModelSlot(_Request):
+    """Give back the slot `token` holds, or stop waiting for one."""
+
+    op: Literal["model_slot_release"] = "model_slot_release"
+    token: str
+
+
 class GetStatus(_Request):
     op: Literal["status"] = "status"
     session: str
@@ -482,7 +500,9 @@ type Request = Annotated[
     | CallResult
     | GetSpec
     | SetAttention
-    | PublishSupervision,
+    | PublishSupervision
+    | AcquireModelSlot
+    | ReleaseModelSlot,
     Field(discriminator="op"),
 ]
 
