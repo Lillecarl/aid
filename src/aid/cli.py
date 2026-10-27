@@ -365,6 +365,11 @@ def _parser() -> argparse.ArgumentParser:
     query.add_argument("sql", help="tables: rulings, ruling_steps; with --session also removal_plans, _entries, _kept")
     query.add_argument("--session", help="attach this session's removal plans")
     query.add_argument("--table", action="store_true", help="tab-separated columns and rows instead of JSON")
+    findings = sub.add_parser("findings", help="the findings plugin's records: what sessions reported")
+    findings_sub = findings.add_subparsers(dest="findings_command", required=True)
+    findings_query = findings_sub.add_parser("query", help="one read-only SQL statement over findings, as JSON")
+    findings_query.add_argument("sql", help="tables: findings, verdicts")
+    findings_query.add_argument("--table", action="store_true", help="tab-separated columns and rows instead of JSON")
 
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
@@ -712,8 +717,11 @@ async def _client_command(args: argparse.Namespace) -> None:
                         print(f"{key}={value}")
             case "supervise":
                 await client.session(args.name).set_supervisor(args.supervisor)
-            case "supervision":
-                answer = await client.call_plugin("supervision", "query", sql=args.sql, session=args.session)
+            case "supervision" | "findings":
+                if args.command == "supervision":
+                    answer = await client.call_plugin("supervision", "query", sql=args.sql, session=args.session)
+                else:
+                    answer = await client.call_plugin("findings", "query", sql=args.sql)
                 result = QueryResult.model_validate(answer)
                 if args.table:
                     print(_query_table(result))

@@ -1,0 +1,3 @@
+version = "0.1.0"
+description = "Findings: sessions report issues they find into a local database, for review passes after them."
+autostart = true

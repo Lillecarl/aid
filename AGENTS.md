@@ -167,6 +167,11 @@ on reusable decisions and current boundaries; put long investigations and dated 
   (`agent="spawned <name>"`); `children.json` in the plugin dir keeps each child's parent and last relayed seq,
   saved after the send (a crash between repeats one). A relay checks presence after `PRESENCE_CHECK` quiet.
   `dismiss(session)`: the parent only.
+- `plugins/findings/` — reported issues, bundled, `autostart` (supervise: `spec`). Tool `report_finding` writes one
+  row of `findings.db` (plugin dir, 0600: findings may quote secrets); `repo` is the caller's resolved `cwd`, never
+  an argument; path confined to it (absolute allowed inside), lines within the file, `evidence` must occur in it
+  (whitespace squeezed) else refused. Duplicates kept, grouped by `dedup`. `verdicts` for review passes. `query`
+  (`aid findings query`) operator only. Plan: `docs/audit-campaigns.md`.
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API, native blocks,
   `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions) and `GoogleModel`
