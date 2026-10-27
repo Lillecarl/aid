@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 import anyio
 import anyio.to_thread
 import structlog
-from pydantic import ValidationError
+from pydantic import TypeAdapter, ValidationError
 
 from aid import daemon, guard, plugin_host, speech
 from aid.client import connect, register_plugin
@@ -61,6 +61,7 @@ if TYPE_CHECKING:
 
 ENV_CLIENT_SECRET = "AID_OIDC_CLIENT_SECRET"
 ENV_SESSION_SECRET = "AID_WEB_SESSION_SECRET"
+_JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
 
 log = structlog.get_logger(__name__)
 
@@ -376,6 +377,16 @@ def _parser() -> argparse.ArgumentParser:
     findings_query = findings_sub.add_parser("query", help="one read-only SQL statement over findings, as JSON")
     findings_query.add_argument("sql", help="tables: findings, verdicts")
     findings_query.add_argument("--table", action="store_true", help="tab-separated columns and rows instead of JSON")
+    campaign = sub.add_parser("campaign", help="audit campaigns: a model reads every tracked file of many repositories")
+    campaign_sub = campaign.add_subparsers(dest="campaign_command", required=True)
+    campaign_sub.add_parser("start", help="start one from a JSON config; prints its status").add_argument(
+        "config", type=Path, help="a CampaignConfig (plugins/campaign): name, root, model, hosts, ..."
+    )
+    campaign_sub.add_parser("status", help="campaigns, their repositories and units, as JSON").add_argument(
+        "name", nargs="?"
+    )
+    campaign_sub.add_parser("pause", help="stop after each repository's running unit").add_argument("name")
+    campaign_sub.add_parser("resume", help="run a paused campaign again").add_argument("name")
 
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
@@ -736,6 +747,16 @@ async def _client_command(args: argparse.Namespace) -> None:
                         print(f"… more rows past {len(result.rows)}; narrow the query or aggregate", file=sys.stderr)
                 else:
                     print(result.model_dump_json())
+            case "campaign":
+                match args.campaign_command:
+                    case "start":
+                        config = _JSON.validate_json(args.config.read_bytes())
+                        answer = await client.call_plugin("campaign", "start", config=config)
+                    case "status":
+                        answer = await client.call_plugin("campaign", "status", name=args.name)
+                    case _:
+                        answer = await client.call_plugin("campaign", args.campaign_command, name=args.name)
+                print(json.dumps(answer))
             case "stop":
                 await client.session(args.name).stop()
             case "delete":

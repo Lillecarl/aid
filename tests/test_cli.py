@@ -101,6 +101,12 @@ def test_new_py_takes_the_models_children_may_run_on() -> None:
     assert isinstance(spec := _spec(args), NativeSpec) and spec.spawn_models == ["deepseek/.*"]
 
 
+def test_campaign_commands_parse() -> None:
+    assert str(_parser().parse_args(["campaign", "start", "c.json"]).config) == "c.json"
+    assert _parser().parse_args(["campaign", "status"]).name is None
+    assert _parser().parse_args(["campaign", "pause", "audit"]).campaign_command == "pause"
+
+
 def test_new_py_makes_a_private_session() -> None:
     args = _parser().parse_args(["new-py", "s", "agents:echo", "--private", "vllm.example", "--private", "b.example"])
     args.agent_command = []
