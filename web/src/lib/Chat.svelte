@@ -176,9 +176,15 @@
     into.push(...rowsOf(item, key, seq));
   }
 
+  /** Turns history shows ended: a stream chunk of one arrives late on the events socket, after its turn's rows. */
+  const endedTurns = new Set<string>();
+
   function fromHistory(entries: HistoryEntry[]): Row[] {
     const out: Row[] = [];
-    for (const e of entries) append(out, e.item, `h${e.seq}`, e.seq);
+    for (const e of entries) {
+      if (e.item.type === "output" || e.item.type === "error") endedTurns.add(e.turn);
+      append(out, e.item, `h${e.seq}`, e.seq);
+    }
     return out;
   }
 
@@ -290,6 +296,7 @@
       return;
     }
     newest = entry.seq;
+    if (entry.item.type === "output" || entry.item.type === "error") endedTurns.add(entry.turn);
     const follow = nearBottom();
     // A recorded entry ends the block the stream topic was showing: history has it joined, or the next event closed
     // it. Both arrive on one socket, in the order the daemon published them.
@@ -579,7 +586,7 @@
     });
     // Text and thinking of turns this page did not send stream here; its own turn streams on its prompt.
     const unwatchStream = api.followStream(name, (chunk) => {
-      if (!busy && !hasNewer) apply(chunk.event);
+      if (!busy && !hasNewer && !endedTurns.has(chunk.turn)) apply(chunk.event);
     });
     const unwatchStatus = api.followStatus(
       name,
