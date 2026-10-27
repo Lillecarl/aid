@@ -45,6 +45,7 @@ IDLE = {
     "attention": None,
     "parent": None,
     "supervisor": None,
+    "private": False,
     "tags": dict[str, str](),
 }
 REFUSED = "other@example.com"

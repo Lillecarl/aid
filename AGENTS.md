@@ -87,12 +87,12 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - `src/aid/zap.py` — every worker connection is CURVE. The daemon issues a keypair per launch; its ZAP handler
   names the session as the connection's User-Id, and the daemon routes by that, never by a worker's routing id.
   A `wss://` worker sets WSS_HOSTNAME: without it libzmq accepts a trusted certificate for any name. Domains:
-  workers, plugins, plugin events (wants `read`).
+  workers, plugins, plugin events (wants `read`), plugin private events (`read` + `private`).
 - `src/aid/plugins.py` — plugins: a registered CURVE public key + grants (`read`, `prompt`, `message`,
   `permissions`, `manage`, `supervise`, `private`; `NEEDS` maps op → grant, unlisted ops no plugin may send). Sockets
-  `plugins.sock` (ROUTER), `plugin-events.sock` and `plugin-private-events.sock` (PUB), all CURVE; `_plugin_loop` checks each request against the grants as they
-  are now → `forbidden`. The daemon stamps what a plugin cannot claim: a message's sender is `plugin:<name>`,
-  `AnswerPermission.plugin` is the connection's (None on control) → `PermissionDecision.by=plugin` + name.
+  `plugins.sock` (ROUTER), `plugin-events.sock` and `plugin-private-events.sock` (PUB), all CURVE; `_plugin_loop`
+  checks each request against the grants as they are now → `forbidden`. The daemon stamps what a plugin cannot
+  claim: a message's sender is `plugin:<name>`, `AnswerPermission.plugin` is the connection's (None on control) → `PermissionDecision.by=plugin` + name.
   Calls: a plugin overriding `Plugin.call(caller, method, args)` serves them (`plugin_host.run` → `serve_calls`,
   `ServeCalls` renewed every `SERVE_RENEW`, no grant needed); `CallPlugin` from a session tool or control gets
   `caller` stamped (agent connection → its session; control → as sent, None = operator), goes out as an
