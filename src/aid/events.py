@@ -37,6 +37,13 @@ def session_prefix(name: str) -> bytes:
     return f"session/{name}/".encode()
 
 
+def topic_session(topic: bytes) -> str | None:
+    """The session a topic belongs to; None for the list. Names hold no `/`."""
+    if not topic.startswith(b"session/"):
+        return None
+    return topic.removeprefix(b"session/").partition(b"/")[0].decode()
+
+
 def status_topic(name: str) -> bytes:
     return session_prefix(name) + b"status/"
 

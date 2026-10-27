@@ -25,7 +25,7 @@ from aid import zap
 from aid.catalog import listing
 from aid.client import spawn_plugin_client
 from aid.discovery import Catalog, discover
-from aid.plugins import PluginSpec, hooks, plugins_path, serves_calls
+from aid.plugins import Grant, PluginSpec, hooks, plugins_path, serves_calls
 from aid.protocol import MessageHook
 
 if TYPE_CHECKING:
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from pydantic import JsonValue
 
     from aid.client import Client
-    from aid.plugins import Grant, Plugin
+    from aid.plugins import Plugin
     from aid.protocol import AgentCatalog, Invocation
 
 log = structlog.get_logger(__name__)
@@ -133,7 +133,7 @@ async def supervise(ctx: zmq.asyncio.Context, name: str, plugin: Plugin) -> None
     window_start = 0.0
     while True:
         try:
-            async with spawn_plugin_client(ctx, name) as client:
+            async with spawn_plugin_client(ctx, name, private=Grant.PRIVATE in plugin.grants) as client:
                 await run(plugin, client)
         except anyio.get_cancelled_exc_class():
             raise

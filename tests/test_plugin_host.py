@@ -337,7 +337,7 @@ async def test_supervise_gives_up_after_repeated_failures(monkeypatch: pytest.Mo
     runs = 0
 
     @asynccontextmanager
-    async def fake_spawn(_ctx: zmq.asyncio.Context, _name: str) -> AsyncGenerator[object]:
+    async def fake_spawn(_ctx: zmq.asyncio.Context, _name: str, *, private: bool = False) -> AsyncGenerator[object]:
         yield object()
 
     monkeypatch.setattr(plugin_host, "spawn_plugin_client", fake_spawn)
@@ -361,7 +361,7 @@ async def test_supervise_gives_up_after_repeated_failures(monkeypatch: pytest.Mo
 
 async def test_supervise_ends_on_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:
     @asynccontextmanager
-    async def fake_spawn(_ctx: zmq.asyncio.Context, _name: str) -> AsyncGenerator[object]:
+    async def fake_spawn(_ctx: zmq.asyncio.Context, _name: str, *, private: bool = False) -> AsyncGenerator[object]:
         yield object()
 
     monkeypatch.setattr(plugin_host, "spawn_plugin_client", fake_spawn)

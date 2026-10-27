@@ -141,6 +141,8 @@ PLUGIN_CALL_TIMEOUT: Final = 30.0
 """Seconds a `CallPlugin` waits for the plugin's answer: a plugin gone mid-call never sends one."""
 LIVE_LIMIT: Final = 65536
 """Characters of `usertee` output a session keeps for a page opened mid-command (`GetLive`)."""
+OPEN_SESSIONS: Final = b"\0open " + events.SESSIONS
+"""The key, never a topic, under which `_published` holds the list plugins without `private` get."""
 SPEC_FILE: Final = "spec.json"
 TOOLS_FILE: Final = "tools.json"
 """The tools the last worker reported, so a stopped session still lists them."""
@@ -422,6 +424,10 @@ class Daemon:
         self._local_plugin_events = self._ctx.socket(zmq.PUB)
         """The same protocol over inproc, for tasks the daemon spawned: no CURVE, since no other process can
         connect, and the task's DEALER identity names the plugin."""
+        self._plugin_private_events = self._ctx.socket(zmq.PUB)
+        zap.serve_curve(self._plugin_private_events, self._keys, zap.PLUGIN_PRIVATE_EVENTS_DOMAIN)
+        self._local_plugin_private_events = self._ctx.socket(zmq.PUB)
+        """The plugin events of private sessions go only to these two, and so does the full session list."""
         self._events_lock = anyio.Lock()
         self._published: dict[bytes, bytes] = {}
         """The last status or list published per topic: publish only what changed."""
@@ -450,6 +456,8 @@ class Daemon:
         self._plugin_events.bind(self._paths.plugin_events)
         self._local_plugins.sock.bind(plugins.INPROC_PLUGINS)
         self._local_plugin_events.bind(plugins.INPROC_PLUGIN_EVENTS)
+        self._plugin_private_events.bind(self._paths.plugin_private_events)
+        self._local_plugin_private_events.bind(plugins.INPROC_PLUGIN_PRIVATE_EVENTS)
         for endpoint in self._workers_listen:
             self._workers.bind(endpoint)
             log.info("listening", socket=endpoint)
@@ -484,6 +492,8 @@ class Daemon:
             self._plugin_events.close(linger=0)
             self._local_plugins.sock.close(linger=0)
             self._local_plugin_events.close(linger=0)
+            self._plugin_private_events.close(linger=0)
+            self._local_plugin_private_events.close(linger=0)
             self._ctx.term()
 
     async def _load_sessions(self) -> None:
@@ -553,14 +563,32 @@ class Daemon:
                 tg.start_soon(self._stop, session)
 
     async def _publish(self, topic: bytes, payload: bytes) -> None:
+        """To the operator and `private` plugins; to other plugins only an open session's topic. A session no longer
+        known counts as private, and the list goes to them by `_publish_open`."""
+        name = events.topic_session(topic)
+        open_topic = name is not None and name in self._sessions and not self._private(name)
         async with self._events_lock:
-            await self._events.send_multipart([topic, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
-            await self._plugin_events.send_multipart([topic, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
-            await self._local_plugin_events.send_multipart([topic, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
+            for sock in (self._events, self._plugin_private_events, self._local_plugin_private_events):
+                await sock.send_multipart([topic, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
+            if open_topic:
+                await self._publish_open_locked(topic, payload)
+
+    async def _publish_open(self, topic: bytes, payload: bytes) -> None:
+        """To plugins without `private` only."""
+        async with self._events_lock:
+            await self._publish_open_locked(topic, payload)
+
+    async def _publish_open_locked(self, topic: bytes, payload: bytes) -> None:
+        for sock in (self._plugin_events, self._local_plugin_events):
+            await sock.send_multipart([topic, payload])  # pyright: ignore[reportUnknownMemberType] -- pyzmq types msg_parts as a bare Sequence
 
     def _state(self) -> dict[bytes, bytes]:
+        """Each status by its topic, the list, and under `OPEN_SESSIONS` the list without private sessions."""
         current = {events.status_topic(s.name): s.status().model_dump_json().encode() for s in self._sessions.values()}
         current[events.SESSIONS] = SessionInfosAdapter.dump_json([s.info() for s in self._sessions.values()])
+        current[OPEN_SESSIONS] = SessionInfosAdapter.dump_json(
+            [s.info() for s in self._sessions.values() if not is_private(s.spec)]
+        )
         return current
 
     async def _publish_changes(self) -> None:
@@ -569,7 +597,10 @@ class Daemon:
         for topic, payload in current.items():
             if self._published.get(topic) != payload:
                 self._published[topic] = payload
-                await self._publish(topic, payload)
+                if topic == OPEN_SESSIONS:
+                    await self._publish_open(events.SESSIONS, payload)
+                else:
+                    await self._publish(topic, payload)
         for gone in self._published.keys() - current.keys():
             del self._published[gone]
 
@@ -601,8 +632,8 @@ class Daemon:
     @contextlib.asynccontextmanager
     async def plugin_client(self, name: str) -> AsyncGenerator[Client]:
         """A plugin client for a task spawned as `name`: inproc sockets on this daemon's context, which inproc
-        peers must share, with the task's name as its identity."""
-        async with spawn_plugin_client(self._ctx, name) as client:
+        peers must share, with the task's name as its identity. It follows the events its registration allows."""
+        async with spawn_plugin_client(self._ctx, name, private=self._plugin_private(name)) as client:
             yield client
 
     async def _reconcile_plugins(self) -> None:
@@ -973,7 +1004,7 @@ class Daemon:
                     raise AidError("forbidden", "only the operator, private sessions and private plugins make one")
                 named += [request.spec.parent, request.spec.supervisor]
             case SendMessage():
-                named.append(request.to)
+                named += [request.to, request.sender]
             case SetSupervisor():
                 named.append(request.supervisor)
             case PublishSupervision():

@@ -56,6 +56,8 @@ INPROC_PLUGIN_EVENTS: Final = "inproc://aid-plugin-events"
 """The plugin sockets inside the daemon: tasks it spawned speak the same protocol over these, on its context,
 with the task's name as its identity. Process-private by construction, so no CURVE: no other process can
 connect, and the daemon names every task it spawns."""
+INPROC_PLUGIN_PRIVATE_EVENTS: Final = "inproc://aid-plugin-private-events"
+"""As `Paths.plugin_private_events`, for hosted plugins whose code declares `private`."""
 
 
 class Grant(StrEnum):

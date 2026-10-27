@@ -22,7 +22,15 @@ from aid import events, zap
 from aid.control import ENV_AGENT_CONNECTION, AgentConnection
 from aid.history import MAX_PAGE
 from aid.paths import ENV_SESSION, default_paths
-from aid.plugins import INPROC_PLUGIN_EVENTS, INPROC_PLUGINS, SECRET_FILE, Grant, PluginSpec
+from aid.plugins import (
+    INPROC_PLUGIN_EVENTS,
+    INPROC_PLUGIN_PRIVATE_EVENTS,
+    INPROC_PLUGINS,
+    PLUGIN_FILE,
+    SECRET_FILE,
+    Grant,
+    PluginSpec,
+)
 from aid.protocol import (
     AddPlugin,
     AgentCatalog,
@@ -126,23 +134,31 @@ async def plugin_endpoints(paths: Paths, name: str) -> Endpoints:
     except FileNotFoundError:
         raise AidError("not_running", f"no {paths.server_key}: the daemon is not running") from None
     keys = zap.Keypair(public=zmq.curve_public(secret.encode()).decode(), secret=secret)
-    return Endpoints(paths.plugins, paths.plugin_events, (server, keys))
+    try:
+        grants = PluginSpec.model_validate_json(
+            await anyio.Path(paths.plugin_dir(name), PLUGIN_FILE).read_bytes()
+        ).grants
+    except FileNotFoundError:
+        grants = frozenset[Grant]()
+    # The two events sockets publish different session lists: a plugin follows exactly one.
+    events = paths.plugin_private_events if Grant.PRIVATE in grants else paths.plugin_events
+    return Endpoints(paths.plugins, events, (server, keys))
 
 
-def local_plugin_endpoints() -> Endpoints:
+def local_plugin_endpoints(*, private: bool = False) -> Endpoints:
     """A plugin's sockets inside the daemon: the inproc pair, no keys. Only tasks on the daemon's context can
     connect, and the daemon names each task it spawns, so identity holds by construction."""
-    return Endpoints(INPROC_PLUGINS, INPROC_PLUGIN_EVENTS)
+    return Endpoints(INPROC_PLUGINS, INPROC_PLUGIN_PRIVATE_EVENTS if private else INPROC_PLUGIN_EVENTS)
 
 
 @asynccontextmanager
-async def spawn_plugin_client(ctx: zmq.asyncio.Context, name: str) -> AsyncGenerator[Client]:
+async def spawn_plugin_client(ctx: zmq.asyncio.Context, name: str, *, private: bool = False) -> AsyncGenerator[Client]:
     """A plugin client for a task the daemon spawned as `name`: a DEALER on the daemon's context, whose
     identity the plugin loop reads as the plugin. Mirrors `connect`, minus the context, which the daemon
-    owns: no `ctx.term()` here, and sockets it opens close with it."""
+    owns: no `ctx.term()` here, and sockets it opens close with it. `private`: follow private sessions too."""
     sock = ctx.socket(zmq.DEALER)
     sock.setsockopt(zmq.IDENTITY, name.encode())
-    endpoints = local_plugin_endpoints()
+    endpoints = local_plugin_endpoints(private=private)
     sock.connect(endpoints.control)
     client = Client(sock, ctx, endpoints)
     try:

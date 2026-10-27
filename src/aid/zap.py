@@ -5,7 +5,7 @@ a keypair per worker launch; the ZAP handler accepts only issued keys and names 
 User-Id. The daemon routes by that, never by a routing id a worker picks: that id is a claim, the key is proof.
 
 Plugins (`aid.plugins`) bring keys of their own, registered with their grants. The handler names the plugin as the
-User-Id; the events domain also wants the `read` grant.
+User-Id; the events domain also wants the `read` grant, and the private events domain `read` and `private`.
 """
 
 from __future__ import annotations
@@ -25,6 +25,7 @@ ZAP_ENDPOINT: Final = "inproc://zeromq.zap.01"
 DOMAIN: Final = b"aid-workers"
 PLUGINS_DOMAIN: Final = b"aid-plugins"
 PLUGIN_EVENTS_DOMAIN: Final = b"aid-plugin-events"
+PLUGIN_PRIVATE_EVENTS_DOMAIN: Final = b"aid-plugin-private-events"
 _VERSION: Final = b"1.0"
 
 
@@ -85,6 +86,8 @@ class Keys:
         if spec is None:
             return None
         if domain == PLUGINS_DOMAIN or (domain == PLUGIN_EVENTS_DOMAIN and Grant.READ in spec.grants):
+            return spec.name
+        if domain == PLUGIN_PRIVATE_EVENTS_DOMAIN and {Grant.READ, Grant.PRIVATE} <= spec.grants:
             return spec.name
         return None
 

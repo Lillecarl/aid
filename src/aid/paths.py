@@ -43,6 +43,12 @@ class Paths:
         return f"ipc://{self.runtime_dir / 'plugin-events.sock'}"
 
     @property
+    def plugin_private_events(self) -> str:
+        """Everything the daemon publishes, private sessions included, CURVE, for plugins granted `read` and
+        `private`."""
+        return f"ipc://{self.runtime_dir / 'plugin-private-events.sock'}"
+
+    @property
     def server_key(self) -> Path:
         """The daemon's CURVE public key while it runs, which a plugin's sockets need."""
         return self.runtime_dir / "server.key"

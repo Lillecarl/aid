@@ -4,12 +4,14 @@ from typing import TYPE_CHECKING
 
 import anyio
 import pytest
+import zmq
 from pydantic import ValidationError
 
 import aid
+from aid import events
 from aid.client import register_plugin
 from aid.plugins import Grant
-from aid.protocol import AidError, CallPlugin, GetHistory, SendMessage
+from aid.protocol import AidError, CallPlugin, GetHistory, SendMessage, SessionInfosAdapter
 from aid.spec import AcpSpec, NativeSpec, PermissionMode, Private
 from tests.conftest import py_spec
 from tests.test_agent_control import RecordingLauncher, agent_client, server
@@ -94,6 +96,45 @@ async def test_a_plugin_without_the_grant_never_sees_a_private_session(
                     await chat.create("another", private_spec(tmp_path))
                 assert sorted(info.name for info in await keeper.sessions()) == ["open", "secret"]
                 assert (await keeper.session("secret").status()).private
+
+
+async def test_only_plugins_granted_private_hear_a_private_session(
+    server: tuple[Paths, RecordingLauncher], tmp_path: Path
+) -> None:
+    paths, _ = server
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(paths) as control:
+            await register_plugin(control, paths, "chat", frozenset({Grant.READ}))
+            await register_plugin(control, paths, "keeper", frozenset({Grant.READ, Grant.PRIVATE}))
+            async with (
+                aid.connect(paths, plugin="chat") as chat,
+                aid.connect(paths, plugin="keeper") as keeper,
+                chat.open_socket(zmq.SUB) as chat_raw,
+                keeper.open_socket(zmq.SUB) as keeper_raw,
+            ):
+                for sock in (chat_raw, keeper_raw):
+                    sock.subscribe(b"")
+                await anyio.sleep(0.3)  # PUB drops what a subscriber not yet joined would get.
+                await control.create("secret", private_spec(tmp_path))
+                await control.session("secret").run("hush")
+                await control.create("open", py_spec(tmp_path, "agents:echo"))
+                await control.session("open").run("hello")
+                heard: dict[str, list[bytes]] = {"chat": [], "keeper": []}
+                lists: dict[str, list[str]] = {"chat": [], "keeper": []}
+                for who, sock in (("chat", chat_raw), ("keeper", keeper_raw)):
+                    while not any(t.startswith(b"session/open/history/") for t in heard[who]) or not lists[who]:
+                        topic, payload = await sock.recv_multipart()
+                        heard[who].append(topic)
+                        if topic == events.SESSIONS:
+                            lists[who] = [info.name for info in SessionInfosAdapter.validate_json(payload)]
+                    while "open" not in lists[who]:
+                        topic, payload = await sock.recv_multipart()
+                        if topic == events.SESSIONS:
+                            lists[who] = [info.name for info in SessionInfosAdapter.validate_json(payload)]
+    assert not [t for t in heard["chat"] if t.startswith(b"session/secret/")]
+    assert lists["chat"] == ["open"]
+    assert any(t.startswith(b"session/secret/history/") for t in heard["keeper"])
+    assert sorted(lists["keeper"]) == ["open", "secret"]
 
 
 async def test_a_private_session_talks_only_to_private_sessions_and_plugins(
