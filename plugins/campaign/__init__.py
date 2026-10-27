@@ -376,18 +376,31 @@ class Campaigns(aid.Plugin):
         if repo.state == RepoState.PENDING:
             files, skipped = await anyio.to_thread.run_sync(examine, path, await tracked(path), config.limits)
             await store.plan(config.name, repo.path, chunk(files, config.limits), skipped)
-        brief = repo.brief
-        if brief is None:
-            await _idle(session)
-            answer = (await session.run(BRIEF_PROMPT)).output
-            brief = answer if isinstance(answer, str) else str(answer)
-            await store.briefed(config.name, repo.path, brief)
+        brief = repo.brief if repo.brief is not None else await self._brief(config, session)
+        await store.briefed(config.name, repo.path, brief)
         for unit in await store.units(config.name, repo.path):
             if config.name in self._pausing:
                 return
             if unit.state not in FINISHED:
                 await self._unit(config, session, path, brief, unit)
         await store.repo_ended(config.name, repo.path, RepoState.DONE)
+
+    async def _brief(self, config: CampaignConfig, session: aid.Session) -> str:
+        """The repository's brief, from up to `attempts` turns: the last failure fails the repository."""
+        attempts = 0
+        while True:
+            await _idle(session)
+            try:
+                answer = (await session.run(BRIEF_PROMPT)).output
+                return answer if isinstance(answer, str) else str(answer)
+            except AidError as failure:
+                if failure.code == BUSY:
+                    continue
+                attempts += 1
+                log.warning("brief_failed", session=session.name, error=failure.message)
+                if attempts >= config.attempts:
+                    raise
+                await anyio.sleep(config.backoff)
 
     async def _unit(self, config: CampaignConfig, session: aid.Session, path: Path, brief: str, unit: Unit) -> None:
         store = self.store
@@ -401,7 +414,15 @@ class Campaigns(aid.Plugin):
             await store.unit_started(unit, start)
         attempts, error = unit.attempts, unit.error
         missing = uncovered(path, unit.files, await _calls_since(session, start))
-        while missing and attempts < config.attempts:
+        # Read is not audited: a turn that failed after its reads never reported, and the next fresh turn remembers
+        # nothing of them. So a failed turn's reads count for nothing, and only a turn that ends ends the unit.
+        while (missing or error is not None) and attempts < config.attempts:
+            if error is not None:
+                await _idle(session)
+                await anyio.sleep(config.backoff)
+                start = await _newest_seq(session)
+                await store.unit_started(unit, start)
+                missing = [file.path for file in unit.files]
             try:
                 await session.run(unit_prompt(brief, [f for f in unit.files if f.path in missing]))
                 error = None
@@ -415,8 +436,7 @@ class Campaigns(aid.Plugin):
             attempts += 1
             missing = uncovered(path, unit.files, await _calls_since(session, start))
             await store.unit_attempted(unit, attempts, missing, error)
-            if missing and error is not None:
-                await _idle(session)
-                await anyio.sleep(config.backoff)
-        unread = UnitState.FAILED if error is not None else UnitState.INCOMPLETE
-        await store.unit_ended(unit, unread if missing else UnitState.DONE)
+        if error is not None:
+            await store.unit_ended(unit, UnitState.FAILED)
+        else:
+            await store.unit_ended(unit, UnitState.INCOMPLETE if missing else UnitState.DONE)

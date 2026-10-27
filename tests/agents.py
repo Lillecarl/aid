@@ -293,7 +293,20 @@ async def _audit_lazily(messages: list[ModelMessage], info: AgentInfo) -> AsyncI
         yield delta
 
 
+_FLAKY_FAILURES: dict[str, int] = {}
+
+
+async def _audit_flakily(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    """As the auditor, but its first answer after reading fails, as a gateway that drops the connection does."""
+    async for delta in _auditing_stream(messages, lazy=False):
+        if isinstance(delta, str) and ": read" in delta and not _FLAKY_FAILURES.get("answer"):
+            _FLAKY_FAILURES["answer"] = 1
+            raise ConnectionError("the gateway dropped the connection")
+        yield delta
+
+
 auditor = Agent(FunctionModel(stream_function=_audit))
+flaky_auditor = Agent(FunctionModel(stream_function=_audit_flakily))
 lazy_auditor = Agent(FunctionModel(stream_function=_audit_lazily))
 
 

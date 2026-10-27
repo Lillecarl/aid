@@ -38,7 +38,12 @@ SCRIPTED = """\
 import agents
 import aid
 
-MODELS = {"auditor": agents.auditor, "lazy": agents.lazy_auditor, "echo": agents.echo}
+MODELS = {
+    "auditor": agents.auditor,
+    "lazy": agents.lazy_auditor,
+    "flaky": agents.flaky_auditor,
+    "echo": agents.echo,
+}
 
 
 class Scripted(aid.ModelProvider):
@@ -195,6 +200,25 @@ async def test_a_unit_is_prompted_again_with_what_was_left_unread(
     assert (alpha["state"], alpha["units"]) == ("done", {"done": 2})
     # Unit one: b.py, then a.py when prompted again alone; unit two: c.py alone, which the lazy model reads.
     assert reads == ["b.py", "a.py", "c.py"]
+
+
+async def test_a_turn_that_fails_after_its_reads_is_audited_again(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    root = tmp_path / "tree"
+    await repos(root)
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            fields: dict[str, JsonValue] = {"model": "scripted/flaky", "repos": ["alpha"], "limits": {"unit_files": 3}}
+            await client.call_plugin("campaign", "start", config=config(tmp_path, root, **fields))
+            [alpha] = await settled(client, "audit")
+            reads = await read_paths(client, "audit.alpha")
+            findings = await client.call_plugin("findings", "query", sql="SELECT path FROM findings")
+    # The unit's reads and report, an answer that fails, then all three read, reported and answered again.
+    assert (alpha["state"], alpha["units"]) == ("done", {"done": 1})
+    assert reads.count("a.py") == 2
+    assert QueryResult.model_validate(findings).rows == [["a.py"], ["a.py"]]
 
 
 async def test_attempts_run_out_on_a_file_never_read(
