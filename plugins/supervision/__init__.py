@@ -182,6 +182,7 @@ class Supervision(aid.Plugin):
             aid.Grant.PERMISSIONS,
             aid.Grant.SUPERVISE,
             aid.Grant.MANAGE,
+            aid.Grant.PRIVATE,
         }
     )
 
@@ -600,6 +601,8 @@ class Supervision(aid.Plugin):
             parent=supervisor,
             permission=PermissionMode.DENY,
             aid_tools=False,
+            # A private supervisor's classifier is private too; its worker then refuses a model off the hosts.
+            private=native.private if native is not None else None,
         )
         await self.client.create(name, spec)
         return name

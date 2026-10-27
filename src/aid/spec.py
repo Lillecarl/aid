@@ -79,6 +79,24 @@ class Sandbox(BaseModel):
     """Absolute paths the shell may write besides the session's directory: caches, a build output."""
 
 
+def _hostnames(hosts: list[str]) -> list[str]:
+    if bad := [h for h in hosts if not re.fullmatch(r"[a-z0-9]([a-z0-9.-]*[a-z0-9])?", h)]:
+        raise ValueError(f"hosts are lowercase host names, without scheme or port: {bad}")
+    return hosts
+
+
+class Private(BaseModel):
+    """What keeps a session's content on the operator's own machines (docs/audit-campaigns.md). The daemon shows it
+    only to the operator, to plugins holding the `private` grant and to other private sessions; it messages, is
+    supervised by and has as parent or child only private sessions; and its worker refuses a model whose requests go
+    to a host not listed."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    hosts: Annotated[list[str], Field(min_length=1), AfterValidator(_hostnames)]
+    """Host names the session's model requests may go to, the resolved base URL's host compared exactly."""
+
+
 class Hook(BaseModel):
     """A pre-tool gate: when `tool` runs with rendered text matching `match`, refuse it with `message`."""
 
@@ -317,6 +335,9 @@ class NativeSpec(_Spec):
     spawn_models: list[ToolPattern] | None = None
     """Models this session's spawned children may run on besides its own: regexes fullmatched against
     `provider/model`. Children inherit it unchanged. Agents never set it."""
+    private: Private | None = None
+    """Keep the session's content among private sessions and listed model hosts. Native only: other engines pick
+    their own endpoints. Children and forks inherit it; agents never set it."""
 
     def offers(self, tool_name: str) -> bool:
         return self.tools is None or any(re.fullmatch(pattern, tool_name) for pattern in self.tools)
@@ -385,3 +406,7 @@ class ClaudeSdkSpec(_Spec):
 type AgentSpec = Annotated[AcpSpec | NativeSpec | ClaudeTtySpec | ClaudeSdkSpec, Field(discriminator="kind")]
 
 AgentSpecAdapter: TypeAdapter[AgentSpec] = TypeAdapter(AgentSpec)
+
+
+def is_private(spec: AgentSpec) -> bool:
+    return isinstance(spec, NativeSpec) and spec.private is not None

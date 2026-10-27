@@ -1229,7 +1229,8 @@
         "message",
         "permissions",
         "manage",
-        "supervise"
+        "supervise",
+        "private"
       ],
       "title": "Grant",
       "type": "string"
@@ -1963,6 +1964,17 @@
           "exclusiveMinimum": 0,
           "type": "number"
         },
+        "private": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Private"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
         "python_path": {
           "items": {
             "type": "string"
@@ -2540,6 +2552,24 @@
       "title": "PluginInfo",
       "type": "object"
     },
+    "Private": {
+      "additionalProperties": false,
+      "description": "What keeps a session's content on the operator's own machines (docs/audit-campaigns.md). The daemon shows it\nonly to the operator, to plugins holding the `private` grant and to other private sessions; it messages, is\nsupervised by and has as parent or child only private sessions; and its worker refuses a model whose requests go\nto a host not listed.",
+      "properties": {
+        "hosts": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+        }
+      },
+      "required": [
+        "hosts"
+      ],
+      "title": "Private",
+      "type": "object"
+    },
     "Prompt": {
       "additionalProperties": false,
       "properties": {
@@ -2877,6 +2907,10 @@
           "default": 0,
           "type": "integer"
         },
+        "private": {
+          "default": false,
+          "type": "boolean"
+        },
         "running": {
           "type": "boolean"
         },
@@ -2911,6 +2945,7 @@
         "attention",
         "parent",
         "supervisor",
+        "private",
         "tags"
       ],
       "title": "SessionInfo",
@@ -3065,6 +3100,10 @@
             }
           ]
         },
+        "private": {
+          "default": false,
+          "type": "boolean"
+        },
         "running": {
           "type": "boolean"
         },
@@ -3126,6 +3165,7 @@
         "attention",
         "parent",
         "supervisor",
+        "private",
         "directory_request",
         "cost",
         "context_used",

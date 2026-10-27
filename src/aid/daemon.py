@@ -113,6 +113,7 @@ from aid.spec import (
     NativeSpec,
     PermissionMode,
     Sandbox,
+    is_private,
     tool_group,
 )
 from aid.summary import summarize
@@ -233,6 +234,7 @@ class _Session:
             attention=self.attention,
             parent=self.spec.parent,
             supervisor=self.spec.supervisor,
+            private=is_private(self.spec),
             tags=self.spec.tags,
         )
 
@@ -309,6 +311,7 @@ class _Session:
             attention=self.attention,
             parent=self.spec.parent,
             supervisor=self.spec.supervisor,
+            private=is_private(self.spec),
             directory_request=self.directory_request,
             cost={**self.cost, **self.latest},
             context_used=self.context.context_used if self.context else None,
@@ -720,12 +723,15 @@ class Daemon:
             if actor is None:
                 raise AidError("unauthenticated", "agent control credentials were revoked")
             request = authorize(request, actor)
+        cleared = self._cleared(client)
+        if not cleared:
+            self._hide_private(request)
         match request:
             case CreateSession():
                 await self._create(request)
                 return Done(id=request.id, data={"name": request.name})
             case ListSessions():
-                infos = [s.info() for s in self._sessions.values()]
+                infos = [s.info() for s in self._sessions.values() if cleared or not is_private(s.spec)]
                 return Done(id=request.id, data=[info.model_dump(mode="json") for info in infos])
             case ListAgents():
                 return Done(id=request.id, data=(await listing()).model_dump(mode="json"))
@@ -952,11 +958,45 @@ class Daemon:
                 waiting[1].send_nowait(request)
                 return Done(id=request.id)
 
+    def _cleared(self, client: _Peer) -> bool:
+        """Whether `client` sees private sessions: the operator, a plugin holding `private`, a private session."""
+        if client.agent_key is not None:
+            return self._private(self._keys.agent_session(client.agent_key))
+        return client.plugin is None or self._plugin_private(client.plugin)
+
+    def _hide_private(self, request: Request) -> None:
+        """Refuse a request naming a private session as if it did not exist: a refusal would confirm the name."""
+        named: list[str | None] = [getattr(request, "session", None)]
+        match request:
+            case CreateSession():
+                if is_private(request.spec):
+                    raise AidError("forbidden", "only the operator, private sessions and private plugins make one")
+                named += [request.spec.parent, request.spec.supervisor]
+            case SendMessage():
+                named.append(request.to)
+            case SetSupervisor():
+                named.append(request.supervisor)
+            case PublishSupervision():
+                named.append(request.event.session)
+            case _:
+                pass
+        for name in named:
+            if isinstance(name, str) and self._private(name):
+                raise AidError("not_found", f"no session named {name!r}")
+
+    def _private(self, name: str | None) -> bool:
+        return name is not None and (session := self._sessions.get(name)) is not None and is_private(session.spec)
+
+    def _plugin_private(self, plugin: str) -> bool:
+        return (spec := self._keys.plugins.get(plugin)) is not None and Grant.PRIVATE in spec.grants
+
     def _granted(self, client: _Peer, grant: Grant) -> bool:
         spec = self._keys.plugins.get(client.plugin) if client.plugin is not None else None
         return spec is not None and grant in spec.grants
 
     async def _call_plugin(self, request: CallPlugin) -> JsonValue:
+        if self._private(request.caller) and not self._plugin_private(request.plugin):
+            raise AidError("private", f"private session {request.caller!r} calls only plugins granted private")
         return await self._invoke(
             request.plugin, Invocation(id="", caller=request.caller, method=request.method, args=request.args)
         )
@@ -965,8 +1005,9 @@ class Daemon:
         """Ask every plugin hooking messages before accepting `request`: one refusal refuses it. A plugin that is
         gone or silent lets it through, so a broken plugin never stops messages."""
         hook = MessageHook(to=request.to, sender=request.sender, text=request.text)
+        private = self._private(request.to) or self._private(request.sender)
         for plugin, hooked in list(self._hooks.items()):
-            if "message" not in hooked:
+            if "message" not in hooked or (private and not self._plugin_private(plugin)):
                 continue
             invocation = Invocation(
                 id="", caller=None, method="message", args=hook.model_dump(mode="json"), hook="message"
@@ -1055,13 +1096,19 @@ class Daemon:
         links = {other: session.spec.supervisor for other, session in self._sessions.items()}
         if supervision_cycle(links, name, supervisor):
             raise AidError("supervisor_cycle", f"supervising {name!r} by {supervisor!r} closes a cycle")
+        if is_private(spec) and not is_private(self._sessions[supervisor].spec):
+            raise AidError("private", f"private session {name!r} needs a private supervisor, not {supervisor!r}")
 
     async def _create(self, request: CreateSession) -> None:
         if request.name in self._sessions:
             raise AidError("exists", f"session {request.name!r} already exists")
         self._check_supervisor(request.name, request.spec)
-        if (parent := request.spec.parent) is not None and parent not in self._sessions:
-            raise AidError("unknown_parent", f"session {request.name!r} names no parent {parent!r}")
+        if (parent := request.spec.parent) is not None:
+            if parent not in self._sessions:
+                raise AidError("unknown_parent", f"session {request.name!r} names no parent {parent!r}")
+            # Children's results reach their parents, and parents prompt children: both or neither are private.
+            if is_private(request.spec) != is_private(self._sessions[parent].spec):
+                raise AidError("private", f"session {request.name!r} and its parent {parent!r} differ in privacy")
         session = self._new_session(request.name, request.spec)
         self._sessions[session.name] = session
         session_dir = anyio.Path(self._paths.session_dir(session.name))
@@ -1079,6 +1126,8 @@ class Daemon:
         session = self._session(request.to)
         if request.sender == session.name:
             raise AidError("to_self", f"{session.name!r} cannot message itself")
+        if self._private(request.sender) and not is_private(session.spec):
+            raise AidError("private", f"private session {request.sender!r} messages only private sessions")
         if session.uses_channel and not session.spec.aid_tools:
             raise AidError("cannot_receive", f"{session.name!r} has aid_tools off, so nothing reads its messages")
         await self._gate_message(request)

@@ -78,7 +78,9 @@ async def fork(instructions: str) -> str:
 class Forks(aid.Plugin):
     """Short-lived forks of native sessions, from the `fork` tool."""
 
-    grants = frozenset({aid.Grant.READ, aid.Grant.PROMPT, aid.Grant.MESSAGE, aid.Grant.MANAGE, aid.Grant.SUPERVISE})
+    grants = frozenset(
+        {aid.Grant.READ, aid.Grant.PROMPT, aid.Grant.MESSAGE, aid.Grant.MANAGE, aid.Grant.SUPERVISE, aid.Grant.PRIVATE}
+    )
 
     def __init__(self) -> None:
         self._client: aid.Client | None = None

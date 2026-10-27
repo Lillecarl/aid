@@ -72,6 +72,9 @@ class Grant(StrEnum):
     SUPERVISE = "supervise"
     """Watch over sessions: read their specs, gate messages to them, set their attention, publish on their
     supervision topic, answer permissions and send messages as a session it names."""
+    PRIVATE = "private"
+    """See private sessions (`NativeSpec.private`) and serve their calls: trusted to keep what it learns among
+    private sessions and the operator."""
 
 
 NEEDS: Final[dict[str, Grant]] = {

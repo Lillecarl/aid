@@ -85,7 +85,7 @@ async def dismiss(session: str) -> str:
 class Spawn(aid.Plugin):
     """Children of native sessions, from the `spawn` tool, and the relay of their turns to their parents."""
 
-    grants = frozenset({aid.Grant.READ, aid.Grant.MESSAGE, aid.Grant.MANAGE, aid.Grant.SUPERVISE})
+    grants = frozenset({aid.Grant.READ, aid.Grant.MESSAGE, aid.Grant.MANAGE, aid.Grant.SUPERVISE, aid.Grant.PRIVATE})
 
     def __init__(self) -> None:
         self._client: aid.Client | None = None

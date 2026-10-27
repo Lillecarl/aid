@@ -65,7 +65,7 @@ async def report_finding(
 class Findings(aid.Plugin):
     """The findings database's one writer: sessions report, the operator queries."""
 
-    grants = frozenset({aid.Grant.SUPERVISE})
+    grants = frozenset({aid.Grant.SUPERVISE, aid.Grant.PRIVATE})
 
     def __init__(self) -> None:
         self._client: aid.Client | None = None

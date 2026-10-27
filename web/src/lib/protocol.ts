@@ -30,7 +30,7 @@ export type PermissionMode1 = "allow" | "deny" | "ask" | "supervisor" | "ask_sup
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Grant".
  */
-export type Grant = "read" | "prompt" | "message" | "permissions" | "manage" | "supervise";
+export type Grant = "read" | "prompt" | "message" | "permissions" | "manage" | "supervise" | "private";
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "AgentKind".
@@ -309,6 +309,7 @@ export interface NativeSpec {
   parent?: string | null;
   permission?: PermissionMode2;
   permission_timeout?: number;
+  private?: Private | null;
   python_path?: string[];
   sandbox?: Sandbox | null;
   seed_history?: string | null;
@@ -334,6 +335,21 @@ export interface NativeSpec {
   worker_ca?: string | null;
   worker_command?: [string, ...string[]] | null;
   worker_endpoint?: string | null;
+}
+/**
+ * What keeps a session's content on the operator's own machines (docs/audit-campaigns.md). The daemon shows it
+ * only to the operator, to plugins holding the `private` grant and to other private sessions; it messages, is
+ * supervised by and has as parent or child only private sessions; and its worker refuses a model whose requests go
+ * to a host not listed.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "Private".
+ */
+export interface Private {
+  /**
+   * @minItems 1
+   */
+  hosts: [string, ...string[]];
 }
 /**
  * bubblewrap around what a native session's tools start (`aid.sandbox`): the filesystem read-only but the
@@ -1101,6 +1117,7 @@ export interface SessionInfo {
   name: string;
   parent: string | null;
   permissions: number;
+  private: boolean;
   running: boolean;
   supervisor: string | null;
   tags: {
@@ -1136,6 +1153,7 @@ export interface SessionStatus {
   permission: PermissionMode1 | null;
   permissions: PermissionRequest[];
   pid: number | null;
+  private: boolean;
   running: boolean;
   runs: string;
   sandbox: Sandbox | null;

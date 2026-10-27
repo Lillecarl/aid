@@ -975,6 +975,8 @@ class SessionInfo(_Message):
     """The spec's `parent`: the session this one works for."""
     supervisor: str | None = None
     """The spec's `supervisor`: the session watching this one."""
+    private: bool = False
+    """The spec sets `private`: only the operator, `private` plugins and private sessions see this one."""
     tags: dict[str, str] = Field(default_factory=dict[str, str])
     """The spec's `tags`."""
 
@@ -1043,6 +1045,8 @@ class SessionStatus(_Message):
     """The spec's `parent`: the session this one works for."""
     supervisor: str | None = None
     """The spec's `supervisor`: the session watching this one, and answering its supervisor-mode requests."""
+    private: bool = False
+    """The spec sets `private`."""
     directory_request: DirectoryRequest | None = None
     """The agent's request to move (`RequestDirectory`), waiting for a person, or approved and waiting for the
     turn to end."""
