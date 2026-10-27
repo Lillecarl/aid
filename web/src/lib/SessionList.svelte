@@ -18,6 +18,11 @@
     <li>
       <button type="button" class:current={session.name === current} onclick={() => onselect(session.name)}>
         <span class="name">{session.name}</span>
+        {#if session.private}
+          <span class="private" data-testid="private" title="only the operator, private plugins and sessions see it"
+            >private</span
+          >
+        {/if}
         <span class="meta"
           >{session.kind} · {session.working ? "working" : session.running ? "running" : "stopped"}</span
         >
@@ -68,6 +73,13 @@
     flex-wrap: wrap;
     gap: 0.25rem;
     min-width: 0;
+  }
+  .private {
+    font-size: 0.8em;
+    padding: 0 0.35rem;
+    border: 1px solid var(--accent);
+    border-radius: 0.6rem;
+    color: var(--accent);
   }
   .tag {
     font-size: 0.8em;

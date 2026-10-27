@@ -27,8 +27,9 @@ code and no finding leaves the operator's infrastructure.
    Duplicates are kept and marked, never refused: a refusal teaches the model to vary its titles.
 2. **Read-only search.** A `search` tool in `aid.coding_tools`: regex over files, in process, confined by
    `Coding.resolve`. Without it, a model must read every file to find one name.
-3. **Privacy.** The `private` spec field, honoured by the daemon's event delivery and by every relay plugin. The
-   model endpoint allowlist.
+3. **Privacy.** Built: the `private` spec field with its model hosts, enforced by the daemon (requests, messages,
+   plugin calls, events) and by the worker (model host checked at start). Plugins see private sessions only with the
+   `private` grant; the bundled findings, forks, spawn and supervision plugins hold it, Discord and Telegram do not.
 4. **Campaign plugin.** Units from `git ls-files`, with size and binary filters. One session per repository, on
    an instructions spec with a read-only ceiling. A per-repository brief first, then one turn per unit.
    Supervision on a self-hosted model. Bounded concurrency.
@@ -41,5 +42,6 @@ code and no finding leaves the operator's infrastructure.
 
 - Findings can hold secrets, because leaked secrets are one kind of finding. The database stays in the plugin's
   state directory, mode 0600, and never in a reviewed repository.
-- A plugin with the `read` grant hears every session's events today. Phase 3 has to close that for private
-  sessions before a real run.
+- Privacy holds at aid's sockets and relays. A same-user process, such as a non-private session with a shell, can
+  still open the control socket or read the state directory: that needs confinement (Lillecarl/aid#4, #44). Keep
+  sessions with a shell out of the daemon during a campaign, or sandbox them.

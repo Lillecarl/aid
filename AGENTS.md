@@ -89,8 +89,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   A `wss://` worker sets WSS_HOSTNAME: without it libzmq accepts a trusted certificate for any name. Domains:
   workers, plugins, plugin events (wants `read`).
 - `src/aid/plugins.py` — plugins: a registered CURVE public key + grants (`read`, `prompt`, `message`,
-  `permissions`, `manage`, `supervise`; `NEEDS` maps op → grant, unlisted ops no plugin may send). Sockets `plugins.sock`
-  (ROUTER) and `plugin-events.sock` (PUB), both CURVE; `_plugin_loop` checks each request against the grants as they
+  `permissions`, `manage`, `supervise`, `private`; `NEEDS` maps op → grant, unlisted ops no plugin may send). Sockets
+  `plugins.sock` (ROUTER), `plugin-events.sock` and `plugin-private-events.sock` (PUB), all CURVE; `_plugin_loop` checks each request against the grants as they
   are now → `forbidden`. The daemon stamps what a plugin cannot claim: a message's sender is `plugin:<name>`,
   `AnswerPermission.plugin` is the connection's (None on control) → `PermissionDecision.by=plugin` + name.
   Calls: a plugin overriding `Plugin.call(caller, method, args)` serves them (`plugin_host.run` → `serve_calls`,
@@ -427,6 +427,20 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 - Permission modes: `allow`, `deny`, `ask`, `supervisor`, `ask_supervisor` (the last two route through the
   supervision plugin, above; without a supervisor they are `ask`). Engines branch on `PermissionMode.waits`, never
   on `ask` alone; Claude's rules ask for every waiting mode (`claude_rules`).
+- Private sessions (`NativeSpec.private`, `Private.hosts`; docs/audit-campaigns.md): a viewer is cleared if it is the
+  operator (control, no agent key), a plugin with `private`, or a private session's agent. `_dispatch` hides private
+  sessions from the rest: `ListSessions` filtered, any request naming one (`session`, `to`, `sender`, `supervisor`,
+  spec `parent`/`supervisor`, a supervision event's session) → `not_found` (never `forbidden`: names leak repos); a
+  private `CreateSession` → `forbidden`. Always: a private sender messages only private recipients; a private caller
+  calls only `private` plugins; message hooks of other plugins are skipped for private traffic; parent and child match
+  in privacy (`_create`); a private session's supervisor is private (`_check_supervisor`). Events: `_publish` sends a
+  session topic to the open plugin PUBs only if the session is known and open (unknown = private); the full list on
+  operator + private PUBs, `OPEN_SESSIONS` (the open list) on the open PUBs as `sessions/`. A plugin client follows one
+  events socket, chosen by its grants (`plugin.json`, or the hosted class's); the private ZAP domain wants `read` +
+  `private`. Worker: `open_native` refuses to start unless `check_host` finds the model's client host
+  (`Hosted.host(settings)`: OpenAI/Anthropic `base_url`, google-genai's `_http_options`) in `hosts`; a model naming no
+  host is refused (test models say `model.test`). Not covered: a same-user process (a non-private session with a
+  shell) can open control.sock or read the state dir (Lillecarl/aid#4, #44). `aid new-py --private HOST`.
 - Tool ceiling (Lillecarl/aid#50): `NativeSpec.tools`, regexes fullmatched against tool names
   (`offers`); the backend never offers a tool none matches, aid's and plugins' included, so a call to one is an
   unknown tool. Above modes, not one of them: `deny` still offers. Set at creation (`aid new-py --tool`, the create

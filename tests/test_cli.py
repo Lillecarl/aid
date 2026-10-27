@@ -21,7 +21,16 @@ from aid.cli import (
 )
 from aid.launcher import PRELOAD
 from aid.protocol import Cost, HistoryEntry, QueryResult, SessionInfo, ToolCall, Usage
-from aid.spec import AgentKind, ClaudeSdkSpec, ClaudeTtySpec, McpHttp, McpStdio, NativeSpec, PermissionMode
+from aid.spec import (
+    AgentKind,
+    ClaudeSdkSpec,
+    ClaudeTtySpec,
+    McpHttp,
+    McpStdio,
+    NativeSpec,
+    PermissionMode,
+    Private,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -90,6 +99,12 @@ def test_new_py_takes_the_models_children_may_run_on() -> None:
     args = _parser().parse_args(["new-py", "s", "agents:echo", "--spawn-model", "deepseek/.*"])
     args.agent_command = []
     assert isinstance(spec := _spec(args), NativeSpec) and spec.spawn_models == ["deepseek/.*"]
+
+
+def test_new_py_makes_a_private_session() -> None:
+    args = _parser().parse_args(["new-py", "s", "agents:echo", "--private", "vllm.example", "--private", "b.example"])
+    args.agent_command = []
+    assert isinstance(spec := _spec(args), NativeSpec) and spec.private == Private(hosts=["vllm.example", "b.example"])
 
 
 def test_new_py_makes_an_agent_from_instructions(tmp_path: Path) -> None:

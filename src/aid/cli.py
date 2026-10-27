@@ -44,7 +44,7 @@ from aid.protocol import (
     TurnError,
     Usage,
 )
-from aid.spec import AcpSpec, ClaudeSdkSpec, ClaudeTtySpec, NativeSpec, PermissionMode, Sandbox
+from aid.spec import AcpSpec, ClaudeSdkSpec, ClaudeTtySpec, NativeSpec, PermissionMode, Private, Sandbox
 from aid.web import OidcConfig, create_app
 from aid.web import serve as serve_web
 from aid.web.app import ENV_ASSETS
@@ -268,6 +268,12 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         metavar="REGEX",
         help="a provider/model spawned children may run on besides this session's own; repeatable",
+    )
+    py.add_argument(
+        "--private",
+        action="append",
+        metavar="HOST",
+        help="make the session private, its model allowed to send only to this host; repeatable",
     )
     py.add_argument(
         "--max-context",
@@ -518,6 +524,7 @@ def _spec(args: argparse.Namespace) -> AgentSpec:
         tags=tags,
         tools=args.tool,
         spawn_models=args.spawn_model,
+        private=Private(hosts=args.private) if args.private else None,
         **source,
     )
 
