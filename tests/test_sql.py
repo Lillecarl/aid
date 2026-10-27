@@ -85,6 +85,22 @@ async def test_an_excerpt_is_all_a_question_reads_of_its_source(tmp_path: Path) 
         assert refused.value.code == "query_failed"
 
 
+async def test_an_older_database_steps_up_through_its_migrations(tmp_path: Path) -> None:
+    path = tmp_path / "steps.db"
+    db = await Database.open(path, SCHEMA, 1)
+    await db.run(_fill)
+    await db.aclose()
+    newer = SCHEMA + "CREATE TABLE IF NOT EXISTS notes (text TEXT);"
+    with pytest.raises(AidError, match="no migration from version 1"):
+        await Database.open(path, newer, 3, {2: "SELECT 1"})
+    db = await Database.open(path, newer, 3, {1: "ALTER TABLE things ADD COLUMN kind TEXT", 2: "SELECT 1"})
+    await db.aclose()
+    assert (await ask({"one": path}, "SELECT count(kind), count(*) FROM things")).rows == [[0, 4]]
+    assert (await ask({"one": path}, "SELECT count(*) FROM notes")).rows == [[0]]
+    fresh = await Database.open(tmp_path / "fresh.db", newer, 3, {})
+    await fresh.aclose()
+
+
 async def test_a_long_question_is_interrupted(tmp_path: Path) -> None:
     with pytest.raises(AidError) as caught:
         await ask(

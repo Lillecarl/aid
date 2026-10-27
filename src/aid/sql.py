@@ -36,10 +36,18 @@ PROGRESS_STEPS: Final = 1000
 READING: Final = frozenset({apsw.SQLITE_SELECT, apsw.SQLITE_READ, apsw.SQLITE_FUNCTION, apsw.SQLITE_RECURSIVE})
 
 
-def _create(db: apsw.Connection, schema: str, version: int) -> None:
+def _create(db: apsw.Connection, schema: str, version: int, migrations: Mapping[int, str]) -> None:
     db.execute("PRAGMA journal_mode = WAL")
     db.execute("PRAGMA busy_timeout = 5000")
     with db:
+        found = db.execute("PRAGMA user_version").get
+        current = found if isinstance(found, int) else 0
+        # A file at version 0 is new: the schema makes it current. An older one steps up first; the schema then
+        # adds what is new, as it runs at every open.
+        for step in range(current, version) if current else ():
+            if (migration := migrations.get(step)) is None:
+                raise AidError("no_migration", f"no migration from version {step} to {step + 1}")
+            db.execute(migration)
         db.execute(schema)
         db.execute(f"PRAGMA user_version = {version}")
 
@@ -52,12 +60,13 @@ class Database:
         self._limiter = anyio.CapacityLimiter(1)
 
     @classmethod
-    async def open(cls, path: Path, schema: str, version: int) -> Database:
-        """Open or create `path` in WAL mode, so readers on other connections never wait on the writer."""
+    async def open(cls, path: Path, schema: str, version: int, migrations: Mapping[int, str] | None = None) -> Database:
+        """Open or create `path` in WAL mode, so readers on other connections never wait on the writer. A file at an
+        older `version` runs `migrations[n]` for each version n it passes, then the schema."""
         await anyio.Path(path).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         database = cls(await anyio.to_thread.run_sync(apsw.Connection, str(path)))
         try:
-            await database.run(_create, schema, version)
+            await database.run(_create, schema, version, migrations or {})
         except BaseException:
             await database.aclose()
             raise
