@@ -361,10 +361,13 @@ class OpenAIChatModel:
         return kwargs
 
     def reasoning(self, delta: ChoiceDelta) -> str | None:
-        """A streamed delta's reasoning text. DeepSeek and others stream it beside the content as
-        `reasoning_content`; the SDK keeps the extra field."""
-        thought = (delta.model_extra or {}).get("reasoning_content")
-        return thought if isinstance(thought, str) else None
+        """A streamed delta's reasoning text, beside the content: DeepSeek names it `reasoning_content`, OpenRouter
+        and vLLM `reasoning` (measured 2026-10-27, vLLM serving glm-5.3-flash). The SDK keeps the extra field."""
+        extra = delta.model_extra or {}
+        for key in ("reasoning_content", "reasoning"):
+            if isinstance(thought := extra.get(key), str) and thought:
+                return thought
+        return None
 
     def usage(self, usage: CompletionUsage) -> RequestUsage:
         return _openai_usage(usage)

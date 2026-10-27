@@ -659,7 +659,9 @@ async def test_provider_defaults_go_under_the_session_settings(monkeypatch: pyte
 
 
 async def test_openai_compatible_stream_keeps_reasoning_and_cache_reads(monkeypatch: pytest.MonkeyPatch) -> None:
-    data = event({"reasoning_content": "hmm"}) + event({"content": "ok"}) + event({}, finish="length")
+    # DeepSeek's field, then vLLM's and OpenRouter's: both are one stream's thinking.
+    data = event({"reasoning_content": "hm"}) + event({"reasoning": "m"}) + event({"content": "ok"})
+    data += event({}, finish="length")
     data += event(
         {},
         usage={
