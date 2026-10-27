@@ -28,6 +28,7 @@ from aid.protocol import (
     Delivery,
     JsonValue,
     Lifecycle,
+    ListModelSlots,
     MessageEntry,
     Output,
     PermissionDecider,
@@ -37,6 +38,7 @@ from aid.protocol import (
     QueryResult,
     RemoteControl,
     SessionInfo,
+    SlotUse,
     Started,
     TextDelta,
     ThoughtDelta,
@@ -62,6 +64,7 @@ if TYPE_CHECKING:
 ENV_CLIENT_SECRET = "AID_OIDC_CLIENT_SECRET"
 ENV_SESSION_SECRET = "AID_WEB_SESSION_SECRET"
 _JSON: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
+_LIST: TypeAdapter[list[JsonValue]] = TypeAdapter(list[JsonValue])
 
 log = structlog.get_logger(__name__)
 
@@ -384,6 +387,7 @@ def _parser() -> argparse.ArgumentParser:
     findings_query = findings_sub.add_parser("query", help="one read-only SQL statement over findings, as JSON")
     findings_query.add_argument("sql", help="tables: findings, verdicts")
     findings_query.add_argument("--table", action="store_true", help="tab-separated columns and rows instead of JSON")
+    sub.add_parser("slots", help="model hosts the daemon limits: capacity, who holds a slot, who waits")
     campaign = sub.add_parser("campaign", help="audit campaigns: a model reads every tracked file of many repositories")
     campaign_sub = campaign.add_subparsers(dest="campaign_command", required=True)
     campaign_sub.add_parser("start", help="start one from a JSON config; prints its status").add_argument(
@@ -754,6 +758,11 @@ async def _client_command(args: argparse.Namespace) -> None:
                         print(f"… more rows past {len(result.rows)}; narrow the query or aggregate", file=sys.stderr)
                 else:
                     print(result.model_dump_json())
+            case "slots":
+                for given in _LIST.validate_python(await client.call(ListModelSlots())):
+                    use = SlotUse.model_validate(given)
+                    held = f"{len(use.holders)}/{use.capacity}"
+                    print(f"{use.host}\t{held}\t{','.join(use.holders)}\t{len(use.waiting)} waiting")
             case "campaign":
                 match args.campaign_command:
                     case "start":

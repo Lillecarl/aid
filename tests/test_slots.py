@@ -8,7 +8,7 @@ import pytest
 
 import aid
 from aid.daemon import Daemon
-from aid.protocol import AidError
+from aid.protocol import AidError, ListModelSlots, SlotUse
 from aid.slots import ModelSlots
 from tests.conftest import py_spec
 from tests.models import HOST
@@ -84,6 +84,11 @@ async def test_one_slot_holds_the_second_session_until_the_first_request_ends(da
                 with anyio.move_on_after(1):
                     await waited.wait()
                 assert not waited.is_set()
+                listed = await client.call(ListModelSlots())
+                assert isinstance(listed, list)
+                assert [SlotUse.model_validate(use) for use in listed] == [
+                    SlotUse(host=HOST, capacity=1, holders=["first"], waiting=["second"])
+                ]
                 await first.cancel()  # The cancelled request gives its slot back.
                 await waited.wait()
             assert (await second.history(limit=5)).entries[-1].item.type == "output"

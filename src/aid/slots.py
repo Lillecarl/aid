@@ -20,7 +20,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from aid.client import connect
 from aid.control import ENV_MODEL_SLOTS
-from aid.protocol import AcquireModelSlot, AidError, ReleaseModelSlot
+from aid.protocol import AcquireModelSlot, AidError, ReleaseModelSlot, SlotUse
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Mapping
@@ -51,6 +51,17 @@ class ModelSlots:
         """Tokens released before the daemon saw them asked for: acquire and release travel on separate connections,
         so a cancelled wait's release can overtake its acquire. A late acquire for one is refused, not granted to a
         holder nobody would release before its worker exits."""
+
+    def use(self) -> list[SlotUse]:
+        return [
+            SlotUse(
+                host=host,
+                capacity=slots.capacity,
+                holders=list(slots.holders.values()),
+                waiting=[session for session, _ in slots.waiting.values()],
+            )
+            for host, slots in self._hosts.items()
+        ]
 
     def capacities(self) -> dict[str, int]:
         return {host: slots.capacity for host, slots in self._hosts.items()}

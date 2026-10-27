@@ -213,6 +213,19 @@ class ReceiveMessages(_Request):
     wait: Annotated[float, Field(ge=0, le=60)] = 25
 
 
+class ListModelSlots(_Request):
+    """Each limited model host: its capacity, the sessions holding a slot and those waiting, in order."""
+
+    op: Literal["model_slots"] = "model_slots"
+
+
+class SlotUse(_Message):
+    host: str
+    capacity: int
+    holders: list[str]
+    waiting: list[str]
+
+
 class AcquireModelSlot(_Request):
     """Answer once `token` holds one of the daemon's slots for model `host` (`aid.slots`). An agent connection asks
     for its own session."""
@@ -501,6 +514,7 @@ type Request = Annotated[
     | GetSpec
     | SetAttention
     | PublishSupervision
+    | ListModelSlots
     | AcquireModelSlot
     | ReleaseModelSlot,
     Field(discriminator="op"),

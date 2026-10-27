@@ -60,6 +60,7 @@ from aid.protocol import (
     Lifecycle,
     ListAgents,
     ListModels,
+    ListModelSlots,
     ListPlugins,
     ListSessions,
     Live,
@@ -978,6 +979,8 @@ class Daemon:
                 self._call_targets[client.plugin] = client
                 self._hooks[client.plugin] = frozenset(request.hooks)
                 return Done(id=request.id)
+            case ListModelSlots():
+                return Done(id=request.id, data=[use.model_dump(mode="json") for use in self._slots.use()])
             case AcquireModelSlot():
                 await self._slots.acquire(request.host, request.token, request.session or "")
                 return Done(id=request.id)
