@@ -14,6 +14,7 @@ from aid.backends.native import NativeBackend
 from aid.backends.permissions import PermissionWaits
 from aid.coding import (
     CODING,
+    SEARCH_LINE_CHARS,
     SPILL_LIMIT,
     Coding,
     Condition,
@@ -21,6 +22,7 @@ from aid.coding import (
     Verdict,
     WatchView,
     compact,
+    search,
     spill,
 )
 from aid.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
@@ -331,6 +333,45 @@ async def test_compact_leaves_short_history(tmp_path: Path) -> None:
     finally:
         CODING.reset(token)
     assert not (tmp_path / "history.json").exists()
+
+
+async def test_search_finds_lines_in_files_git_would_keep(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "build").mkdir()
+    (repo / ".git").mkdir()
+    (repo / ".gitignore").write_text("build/\n")
+    (repo / ".env").write_text("TOKEN=abc\n")
+    (repo / "src" / "app.py").write_text("x = 1\ntoken = os.environ['TOKEN']\n")
+    (repo / "src" / "blob.bin").write_bytes(b"TOKEN\0")
+    (repo / "src" / "min.js").write_text("TOKEN" + "x" * SEARCH_LINE_CHARS + "\n")
+    (repo / "build" / "out.py").write_text("TOKEN\n")
+    (repo / ".git" / "config").write_text("TOKEN\n")
+    (repo / "src" / "link.py").symlink_to(tmp_path / "outside.py")
+    (tmp_path / "outside.py").write_text("TOKEN\n")
+    coding = Coding(
+        cwd=repo,
+        store=tmp_path / "runs",
+        outputs=tmp_path / "outputs",
+        mode=PermissionMode.ALLOW,
+        timeout=60,
+        waits=PermissionWaits(),
+    )
+    token = CODING.set(coding)
+    try:
+        assert await search("TOKEN") == ".env:1: TOKEN=abc\nsrc/app.py:2: token = os.environ['TOKEN']"
+        assert await search("token", ignore_case=True, glob="src/**") == "src/app.py:2: token = os.environ['TOKEN']"
+        assert await search("TOKEN", path="src/app.py") == "src/app.py:2: token = os.environ['TOKEN']"
+        assert (
+            await search("TOKEN", limit=1) == ".env:1: TOKEN=abc\n… stopped at 1 matches; narrow path, glob or pattern"
+        )
+        assert await search("absent") == "no match for 'absent' under ."
+        with pytest.raises(AidError, match="outside"):
+            await search("TOKEN", path="../outside.py")
+        with pytest.raises(AidError, match="missing \\)"):
+            await search("(")
+    finally:
+        CODING.reset(token)
 
 
 async def test_outline_names_a_directory(daemon: Paths, tmp_path: Path) -> None:

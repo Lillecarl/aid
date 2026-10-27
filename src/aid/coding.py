@@ -26,13 +26,15 @@ import inspect
 import io
 import json
 import linecache
+import os
 import re
 import shlex
 import sys
+import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import anyio
@@ -67,7 +69,7 @@ from pyrun.script import script_frames
 from pyrun.shell import SHELL_ARGV, ShellResult, ShellSession
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Iterable
+    from collections.abc import Awaitable, Callable, Iterable, Iterator
 
     from pydantic import JsonValue
 
@@ -98,6 +100,13 @@ MATCH_FIRES_PER_POLL: Final = 20
 task must not flood the session's turns."""
 MATCH_LINE_LIMIT: Final = 1000
 """Characters of one matched line a notification carries; the full line waits in task_output."""
+SEARCH_LIMIT: Final = 100
+SEARCH_SECONDS: Final = 30.0
+"""A search stops here and says so: it runs in the edit thread, which every other edit tool waits on."""
+SEARCH_FILE_BYTES: Final = 4 << 20
+SEARCH_LINE_CHARS: Final = 4000
+"""Longer lines are skipped: minified bundles drown the results, and `re` backtracking grows with the line."""
+SEARCH_SHOWN_CHARS: Final = 300
 # A pyrun record, as a report names it: `<scope>.<n>/stdout`, or a scope's own file, `<scope>/printed`.
 _RECORD = re.compile(r"^(?P<scope>[0-9a-f]{6})(?:\.(?P<n>\d+))?/(?P<file>[\w.]+)$")
 PYTHON_READ: Final = "python:read"
@@ -929,6 +938,82 @@ async def outline(path: str) -> str:
     return "\n".join(f"{n.start_line}-{n.end_line}\t{n.kind}\t{n.name}" for n in nodes) or f"{path} defines nothing"
 
 
+async def search(
+    pattern: str, path: str = ".", glob: str | None = None, ignore_case: bool = False, limit: int = SEARCH_LIMIT
+) -> str:
+    """Find a regex (Python `re`, one line at a time) in the files under `path`, as `file:line: text`.
+
+    `glob` keeps files whose path relative to your working directory matches it (`**/*.py`). Skipped: `.git`,
+    paths a .gitignore excludes, binary files, files over 4 MiB and lines over 4000 characters. Stops at `limit`
+    matches or after 30 seconds, and says so."""
+    coding = _coding()
+    try:
+        regex = re.compile(pattern, re.IGNORECASE if ignore_case else 0)
+    except re.error as error:
+        raise AidError("bad_pattern", f"{pattern!r}: {error}") from None
+    start = coding.resolve(path)
+    root = coding.cwd.resolve()
+    hits, stopped = await coding.edit(lambda s: _search(s, root, start, regex, glob, max(limit, 1)))
+    if not hits:
+        return f"no match for {pattern!r} under {path}" + (f" ({stopped})" if stopped else "")
+    return "\n".join(hits) + (f"\n… {stopped}; narrow path, glob or pattern" if stopped else "")
+
+
+def _search(
+    session: EditSession, root: Path, start: Path, regex: re.Pattern[str], glob: str | None, limit: int
+) -> tuple[list[str], str | None]:
+    deadline = time.monotonic() + SEARCH_SECONDS
+    staged = session.staged()
+    hits: list[str] = []
+    for file in _searched_files(session, start):
+        if time.monotonic() > deadline:
+            return hits, f"stopped after {SEARCH_SECONDS:g} seconds"
+        shown = str(file.relative_to(root)) if file.is_relative_to(root) else str(file)
+        if glob is not None and not PurePath(shown).full_match(glob):
+            continue
+        if (text := _searched_text(file, staged)) is None:
+            continue
+        for number, line in enumerate(text.splitlines(), 1):
+            if len(line) <= SEARCH_LINE_CHARS and regex.search(line):
+                hits.append(f"{shown}:{number}: {line[:SEARCH_SHOWN_CHARS]}")
+                if len(hits) == limit:
+                    return hits, f"stopped at {limit} matches"
+    return hits, None
+
+
+def _searched_files(session: EditSession, start: Path) -> Iterator[Path]:
+    if not start.is_dir():
+        yield start
+        return
+    ignore = session.ignore_filter
+    # .gitignore rules hold under the session's directory; a pyrun record or a spilled output has none.
+    governed = start.is_relative_to(session.root)
+    for directory, dirs, files in os.walk(start):
+        here = Path(directory)
+        dirs[:] = sorted(d for d in dirs if d != ".git" and not (governed and ignore.ignored(here / d, is_dir=True)))
+        for name in sorted(files):
+            if not (file := here / name).is_symlink() and not (governed and ignore.ignored(file)):
+                yield file
+
+
+def _searched_text(file: Path, staged: dict[Path, str | bytes | None]) -> str | None:
+    """The file as `read` shows it: staged content first; None for a binary, oversized or vanished file."""
+    if file in staged:
+        content = staged[file]
+    else:
+        try:
+            if file.stat().st_size > SEARCH_FILE_BYTES:
+                return None
+            content = file.read_bytes()
+        except OSError:
+            return None
+    if content is None or isinstance(content, str):
+        return content
+    if b"\0" in content[:8192]:
+        return None
+    return content.decode(errors="replace")
+
+
 async def show_edits() -> str:
     """Everything staged so far, as one diff."""
     return _coding().diff() or "nothing is staged"
@@ -1457,6 +1542,7 @@ coding_tools: Toolset = Toolset(
         _retrying(rename_symbol),
         _retrying(apply_patch),
         Tool(_retrying(outline), kind="read"),
+        Tool(_retrying(search), kind="read"),
         _retrying(show_edits),
         _retrying(discard_edits),
         _retrying(compact),

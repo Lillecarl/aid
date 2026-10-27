@@ -349,7 +349,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   rows only, rechecking kind and parents. Rows in the session dir's `removals.db` (apsw, the worker writes:
   `removal_plans` with the permission `request_id`, `removal_entries` with `top`/`within`/`tracked`/`outcome`,
   `removal_kept`); the request's input is a `RemovalPreview` naming the plan. `preview=True` plans without asking.
-- `src/aid/coding.py` — `aid.coding_tools`, a toolset native agents opt into: list and read, pyedit edits through its
+- `src/aid/coding.py` — `aid.coding_tools`, a toolset native agents opt into: list, read and `search` (`re` per
+  line in the edit thread, no program run: skips `.git`, gitignored paths, binaries, >4 MiB files, long lines;
+  stops at `limit` or `SEARCH_SECONDS`), pyedit edits through its
   library (`EditSession`, staged until `apply_edits`; no agent code runs in the worker), and `python` (pyrun
   `run_script` in a child, each command asked under `python`; file reads and writes outside the cwd under
   `python:read` / `python:write` via pyrun's audit-hook guard, `pyrun/src/pyrun/files.py`: async mode only, not
