@@ -2755,6 +2755,9 @@
         },
         "session_summary": {
           "$ref": "#/$defs/SessionSummary"
+        },
+        "stream_chunk": {
+          "$ref": "#/$defs/StreamChunk"
         }
       },
       "required": [
@@ -2766,6 +2769,7 @@
         "session_event",
         "session_summary",
         "live_chunk",
+        "stream_chunk",
         "agent_catalog",
         "model_listing",
         "file_entry",
@@ -3516,6 +3520,38 @@
         "session"
       ],
       "title": "StopSession",
+      "type": "object"
+    },
+    "StreamChunk": {
+      "additionalProperties": false,
+      "description": "A text or thinking delta of a running turn, published on its session's stream topic for every watcher, not\nonly the client that prompted: a page with the chat open shows it until history records the joined block.\nAdvisory: a dropped chunk shows late, when the block lands in history.",
+      "properties": {
+        "event": {
+          "discriminator": {
+            "mapping": {
+              "text": "#/$defs/TextDelta",
+              "thought": "#/$defs/ThoughtDelta"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/TextDelta"
+            },
+            {
+              "$ref": "#/$defs/ThoughtDelta"
+            }
+          ]
+        },
+        "turn": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "turn",
+        "event"
+      ],
+      "title": "StreamChunk",
       "type": "object"
     },
     "TextDelta": {

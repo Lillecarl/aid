@@ -1107,6 +1107,7 @@ export interface Received {
   session_info: SessionInfo;
   session_status: SessionStatus;
   session_summary: SessionSummary;
+  stream_chunk: StreamChunk;
 }
 /**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -1197,6 +1198,18 @@ export interface SessionSummary {
   starts: number;
   thought_tokens: number;
   turns: number;
+}
+/**
+ * A text or thinking delta of a running turn, published on its session's stream topic for every watcher, not
+ * only the client that prompted: a page with the chat open shows it until history records the joined block.
+ * Advisory: a dropped chunk shows late, when the block lands in history.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "StreamChunk".
+ */
+export interface StreamChunk {
+  event: TextDelta | ThoughtDelta;
+  turn: string;
 }
 /**
  * What the page sends aid web.

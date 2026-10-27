@@ -27,6 +27,7 @@ from aid.protocol import (
     SessionInfo,
     SessionStatus,
     SessionSummary,
+    StreamChunk,
 )
 from aid.spec import AgentSpec
 from aid.web.files import DirCompletions, Entry, FileView
@@ -44,6 +45,7 @@ class Received(BaseModel):
     session_event: SessionEvent
     session_summary: SessionSummary
     live_chunk: LiveChunk
+    stream_chunk: StreamChunk
     agent_catalog: AgentCatalog
     model_listing: ModelListing
     file_entry: Entry

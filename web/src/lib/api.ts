@@ -12,6 +12,7 @@ import type {
   HistoryEntry,
   HistoryPage,
   LiveChunk,
+  StreamChunk,
   ModelListing,
   PageReply,
   PageRequest,
@@ -204,6 +205,14 @@ export const followHistory = (
     message: (payload) =>
       onentry(JSON.parse(decoder.decode(payload)) as HistoryEntry),
     open: onopen,
+  });
+
+/** Each text and thinking delta of the session's running turn, whoever prompted it. Never recorded as such: history
+ * takes the joined block, so a chunk the relay dropped shows late, when the block lands. */
+export const followStream = (name: string, onchunk: (chunk: StreamChunk) => void) =>
+  listen(`session/${name}/stream/`, {
+    message: (payload) => onchunk(JSON.parse(decoder.decode(payload)) as StreamChunk),
+    open: () => undefined,
   });
 
 /** Output the session's agent pipes through `usertee`, as it comes. `onopen` runs on each subscription: fetch what the

@@ -89,6 +89,7 @@ from aid.protocol import (
     StartFailed,
     StartSession,
     StopSession,
+    StreamChunk,
     TextDelta,
     ThoughtDelta,
     ToolCall,
@@ -1657,6 +1658,11 @@ class Daemon:
                             session.note(reply.event)
                             await self._learn_tool(session, reply.event)
                         await self._record(route, reply)
+                        if isinstance(reply.event, TextDelta | ThoughtDelta):
+                            # After recording: a delta of a new block flushes the last one to history first, and a
+                            # page drops its streamed rows when that entry lands, so the delta must follow it.
+                            chunk = StreamChunk(turn=reply.id, event=reply.event)
+                            await self._publish(events.stream_topic(route.session), chunk.model_dump_json().encode())
                 case Done() | Failure():
                     if (route := self._routes.pop(reply.id, None)) is not None:
                         # The reply tells its client the turn is over: a prompt sent on it found the turn still

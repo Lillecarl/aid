@@ -14,6 +14,7 @@ import zmq.asyncio
 import aid
 from aid import events
 from aid.paths import Paths
+from aid.protocol import HistoryEntry, StreamChunk
 from aid.spec import PermissionMode
 from tests.conftest import py_spec
 from tests.test_coding import plan
@@ -22,7 +23,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
     from pathlib import Path
 
-    from aid.protocol import HistoryEntry
 
 pytestmark = pytest.mark.anyio
 
@@ -66,6 +66,33 @@ async def subscribed(paths: Paths, *prefixes: bytes) -> AsyncGenerator[Subscribe
     finally:
         sock.close(linger=0)
         ctx.term()
+
+
+async def test_every_watcher_hears_a_turn_stream_before_history_joins_it(daemon: Paths, tmp_path: Path) -> None:
+    gate = tmp_path / "gate"
+    gate.touch()
+    spec = py_spec(tmp_path, "agents:thinker", AID_THINK_GATE=str(gate))
+    with anyio.fail_after(TIMEOUT):
+        async with (
+            subscribed(daemon, events.stream_topic("t"), events.history_topic("t")) as sub,
+            aid.connect(daemon) as client,
+        ):
+            await client.create("t", spec)
+            await client.session("t").run("go")
+            heard: list[tuple[str, str]] = []
+            while not any(kind == "output" for kind, _ in heard):
+                topic, payload = await sub.next()
+                if topic == events.stream_topic("t"):
+                    chunk = StreamChunk.model_validate(payload)
+                    heard.append((f"stream {chunk.event.type}", chunk.event.text))
+                else:
+                    item = HistoryEntry.model_validate(payload).item
+                    heard.append((item.type, getattr(item, "text", "")))
+    order = [kind for kind, _ in heard if kind not in {"started", "prompt", "usage"}]
+    # The thought lands in history before the first text delta streams: a page drops streamed rows on each entry.
+    assert order[:4] == ["stream thought", "stream thought", "thought", "stream text"]
+    assert "".join(text for kind, text in heard if kind == "stream thought") == "hmm, let me think"
+    assert ("thought", "hmm, let me think") in heard and ("text", "thought through") in heard
 
 
 async def test_the_daemon_publishes_changes(daemon: Paths, tmp_path: Path) -> None:

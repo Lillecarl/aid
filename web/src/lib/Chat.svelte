@@ -291,6 +291,9 @@
     }
     newest = entry.seq;
     const follow = nearBottom();
+    // A recorded entry ends the block the stream topic was showing: history has it joined, or the next event closed
+    // it. Both arrive on one socket, in the order the daemon published them.
+    rows = rows.filter((r) => r.seq !== undefined || r.local);
     append(rows, entry.item, `h${entry.seq}`, entry.seq);
     trimTop();
     if (follow) void toBottom();
@@ -574,6 +577,10 @@
         if (!busy && !loading) void reconcile().catch(() => undefined);
       });
     });
+    // Text and thinking of turns this page did not send stream here; its own turn streams on its prompt.
+    const unwatchStream = api.followStream(name, (chunk) => {
+      if (!busy && !hasNewer) apply(chunk.event);
+    });
     const unwatchStatus = api.followStatus(
       name,
       (status) => {
@@ -603,6 +610,7 @@
       unwatch?.();
       unwatchStatus();
       unwatchLive();
+      unwatchStream();
       void dictation?.stop();
     };
   });

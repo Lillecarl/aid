@@ -12,6 +12,8 @@
 - `session/<name>/permission/`: each permission request or decision as the worker sent it, with its turn
   (`PermissionEvent`). Observability only: answering stays on the permission paths, so a dropped event
   costs insight, never a hung agent.
+- `session/<name>/stream/`: each text and thinking delta of a running turn (`StreamChunk`), whoever prompted it.
+  Never recorded as such: history takes the joined block, so a dropped chunk costs only the live view.
 - `session/<name>/live/`: output an agent piped through `usertee` (`LiveChunk`), for a person to watch. Never
   recorded; `GetLive` fetches the newest of it for a late subscriber, and a dropped chunk is gone.
 - `session/<name>/supervision/`: what a supervised session's link did (`SupervisionEvent`): each firing
@@ -62,6 +64,10 @@ def tool_topic(name: str) -> bytes:
 
 def permission_topic(name: str) -> bytes:
     return session_prefix(name) + b"permission/"
+
+
+def stream_topic(name: str) -> bytes:
+    return session_prefix(name) + b"stream/"
 
 
 def live_topic(name: str) -> bytes:

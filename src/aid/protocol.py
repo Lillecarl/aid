@@ -676,6 +676,15 @@ class ToolCall(_Message):
     """Files the call touches, `path` or `path:line`."""
 
 
+class StreamChunk(_Message):
+    """A text or thinking delta of a running turn, published on its session's stream topic for every watcher, not
+    only the client that prompted: a page with the chat open shows it until history records the joined block.
+    Advisory: a dropped chunk shows late, when the block lands in history."""
+
+    turn: str
+    event: Annotated[TextDelta | ThoughtDelta, Field(discriminator="type")]
+
+
 class LiveChunk(_Message):
     """Output an agent piped through `usertee` (`aid/usertee.py`), for a person to watch: published on its
     session's live topic, and the answer to `GetLive`. `turn` is the turn it came in, None outside one. Advisory

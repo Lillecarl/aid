@@ -494,6 +494,9 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
 - claude-tty depends on Claude Code's screen and transcript, neither an API. `claude_tty.py` and
   `transcript.py` say what was measured, on which version; re-measure before changing them.
 - libpymux and the `pymux` binary come from one pyterm pin (`default.nix`): the wire protocol still moves.
+- Turn text and thinking reach every watcher on `session/<name>/stream/` (`StreamChunk`), published after the
+  recorder took the delta, so a block's history entry precedes the next block's first delta; Chat shows chunks of
+  turns it did not send as unrecorded rows and drops them on each recorded entry (one events socket keeps order).
 - Web live views stream only while their tab is mounted and the browser tab is visible: status, list and history by
   `api.follow*` (the events WebSocket closes on a hidden tab), Terminal by `<pymux-pane>` (pyterm's `pymux-element`, linked in as `node_modules/pymux-pane`)
   over `/api/sessions/{name}/pane`, which relays `libpymux.PaneStream` without reading it. The element styles
