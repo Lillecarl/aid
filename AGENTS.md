@@ -173,6 +173,18 @@ on reusable decisions and current boundaries; put long investigations and dated 
   an argument; path confined to it (absolute allowed inside), lines within the file, `evidence` must occur in it
   (whitespace squeezed) else refused. Duplicates kept, grouped by `dedup`. `verdicts` for review passes. `query`
   (`aid findings query`) operator only. Plan: `docs/audit-campaigns.md`.
+- `plugins/campaign/` — audit campaigns, bundled, `autostart` (read, prompt, manage, private; operator calls only:
+  `start`/`status`/`pause`/`resume`, `aid campaign`). `CampaignConfig` (name, root, repos or every `.git` dir, model +
+  settings, `hosts` → every session private, env, python_path, `Limits`, concurrency, attempts, supervise, backoff).
+  Root session `<name>`: agent `supervisor` on the campaign model, ceiling `SUPERVISOR_TOOLS` (no man/tldr: they run
+  programs). Per repository `<name>.<slug>` (`session_names`): instructions spec, ceiling `AUDITOR_TOOLS`,
+  `fresh_turns`, `instruction_providers=[]` (nothing from the audited tree composes), parent root, supervisor root if
+  `supervise`. `units.py` (pure): `git ls-files`, skip excluded/links/oversized/binary, chunk by file and byte caps;
+  `uncovered`: a file is read when completed `read` calls' `[offset, offset+limit)` ranges cover every line, events
+  merged per (turn, tool_call_id) (models renumber calls each turn). Brief turn, then a turn per unit; unread files
+  prompted again (brief included: turns are fresh) until `attempts`; turn errors back off. `store.py`
+  (`campaign.db`): campaigns, repos, units with `start_seq`; a resumed `running` unit checks coverage since it before
+  prompting. Calls wait for `_ready` (stored campaigns launched).
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API, native blocks,
   `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions) and `GoogleModel`

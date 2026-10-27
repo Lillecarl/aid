@@ -99,16 +99,18 @@ def chunk(files: Sequence[FileInfo], limits: Limits) -> list[list[FileInfo]]:
     return units
 
 
-def _merged(calls: Iterable[ToolCall]) -> list[ToolCall]:
-    """One record per call: later events fill what earlier ones left empty, as `ToolCall` says."""
-    merged: dict[str, ToolCall] = {}
-    for call in calls:
-        earlier = merged.get(call.tool_call_id)
+def _merged(calls: Iterable[tuple[str, ToolCall]]) -> list[ToolCall]:
+    """One record per call: later events fill what earlier ones left empty, as `ToolCall` says. Keyed by turn too:
+    a model may number its calls afresh each turn (`call_0`), and fresh turns make that likelier."""
+    merged: dict[tuple[str, str], ToolCall] = {}
+    for turn, call in calls:
+        key = (turn, call.tool_call_id)
+        earlier = merged.get(key)
         if earlier is None:
-            merged[call.tool_call_id] = call
+            merged[key] = call
         else:
             given = call.model_dump(exclude_defaults=True, exclude={"type"})
-            merged[call.tool_call_id] = earlier.model_copy(update=given)
+            merged[key] = earlier.model_copy(update=given)
     return list(merged.values())
 
 
@@ -118,8 +120,8 @@ def _relative(repo: Path, given: str) -> str | None:
     return str(target.relative_to(root)) if target.is_relative_to(root) else None
 
 
-def read_ranges(repo: Path, calls: Iterable[ToolCall]) -> dict[str, list[tuple[int, int]]]:
-    """Each file's line ranges `[first, past)` that completed `read` calls returned."""
+def read_ranges(repo: Path, calls: Iterable[tuple[str, ToolCall]]) -> dict[str, list[tuple[int, int]]]:
+    """Each file's line ranges `[first, past)` that completed `read` calls returned; `calls` are `(turn, event)`."""
     ranges: dict[str, list[tuple[int, int]]] = {}
     for call in _merged(calls):
         if call.tool != "read" or call.status != "completed" or not isinstance(call.input, dict):
@@ -144,7 +146,7 @@ def _covers(ranges: Sequence[tuple[int, int]], lines: int) -> bool:
     return reached > lines
 
 
-def uncovered(repo: Path, files: Sequence[FileInfo], calls: Iterable[ToolCall]) -> list[str]:
+def uncovered(repo: Path, files: Sequence[FileInfo], calls: Iterable[tuple[str, ToolCall]]) -> list[str]:
     """The unit's files some line of which no completed `read` returned."""
     ranges = read_ranges(repo, calls)
     return [file.path for file in files if not _covers(ranges.get(file.path, []), file.lines)]

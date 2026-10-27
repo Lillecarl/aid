@@ -30,9 +30,11 @@ code and no finding leaves the operator's infrastructure.
 3. **Privacy.** Built: the `private` spec field with its model hosts, enforced by the daemon (requests, messages,
    plugin calls, events) and by the worker (model host checked at start). Plugins see private sessions only with the
    `private` grant; the bundled findings, forks, spawn and supervision plugins hold it, Discord and Telegram do not.
-4. **Campaign plugin.** Units from `git ls-files`, with size and binary filters. One session per repository, on
-   an instructions spec with a read-only ceiling. A per-repository brief first, then one turn per unit.
-   Supervision on a self-hosted model. Bounded concurrency.
+4. **Campaign plugin.** Built: `plugins/campaign/`, `aid campaign start CONFIG.json`. Units from `git ls-files`,
+   with size and binary filters. One private session per repository on an instructions spec with a read-only
+   ceiling, fresh turns and no instructions from the audited tree. A brief first, then one turn per unit; a unit
+   is done when the recorded reads cover every line of its files. The root session supervises on the same model.
+   Bounded concurrency; a restart resumes from the database.
 5. **Pilot.** Two or three small repositories. Measure context growth per unit, the server's concurrency, cost in
    time, and the false-positive rate. Size the full run from these numbers.
 6. **Review.** A second campaign over the findings: confirm, reject or mark duplicate, with a reason. Then a

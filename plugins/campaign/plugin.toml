@@ -1,0 +1,4 @@
+version = "0.1.0"
+description = "Audit campaigns: a self-hosted model reads every tracked file of a tree of repositories under supervision."
+autostart = true
+requires = ["findings", "supervision"]

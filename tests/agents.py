@@ -235,6 +235,68 @@ async def _planned_stream(messages: list[ModelMessage], info: AgentInfo) -> Asyn
 coder = Agent(FunctionModel(_planned, stream_function=_planned_stream), toolsets=[aid.coding_tools])
 
 
+_LISTED = re.compile(r"^- (\S+) \((\d+) lines\)$", re.MULTILINE)
+
+
+def _auditing(messages: list[ModelMessage], *, lazy: bool) -> ModelResponse:
+    """A campaign's auditor: reads every file the unit prompt lists, in 2000-line parts, reports a finding where a
+    file holds `hunter2`, then answers. `lazy` leaves the first file unread when the prompt lists more than one."""
+    start = max(
+        i
+        for i, m in enumerate(messages)
+        if any(isinstance(p, UserPromptPart) and not _is_note(p.content) for p in m.parts)
+    )
+    prompt = next(p.content for p in messages[start].parts if isinstance(p, UserPromptPart) and not _is_note(p.content))
+    listed = [(path, int(lines)) for path, lines in _LISTED.findall(str(prompt))]
+    if not listed:
+        return ModelResponse(parts=[TextPart("A test repository.")])
+    if lazy and len(listed) > 1:
+        listed = listed[1:]
+    turn = messages[start:]
+    called = [p for m in turn for p in m.parts if isinstance(p, ToolCallPart)]
+    planned = [
+        {"path": path, "offset": offset, "limit": 2000}
+        for path, lines in listed
+        for offset in range(1, max(lines, 1) + 1, 2000)
+    ]
+    if len(called) < len(planned):
+        return ModelResponse(parts=[ToolCallPart("read", planned[len(called)], tool_call_id=f"read{len(called)}")])
+    returns = [p for m in turn for p in m.parts if isinstance(p, ToolReturnPart) and p.tool_name == "read"]
+    leaked = next((p for p in returns if "hunter2" in str(p.content)), None)
+    if leaked is not None and not any(c.tool_name == "report_finding" for c in called):
+        source = next(c for c in called if c.tool_call_id == leaked.tool_call_id)
+        path = source.args_as_dict()["path"]
+        report = {"path": path, "category": "secret", "severity": "high", "title": "Password", "detail": "In source."}
+        return ModelResponse(parts=[ToolCallPart("report_finding", report, tool_call_id="report")])
+    return ModelResponse(parts=[TextPart("\n".join(f"{path}: read" for path, _ in listed))])
+
+
+async def _auditing_stream(messages: list[ModelMessage], *, lazy: bool) -> AsyncIterator[str | DeltaToolCalls]:
+    match _auditing(messages, lazy=lazy).parts:
+        case [ToolCallPart() as call]:
+            yield {
+                0: DeltaToolCall(name=call.tool_name, json_args=call.args_as_json_str(), tool_call_id=call.tool_call_id)
+            }
+        case [TextPart() as text]:
+            yield text.content
+        case parts:
+            raise ValueError(f"unexpected parts {parts}")
+
+
+async def _audit(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    async for delta in _auditing_stream(messages, lazy=False):
+        yield delta
+
+
+async def _audit_lazily(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    async for delta in _auditing_stream(messages, lazy=True):
+        yield delta
+
+
+auditor = Agent(FunctionModel(stream_function=_audit))
+lazy_auditor = Agent(FunctionModel(stream_function=_audit_lazily))
+
+
 async def control_call(request: dict[str, JsonValue]) -> str:
     """Call the daemon through this agent's normal connector and return the result or refusal code."""
     try:

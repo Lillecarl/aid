@@ -72,8 +72,8 @@ def test_units_close_at_either_cap_in_path_order() -> None:
     assert [[f.path for f in group] for group in groups] == [["d/a", "d/b"], ["d/c"], ["d/e"]]
 
 
-def call(call_id: str, **fields: JsonValue) -> ToolCall:
-    return ToolCall.model_validate({"tool_call_id": call_id, **fields})
+def call(call_id: str, turn: str = "t1", **fields: JsonValue) -> tuple[str, ToolCall]:
+    return turn, ToolCall.model_validate({"tool_call_id": call_id, **fields})
 
 
 def test_a_file_is_covered_only_when_completed_reads_return_every_line(tmp_path: Path) -> None:
@@ -99,3 +99,14 @@ def test_a_file_is_covered_only_when_completed_reads_return_every_line(tmp_path:
     assert uncovered(tmp_path, [long, short, empty], calls) == []
     outside = [call("8", tool="read", status="completed", input={"path": "../repo2/short.py"})]
     assert uncovered(tmp_path / "x", [short], outside) == ["src/short.py"]
+
+
+def test_calls_numbered_afresh_each_turn_stay_apart(tmp_path: Path) -> None:
+    files = [FileInfo(path="a.py", lines=1, size=1), FileInfo(path="b.py", lines=1, size=1)]
+    calls = [
+        call("call_0", "t1", tool="read", status="in_progress", input={"path": "b.py"}),
+        call("call_0", "t1", status="completed"),
+        call("call_0", "t2", tool="read", status="in_progress", input={"path": "a.py"}),
+        call("call_0", "t2", status="completed"),
+    ]
+    assert uncovered(tmp_path, files, calls) == []
