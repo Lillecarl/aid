@@ -34,7 +34,10 @@ code and no finding leaves the operator's infrastructure.
    with size and binary filters. One private session per repository on an instructions spec with a read-only
    ceiling, fresh turns and no instructions from the audited tree. A brief first, then one turn per unit; a unit
    is done when the recorded reads cover every line of its files. The root session supervises on the same model.
-   Bounded concurrency; a restart resumes from the database.
+   Bounded concurrency; a restart resumes from the database. A big repository is mapped into subsystems by the
+   model and checked by the plugin (every file in exactly one), audited by a child session per subsystem, and ends
+   with an integration turn that looks for issues across them. The daemon's model slots keep the server at its best
+   batch (`--model-slots`).
 5. **Pilot.** Two or three small repositories. Measure context growth per unit, the server's concurrency, cost in
    time, and the false-positive rate. Size the full run from these numbers.
 6. **Review.** A second campaign over the findings: confirm, reject or mark duplicate, with a reason. Then a

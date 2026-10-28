@@ -26,8 +26,11 @@ if TYPE_CHECKING:
     import apsw
 
 CAMPAIGN_FILE: Final = "campaign.db"
-SCHEMA_VERSION: Final = 2
-MIGRATIONS: Final = {1: "ALTER TABLE units ADD COLUMN covered TEXT"}
+SCHEMA_VERSION: Final = 3
+MIGRATIONS: Final = {
+    1: "ALTER TABLE units ADD COLUMN covered TEXT",
+    2: "ALTER TABLE units ADD COLUMN subsystem INTEGER; ALTER TABLE units ADD COLUMN answer TEXT",
+}
 SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS campaigns (
     name TEXT PRIMARY KEY,
@@ -59,6 +62,20 @@ CREATE TABLE IF NOT EXISTS units (
     error TEXT,
     started REAL,
     ended REAL,
+    subsystem INTEGER,
+    answer TEXT,
+    PRIMARY KEY (campaign, repo, idx),
+    FOREIGN KEY (campaign, repo) REFERENCES repos (campaign, path)
+) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS subsystems (
+    campaign TEXT NOT NULL,
+    repo TEXT NOT NULL,
+    idx INTEGER NOT NULL,
+    name TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    boundaries TEXT NOT NULL,
+    globs TEXT NOT NULL,
+    session TEXT NOT NULL,
     PRIMARY KEY (campaign, repo, idx),
     FOREIGN KEY (campaign, repo) REFERENCES repos (campaign, path)
 ) WITHOUT ROWID;
@@ -79,6 +96,10 @@ class RepoState(StrEnum):
     LISTED = "listed"
     """Its units are planned."""
     BRIEFED = "briefed"
+    MAPPED = "mapped"
+    """Split into subsystems, each audited by a session of its own; its units re-planned per subsystem."""
+    INTEGRATED = "integrated"
+    """Its integration turn looked across the subsystems."""
     DONE = "done"
     FAILED = "failed"
 
@@ -127,6 +148,19 @@ class Unit(BaseModel):
     """Files earlier attempts read every line of, in turns that ended."""
     missing: list[str]
     error: str | None
+    subsystem: int | None
+    """The subsystem it belongs to, for a split repository; its session audits it."""
+    answer: str | None
+    """The last attempt's final text, for the integration turn."""
+
+
+class SubsystemRow(BaseModel):
+    idx: int
+    name: str
+    purpose: str
+    boundaries: str
+    globs: list[str]
+    session: str
 
 
 def _repo(row: apsw.SQLiteValues) -> Repo:
@@ -145,7 +179,7 @@ def _repo(row: apsw.SQLiteValues) -> Repo:
 
 
 def _unit(row: apsw.SQLiteValues) -> Unit:
-    campaign, repo, idx, files, state, attempts, start_seq, covered, missing, error = row
+    campaign, repo, idx, files, state, attempts, start_seq, covered, missing, error, subsystem, answer = row
     return Unit.model_validate(
         {
             "campaign": campaign,
@@ -158,6 +192,8 @@ def _unit(row: apsw.SQLiteValues) -> Unit:
             "covered": _PATHS.validate_json(covered) if isinstance(covered, str) else [],
             "missing": _PATHS.validate_json(missing) if isinstance(missing, str) else [],
             "error": error,
+            "subsystem": subsystem,
+            "answer": answer,
         }
     )
 
@@ -203,6 +239,39 @@ def _plan(
             "UPDATE repos SET state = ?, skipped = ? WHERE campaign = ? AND path = ?",
             (RepoState.LISTED, _SKIPPED.dump_json(list(skipped)).decode(), campaign, repo),
         )
+
+
+def _split(
+    db: apsw.Connection,
+    campaign: str,
+    repo: str,
+    subsystems: Sequence[SubsystemRow],
+    units: Sequence[tuple[int, Sequence[FileInfo]]],
+) -> None:
+    with db:
+        db.execute("DELETE FROM units WHERE campaign = ? AND repo = ?", (campaign, repo))
+        db.execute("DELETE FROM subsystems WHERE campaign = ? AND repo = ?", (campaign, repo))
+        for part in subsystems:
+            db.execute(
+                "INSERT INTO subsystems (campaign, repo, idx, name, purpose, boundaries, globs, session)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    campaign,
+                    repo,
+                    part.idx,
+                    part.name,
+                    part.purpose,
+                    part.boundaries,
+                    json.dumps(part.globs),
+                    part.session,
+                ),
+            )
+        for idx, (subsystem, files) in enumerate(units):
+            db.execute(
+                "INSERT INTO units (campaign, repo, idx, files, state, subsystem) VALUES (?, ?, ?, ?, ?, ?)",
+                (campaign, repo, idx, _FILES.dump_json(list(files)).decode(), UnitState.PENDING, subsystem),
+            )
+        db.execute("UPDATE repos SET state = ? WHERE campaign = ? AND path = ?", (RepoState.MAPPED, campaign, repo))
 
 
 class CampaignStore:
@@ -251,6 +320,35 @@ class CampaignStore:
     ) -> None:
         await self._db.run(_plan, campaign, repo, units, skipped)
 
+    async def split(
+        self,
+        campaign: str,
+        repo: str,
+        subsystems: Sequence[SubsystemRow],
+        units: Sequence[tuple[int, Sequence[FileInfo]]],
+    ) -> None:
+        """Replace the repository's units with `units`, each `(subsystem, files)`, and record its subsystems."""
+        await self._db.run(_split, campaign, repo, subsystems, units)
+
+    async def subsystems(self, campaign: str, repo: str) -> list[SubsystemRow]:
+        return await self._db.run(
+            lambda db: [
+                SubsystemRow(
+                    idx=int(str(idx)),
+                    name=str(name),
+                    purpose=str(purpose),
+                    boundaries=str(boundaries),
+                    globs=_PATHS.validate_json(str(globs)),
+                    session=str(session),
+                )
+                for idx, name, purpose, boundaries, globs, session in db.execute(
+                    "SELECT idx, name, purpose, boundaries, globs, session FROM subsystems"
+                    " WHERE campaign = ? AND repo = ? ORDER BY idx",
+                    (campaign, repo),
+                )
+            ]
+        )
+
     async def briefed(self, campaign: str, repo: str, brief: str) -> None:
         await self._db.run(
             lambda db: db.execute(
@@ -271,7 +369,8 @@ class CampaignStore:
             lambda db: [
                 _unit(row)
                 for row in db.execute(
-                    "SELECT campaign, repo, idx, files, state, attempts, start_seq, covered, missing, error FROM units"
+                    "SELECT campaign, repo, idx, files, state, attempts, start_seq, covered, missing, error, subsystem, answer"
+                    " FROM units"
                     " WHERE campaign = ? AND repo = ? ORDER BY idx",
                     (campaign, repo),
                 )
@@ -287,17 +386,24 @@ class CampaignStore:
         )
 
     async def attempt_ended(
-        self, unit: Unit, attempts: int, covered: Sequence[str], missing: Sequence[str], error: str | None
+        self,
+        unit: Unit,
+        attempts: int,
+        covered: Sequence[str],
+        missing: Sequence[str],
+        error: str | None,
+        answer: str | None,
     ) -> None:
         await self._db.run(
             lambda db: db.execute(
-                "UPDATE units SET attempts = ?, start_seq = NULL, covered = ?, missing = ?, error = ?"
-                " WHERE campaign = ? AND repo = ? AND idx = ?",
+                "UPDATE units SET attempts = ?, start_seq = NULL, covered = ?, missing = ?, error = ?,"
+                " answer = coalesce(?, answer) WHERE campaign = ? AND repo = ? AND idx = ?",
                 (
                     attempts,
                     json.dumps(list(covered)),
                     json.dumps(list(missing)),
                     error,
+                    answer,
                     unit.campaign,
                     unit.repo,
                     unit.idx,

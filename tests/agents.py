@@ -248,6 +248,13 @@ def _auditing(messages: list[ModelMessage], *, lazy: bool) -> ModelResponse:
     )
     prompt = next(p.content for p in messages[start].parts if isinstance(p, UserPromptPart) and not _is_note(p.content))
     listed = [(path, int(lines)) for path, lines in _LISTED.findall(str(prompt))]
+    if "Answer with one JSON block" in str(prompt):
+        # A subsystem map: one subsystem per top-level directory the overview names.
+        dirs = re.findall(r"^([^/\s]+)/  \d+ files", str(prompt), re.MULTILINE)
+        parts = [{"name": d, "globs": [d], "purpose": f"the {d} code", "boundaries": "none"} for d in dirs]
+        return ModelResponse(parts=[TextPart(f"```json\n{json.dumps({'subsystems': parts})}\n```")])
+    if "cross subsystems" in str(prompt):
+        return ModelResponse(parts=[TextPart("Nothing crosses the subsystems.")])
     if not listed:
         return ModelResponse(parts=[TextPart("A test repository.")])
     if lazy and len(listed) > 1:

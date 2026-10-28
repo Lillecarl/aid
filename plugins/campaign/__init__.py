@@ -12,6 +12,7 @@ State lives in the plugin's database, so a restart resumes where the rows say. B
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Final
@@ -35,8 +36,20 @@ from .store import (
     CampaignStore,
     Repo,
     RepoState,
+    SubsystemRow,
     Unit,
     UnitState,
+)
+from .subsystems import (
+    OTHER,
+    MapProblem,
+    Subsystem,
+    SubsystemMap,
+    integration_prompt,
+    map_prompt,
+    overview,
+    parse_map,
+    subsystem_context,
 )
 from .units import BRIEF_PROMPT, END_TURN, Limits, chunk, credited, examine, tracked, uncovered, unit_prompt
 
@@ -103,8 +116,30 @@ class CampaignConfig(BaseModel):
     """Turns a unit gets, retries for unread files and for turn errors together."""
     supervise: bool = True
     """The root session supervises each repository session: one supervisor turn per unit on the same model."""
+    split_units: Annotated[int, Field(ge=0)] = 6
+    """A repository with more units than this is mapped into subsystems, each audited by a session of its own
+    (`subsystems`); 0 never splits."""
+    subsystems_at_once: Annotated[int, Field(ge=1)] = 2
+    """Subsystem sessions of one repository running at once; model slots bound what reaches the server."""
     backoff: Annotated[float, Field(ge=0)] = 10.0
     """Seconds a unit waits after a failed turn before its next attempt: a gateway's 503 passes."""
+
+
+def subsystem_session(campaign: str, repo: str, idx: int) -> str:
+    """`<campaign>.<slug>-<hash>.s<idx>`: a name from the repository's path and the index, never from the model's
+    subsystem names, within 64 characters, and apart for repositories whose slugs agree."""
+    digest = hashlib.sha256(repo.encode()).hexdigest()[:6]
+    room = 64 - len(campaign) - len(digest) - len(f".s{idx}") - 2
+    return f"{campaign}.{slug(repo)[:room]}-{digest}.s{idx}"
+
+
+def _mapped(parts: list[SubsystemRow]) -> SubsystemMap:
+    """The map the stored subsystems came from: every row but the last, `OTHER`'s."""
+    return SubsystemMap(
+        subsystems=[
+            Subsystem(name=p.name, globs=p.globs, purpose=p.purpose, boundaries=p.boundaries) for p in parts[:-1]
+        ]
+    )
 
 
 def slug(text: str) -> str:
@@ -385,34 +420,144 @@ class Campaigns(aid.Plugin):
     async def _audit(self, config: CampaignConfig, repo: Repo) -> None:
         client, store = self.client, self.store
         path = Path(config.root) / repo.path
-        if repo.session not in {info.name for info in await client.sessions()}:
-            await client.create(repo.session, repo_spec(config, path))
+        await self._session(repo.session, repo_spec(config, path))
         session = client.session(repo.session)
-        if repo.state == RepoState.PENDING:
+        state = repo.state
+        if state == RepoState.PENDING:
             files, skipped = await anyio.to_thread.run_sync(examine, path, await tracked(path), config.limits)
             await store.plan(config.name, repo.path, chunk(files, config.limits), skipped)
-        brief = repo.brief if repo.brief is not None else await self._brief(config, session)
-        await store.briefed(config.name, repo.path, brief)
-        for unit in await store.units(config.name, repo.path):
+        brief = repo.brief
+        if brief is None:
+            brief = await self._turn(config, session, BRIEF_PROMPT)
+            await store.briefed(config.name, repo.path, brief)
+            state = RepoState.BRIEFED
+        units = await store.units(config.name, repo.path)
+        # Only before any unit started: a repository audited whole so far stays whole.
+        fresh = all(unit.state == UnitState.PENDING for unit in units)
+        if state == RepoState.BRIEFED and 0 < config.split_units < len(units) and fresh:
+            await self._split(config, repo, session, brief, units)
+        parts = await store.subsystems(config.name, repo.path)
+        if not parts:
+            for unit in units:
+                if config.name in self._pausing:
+                    return
+                if unit.state not in FINISHED:
+                    await self._unit(config, session, path, brief, unit)
+        else:
+            await self._audit_parts(config, repo, path, brief, parts)
             if config.name in self._pausing:
                 return
-            if unit.state not in FINISHED:
-                await self._unit(config, session, path, brief, unit)
-        await store.repo_ended(config.name, repo.path, RepoState.DONE)
+            if state != RepoState.INTEGRATED:
+                await self._integrate(config, repo, session, brief, parts)
+        if config.name not in self._pausing:
+            await store.repo_ended(config.name, repo.path, RepoState.DONE)
 
-    async def _brief(self, config: CampaignConfig, session: aid.Session) -> str:
-        """The repository's brief, from up to `attempts` turns: the last failure fails the repository."""
+    async def _session(self, name: str, spec: NativeSpec) -> None:
+        if name not in {info.name for info in await self.client.sessions()}:
+            await self.client.create(name, spec)
+
+    async def _split(
+        self, config: CampaignConfig, repo: Repo, session: aid.Session, brief: str, units: list[Unit]
+    ) -> None:
+        """Ask for a subsystem map until one covers the files (`parse_map`), then re-plan the units per subsystem.
+        A repository no answer maps stays whole."""
+        files = [file for unit in units for file in unit.files]
+        tree, problem = overview(files), None
+        for _ in range(config.attempts):
+            answer = await self._turn(config, session, map_prompt(brief, tree, len(files), problem))
+            try:
+                mapped, groups = parse_map(answer, files)
+            except MapProblem as refused:
+                problem = str(refused)
+                log.info("map_refused", session=session.name, problem=problem[:200])
+                continue
+            break
+        else:
+            log.warning("map_failed", session=session.name, problem=problem)
+            return
+        rows = [
+            SubsystemRow(
+                idx=idx,
+                name=part.name,
+                purpose=part.purpose,
+                boundaries=part.boundaries,
+                globs=part.globs,
+                session=subsystem_session(config.name, repo.path, idx),
+            )
+            for idx, part in enumerate(mapped.subsystems)
+        ]
+        other = len(rows)
+        rows.append(
+            SubsystemRow(
+                idx=other,
+                name=OTHER,
+                purpose="",
+                boundaries="",
+                globs=[],
+                session=subsystem_session(config.name, repo.path, other),
+            )
+        )
+        planned = [(idx, part) for idx, group in enumerate(groups) for part in chunk(group, config.limits)]
+        await self.store.split(config.name, repo.path, rows, planned)
+
+    async def _audit_parts(
+        self, config: CampaignConfig, repo: Repo, path: Path, brief: str, parts: list[SubsystemRow]
+    ) -> None:
+        """Each subsystem's units in a session of its own, `subsystems_at_once` of them at a time."""
+        mapped = _mapped(parts)
+        units = await self.store.units(config.name, repo.path)
+        limiter = anyio.CapacityLimiter(config.subsystems_at_once)
+        spec = repo_spec(config, path).model_copy(update={"parent": repo.session})
+        async with anyio.create_task_group() as tg:
+            for part in parts:
+                mine = [u for u in units if u.subsystem == part.idx and u.state not in FINISHED]
+                if mine:
+                    told = f"{brief}\n\n{subsystem_context(mapped, part.idx)}"
+                    tg.start_soon(self._audit_part, config, path, told, part, spec, mine, limiter)
+
+    async def _audit_part(
+        self,
+        config: CampaignConfig,
+        path: Path,
+        brief: str,
+        part: SubsystemRow,
+        spec: NativeSpec,
+        units: list[Unit],
+        limiter: anyio.CapacityLimiter,
+    ) -> None:
+        async with limiter:
+            await self._session(part.session, spec)
+            session = self.client.session(part.session)
+            for unit in units:
+                if config.name in self._pausing:
+                    return
+                await self._unit(config, session, path, brief, unit)
+
+    async def _integrate(
+        self, config: CampaignConfig, repo: Repo, session: aid.Session, brief: str, parts: list[SubsystemRow]
+    ) -> None:
+        """One turn on the repository's session over every subsystem's answers: issues no single one could see."""
+        names = {part.idx: part.name for part in parts}
+        units = await self.store.units(config.name, repo.path)
+        answers = [
+            (names.get(u.subsystem, OTHER) if u.subsystem is not None else OTHER, u.answer) for u in units if u.answer
+        ]
+        await self._turn(config, session, integration_prompt(brief, _mapped(parts), answers))
+        await self.store.repo_ended(config.name, repo.path, RepoState.INTEGRATED)
+
+    async def _turn(self, config: CampaignConfig, session: aid.Session, prompt: str) -> str:
+        """The answer of a turn that ended on its own, from up to `attempts` turns; the last failure raises."""
         attempts = 0
         while True:
             await _idle(session)
             try:
-                result = await _ended(session, BRIEF_PROMPT)
+                result = await _ended(session, prompt)
                 return result.output if isinstance(result.output, str) else str(result.output)
             except AidError as failure:
                 if failure.code == BUSY:
                     continue
                 attempts += 1
-                log.warning("brief_failed", session=session.name, error=failure.message)
+                log.warning("turn_failed", session=session.name, error=failure.message)
                 if attempts >= config.attempts:
                     raise
                 await anyio.sleep(config.backoff)
@@ -425,7 +570,7 @@ class Campaigns(aid.Plugin):
         covered = set(unit.covered)
         if unit.start_seq is not None:
             covered |= _read(path, unit, await _since(session, unit.start_seq))
-        attempts, error = unit.attempts, unit.error
+        attempts, error, answer = unit.attempts, unit.error, None
         missing = [f.path for f in unit.files if f.path not in covered]
         while missing and attempts < config.attempts:
             await _idle(session)
@@ -434,6 +579,7 @@ class Campaigns(aid.Plugin):
             try:
                 result = await session.run(unit_prompt(brief, [f for f in unit.files if f.path in missing]))
                 error = None if result.stop_reason == END_TURN else f"stopped at {result.stop_reason}"
+                answer = str(result.output) if error is None else None
             except AidError as failure:
                 if failure.code == BUSY:
                     # A turn the unit never asked for, such as a supervisor's message, woke the session first.
@@ -443,7 +589,7 @@ class Campaigns(aid.Plugin):
             attempts += 1
             covered |= _read(path, unit, await _since(session, start))
             missing = [f.path for f in unit.files if f.path not in covered]
-            await store.attempt_ended(unit, attempts, sorted(covered), missing, error)
+            await store.attempt_ended(unit, attempts, sorted(covered), missing, error, answer)
             if missing and error is not None:
                 await anyio.sleep(config.backoff)
         unread = UnitState.FAILED if error is not None else UnitState.INCOMPLETE

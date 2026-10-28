@@ -13,9 +13,9 @@ import aid
 from aid.daemon import Daemon
 from aid.paths import ENV_STATE_DIR
 from aid.plugins import ENV_PLUGINS_PATH
-from aid.protocol import CallPlugin, GetSpec, QueryResult, ToolCall
+from aid.protocol import CallPlugin, GetSpec, PromptEntry, QueryResult, ToolCall
 from aid.spec import AgentSpecAdapter, NativeSpec
-from plugins.campaign import CampaignConfig, session_names
+from plugins.campaign import CampaignConfig, session_names, subsystem_session
 from plugins.campaign.store import CAMPAIGN_FILE
 from tests.conftest import TESTS, py_spec
 from tests.models import HOST
@@ -398,6 +398,36 @@ async def test_a_campaign_never_adopts_a_session_it_did_not_make(
             campaign = await status(client, "audit")
     assert campaign["state"] == "paused"
     assert "did not make" in str(campaign["error"])
+
+
+async def test_a_big_repository_is_split_into_subsystems_each_with_a_session(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    root = tmp_path / "tree"
+    files = {f"{d}/f{n}.py": b"x = 1\n" for d in ("api", "auth", "deploy") for n in range(4)}
+    await git_repo(root / "gamma", files | {"README.md": b"# gamma\n"})
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            fields: dict[str, JsonValue] = {"repos": ["gamma"], "split_units": 2, "limits": {"unit_files": 2}}
+            await client.call_plugin("campaign", "start", config=config(tmp_path, root, **fields))
+            [gamma] = await settled(client, "audit")
+            sessions = {info.name: info for info in await client.sessions()}
+            reads: list[str] = []
+            for name in sessions:
+                if name.startswith(subsystem_session("audit", "gamma", 0)[:-1]):
+                    reads += await read_paths(client, name)
+            prompts = [
+                e.item.text
+                for e in (await client.session("audit.gamma").history(limit=1000)).entries
+                if isinstance(e.item, PromptEntry)
+            ]
+    assert gamma["state"] == "done"
+    parts = [subsystem_session("audit", "gamma", idx) for idx in range(3)]
+    assert all(sessions[name].parent == "audit.gamma" for name in parts)
+    # README.md matched no subsystem: it is the "other" subsystem's, in a session of its own.
+    assert sorted(reads) == sorted([*files, "README.md"])
+    assert any("cross subsystems" in prompt for prompt in prompts)
 
 
 async def test_only_the_operator_runs_campaigns(

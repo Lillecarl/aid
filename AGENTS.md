@@ -186,6 +186,14 @@ on reusable decisions and current boundaries; put long investigations and dated 
   turn, then a turn per unit; unread files prompted again (brief included: turns are fresh) until `attempts`; failed
   turns back off; a busy refusal costs no attempt. `store.py` (`campaign.db`, migrations): units keep `covered` and
   the running attempt's `start_seq`; a resume credits what that attempt recorded. Calls wait for `_ready`.
+  Splitting (`subsystems.py`, pure): a briefed repository with more than `split_units` units, none started, gets a map
+  turn (`overview` capped at `OVERVIEW_LINES`); `parse_map` takes 2–12 subsystems, a bare dir or one-level glob
+  covers its tree, first match wins, the rest is `OTHER`; more than `OTHER_SHARE` unmatched is refused with a sample
+  and asked again, no map after `attempts` leaves it whole. Units re-plan per subsystem (`store.split`, rows in
+  `subsystems`); each subsystem runs in its own child session (`subsystem_session`: campaign, slug, path hash,
+  index; never model text), parent the repository session, `subsystems_at_once` per repository, prompts carrying
+  the brief and `subsystem_context`. Unit answers are stored; an integration turn on the repository session reads
+  them (clipped) for issues across subsystems. States: briefed → mapped → integrated → done.
 - `src/aid/slots.py` — model slots: `aid daemon --model-slots HOST=N` caps requests in flight to a model host across
   every session (a self-hosted server's best batch load). The table reaches a worker at launch (`WorkerArgs.model_slots`
   → `AID_MODEL_SLOTS`; none outside a worker); `open_native` wraps a limited host's model in `Slotted`, calling
