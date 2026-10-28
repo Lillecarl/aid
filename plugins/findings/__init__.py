@@ -48,9 +48,12 @@ async def report_finding(
     """Record one issue you found, so people review it later. Report each issue once, as soon as you are sure of it.
 
     `path`: the file (or directory) relative to your working directory. `category`: security, secret, bug, config,
-    dependency, quality or other. `severity`: critical, high, medium, low or info. `title`: one line. `detail`: what
-    is wrong, why it matters and how to fix it. `line_start`/`line_end`: the lines it is on. `evidence`: the code
-    that shows it, quoted exactly from the file; a quote that is not in the file is refused."""
+    dependency, quality or other. `severity`: critical (a working secret, private key or credential in the files, or a
+    flaw exploitable as it stands), high (personal data exposed, a security weakness, or a bug that breaks a main
+    function), medium (a bug or misconfiguration with limited effect), low (a minor defect, stale or wrong
+    documentation) or info (a note). `title`: one line. `detail`: what is wrong, why it matters and how to fix it.
+    `line_start`/`line_end`: the lines it is on. `evidence`: the code that shows it, quoted exactly from the file; a
+    quote that is not in the file is refused."""
     async with aid.connect() as client:
         result = await client.call_plugin(
             PLUGIN,
@@ -77,7 +80,10 @@ async def record_verdict(
 ) -> str:
     """Judge one finding after reading the code it names. `status`: confirmed (a real issue as described), rejected
     (not an issue: say why), duplicate (the same issue as `duplicate_of`, another finding's id) or unsure. `note`:
-    the reason, briefly. `severity`: critical, high, medium, low or info, only when the finding's is wrong."""
+    the reason, briefly. `severity`: only when the finding's is wrong, on this scale: critical (a working secret,
+    private key or credential in the files, or a flaw exploitable as it stands), high (personal data exposed, a
+    security weakness, or a bug that breaks a main function), medium (a bug or misconfiguration with limited effect),
+    low (a minor defect, stale or wrong documentation) or info (a note)."""
     async with aid.connect() as client:
         await client.call_plugin(
             PLUGIN,
