@@ -279,8 +279,8 @@
   const loadNewer = () =>
     guard(async () => {
       const page = await api.history(name, { after: newest, limit: PAGE });
-      rows = [...rows, ...fromHistory(page.entries)];
-      newest = page.entries.at(-1)?.seq ?? newest;
+      rows = [...rows, ...fromHistory(page.entries.filter((e) => e.seq > newest))];
+      newest = Math.max(newest, page.entries.at(-1)?.seq ?? newest);
       hasNewer = page.has_newer;
       await keepingPosition(trimTop);
     });
@@ -332,8 +332,10 @@
       do {
         behind = false;
         const page = await api.history(name, { after: newest, limit: 1000 });
-        rows = [...rows.filter((r) => r.seq !== undefined || r.local), ...fromHistory(page.entries)];
-        newest = page.entries.at(-1)?.seq ?? newest;
+        // Only what the rows lack now: a load that ended while this fetch was out may hold its first entries.
+        const fresh = page.entries.filter((e) => e.seq > newest);
+        rows = [...rows.filter((r) => r.seq !== undefined || r.local), ...fromHistory(fresh)];
+        newest = Math.max(newest, page.entries.at(-1)?.seq ?? newest);
         behind ||= page.has_newer;
       } while (behind);
     } finally {
