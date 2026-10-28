@@ -27,7 +27,9 @@ from aid.history import MAX_PAGE
 from aid.paths import default_paths
 from aid.protocol import AidError, HistoryEntry
 from aid.spec import NativeSpec, PermissionMode, Private
+from aid.sql import ask
 
+from .review import FINDINGS_FILE, FINDINGS_PLUGIN, pending, pending_sql, review_prompt
 from .store import (
     CAMPAIGN_FILE,
     FINISHED,
@@ -67,6 +69,7 @@ BUSY: Final = "busy"
 """The daemon's refusal of a prompt to a session in a turn."""
 NAME_CHARS: Final = 24
 AUDITOR_TOOLS: Final = ("ls", "read", "outline", "search", "report_finding")
+REVIEWER_TOOLS: Final = ("ls", "read", "outline", "search", "record_verdict")
 SUPERVISOR_TOOLS: Final = (
     "supervised_history",
     "supervised_entry",
@@ -123,6 +126,10 @@ class CampaignConfig(BaseModel):
     (`subsystems`); 0 never splits."""
     subsystems_at_once: Annotated[int, Field(ge=1)] = 2
     """Subsystem sessions of one repository running at once; model slots bound what reaches the server."""
+    review: bool = True
+    """After its audit, a repository's findings are each judged by a session that did not report them (`review`)."""
+    review_batch: Annotated[int, Field(ge=1)] = 8
+    """Findings one review turn judges."""
     backoff: Annotated[float, Field(ge=0)] = 10.0
     """Seconds a unit waits after a failed turn before its next attempt: a gateway's 503 passes."""
 
@@ -212,6 +219,12 @@ def survey_spec(config: CampaignConfig, repo: Path, parent: str) -> NativeSpec:
     the brief as a finding)."""
     survey_tools = [re.escape(tool) for tool in AUDITOR_TOOLS if tool != "report_finding"]
     return repo_spec(config, repo).model_copy(update={"tools": survey_tools, "parent": parent})
+
+
+def reviewer_spec(config: CampaignConfig, repo: Path, parent: str) -> NativeSpec:
+    """The review phase's session: it reads and judges, and reports nothing of its own."""
+    tools = [re.escape(tool) for tool in REVIEWER_TOOLS]
+    return repo_spec(config, repo).model_copy(update={"tools": tools, "parent": parent})
 
 
 async def _repositories(config: CampaignConfig) -> list[str]:
@@ -466,8 +479,39 @@ class Campaigns(aid.Plugin):
                 return
             if state != RepoState.INTEGRATED:
                 await self._integrate(config, repo, session, brief, parts)
+        if config.review and config.name not in self._pausing:
+            await self._review(config, repo, path, brief)
         if config.name not in self._pausing:
             await store.repo_ended(config.name, repo.path, RepoState.DONE)
+
+    async def _review(self, config: CampaignConfig, repo: Repo, path: Path, brief: str) -> None:
+        """Batches of the repository's unjudged findings to a reviewer session until each holds a verdict or has had
+        `attempts` turns. The findings database says what is left, so a resume needs no state of its own."""
+        where = str(await anyio.Path(path).resolve())
+        database = default_paths().plugin_dir(FINDINGS_PLUGIN) / FINDINGS_FILE
+        name = child_session(config.name, repo.path, "review")
+        tries: dict[int, int] = {}
+        while config.name not in self._pausing:
+            try:
+                left = pending(await ask({FINDINGS_PLUGIN: database}, pending_sql(where)))
+            except AidError as failure:
+                log.warning("review_unlisted", repo=repo.path, error=failure.message)
+                return
+            batch = [f for f in left if tries.get(f.id, 0) < config.attempts][: config.review_batch]
+            if not batch:
+                return
+            await self._session(name, reviewer_spec(config, path, repo.session))
+            session = self.client.session(name)
+            await _idle(session)
+            try:
+                await session.run(review_prompt(brief, batch))
+            except AidError as failure:
+                if failure.code == BUSY:
+                    continue
+                log.warning("review_turn_failed", session=name, error=failure.message)
+                await anyio.sleep(config.backoff)
+            for finding in batch:
+                tries[finding.id] = tries.get(finding.id, 0) + 1
 
     @contextlib.asynccontextmanager
     async def _surveying(self, config: CampaignConfig, repo: Repo, path: Path) -> AsyncGenerator[aid.Session]:

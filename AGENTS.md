@@ -171,7 +171,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - `plugins/findings/` — reported issues, bundled, `autostart` (supervise: `spec`). Tool `report_finding` writes one
   row of `findings.db` (plugin dir, 0600: findings may quote secrets); `repo` is the caller's resolved `cwd`, never
   an argument; path confined to it (absolute allowed inside), lines within the file, `evidence` must occur in it
-  (whitespace squeezed) else refused. Duplicates kept, grouped by `dedup`. `verdicts` for review passes. `query`
+  (whitespace squeezed) else refused. Duplicates kept, grouped by `dedup`. `record_verdict` writes `verdicts` (pass
+  `ai`, status confirmed/rejected/duplicate/unsure, note, severity): only for a finding in the caller's own cwd,
+  never by its reporter, a duplicate naming another finding of that repo. `query`
   (`aid findings query`) operator only. Plan: `docs/audit-campaigns.md`.
 - `plugins/campaign/` — audit campaigns, bundled, `autostart` (read, prompt, manage, private; operator calls only:
   `start`/`status`/`pause`/`resume`, `aid campaign`). `CampaignConfig` (name, root, repos or every `.git` dir, model +
@@ -195,7 +197,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   the brief and `subsystem_context`. Unit answers are stored; an integration turn on the repository session reads
   them (clipped) for issues across subsystems. States: briefed → mapped → integrated → done. The brief and map turns
   run in a `.survey` child session without `report_finding` (`survey_spec`; a ceiling holds per session, and the
-  pilot's brief turn filed the brief as a finding), deleted once they are done.
+  pilot's brief turn filed the brief as a finding), deleted once they are done. Review (`review.py`, `review`): after
+  the audit a `.review` child session (`REVIEWER_TOOLS`: read tools + `record_verdict`) judges the repository's
+  findings in batches of `review_batch`; the findings database is the record (`pending_sql`, read-only `ask` on
+  `findings.db`): a finding with an `ai` verdict is reviewed, so a resume keeps no state; `attempts` turns each.
 - `src/aid/slots.py` — model slots: `aid daemon --model-slots HOST=N` caps requests in flight to a model host across
   every session (a self-hosted server's best batch load). The table reaches a worker at launch (`WorkerArgs.model_slots`
   → `AID_MODEL_SLOTS`; none outside a worker); `open_native` wraps a limited host's model in `Slotted`, calling

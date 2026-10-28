@@ -15,7 +15,7 @@ from aid.paths import ENV_STATE_DIR
 from aid.plugins import ENV_PLUGINS_PATH
 from aid.protocol import CallPlugin, GetSpec, PromptEntry, QueryResult, ToolCall
 from aid.spec import AgentSpecAdapter, NativeSpec
-from plugins.campaign import CampaignConfig, session_names, subsystem_session, survey_spec
+from plugins.campaign import CampaignConfig, child_session, session_names, subsystem_session, survey_spec
 from plugins.campaign.store import CAMPAIGN_FILE
 from tests.conftest import TESTS, py_spec
 from tests.models import HOST
@@ -188,6 +188,7 @@ async def test_a_campaign_reads_every_line_of_every_tracked_file(
             await client.call_plugin("campaign", "start", config=config(tmp_path, root))
             repos_done = await settled(client, "audit")
             findings = await client.call_plugin("findings", "query", sql="SELECT session, path, category FROM findings")
+            verdicts = await client.call_plugin("findings", "query", sql="SELECT finding, status, by FROM verdicts")
             alpha = await read_paths(client, "audit.alpha")
             briefs = [
                 e
@@ -205,6 +206,8 @@ async def test_a_campaign_reads_every_line_of_every_tracked_file(
     assert sorted(alpha) == ["a.py", "b.py", "c.py"]
     assert beta == ["long.py", "long.py", "long.py"]
     assert QueryResult.model_validate(findings).rows == [["audit.alpha", "a.py", "secret"]]
+    # Reviewed after the audit, by the repository's review session, not by the session that reported it.
+    assert QueryResult.model_validate(verdicts).rows == [[1, "confirmed", child_session("audit", "alpha", "review")]]
     assert isinstance(spec, NativeSpec)
     assert (spec.parent, spec.fresh_turns, spec.instruction_providers, spec.private is not None) == (
         "audit",

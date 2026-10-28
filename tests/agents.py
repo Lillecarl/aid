@@ -253,6 +253,13 @@ def _auditing(messages: list[ModelMessage], *, lazy: bool) -> ModelResponse:
         dirs = re.findall(r"^([^/\s]+)/  \d+ files", str(prompt), re.MULTILINE)
         parts = [{"name": d, "globs": [d], "purpose": f"the {d} code", "boundaries": "none"} for d in dirs]
         return ModelResponse(parts=[TextPart(f"```json\n{json.dumps({'subsystems': parts})}\n```")])
+    if "record a verdict for every finding" in str(prompt):
+        ids = [int(n) for n in re.findall(r"^Finding (\d+):", str(prompt), re.MULTILINE)]
+        judged = sum(1 for m in messages[start:] for p in m.parts if isinstance(p, ToolCallPart))
+        if judged < len(ids):
+            verdict: dict[str, JsonValue] = {"finding": ids[judged], "status": "confirmed", "note": "Seen in the code."}
+            return ModelResponse(parts=[ToolCallPart("record_verdict", verdict, tool_call_id=f"verdict{judged}")])
+        return ModelResponse(parts=[TextPart(f"{len(ids)} findings judged.")])
     if "cross subsystems" in str(prompt):
         return ModelResponse(parts=[TextPart("Nothing crosses the subsystems.")])
     if not listed:
