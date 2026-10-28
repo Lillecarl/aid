@@ -13,6 +13,7 @@ from aid.cli import (
     _preload,  # pyright: ignore[reportPrivateUsage]
     _query_table,  # pyright: ignore[reportPrivateUsage]
     _session_line,  # pyright: ignore[reportPrivateUsage]
+    _shortlist_sql,  # pyright: ignore[reportPrivateUsage]
     _spec,  # pyright: ignore[reportPrivateUsage]
     _split_agent_command,  # pyright: ignore[reportPrivateUsage]
     _tagged,  # pyright: ignore[reportPrivateUsage]
@@ -99,6 +100,13 @@ def test_new_py_takes_the_models_children_may_run_on() -> None:
     args = _parser().parse_args(["new-py", "s", "agents:echo", "--spawn-model", "deepseek/.*"])
     args.agent_command = []
     assert isinstance(spec := _spec(args), NativeSpec) and spec.spawn_models == ["deepseek/.*"]
+
+
+def test_the_shortlist_narrows_to_a_campaign() -> None:
+    assert "f.session LIKE 'audit.%'" in _shortlist_sql(everything=True, campaign="audit")
+    assert "f.session" not in _shortlist_sql(everything=True)
+    with pytest.raises(SystemExit):
+        _shortlist_sql(everything=True, campaign="x' OR 1=1 --")
 
 
 def test_campaign_commands_parse() -> None:

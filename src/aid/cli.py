@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import signal
 import sys
@@ -397,6 +398,7 @@ def _parser() -> argparse.ArgumentParser:
         "shortlist", help="findings worth a person's look, most severe first: neither pass rejected or merged them"
     )
     shortlist.add_argument("--all", action="store_true", help="every finding, with both passes' verdicts")
+    shortlist.add_argument("--campaign", help="only findings this campaign's sessions reported")
     sub.add_parser("slots", help="model hosts the daemon limits: capacity, who holds a slot, who waits")
     campaign = sub.add_parser("campaign", help="audit campaigns: a model reads every tracked file of many repositories")
     campaign_sub = campaign.add_subparsers(dest="campaign_command", required=True)
@@ -596,9 +598,14 @@ ORDER BY CASE coalesce(h.severity, ai.severity, f.severity)
 """Each finding with its latest verdict of each pass; a person's severity over the AI's over the reporter's."""
 
 
-def _shortlist_sql(*, everything: bool) -> str:
-    where = "" if everything else "WHERE coalesce(h.status, ai.status, 'confirmed') NOT IN ('rejected', 'duplicate')"
-    return _SHORTLIST.format(where=where)
+def _shortlist_sql(*, everything: bool, campaign: str | None = None) -> str:
+    """`campaign`: only findings its sessions reported, `<campaign>.…`; the name is checked, so it goes in as text."""
+    clauses = [] if everything else ["coalesce(h.status, ai.status, 'confirmed') NOT IN ('rejected', 'duplicate')"]
+    if campaign is not None:
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", campaign):
+            raise SystemExit(f"aid findings shortlist: {campaign!r} is no campaign name")
+        clauses.append(f"f.session LIKE '{campaign}.%'")
+    return _SHORTLIST.format(where=f"WHERE {' AND '.join(clauses)}" if clauses else "")
 
 
 def _query_table(result: QueryResult) -> str:
@@ -790,7 +797,9 @@ async def _client_command(args: argparse.Namespace) -> None:
                     duplicate_of=args.duplicate_of,
                 )
             case "findings" if args.findings_command == "shortlist":
-                answer = await client.call_plugin("findings", "query", sql=_shortlist_sql(everything=args.all))
+                answer = await client.call_plugin(
+                    "findings", "query", sql=_shortlist_sql(everything=args.all, campaign=args.campaign)
+                )
                 result = QueryResult.model_validate(answer)
                 print(_query_table(result))
                 if result.truncated:
