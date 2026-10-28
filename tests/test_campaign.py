@@ -352,6 +352,35 @@ async def test_a_repository_done_before_its_review_is_reviewed_on_resume(
     assert QueryResult.model_validate(judged).rows == [[1, "confirmed"]]
 
 
+async def test_a_resume_takes_a_revised_config_for_what_is_left(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    root = tmp_path / "tree"
+    await repos(root)
+    first: dict[str, JsonValue] = {"repos": ["alpha"], "review": False}
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            await client.call_plugin("campaign", "start", config=config(tmp_path, root, **first))
+            await settled(client, "audit")
+            elsewhere = config(tmp_path, tmp_path, **first)
+            with pytest.raises(aid.AidError, match="name and root"):
+                await client.call_plugin("campaign", "resume", name="audit", config=elsewhere)
+            revised = config(tmp_path, root, repos=["alpha", "beta"], review=False, max_context=200_000)
+            await client.call_plugin("campaign", "resume", name="audit", config=revised)
+            done = await settled(client, "audit")
+            alpha = AgentSpecAdapter.validate_python(await client.call(GetSpec(session="audit.alpha")))
+            beta = AgentSpecAdapter.validate_python(await client.call(GetSpec(session="audit.beta")))
+    db = apsw.Connection(str(paths.plugin_dir("campaign") / CAMPAIGN_FILE))
+    stored = CampaignConfig.model_validate_json(str(db.execute("SELECT config FROM campaigns").get))
+    db.close()
+    assert [(r["path"], r["state"]) for r in done] == [("alpha", "done"), ("beta", "done")]
+    # A session made before the revision keeps its spec; one made after takes the window.
+    assert isinstance(alpha, NativeSpec) and isinstance(beta, NativeSpec)
+    assert (alpha.max_context, beta.max_context) == (None, 200_000)
+    assert stored.max_context == 200_000
+
+
 async def test_the_root_session_supervises_each_repository(
     paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -179,8 +179,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   (`aid findings query`) operator only. Plan: `docs/audit-campaigns.md`.
 - `plugins/campaign/` — audit campaigns, bundled, `autostart` (read, prompt, manage, private; operator calls only:
   `start`/`status`/`pause`/`resume`, `aid campaign`). `CampaignConfig` (name, root, repos or every `.git` dir, model +
-  settings, `hosts` → every session private, env, python_path, `Limits`, concurrency, attempts, supervise, backoff).
-  Root session `<name>`: agent `supervisor` on the campaign model, ceiling `SUPERVISOR_TOOLS` (no man/tldr: they run
+  settings, `hosts` → every session private, env, python_path, `max_context`, `Limits`, concurrency, attempts,
+  supervise, backoff). `resume` may take a revised config, same name and root, stored in place: sessions made after
+  follow it, existing sessions keep their specs and planned units their files. Root session `<name>`: agent `supervisor` on the campaign model, ceiling `SUPERVISOR_TOOLS` (no man/tldr: they run
   programs). Per repository `<name>.<slug>` (`session_names`): instructions spec, ceiling `AUDITOR_TOOLS`,
   `fresh_turns`, `instruction_providers=[]` (nothing from the audited tree composes), parent root, supervisor root if
   `supervise`. `units.py` (pure): `git ls-files`, skip excluded/links/oversized/binary, chunk by file and byte caps;

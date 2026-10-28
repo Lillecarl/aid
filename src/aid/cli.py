@@ -409,7 +409,9 @@ def _parser() -> argparse.ArgumentParser:
         "name", nargs="?"
     )
     campaign_sub.add_parser("pause", help="stop after each repository's running unit").add_argument("name")
-    campaign_sub.add_parser("resume", help="run a paused campaign again").add_argument("name")
+    resume = campaign_sub.add_parser("resume", help="run a paused campaign again")
+    resume.add_argument("name")
+    resume.add_argument("--config", type=Path, help="a revised CampaignConfig: same name and root")
 
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
@@ -828,6 +830,9 @@ async def _client_command(args: argparse.Namespace) -> None:
                         answer = await client.call_plugin("campaign", "start", config=config)
                     case "status":
                         answer = await client.call_plugin("campaign", "status", name=args.name)
+                    case "resume" if args.config is not None:
+                        config = _JSON.validate_json(args.config.read_bytes())
+                        answer = await client.call_plugin("campaign", "resume", name=args.name, config=config)
                     case _:
                         answer = await client.call_plugin("campaign", args.campaign_command, name=args.name)
                 print(json.dumps(answer))

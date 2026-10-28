@@ -299,6 +299,9 @@ class CampaignStore:
             lambda db: db.execute("UPDATE campaigns SET state = ?, error = ? WHERE name = ?", (state, error, name))
         )
 
+    async def set_config(self, name: str, config: str) -> None:
+        await self._db.run(lambda db: db.execute("UPDATE campaigns SET config = ? WHERE name = ?", (config, name)))
+
     async def add_repos(self, campaign: str, repos: Sequence[tuple[str, str]]) -> None:
         """`(path, session)` pairs; a repository already known keeps its row."""
         await self._db.run(_add_repos, campaign, repos)

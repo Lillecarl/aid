@@ -113,6 +113,8 @@ class CampaignConfig(BaseModel):
     env: dict[str, str] = Field(default_factory=dict[str, str])
     python_path: list[str] = Field(default_factory=list[str])
     """`NativeSpec.python_path` of every campaign session: where a model provider plugin's own imports live."""
+    max_context: Annotated[int, Field(gt=0)] | None = None
+    """`NativeSpec.max_context` of every campaign session: the model's window, where models.dev knows none."""
     instructions: str = INSTRUCTIONS
     limits: Limits = Field(default_factory=Limits)
     concurrency: Annotated[int, Field(ge=1)] = 2
@@ -185,6 +187,7 @@ def root_spec(config: CampaignConfig) -> NativeSpec:
         model_settings=config.model_settings,
         env=config.env,
         python_path=config.python_path,
+        max_context=config.max_context,
         tools=[re.escape(tool) for tool in SUPERVISOR_TOOLS],
         permission=PermissionMode.DENY,
         supervisor_classifier=None,
@@ -201,6 +204,7 @@ def repo_spec(config: CampaignConfig, repo: Path) -> NativeSpec:
         model_settings=config.model_settings,
         env=config.env,
         python_path=config.python_path,
+        max_context=config.max_context,
         tools=[re.escape(tool) for tool in AUDITOR_TOOLS],
         permission=PermissionMode.DENY,
         instruction_providers=[],
@@ -330,7 +334,12 @@ class Campaigns(aid.Plugin):
             case "pause":
                 return await self._pause(str(args.get("name")))
             case "resume":
-                return await self._resume(str(args.get("name")))
+                revised = args.get("config")
+                try:
+                    config = None if revised is None else CampaignConfig.model_validate(revised)
+                except ValidationError as error:
+                    raise AidError("bad_args", str(error)) from None
+                return await self._resume(str(args.get("name")), config)
             case _:
                 raise AidError("unknown_method", f"campaign has no method {method!r}")
 
@@ -350,13 +359,21 @@ class Campaigns(aid.Plugin):
         await self.store.set_state(name, CampaignState.PAUSED)
         return await self._status(name)
 
-    async def _resume(self, name: str) -> JsonValue:
+    async def _resume(self, name: str, revised: CampaignConfig | None) -> JsonValue:
+        """`revised` replaces the stored config: same name and root, as rows are keyed by both. Sessions that exist
+        keep their specs; units already planned keep their files."""
         campaign = await self._campaign(name)
         if name in self._running:
             raise AidError("busy", f"campaign {name!r} still finishes its running units; resume it after")
+        config = CampaignConfig.model_validate_json(campaign.config)
+        if revised is not None:
+            if (revised.name, revised.root) != (config.name, config.root):
+                raise AidError("bad_args", "a revised config keeps the campaign's name and root")
+            config = revised
+            await self.store.set_config(name, config.model_dump_json())
         self._pausing.discard(name)
         await self.store.set_state(name, CampaignState.RUNNING)
-        self._launch(CampaignConfig.model_validate_json(campaign.config))
+        self._launch(config)
         return await self._status(name)
 
     async def _campaign(self, name: str) -> Campaign:
