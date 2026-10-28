@@ -193,7 +193,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `subsystems`); each subsystem runs in its own child session (`subsystem_session`: campaign, slug, path hash,
   index; never model text), parent the repository session, `subsystems_at_once` per repository, prompts carrying
   the brief and `subsystem_context`. Unit answers are stored; an integration turn on the repository session reads
-  them (clipped) for issues across subsystems. States: briefed → mapped → integrated → done.
+  them (clipped) for issues across subsystems. States: briefed → mapped → integrated → done. The brief and map turns
+  run in a `.survey` child session without `report_finding` (`survey_spec`; a ceiling holds per session, and the
+  pilot's brief turn filed the brief as a finding), deleted once they are done.
 - `src/aid/slots.py` — model slots: `aid daemon --model-slots HOST=N` caps requests in flight to a model host across
   every session (a self-hosted server's best batch load). The table reaches a worker at launch (`WorkerArgs.model_slots`
   → `AID_MODEL_SLOTS`; none outside a worker); `open_native` wraps a limited host's model in `Slotted`, calling

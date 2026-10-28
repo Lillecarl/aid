@@ -15,7 +15,7 @@ from aid.paths import ENV_STATE_DIR
 from aid.plugins import ENV_PLUGINS_PATH
 from aid.protocol import CallPlugin, GetSpec, PromptEntry, QueryResult, ToolCall
 from aid.spec import AgentSpecAdapter, NativeSpec
-from plugins.campaign import CampaignConfig, session_names, subsystem_session
+from plugins.campaign import CampaignConfig, session_names, subsystem_session, survey_spec
 from plugins.campaign.store import CAMPAIGN_FILE
 from tests.conftest import TESTS, py_spec
 from tests.models import HOST
@@ -94,6 +94,12 @@ def test_session_names_fit_and_never_collide() -> None:
     names = session_names("c" * 24, ["My Repo", "my_repo", "x" * 80, "x" * 80 + "y"])
     assert names[:2] == ["c" * 24 + ".my-repo", "c" * 24 + ".my-repo-2"]
     assert all(len(name) <= 64 for name in names) and len(set(names)) == 4
+
+
+def test_the_survey_session_cannot_report(tmp_path: Path) -> None:
+    config = CampaignConfig.model_validate({"name": "c", "root": "/r", "model": "m/x", "hosts": ["h"]})
+    spec = survey_spec(config, tmp_path, "c.repo")
+    assert (spec.tools, spec.parent) == (["ls", "read", "outline", "search"], "c.repo")
 
 
 @asynccontextmanager
@@ -183,6 +189,12 @@ async def test_a_campaign_reads_every_line_of_every_tracked_file(
             repos_done = await settled(client, "audit")
             findings = await client.call_plugin("findings", "query", sql="SELECT session, path, category FROM findings")
             alpha = await read_paths(client, "audit.alpha")
+            briefs = [
+                e
+                for e in (await client.session("audit.alpha").history(limit=1000)).entries
+                if isinstance(e.item, PromptEntry) and e.item.text.startswith("Look over this repository")
+            ]
+            assert briefs == []
             beta = await read_paths(client, "audit.beta")
             spec = AgentSpecAdapter.validate_python(await client.call(GetSpec(session="audit.alpha")))
             listed = {info.name: info for info in await client.sessions()}
@@ -201,6 +213,8 @@ async def test_a_campaign_reads_every_line_of_every_tracked_file(
         True,
     )
     assert spec.tools == ["ls", "read", "outline", "search", "report_finding"]
+    # The brief ran in a survey session with no tool to report with, deleted once the brief was in.
+    assert not any(name.endswith(".survey") for name in listed)
     assert all(listed[name].private for name in ("audit", "audit.alpha", "audit.beta"))
 
 

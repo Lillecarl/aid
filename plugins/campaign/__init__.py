@@ -54,6 +54,8 @@ from .subsystems import (
 from .units import BRIEF_PROMPT, END_TURN, Limits, chunk, credited, examine, tracked, uncovered, unit_prompt
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+
     from anyio.abc import TaskGroup
 
     from aid.client import RunResult
@@ -125,12 +127,16 @@ class CampaignConfig(BaseModel):
     """Seconds a unit waits after a failed turn before its next attempt: a gateway's 503 passes."""
 
 
-def subsystem_session(campaign: str, repo: str, idx: int) -> str:
-    """`<campaign>.<slug>-<hash>.s<idx>`: a name from the repository's path and the index, never from the model's
-    subsystem names, within 64 characters, and apart for repositories whose slugs agree."""
+def child_session(campaign: str, repo: str, suffix: str) -> str:
+    """`<campaign>.<slug>-<hash>.<suffix>`: a name from the repository's path, never from model text, within 64
+    characters, and apart for repositories whose slugs agree."""
     digest = hashlib.sha256(repo.encode()).hexdigest()[:6]
-    room = 64 - len(campaign) - len(digest) - len(f".s{idx}") - 2
-    return f"{campaign}.{slug(repo)[:room]}-{digest}.s{idx}"
+    room = 64 - len(campaign) - len(digest) - len(suffix) - 3
+    return f"{campaign}.{slug(repo)[:room]}-{digest}.{suffix}"
+
+
+def subsystem_session(campaign: str, repo: str, idx: int) -> str:
+    return child_session(campaign, repo, f"s{idx}")
 
 
 def _mapped(parts: list[SubsystemRow]) -> SubsystemMap:
@@ -198,6 +204,14 @@ def repo_spec(config: CampaignConfig, repo: Path) -> NativeSpec:
         private=_private(config),
         tags={"campaign": config.name},
     )
+
+
+def survey_spec(config: CampaignConfig, repo: Path, parent: str) -> NativeSpec:
+    """The brief's and the map's session: it looks, and has no tool to report with. A tool ceiling holds for a whole
+    session, so the turns that must report nothing run in one of their own (measured: the pilot's brief turn filed
+    the brief as a finding)."""
+    survey_tools = [re.escape(tool) for tool in AUDITOR_TOOLS if tool != "report_finding"]
+    return repo_spec(config, repo).model_copy(update={"tools": survey_tools, "parent": parent})
 
 
 async def _repositories(config: CampaignConfig) -> list[str]:
@@ -426,16 +440,19 @@ class Campaigns(aid.Plugin):
         if state == RepoState.PENDING:
             files, skipped = await anyio.to_thread.run_sync(examine, path, await tracked(path), config.limits)
             await store.plan(config.name, repo.path, chunk(files, config.limits), skipped)
-        brief = repo.brief
-        if brief is None:
-            brief = await self._turn(config, session, BRIEF_PROMPT)
-            await store.briefed(config.name, repo.path, brief)
-            state = RepoState.BRIEFED
+            state = RepoState.LISTED
         units = await store.units(config.name, repo.path)
         # Only before any unit started: a repository audited whole so far stays whole.
         fresh = all(unit.state == UnitState.PENDING for unit in units)
-        if state == RepoState.BRIEFED and 0 < config.split_units < len(units) and fresh:
-            await self._split(config, repo, session, brief, units)
+        splits = 0 < config.split_units < len(units) and fresh and state in {RepoState.LISTED, RepoState.BRIEFED}
+        brief = repo.brief
+        if brief is None or splits:
+            async with self._surveying(config, repo, path) as survey:
+                if brief is None:
+                    brief = await self._turn(config, survey, BRIEF_PROMPT)
+                    await store.briefed(config.name, repo.path, brief)
+                if splits:
+                    await self._split(config, repo, survey, brief, units)
         parts = await store.subsystems(config.name, repo.path)
         if not parts:
             for unit in units:
@@ -451,6 +468,16 @@ class Campaigns(aid.Plugin):
                 await self._integrate(config, repo, session, brief, parts)
         if config.name not in self._pausing:
             await store.repo_ended(config.name, repo.path, RepoState.DONE)
+
+    @contextlib.asynccontextmanager
+    async def _surveying(self, config: CampaignConfig, repo: Repo, path: Path) -> AsyncGenerator[aid.Session]:
+        name = child_session(config.name, repo.path, "survey")
+        await self._session(name, survey_spec(config, path, repo.session))
+        try:
+            yield self.client.session(name)
+        finally:
+            with anyio.CancelScope(shield=True), contextlib.suppress(AidError):
+                await self.client.session(name).delete()
 
     async def _session(self, name: str, spec: NativeSpec) -> None:
         if name not in {info.name for info in await self.client.sessions()}:
