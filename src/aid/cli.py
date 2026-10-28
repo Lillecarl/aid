@@ -8,7 +8,7 @@ import signal
 import sys
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import anyio
 import anyio.to_thread
@@ -387,6 +387,16 @@ def _parser() -> argparse.ArgumentParser:
     findings_query = findings_sub.add_parser("query", help="one read-only SQL statement over findings, as JSON")
     findings_query.add_argument("sql", help="tables: findings, verdicts")
     findings_query.add_argument("--table", action="store_true", help="tab-separated columns and rows instead of JSON")
+    verdict = findings_sub.add_parser("verdict", help="record your verdict on a finding (the human pass)")
+    verdict.add_argument("finding", type=int)
+    verdict.add_argument("status", choices=["confirmed", "rejected", "duplicate", "unsure"])
+    verdict.add_argument("note")
+    verdict.add_argument("--severity", choices=["critical", "high", "medium", "low", "info"])
+    verdict.add_argument("--duplicate-of", type=int)
+    shortlist = findings_sub.add_parser(
+        "shortlist", help="findings worth a person's look, most severe first: neither pass rejected or merged them"
+    )
+    shortlist.add_argument("--all", action="store_true", help="every finding, with both passes' verdicts")
     sub.add_parser("slots", help="model hosts the daemon limits: capacity, who holds a slot, who waits")
     campaign = sub.add_parser("campaign", help="audit campaigns: a model reads every tracked file of many repositories")
     campaign_sub = campaign.add_subparsers(dest="campaign_command", required=True)
@@ -568,6 +578,29 @@ def _tool_line(call: ToolCall, titles: dict[str, str]) -> str:
     return " ".join(parts)
 
 
+_SHORTLIST: Final = """
+WITH latest AS (
+    SELECT * FROM verdicts AS v
+    WHERE decided = (SELECT max(decided) FROM verdicts AS w WHERE w.finding = v.finding AND w.pass = v.pass)
+)
+SELECT f.id, replace(f.repo, rtrim(f.repo, replace(f.repo, '/', '')), '') AS repo,
+    f.path || coalesce(':' || f.line_start, '') AS place, coalesce(h.severity, ai.severity, f.severity) AS severity,
+    coalesce(ai.status, '-') AS ai, coalesce(h.status, '-') AS human, f.title
+FROM findings AS f
+LEFT JOIN latest AS ai ON ai.finding = f.id AND ai.pass = 'ai'
+LEFT JOIN latest AS h ON h.finding = f.id AND h.pass = 'human'
+{where}
+ORDER BY CASE coalesce(h.severity, ai.severity, f.severity)
+    WHEN 'critical' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END, f.id
+"""
+"""Each finding with its latest verdict of each pass; a person's severity over the AI's over the reporter's."""
+
+
+def _shortlist_sql(*, everything: bool) -> str:
+    where = "" if everything else "WHERE coalesce(h.status, ai.status, 'confirmed') NOT IN ('rejected', 'duplicate')"
+    return _SHORTLIST.format(where=where)
+
+
 def _query_table(result: QueryResult) -> str:
     """Column names first, then one line per row, cells tab-separated; a cell's tabs and newlines show as `\\t`
     and `\\n` so a row stays one line, and None is an empty cell."""
@@ -746,6 +779,22 @@ async def _client_command(args: argparse.Namespace) -> None:
                         print(f"{key}={value}")
             case "supervise":
                 await client.session(args.name).set_supervisor(args.supervisor)
+            case "findings" if args.findings_command == "verdict":
+                await client.call_plugin(
+                    "findings",
+                    "verdict",
+                    finding=args.finding,
+                    status=args.status,
+                    note=args.note,
+                    severity=args.severity,
+                    duplicate_of=args.duplicate_of,
+                )
+            case "findings" if args.findings_command == "shortlist":
+                answer = await client.call_plugin("findings", "query", sql=_shortlist_sql(everything=args.all))
+                result = QueryResult.model_validate(answer)
+                print(_query_table(result))
+                if result.truncated:
+                    print(f"… more rows past {len(result.rows)}; use `aid findings query`", file=sys.stderr)
             case "supervision" | "findings":
                 if args.command == "supervision":
                     answer = await client.call_plugin("supervision", "query", sql=args.sql, session=args.session)

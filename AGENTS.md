@@ -173,7 +173,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   an argument; path confined to it (absolute allowed inside), lines within the file, `evidence` must occur in it
   (whitespace squeezed) else refused. Duplicates kept, grouped by `dedup`. `record_verdict` writes `verdicts` (pass
   `ai`, status confirmed/rejected/duplicate/unsure, note, severity): only for a finding in the caller's own cwd,
-  never by its reporter, a duplicate naming another finding of that repo. `query`
+  never by its reporter, a duplicate naming another finding of that repo; the operator's (caller None, `aid findings
+  verdict`) is pass `human`, by `operator`, on any finding. `aid findings shortlist [--all]`: latest verdict per pass,
+  severity human > ai > reported, rejected and duplicates left out. `query`
   (`aid findings query`) operator only. Plan: `docs/audit-campaigns.md`.
 - `plugins/campaign/` — audit campaigns, bundled, `autostart` (read, prompt, manage, private; operator calls only:
   `start`/`status`/`pause`/`resume`, `aid campaign`). `CampaignConfig` (name, root, repos or every `.git` dir, model +

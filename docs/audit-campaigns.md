@@ -41,8 +41,8 @@ code and no finding leaves the operator's infrastructure.
 5. **Pilot.** Two or three small repositories. Measure context growth per unit, the server's concurrency, cost in
    time, and the false-positive rate. Size the full run from these numbers.
 6. **Review.** Built for the AI pass: after a repository's audit, a review session that reported nothing judges
-   each finding (confirmed, rejected, duplicate or unsure, with a reason) through `record_verdict`. Still open: a
-   person's verdicts, in the web UI and the CLI.
+   each finding (confirmed, rejected, duplicate or unsure, with a reason) through `record_verdict`. A person reads
+   `aid findings shortlist` and records verdicts with `aid findings verdict`. Still open: the same in the web UI.
 
 ## Limits known now
 

@@ -28,7 +28,10 @@ if TYPE_CHECKING:
 
 PLUGIN: Final = "findings"
 AI_REVIEW: Final = "ai"
-"""`verdicts.pass` of a model's judgement; a person's is "human"."""
+"""`verdicts.pass` of a model's judgement."""
+HUMAN_REVIEW: Final = "human"
+OPERATOR: Final = "operator"
+"""`verdicts.by` of a verdict the operator recorded."""
 
 
 @aid.mcptool
@@ -117,7 +120,7 @@ class Findings(aid.Plugin):
                 return await self._report(self._client, self._store, caller, args)
             case "verdict":
                 if caller is None:
-                    raise AidError("forbidden", "a session judges findings in its own directory")
+                    return await self._person(self._store, args)
                 return await self._verdict(self._client, self._store, caller, args)
             case "query":
                 if caller is not None:
@@ -128,6 +131,15 @@ class Findings(aid.Plugin):
                 return (await ask({"findings": self._file}, sql)).model_dump(mode="json")
             case _:
                 raise AidError("unknown_method", f"findings has no method {method!r}")
+
+    @staticmethod
+    async def _person(store: FindingStore, args: dict[str, JsonValue]) -> None:
+        """The operator's verdict: the human pass, on any finding."""
+        try:
+            verdict = Verdict.model_validate({key: value for key, value in args.items() if value is not None})
+        except ValidationError as error:
+            raise AidError("bad_args", str(error)) from None
+        await store.judge(None, verdict, session=OPERATOR, review=HUMAN_REVIEW)
 
     @staticmethod
     async def _verdict(client: aid.Client, store: FindingStore, caller: str, args: dict[str, JsonValue]) -> None:

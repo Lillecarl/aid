@@ -198,13 +198,15 @@ class Verdict(BaseModel):
         return self
 
 
-def _judge(db: apsw.Connection, repo: str, verdict: Verdict, session: str, review: str) -> None:
-    """Record `verdict` if its findings lie in `repo` and `session` did not report the one judged."""
+def _judge(db: apsw.Connection, repo: str | None, verdict: Verdict, session: str, review: str) -> None:
+    """Record `verdict` if its findings lie in `repo` and `session` did not report the one judged; a person's
+    (`repo` None) judges any finding."""
     row = db.execute("SELECT repo, session FROM findings WHERE id = ?", (verdict.finding,)).fetchone()
-    if row is None or row[0] != repo:
+    if row is None or (repo is not None and row[0] != repo):
         raise AidError("not_found", f"no finding {verdict.finding} in this directory")
     if row[1] == session:
         raise AidError("forbidden", "a session does not judge its own findings")
+    repo = str(row[0])
     if verdict.duplicate_of is not None:
         other = db.execute("SELECT repo FROM findings WHERE id = ?", (verdict.duplicate_of,)).fetchone()
         if other is None or other[0] != repo or verdict.duplicate_of == verdict.finding:
@@ -245,7 +247,7 @@ class FindingStore:
         """The new finding's id, and the first earlier one at the same place with the same title."""
         return await self._db.run(_insert, repo, path, report, session, model)
 
-    async def judge(self, repo: str, verdict: Verdict, *, session: str, review: str) -> None:
+    async def judge(self, repo: str | None, verdict: Verdict, *, session: str, review: str) -> None:
         await self._db.run(_judge, repo, verdict, session, review)
 
     async def aclose(self) -> None:

@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 import aid
+from aid.cli import _shortlist_sql  # pyright: ignore[reportPrivateUsage] -- the CLI's own query, tested
 from aid.daemon import Daemon
 from aid.paths import ENV_STATE_DIR
 from aid.plugins import ENV_PLUGINS_PATH
@@ -207,7 +208,18 @@ async def test_a_reviewer_judges_findings_in_its_directory_but_not_its_own(
             answer = await client.call_plugin(
                 "findings", "query", sql="SELECT finding, pass, status, duplicate_of, severity, by FROM verdicts"
             )
+            await client.call_plugin(
+                "findings", "verdict", finding=1, status="rejected", note="test code", severity="low"
+            )
+            shortlisted = await client.call_plugin("findings", "query", sql=_shortlist_sql(everything=False))
+            everything = await client.call_plugin("findings", "query", sql=_shortlist_sql(everything=True))
     assert QueryResult.model_validate(answer).rows == [
         [1, "ai", "confirmed", None, "medium", "reviewer"],
         [2, "ai", "duplicate", 1, None, "reviewer"],
+    ]
+    # The person rejected 1 and the AI merged 2 into it: nothing is left for a look, and --all shows both passes.
+    assert QueryResult.model_validate(shortlisted).rows == []
+    assert [row[3:6] for row in QueryResult.model_validate(everything).rows] == [
+        ["low", "confirmed", "rejected"],
+        ["low", "duplicate", "-"],
     ]
