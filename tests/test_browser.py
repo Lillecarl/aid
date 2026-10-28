@@ -508,7 +508,14 @@ async def test_linked_sessions_are_tabs_under_the_chat(page: Page, session_daemo
     box = page.locator("[data-testid=chat-input]:visible")
     await box.fill("hello boss")
     await box.press("Enter")
-    await page.locator("[data-testid=chat-log]:visible").get_by_text("echo hello boss").wait_for(timeout=TIMEOUT * 1000)
+    try:
+        await page.locator("[data-testid=chat-log]:visible").get_by_text("echo hello boss").wait_for(timeout=TIMEOUT * 1000)
+    except Exception:
+        # Lillecarl/aid#53: the answer shows twice now and then; one chat or two mounted ones?
+        logs = page.locator("[data-testid=chat-log]:visible")
+        for i in range(await logs.count()):
+            print(f"chat log {i}:", await logs.nth(i).inner_html())
+        raise
     await page.get_by_role("tab", name="Status").click()
     await page.get_by_role("tab", name="Chat").click()
     await page.locator("[data-testid=linked-tab]:visible").filter(has_text="worker").click()
