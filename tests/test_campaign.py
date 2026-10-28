@@ -329,6 +329,29 @@ async def test_a_restart_resumes_without_reading_again(
     assert sorted(reads) == ["a.py", "b.py", "c.py"]
 
 
+async def test_a_repository_done_before_its_review_is_reviewed_on_resume(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    root = tmp_path / "tree"
+    await repos(root)
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            fields: dict[str, JsonValue] = {"repos": ["alpha"], "review": False}
+            await client.call_plugin("campaign", "start", config=config(tmp_path, root, **fields))
+            await settled(client, "audit")
+            unjudged = await client.call_plugin("findings", "query", sql="SELECT count(*) FROM verdicts")
+        db = apsw.Connection(str(paths.plugin_dir("campaign") / CAMPAIGN_FILE))
+        with db:
+            db.execute("UPDATE campaigns SET state = 'running', config = json_set(config, '$.review', json('true'))")
+        db.close()
+        async with serving(paths, launcher) as client:
+            await settled(client, "audit")
+            judged = await client.call_plugin("findings", "query", sql="SELECT finding, status FROM verdicts")
+    assert QueryResult.model_validate(unjudged).rows == [[0]]
+    assert QueryResult.model_validate(judged).rows == [[1, "confirmed"]]
+
+
 async def test_the_root_session_supervises_each_repository(
     paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -429,7 +429,8 @@ class Campaigns(aid.Plugin):
         limiter = anyio.CapacityLimiter(config.concurrency)
         async with anyio.create_task_group() as tg:
             for repo in await self.store.repos(config.name):
-                if repo.state not in {RepoState.DONE, RepoState.FAILED}:
+                # A done repository may still hold findings no review judged: it finished before the review ran.
+                if repo.state != RepoState.FAILED and (repo.state != RepoState.DONE or config.review):
                     tg.start_soon(self._repo_run, config, repo, limiter)
         if config.name not in self._pausing:
             await self.store.set_state(config.name, CampaignState.DONE)
@@ -450,6 +451,9 @@ class Campaigns(aid.Plugin):
         await self._session(repo.session, repo_spec(config, path))
         session = client.session(repo.session)
         state = repo.state
+        if state == RepoState.DONE:
+            await self._review(config, repo, path, repo.brief or "")
+            return
         if state == RepoState.PENDING:
             files, skipped = await anyio.to_thread.run_sync(examine, path, await tracked(path), config.limits)
             await store.plan(config.name, repo.path, chunk(files, config.limits), skipped)
