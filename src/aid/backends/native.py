@@ -46,6 +46,7 @@ from aid.model import (
     Model,
     ModelInfo,
     RequestUsage,
+    StreamBroken,
     Transport,
     accumulate,
     check_host,
@@ -116,6 +117,10 @@ HOLD: Final = 200
 """Characters of a continuation held from the stream until its repeat of the answer is known and left out."""
 SEAM_PUNCTUATION: Final = ",.;:!?\u2014"
 """Punctuation a space follows in prose, where `join_continued` restores one."""
+STREAM_RETRIES: Final = 3
+"""Broken streams in a row a turn sends again before it fails."""
+STREAM_BACKOFF: Final = 5.0
+"""Seconds before the first resend; each one after waits that much longer."""
 
 
 METADATA: Final = "[Session metadata]"
@@ -548,6 +553,7 @@ class NativeBackend:
         retries = 0
         so_far: str | None = None
         continued = 0
+        broken = 0
         scope = anyio.CancelScope()
         self._scope = scope
         self._turn = messages
@@ -606,6 +612,16 @@ class NativeBackend:
                         finally:
                             with anyio.CancelScope(shield=True):
                                 await stream.aclose()
+                        broken = 0
+                    except StreamBroken as error:
+                        if broken >= STREAM_RETRIES:
+                            raise
+                        broken += 1
+                        # What streamed of it stays in the transcript; the engine history drops it.
+                        messages.pop()
+                        log.warning("stream_broken", error=str(error), retry=broken)
+                        await anyio.sleep(STREAM_BACKOFF * broken)
+                        continue
                     finally:
                         if usage_observed:
                             usage = usage.model_copy(

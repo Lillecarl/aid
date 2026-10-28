@@ -33,6 +33,7 @@ from aid.model import (
     OpenAIChatModel,
     Provider,
     RequestUsage,
+    StreamBroken,
     accumulate,
     anthropic_messages,
     model_for,
@@ -144,6 +145,50 @@ async def test_the_gauge_is_half_the_model_window(
         await session.prompt("hello", emit)
     usage = next(item for item in events if isinstance(item, Usage))
     assert usage.context_size == gauge
+
+
+@pytest.mark.parametrize("breaks", [1, native_backend.STREAM_RETRIES + 1])
+async def test_a_broken_stream_goes_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, breaks: int) -> None:
+    class Breaking(httpx2.AsyncByteStream):
+        async def __aiter__(self):
+            yield event({"reasoning": "thinking"})
+            raise httpx2.ReadError("")
+
+    sent = 0
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        nonlocal sent
+        sent += 1
+        if sent <= breaks:
+            return httpx2.Response(200, headers={"content-type": "text/event-stream"}, stream=Breaking())
+        data = event({"content": "done"}) + event({}, usage={"prompt_tokens": 10, "completion_tokens": 1})
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=data + b"data: [DONE]\n\n")
+
+    def make_client(**kwargs: Any) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
+
+    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setattr(native_backend, "STREAM_BACKOFF", 0)
+    events: list[SessionEvent] = []
+
+    async def emit(item: SessionEvent) -> None:
+        events.append(item)
+
+    agent = Agent("openai/local", model_settings={"api_key": "test-broken", "api_base": "https://example.test/v1"})
+    async with backend(tmp_path, agent) as session:
+        if breaks > native_backend.STREAM_RETRIES:
+            with pytest.raises(StreamBroken):
+                await session.prompt("hello", emit)
+        else:
+            assert (await session.prompt("hello", emit)).output == "done"
+    assert sent == min(breaks + 1, native_backend.STREAM_RETRIES + 1)
+    usage = next(item for item in events if isinstance(item, Usage))
+    assert usage.requests == sent
+    history = ModelMessagesTypeAdapter.validate_json((tmp_path / "history.json").read_bytes())
+    # Only the last response stays: the answer, or what the last broken one streamed (a failed turn keeps it).
+    [response] = [m for m in history if isinstance(m, ModelResponse)]
+    kind = TextPart if breaks <= native_backend.STREAM_RETRIES else ThinkingPart
+    assert [type(part) for part in response.parts] == [kind]
 
 
 async def test_openai_stream_cancellation_closes_transport(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -484,8 +529,9 @@ async def test_anthropic_stream_closes_clients_on_cancellation_and_failure(
     try:
         with anyio.fail_after(2):
             if failure:
-                with pytest.raises(httpx2.ReadError):
+                with pytest.raises(StreamBroken) as raised:
                     await consume()
+                assert isinstance(raised.value.__cause__, httpx2.ReadError)
             else:
                 await consume()
         assert source.closed

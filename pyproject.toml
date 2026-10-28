@@ -22,6 +22,8 @@ dependencies = [
   # aid.model: the native backend's transports, built from pins in default.nix.
   "anthropic",
   "google-genai",
+  # The OpenAI and Anthropic clients' HTTP; aid.model catches its errors.
+  "httpx2",
   "openai",
   "pydantic>=2.11",
   # aid.coding: agents edit through pyedit's library and run processes through pyrun (./pyrun).

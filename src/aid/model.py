@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast,
 import anthropic
 import anyio
 import httpx
+import httpx2
 import openai
 from anthropic.types import (
     InputJSONDelta,
@@ -96,6 +97,15 @@ class StreamDelta:
     model_name: str | None = None
     truncated: bool = False
     """The provider stopped the response at its output token limit."""
+
+
+class StreamBroken(Exception):
+    """The connection failed after the response began. No tool call of it ran, so the request may go again."""
+
+
+BROKEN: Final = (httpx.TransportError, httpx2.TransportError)
+"""What a dropped stream raises: Gemini's client is httpx, the OpenAI and Anthropic clients httpx2. The SDKs raise
+it bare from a response body (openai 2.x, measured 2026-10-28: vLLM dropped 7 streams in 5 hours, 61 to 545 s in)."""
 
 
 class Model(Protocol):
@@ -437,6 +447,8 @@ class OpenAIChatModel:
                                 ids.get(call.index, ""),
                             ),
                         )
+        except BROKEN as error:
+            raise StreamBroken(repr(error)) from error
         finally:
             with anyio.CancelScope(shield=True):
                 await stream.close()
@@ -654,6 +666,8 @@ class AnthropicModel:
                         yield StreamDelta(event.index, ToolCallPart("", "{}", ""))
                     case _:
                         pass
+        except BROKEN as error:
+            raise StreamBroken(repr(error)) from error
         finally:
             with anyio.CancelScope(shield=True):
                 await stream.close()
@@ -862,6 +876,8 @@ class GoogleModel:
                             )
                         elif part.text or extra:
                             yield StreamDelta(0, TextPart(part.text or "", **extra))
+        except BROKEN as error:
+            raise StreamBroken(repr(error)) from error
         finally:
             # Typed as an iterator; the SDK returns an async generator, which holds the response open.
             if isinstance(stream, collections.abc.AsyncGenerator):
