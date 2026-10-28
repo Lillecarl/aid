@@ -15,13 +15,14 @@ export function linkedOnly(sessions: SessionInfo[]): Set<string> {
 }
 
 /** `name`'s tabs: itself and the sessions working for it, then its supervisor and the sessions working for
- * that (its classifier), each after its parent. */
+ * that (its classifier), each after its parent. A child its parent also supervises is a charge, not a helper:
+ * a campaign's repositories are not tabs of the campaign or of each other. */
 export function family(sessions: SessionInfo[], name: string): string[] {
   const tabs: string[] = [];
   const visit = (n: string): void => {
     if (tabs.includes(n)) return;
     tabs.push(n);
-    for (const s of sessions) if (s.parent === n) visit(s.name);
+    for (const s of sessions) if (s.parent === n && s.supervisor !== n) visit(s.name);
   };
   visit(name);
   const supervisor = sessions.find((s) => s.name === name)?.supervisor;

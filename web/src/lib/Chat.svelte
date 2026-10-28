@@ -776,6 +776,8 @@
     flex-wrap: wrap;
     gap: 0.3rem;
     margin-right: auto;
+    max-height: 5.5rem;
+    overflow-y: auto;
   }
   /* app.css makes controls fill their container; beside a label's text that runs past the page edge. */
   .head select,

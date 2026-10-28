@@ -495,9 +495,11 @@ async def test_linked_sessions_are_tabs_under_the_chat(page: Page, session_daemo
     async with aid.connect(session_daemon) as client:
         spec = py_spec(tmp_path, "agents:echo", PermissionMode.DENY).model_copy(update={"parent": "boss"})
         await client.create("boss.classifier", spec)
+        # A charge: a child boss also supervises, as a campaign's repositories are. Not a tab of its siblings.
+        await client.create("boss.charge", spec.model_copy(update={"supervisor": "boss"}))
         await client.session("worker").set_supervisor("boss")
     listing = page.get_by_test_id("session-list")
-    await page.get_by_test_id("show-linked").filter(has_text="Show 2 linked sessions").wait_for(timeout=TIMEOUT * 1000)
+    await page.get_by_test_id("show-linked").filter(has_text="Show 3 linked sessions").wait_for(timeout=TIMEOUT * 1000)
     assert await listing.get_by_role("button").filter(has_text="boss").count() == 0
     await open_session(page, "worker")
     tabs = page.locator("[data-testid=linked-tab]:visible")
