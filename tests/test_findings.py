@@ -168,3 +168,46 @@ async def test_a_session_on_a_read_only_ceiling_records_findings(
             assert stat.S_IMODE(database.stat().st_mode) == 0o600
             with pytest.raises(AidError, match="session reports"):
                 await client.call_plugin("findings", "report", **finding)
+
+
+@pytest.mark.anyio
+async def test_a_reviewer_judges_findings_in_its_directory_but_not_its_own(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    finding: dict[str, JsonValue] = {
+        "path": "app.py",
+        "category": "bug",
+        "severity": "low",
+        "title": "T",
+        "detail": "D",
+    }
+    auditor = auditor_spec(tmp_path, repo).model_copy(update={"tools": ["report_finding", "record_verdict"]})
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            session = await client.create("auditor", auditor)
+            await session.run(calls(("report_finding", finding), ("report_finding", {**finding, "title": "U"})))
+            own = await session.run(calls(("record_verdict", {"finding": 1, "status": "confirmed", "note": "mine"})))
+            assert "own findings" in str(own.output)
+            reviewer = await client.create("reviewer", auditor.model_copy(update={"tools": ["record_verdict"]}))
+            judged = await reviewer.run(
+                calls(
+                    ("record_verdict", {"finding": 1, "status": "confirmed", "note": "real", "severity": "medium"}),
+                    ("record_verdict", {"finding": 2, "status": "duplicate", "note": "same", "duplicate_of": 1}),
+                    ("record_verdict", {"finding": 2, "status": "duplicate", "note": "which?"}),
+                    ("record_verdict", {"finding": 99, "status": "rejected", "note": "no"}),
+                )
+            )
+            assert "names duplicate_of" in str(judged.output) and "no finding 99" in str(judged.output)
+            elsewhere = await client.create(
+                "elsewhere", auditor.model_copy(update={"tools": ["record_verdict"], "cwd": str(tmp_path)})
+            )
+            outside = await elsewhere.run(calls(("record_verdict", {"finding": 1, "status": "rejected", "note": "x"})))
+            assert "no finding 1 in this directory" in str(outside.output)
+            answer = await client.call_plugin(
+                "findings", "query", sql="SELECT finding, pass, status, duplicate_of, severity, by FROM verdicts"
+            )
+    assert QueryResult.model_validate(answer).rows == [
+        [1, "ai", "confirmed", None, "medium", "reviewer"],
+        [2, "ai", "duplicate", 1, None, "reviewer"],
+    ]

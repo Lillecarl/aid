@@ -25,7 +25,8 @@ if TYPE_CHECKING:
     import apsw
 
 FINDINGS_FILE: Final = "findings.db"
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
+MIGRATIONS: Final = {1: "ALTER TABLE verdicts ADD COLUMN severity TEXT"}
 SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS findings (
     id INTEGER PRIMARY KEY,
@@ -50,7 +51,8 @@ CREATE TABLE IF NOT EXISTS verdicts (
     duplicate_of INTEGER REFERENCES findings (id),
     note TEXT,
     by TEXT NOT NULL,
-    decided REAL NOT NULL
+    decided REAL NOT NULL,
+    severity TEXT
 );
 CREATE INDEX IF NOT EXISTS findings_dedup ON findings (dedup);
 CREATE INDEX IF NOT EXISTS findings_repo ON findings (repo, path);
@@ -170,6 +172,59 @@ def _insert(
     return db.last_insert_rowid(), first if isinstance(first, int) else None
 
 
+class Status(StrEnum):
+    CONFIRMED = "confirmed"
+    REJECTED = "rejected"
+    DUPLICATE = "duplicate"
+    UNSURE = "unsure"
+
+
+class Verdict(BaseModel):
+    """A review pass's judgement of one finding."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    finding: int
+    status: Status
+    note: Annotated[str, Field(min_length=1, max_length=4000)]
+    severity: Severity | None = None
+    """The severity the reviewer gives, when it differs from the reporter's."""
+    duplicate_of: int | None = None
+
+    @model_validator(mode="after")
+    def _duplicate_names_one(self) -> Verdict:
+        if (self.status == Status.DUPLICATE) != (self.duplicate_of is not None):
+            raise ValueError("a duplicate names duplicate_of, and only a duplicate does")
+        return self
+
+
+def _judge(db: apsw.Connection, repo: str, verdict: Verdict, session: str, review: str) -> None:
+    """Record `verdict` if its findings lie in `repo` and `session` did not report the one judged."""
+    row = db.execute("SELECT repo, session FROM findings WHERE id = ?", (verdict.finding,)).fetchone()
+    if row is None or row[0] != repo:
+        raise AidError("not_found", f"no finding {verdict.finding} in this directory")
+    if row[1] == session:
+        raise AidError("forbidden", "a session does not judge its own findings")
+    if verdict.duplicate_of is not None:
+        other = db.execute("SELECT repo FROM findings WHERE id = ?", (verdict.duplicate_of,)).fetchone()
+        if other is None or other[0] != repo or verdict.duplicate_of == verdict.finding:
+            raise AidError("not_found", f"no other finding {verdict.duplicate_of} in this directory")
+    db.execute(
+        "INSERT INTO verdicts (finding, pass, status, duplicate_of, note, by, decided, severity)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            verdict.finding,
+            review,
+            verdict.status,
+            verdict.duplicate_of,
+            verdict.note,
+            session,
+            time.time(),
+            verdict.severity,
+        ),
+    )
+
+
 class FindingStore:
     """The findings plugin's database, written by the plugin only."""
 
@@ -182,13 +237,16 @@ class FindingStore:
         await anyio.Path(path).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         await anyio.Path(path).touch(mode=0o600)
         await anyio.Path(path).chmod(0o600)
-        return cls(await Database.open(path, SCHEMA, SCHEMA_VERSION))
+        return cls(await Database.open(path, SCHEMA, SCHEMA_VERSION, MIGRATIONS))
 
     async def insert(
         self, repo: str, path: str, report: Report, *, session: str, model: str | None
     ) -> tuple[int, int | None]:
         """The new finding's id, and the first earlier one at the same place with the same title."""
         return await self._db.run(_insert, repo, path, report, session, model)
+
+    async def judge(self, repo: str, verdict: Verdict, *, session: str, review: str) -> None:
+        await self._db.run(_judge, repo, verdict, session, review)
 
     async def aclose(self) -> None:
         await self._db.aclose()

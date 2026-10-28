@@ -21,12 +21,14 @@ from aid.protocol import AidError, GetSpec
 from aid.spec import AgentSpecAdapter, NativeSpec
 from aid.sql import ask
 
-from .store import FINDINGS_FILE, FindingStore, Report, check
+from .store import FINDINGS_FILE, FindingStore, Report, Verdict, check
 
 if TYPE_CHECKING:
     from pydantic import JsonValue
 
 PLUGIN: Final = "findings"
+AI_REVIEW: Final = "ai"
+"""`verdicts.pass` of a model's judgement; a person's is "human"."""
 
 
 @aid.mcptool
@@ -62,6 +64,30 @@ async def report_finding(
     return str(result)
 
 
+@aid.mcptool
+async def record_verdict(
+    finding: int,
+    status: str,
+    note: str,
+    severity: str | None = None,
+    duplicate_of: int | None = None,
+) -> str:
+    """Judge one finding after reading the code it names. `status`: confirmed (a real issue as described), rejected
+    (not an issue: say why), duplicate (the same issue as `duplicate_of`, another finding's id) or unsure. `note`:
+    the reason, briefly. `severity`: critical, high, medium, low or info, only when the finding's is wrong."""
+    async with aid.connect() as client:
+        await client.call_plugin(
+            PLUGIN,
+            "verdict",
+            finding=finding,
+            status=status,
+            note=note,
+            severity=severity,
+            duplicate_of=duplicate_of,
+        )
+    return f"Recorded the verdict on finding {finding}."
+
+
 class Findings(aid.Plugin):
     """The findings database's one writer: sessions report, the operator queries."""
 
@@ -89,6 +115,10 @@ class Findings(aid.Plugin):
                 if caller is None:
                     raise AidError("forbidden", "a session reports findings in its own directory")
                 return await self._report(self._client, self._store, caller, args)
+            case "verdict":
+                if caller is None:
+                    raise AidError("forbidden", "a session judges findings in its own directory")
+                return await self._verdict(self._client, self._store, caller, args)
             case "query":
                 if caller is not None:
                     raise AidError("forbidden", "only the operator queries findings")
@@ -98,6 +128,16 @@ class Findings(aid.Plugin):
                 return (await ask({"findings": self._file}, sql)).model_dump(mode="json")
             case _:
                 raise AidError("unknown_method", f"findings has no method {method!r}")
+
+    @staticmethod
+    async def _verdict(client: aid.Client, store: FindingStore, caller: str, args: dict[str, JsonValue]) -> None:
+        try:
+            verdict = Verdict.model_validate({key: value for key, value in args.items() if value is not None})
+        except ValidationError as error:
+            raise AidError("bad_args", str(error)) from None
+        spec = AgentSpecAdapter.validate_python(await client.call(GetSpec(session=caller)))
+        repo = str(await anyio.Path(spec.cwd).resolve())
+        await store.judge(repo, verdict, session=caller, review=AI_REVIEW)
 
     @staticmethod
     async def _report(client: aid.Client, store: FindingStore, caller: str, args: dict[str, JsonValue]) -> str:
