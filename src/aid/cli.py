@@ -408,7 +408,7 @@ def _parser() -> argparse.ArgumentParser:
     campaign_sub.add_parser("status", help="campaigns, their repositories and units, as JSON").add_argument(
         "name", nargs="?"
     )
-    campaign_sub.add_parser("pause", help="stop after each repository's running unit").add_argument("name")
+    campaign_sub.add_parser("pause", help="stop after each repository's running turn; `aid cancel` ends one now").add_argument("name")
     resume = campaign_sub.add_parser("resume", help="run a paused campaign again")
     resume.add_argument("name")
     resume.add_argument("--config", type=Path, help="a revised CampaignConfig: same name and root")

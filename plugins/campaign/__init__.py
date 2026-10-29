@@ -353,7 +353,7 @@ class Campaigns(aid.Plugin):
         return await self._status(config.name)
 
     async def _pause(self, name: str) -> JsonValue:
-        """Each repository finishes its running unit, then stops."""
+        """Each repository finishes its running turn, then stops; a cancelled one stops it at once."""
         await self._campaign(name)
         self._pausing.add(name)
         await self.store.set_state(name, CampaignState.PAUSED)
@@ -364,7 +364,7 @@ class Campaigns(aid.Plugin):
         keep their specs; units already planned keep their files."""
         campaign = await self._campaign(name)
         if name in self._running:
-            raise AidError("busy", f"campaign {name!r} still finishes its running units; resume it after")
+            raise AidError("busy", f"campaign {name!r} still finishes its running turns; resume it after")
         config = CampaignConfig.model_validate_json(campaign.config)
         if revised is not None:
             if (revised.name, revised.root) != (config.name, config.root):
@@ -665,6 +665,9 @@ class Campaigns(aid.Plugin):
         attempts, error, answer = unit.attempts, unit.error, None
         missing = [f.path for f in unit.files if f.path not in covered]
         while missing and attempts < config.attempts:
+            if config.name in self._pausing:
+                # Left running with its attempt recorded: a resume credits it. A cancelled turn ends here, not again.
+                return
             await _idle(session)
             start = await _newest_seq(session)
             await store.attempt_started(unit, start)

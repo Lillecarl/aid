@@ -427,6 +427,37 @@ async def test_a_unit_stopped_before_its_answer_is_audited_again(
     assert reads.count("a.py") == 2
 
 
+async def test_a_paused_unit_whose_turn_is_cancelled_asks_no_more(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    root = tmp_path / "tree"
+    await repos(root)
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            fields: dict[str, JsonValue] = {
+                "model": "scripted/hanging",
+                "repos": ["alpha"],
+                "limits": {"unit_files": 3},
+                "env": {ENV_PLUGINS_PATH: str(tmp_path / "worker-plugins"), "AID_HANG_GATE": str(tmp_path / "hung")},
+            }
+            config(tmp_path, root)  # The worker plugins directory, before its path goes into `fields`.
+            await client.call_plugin("campaign", "start", config=config(tmp_path, root, **fields))
+            while not (tmp_path / "hung").exists():  # noqa: ASYNC110 -- the worker drops a file; no event crosses to here
+                await anyio.sleep(0.1)
+            await client.call_plugin("campaign", "pause", name="audit")
+            await client.session("audit.alpha").cancel()
+            campaign = await status(client, "audit")
+            while campaign["running"]:
+                await anyio.sleep(0.1)
+                campaign = await status(client, "audit")
+            entries = (await client.session("audit.alpha").history(limit=1000)).entries
+    # A failed attempt waits out the backoff and goes again, unless the campaign is paused: the hanging model would
+    # answer a second prompt.
+    assert [e.item.type for e in entries].count("prompt") == 1
+    assert campaign["repos"][0]["units"] == {"running": 1}  # type: ignore[index]
+
+
 async def test_a_recreated_session_is_audited_afresh(
     paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
