@@ -25,10 +25,23 @@ from aid.protocol import AidError, GetSpec
 from aid.spec import AgentSpecAdapter, NativeSpec, PermissionMode, Private, Sandbox
 from aid.sql import ask
 
+from .probes import machine_list, machine_probe, machine_read, remote_command
 from .store import REVERSE_FILE, Evidence, Kind, Recorded, ReverseStore, Settlement, artifact
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup
+
+__all__ = [
+    "Investigations",
+    "evidence",
+    "machine_list",
+    "machine_probe",
+    "machine_read",
+    "record_evidence",
+    "remote_command",
+    "settle_evidence",
+]
+"""Discovery offers the tools the package's namespace holds, the probes' included."""
 
 log = structlog.get_logger(__name__)
 

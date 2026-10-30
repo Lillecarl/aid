@@ -212,7 +212,11 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `remote_command` ask, PATH led by `AID_REVERSE_TOOLS/bin`); the goal is the lead's first turn. Evidence
   (`store.py`, `reverse.db` 0600): `record_evidence` kinds observation / inference (needs `supports`) / hypothesis /
   question; artifact = workspace file + sha256, checked by the plugin; `settle_evidence` statuses per kind
-  (`SETTLES`); the investigation comes from the caller's `investigation` tag, never from the model.
+  (`SETTLES`); the investigation comes from the caller's `investigation` tag, never from the model. Probes
+  (`probes.py`): SSH from the worker (`AID_REVERSE_SSH`, tests fake it), saved to `machines/<machine>/` in the
+  workspace; `machine_probe` fixed read commands (`PROBES`), `machine_read`/`machine_list` a `READABLE` path under
+  /sys or /proc, `remote_command` anything, asked each time by the spec's mode; machines from the plugin's `machines`
+  call, by the caller's investigation.
 - `src/aid/slots.py` — model slots: `aid daemon --model-slots HOST=N` caps requests in flight to a model host across
   every session (a self-hosted server's best batch load). The table reaches a worker at launch (`WorkerArgs.model_slots`
   → `AID_MODEL_SLOTS`; none outside a worker); `open_native` wraps a limited host's model in `Slotted`, calling

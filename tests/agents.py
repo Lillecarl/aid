@@ -343,10 +343,12 @@ INVESTIGATION_STEPS: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = (
 
 async def _investigate(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
     """A lead's turn: a file written through the shell, two rows of evidence on it, the record read back, then an
-    answer quoting what each call returned."""
+    answer quoting what each call returned. `AID_TEST_STEPS` (JSON, `[[tool, args], ...]`) replaces the calls."""
+    given = os.environ.get("AID_TEST_STEPS")
+    steps = [(str(n), a) for n, a in json.loads(given)] if given else INVESTIGATION_STEPS
     returns = [p for m in messages for p in m.parts if isinstance(p, ToolReturnPart | RetryPromptPart)]
-    if len(returns) < len(INVESTIGATION_STEPS):
-        name, args = INVESTIGATION_STEPS[len(returns)]
+    if len(returns) < len(steps):
+        name, args = steps[len(returns)]
         yield {0: DeltaToolCall(name=name, json_args=json.dumps(args), tool_call_id=f"step{len(returns)}")}
         return
     yield "\n".join(str(p.content if isinstance(p, ToolReturnPart) else p.model_response()) for p in returns)

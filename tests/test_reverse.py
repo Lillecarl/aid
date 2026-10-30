@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -13,9 +14,10 @@ import aid
 from aid.daemon import Daemon
 from aid.paths import ENV_STATE_DIR
 from aid.plugins import ENV_PLUGINS_PATH
-from aid.protocol import AidError, GetSpec, QueryResult
+from aid.protocol import AidError, GetSpec, PermissionRequest, QueryResult
 from aid.spec import AgentSpecAdapter, NativeSpec, PermissionMode
 from plugins.reverse import InvestigationConfig, lead_name, lead_spec
+from plugins.reverse.probes import ENV_SSH
 from plugins.reverse.store import Evidence, Kind, Recorded, ReverseStore, Settlement, Status, artifact
 from tests.conftest import TESTS
 from tests.models import HOST
@@ -150,6 +152,62 @@ def test_an_artifact_is_a_file_in_the_workspace(tmp_path: Path) -> None:
         artifact(tmp_path / "work", "../outside")
     with pytest.raises(AidError, match="no file"):
         artifact(tmp_path / "work", ".")
+
+
+FAKE_SSH = """#!/bin/sh
+# ssh OPTIONS... DEST -- COMMAND: the command runs here, as ssh would run it there.
+while [ "$1" != "--" ]; do shift; done
+shift
+exec sh -c "$*"
+"""
+
+
+@needs_bwrap
+async def test_probes_read_freely_and_a_remote_command_waits_for_a_person(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    ssh = tmp_path / "ssh"
+    ssh.write_text(FAKE_SSH)
+    ssh.chmod(0o755)
+    steps: list[JsonValue] = [
+        ["machine_read", {"machine": "spark", "path": "/proc/version"}],
+        ["machine_read", {"machine": "spark", "path": "/proc/../etc/shadow"}],
+        ["machine_probe", {"machine": "other", "probe": "identity"}],
+        ["remote_command", {"machine": "spark", "command": "echo written", "why": "test a write"}],
+    ]
+    fields: dict[str, JsonValue] = {"machines": {"spark": "root@spark"}}
+    settings = config(tmp_path, workspace, **fields)
+    env = settings["env"]
+    assert isinstance(env, dict)
+    settings["env"] = {**env, "AID_TEST_STEPS": json.dumps(steps), ENV_SSH: str(ssh)}
+    requests: list[PermissionRequest] = []
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            await client.call_plugin("reverse", "start", config=settings)
+            session = client.session(lead_name("fans"))
+            async with contextlib.aclosing(session.follow_history()) as entries:
+                async for entry in entries:
+                    if isinstance(entry.item, PermissionRequest):
+                        requests.append(entry.item)
+                        [allow] = [o for o in entry.item.options if o.kind == "allow_once"]
+                        await session.answer(entry.item.request_id, allow.option_id)
+                    if entry.item.type == "output":
+                        break
+            history = (await session.history(limit=100)).entries
+    output = str(history[-1].item.output)  # type: ignore[union-attr]
+    assert output.startswith("[read_proc_version on spark: exit 0, saved to machines/spark/read_proc_version-")
+    assert "Linux version" in output
+    assert "is no plain path under /sys or /proc" in output
+    assert "no machine 'other' in this investigation (machines: spark)" in output
+    assert "[command on spark: exit 0, saved to machines/spark/command-" in output and "\nwritten\n" in output
+    [request] = requests
+    assert request.tool_name == "remote_command"
+    assert request.input == {"machine": "spark", "command": "echo written", "why": "test a write"}
+    saved = sorted(p.name.split("-")[0] for p in (workspace / "machines" / "spark").iterdir())
+    assert saved == ["command", "read_proc_version"]
 
 
 @needs_bwrap
