@@ -330,6 +330,29 @@ async def _audit_then_hang(messages: list[ModelMessage], info: AgentInfo) -> Asy
         yield delta
 
 
+INVESTIGATION_STEPS: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = (
+    ("shell", {"command": "echo 'fan: 2400 rpm' > probe.txt && cat probe.txt"}),
+    (
+        "record_evidence",
+        {"kind": "observation", "claim": "the fan spins at 2400 rpm", "artifact": "probe.txt", "location": "line 1"},
+    ),
+    ("record_evidence", {"kind": "hypothesis", "claim": "the controller sets the speed", "supports": [1]}),
+    ("evidence", {}),
+)
+
+
+async def _investigate(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    """A lead's turn: a file written through the shell, two rows of evidence on it, the record read back, then an
+    answer quoting what each call returned."""
+    returns = [p for m in messages for p in m.parts if isinstance(p, ToolReturnPart | RetryPromptPart)]
+    if len(returns) < len(INVESTIGATION_STEPS):
+        name, args = INVESTIGATION_STEPS[len(returns)]
+        yield {0: DeltaToolCall(name=name, json_args=json.dumps(args), tool_call_id=f"step{len(returns)}")}
+        return
+    yield "\n".join(str(p.content if isinstance(p, ToolReturnPart) else p.model_response()) for p in returns)
+
+
+investigator = Agent(FunctionModel(stream_function=_investigate))
 auditor = Agent(FunctionModel(stream_function=_audit))
 hanging_auditor = Agent(FunctionModel(stream_function=_audit_then_hang))
 flaky_auditor = Agent(FunctionModel(stream_function=_audit_flakily))

@@ -408,10 +408,28 @@ def _parser() -> argparse.ArgumentParser:
     campaign_sub.add_parser("status", help="campaigns, their repositories and units, as JSON").add_argument(
         "name", nargs="?"
     )
-    campaign_sub.add_parser("pause", help="stop after each repository's running turn; `aid cancel` ends one now").add_argument("name")
+    campaign_sub.add_parser(
+        "pause", help="stop after each repository's running turn; `aid cancel` ends one now"
+    ).add_argument("name")
     resume = campaign_sub.add_parser("resume", help="run a paused campaign again")
     resume.add_argument("name")
     resume.add_argument("--config", type=Path, help="a revised CampaignConfig: same name and root")
+
+    investigation = sub.add_parser(
+        "investigation", help="reverse-engineering investigations: a lead session answers a question from evidence"
+    )
+    investigation_sub = investigation.add_subparsers(dest="investigation_command", required=True)
+    investigation_sub.add_parser("start", help="start one from a JSON config; prints its status").add_argument(
+        "config", type=Path, help="an InvestigationConfig (plugins/reverse): name, workspace, goal, model, ..."
+    )
+    investigation_sub.add_parser("status", help="investigations, their lead and evidence counts, as JSON").add_argument(
+        "name", nargs="?"
+    )
+    investigation_query = investigation_sub.add_parser("query", help="one read-only SQL statement over the evidence")
+    investigation_query.add_argument("sql", help="tables: investigations, evidence, settlements")
+    investigation_query.add_argument(
+        "--table", action="store_true", help="tab-separated columns and rows instead of JSON"
+    )
 
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
@@ -806,9 +824,16 @@ async def _client_command(args: argparse.Namespace) -> None:
                 print(_query_table(result))
                 if result.truncated:
                     print(f"… more rows past {len(result.rows)}; use `aid findings query`", file=sys.stderr)
-            case "supervision" | "findings":
+            case "investigation" if args.investigation_command == "start":
+                config = _JSON.validate_json(args.config.read_bytes())
+                print(json.dumps(await client.call_plugin("reverse", "start", config=config)))
+            case "investigation" if args.investigation_command == "status":
+                print(json.dumps(await client.call_plugin("reverse", "status", name=args.name)))
+            case "supervision" | "findings" | "investigation":
                 if args.command == "supervision":
                     answer = await client.call_plugin("supervision", "query", sql=args.sql, session=args.session)
+                elif args.command == "investigation":
+                    answer = await client.call_plugin("reverse", "query", sql=args.sql)
                 else:
                     answer = await client.call_plugin("findings", "query", sql=args.sql)
                 result = QueryResult.model_validate(answer)

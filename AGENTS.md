@@ -204,6 +204,15 @@ on reusable decisions and current boundaries; put long investigations and dated 
   the audit a `.review` child session (`REVIEWER_TOOLS`: read tools + `record_verdict`) judges the repository's
   findings in batches of `review_batch`; the findings database is the record (`pending_sql`, read-only `ask` on
   `findings.db`): a finding with an `ai` verdict is reviewed, so a resume keeps no state; `attempts` turns each.
+- `plugins/reverse/` — reverse-engineering investigations, bundled, `autostart` (read, prompt, manage, supervise,
+  private); plan `docs/reverse-engineering.md`. `aid investigation start|status|query` (operator only):
+  `InvestigationConfig` (name, workspace, goal, model, `machines` name → SSH destination, `private` hosts, supervise)
+  → supervisor `<name>` (`SUPERVISOR_TOOLS`) and `<name>.lead` (`lead_spec`: instructions spec, `LEAD_PATTERNS`
+  ceiling, `Sandbox(network=False)` so its shell/python write only the workspace, `WORKSPACE_TOOLS` allowed,
+  `remote_command` ask, PATH led by `AID_REVERSE_TOOLS/bin`); the goal is the lead's first turn. Evidence
+  (`store.py`, `reverse.db` 0600): `record_evidence` kinds observation / inference (needs `supports`) / hypothesis /
+  question; artifact = workspace file + sha256, checked by the plugin; `settle_evidence` statuses per kind
+  (`SETTLES`); the investigation comes from the caller's `investigation` tag, never from the model.
 - `src/aid/slots.py` — model slots: `aid daemon --model-slots HOST=N` caps requests in flight to a model host across
   every session (a self-hosted server's best batch load). The table reaches a worker at launch (`WorkerArgs.model_slots`
   → `AID_MODEL_SLOTS`; none outside a worker); `open_native` wraps a limited host's model in `Slotted`, calling
