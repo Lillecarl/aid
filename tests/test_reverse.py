@@ -16,7 +16,7 @@ from aid.paths import ENV_STATE_DIR
 from aid.plugins import ENV_PLUGINS_PATH
 from aid.protocol import AidError, GetSpec, PermissionRequest, QueryResult
 from aid.spec import AgentSpecAdapter, NativeSpec, PermissionMode
-from plugins.reverse import InvestigationConfig, lead_name, lead_spec
+from plugins.reverse import ENV_TOOLS, InvestigationConfig, lead_name, lead_spec
 from plugins.reverse.probes import ENV_SSH
 from plugins.reverse.store import Evidence, Kind, Recorded, ReverseStore, Settlement, Status, artifact
 from tests.conftest import TESTS
@@ -208,6 +208,50 @@ async def test_probes_read_freely_and_a_remote_command_waits_for_a_person(
     assert request.input == {"machine": "spark", "command": "echo written", "why": "test a write"}
     saved = sorted(p.name.split("-")[0] for p in (workspace / "machines" / "spark").iterdir())
     assert saved == ["command", "read_proc_version"]
+
+
+needs_ghidra = pytest.mark.skipif(not os.environ.get(ENV_TOOLS), reason=f"{ENV_TOOLS} is unset: no Ghidra")
+
+
+@needs_bwrap
+@needs_ghidra
+async def test_the_lead_decompiles_a_raw_image_in_its_sandbox(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    image = "fw.bin"
+    steps: list[JsonValue] = [
+        # mov r0, #42; bx lr: an embedded controller's whole firmware, as far as this test goes.
+        ["shell", {"command": rf"printf '\x2a\x00\xa0\xe3\x1e\xff\x2f\xe1' > {image}"}],
+        ["ghidra_import", {"path": image, "language": "ARM:LE:32:v7", "base_address": "0x8000000"}],
+        ["ghidra_functions", {"path": image}],
+        ["ghidra_decompile", {"path": image, "function": "0x8000004"}],
+        ["ghidra_disassemble", {"path": image, "address": "0x8000000", "count": 2}],
+        ["ghidra_decompile", {"path": "../outside", "function": "entry"}],
+    ]
+    settings = config(tmp_path, workspace)
+    env = settings["env"]
+    assert isinstance(env, dict)
+    settings["env"] = {**env, "AID_TEST_STEPS": json.dumps(steps)}
+    with anyio.fail_after(max(TIMEOUT, 300)):
+        async with serving(paths, launcher) as client:
+            await client.call_plugin("reverse", "start", config=settings)
+            session = client.session(lead_name("fans"))
+            async with contextlib.aclosing(session.follow_history()) as entries:
+                async for entry in entries:
+                    if entry.item.type == "output":
+                        break
+            history = (await session.history(limit=100)).entries
+    output = str(history[-1].item.output)  # type: ignore[union-attr]
+    assert '"lowest_address": "08000000"' in output
+    assert "1 functions; rows 0-1\n08000000 entry (8 bytes)" in output
+    assert "// entry at 08000000\n" in output and "return 0x2a;" in output
+    assert "08000000  2a00a0e3          mov r0,#0x2a\n08000004  1eff2fe1          bx lr" in output
+    assert "../outside is no file in the workspace" in output
+    # The sandbox let Ghidra write its project and settings in the workspace, and nowhere it could see besides.
+    assert (workspace / "ghidra" / "project" / "aid.gpr").is_file()
 
 
 @needs_bwrap

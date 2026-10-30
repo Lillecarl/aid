@@ -216,7 +216,13 @@ on reusable decisions and current boundaries; put long investigations and dated 
   (`probes.py`): SSH from the worker (`AID_REVERSE_SSH`, tests fake it), saved to `machines/<machine>/` in the
   workspace; `machine_probe` fixed read commands (`PROBES`), `machine_read`/`machine_list` a `READABLE` path under
   /sys or /proc, `remote_command` anything, asked each time by the spec's mode; machines from the plugin's `machines`
-  call, by the caller's investigation.
+  call, by the caller's investigation. Ghidra (`ghidra_tools.py`): `ghidra_*` tools ask one helper per worker
+  (`ghidra_helper.py`, JSON lines; run as `aid-ghidra-python -I -c SOURCE`, so the sandbox's private /tmp and the
+  workspace never shadow or hide it), started on first use under `Coding.confine`, project and Ghidra's settings in
+  `<workspace>/ghidra/` (Ghidra refuses dot-prefixed project path elements); a program is `<file>-<sha12>`, so the
+  same bytes reuse the analysis. Raw images: `language` + `base_address` (`-loader-baseAddr`; "Base Address" is
+  ignored silently), `entry` seeded at the lowest address. `nix/reverse-tools.nix` → `AID_REVERSE_TOOLS` (wrapper,
+  shell, tests); the helper is outside pyright/pyrefly (pyghidra's own Python).
 - `src/aid/slots.py` — model slots: `aid daemon --model-slots HOST=N` caps requests in flight to a model host across
   every session (a self-hosted server's best batch load). The table reaches a worker at launch (`WorkerArgs.model_slots`
   → `AID_MODEL_SLOTS`; none outside a worker); `open_native` wraps a limited host's model in `Slotted`, calling

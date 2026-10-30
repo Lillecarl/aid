@@ -25,6 +25,15 @@ from aid.protocol import AidError, GetSpec
 from aid.spec import AgentSpecAdapter, NativeSpec, PermissionMode, Private, Sandbox
 from aid.sql import ask
 
+from .ghidra_tools import (
+    ghidra_decompile,
+    ghidra_disassemble,
+    ghidra_functions,
+    ghidra_import,
+    ghidra_memory,
+    ghidra_strings,
+    ghidra_xrefs,
+)
 from .probes import machine_list, machine_probe, machine_read, remote_command
 from .store import REVERSE_FILE, Evidence, Kind, Recorded, ReverseStore, Settlement, artifact
 
@@ -34,6 +43,13 @@ if TYPE_CHECKING:
 __all__ = [
     "Investigations",
     "evidence",
+    "ghidra_decompile",
+    "ghidra_disassemble",
+    "ghidra_functions",
+    "ghidra_import",
+    "ghidra_memory",
+    "ghidra_strings",
+    "ghidra_xrefs",
     "machine_list",
     "machine_probe",
     "machine_read",

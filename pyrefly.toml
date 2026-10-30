@@ -3,5 +3,6 @@
 # resolve from src/ (the aid package), the root (the tests package, as at runtime under pytest, and
 # in-tree plugins as plugins.<name>).
 project-includes = ["src", "tests", "plugins"]
-project-excludes = ["tests/vivarium/**"]
+# The Ghidra helper runs on pyghidra's own Python, as pyproject.toml's pyright exclude says.
+project-excludes = ["tests/vivarium/**", "plugins/reverse/ghidra_helper.py"]
 search-path = ["src", "."]

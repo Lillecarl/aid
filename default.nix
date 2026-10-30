@@ -84,6 +84,7 @@ let
   speechModel = pkgs.callPackage ./nix/speech-model.nix { };
   grammars = pkgs.callPackage ./nix/tree-sitter-grammars.nix { };
   tldrPages = pkgs.callPackage ./nix/tldr-pages.nix { src = tldr; };
+  reverseTools = pkgs.callPackage ./nix/reverse-tools.nix { };
   # The browsers the browser tests drive: chromium's headless shell for the sandbox run, firefox for a
   # developer's `--browser firefox` run. Fixed-output fetches, so the sandbox may use them.
   browsers = pkgs.playwright-driver.browsers.override {
@@ -260,7 +261,12 @@ let
           pymuxApp = p.pymux;
           dex = pkgs.dex-oidc;
           webUi = ui;
-          inherit speechModel grammars browsers;
+          inherit
+            speechModel
+            grammars
+            browsers
+            reverseTools
+            ;
           inherit (pkgs) cacert;
           fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
           testArgs = lib.filter (arg: arg != "") (lib.splitString " " (builtins.getEnv "AID_TEST_ARGS"));
@@ -314,6 +320,7 @@ in
         makeWrapper ${venv}/bin/aid $out/bin/aid --set-default AID_WEB_ASSETS ${ui} \
           --set-default AID_TREE_SITTER_GRAMMARS ${grammars} \
           --set-default AID_TLDR_PAGES ${tldrPages} \
+          --set-default AID_REVERSE_TOOLS ${reverseTools} \
           --set-default AID_PLUGINS_DIST $out/share/aid/plugins
       '';
 
@@ -384,6 +391,7 @@ in
       export AID_TEST_SPEECH_MODEL=${speechModel}
       export AID_TREE_SITTER_GRAMMARS=${grammars}
       export AID_TLDR_PAGES=${tldrPages}
+      export AID_REVERSE_TOOLS=${reverseTools}
       export PLAYWRIGHT_BROWSERS_PATH=${browsers}
       # The element the web build links in; `npm ci` in web/ removes it, and the next shell puts it back.
       mkdir -p ${lib.escapeShellArg (toString ./web)}/node_modules

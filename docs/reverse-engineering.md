@@ -14,9 +14,11 @@ the investigation like an audit campaign (docs/audit-campaigns.md).
   unblob, acpica-tools (`acpixtract`, `iasl`), UEFITool's `uefiextract` and rizin. Sessions run them from the
   shell, inside the sandbox.
 - **Ghidra tools.** Structured tools over one headless Ghidra per session (`ghidra_*`): import and analyse a file,
-  list functions, decompile, disassemble, cross-references, strings. A helper process keeps the project open
-  between calls; the project lives in the workspace, so a restart keeps the analysis. Analysing a 2,507-function
-  ELF took 42 s, starting the JVM 2 s (measured 2026-10-30, Ghidra 12.1.4, pyghidra 3.1.0).
+  list functions, decompile, disassemble, cross-references, strings, memory blocks. A helper process keeps the
+  project open between calls; the project lives in the workspace under `ghidra/`, so a restart keeps the
+  analysis. A raw image (an embedded controller's code, a flash dump) takes a Ghidra language id and a base
+  address; analysis starts from an `entry` function at its first byte. Analysing a 2,507-function ELF took 42 s,
+  starting the JVM 2 s (measured 2026-10-30, Ghidra 12.1.4, pyghidra 3.1.0).
 - **Machine probes.** The machines under study are reached over SSH, from the worker and never from the sandbox.
   Read probes are fixed commands (identity, `dmidecode`, `acpidump`, hwmon, thermal zones, `fwupdmgr`, reading a
   file under `/sys` or `/proc`): they run without asking and save their output into the workspace.

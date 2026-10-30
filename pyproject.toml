@@ -79,7 +79,8 @@ filterwarnings = [
 pythonVersion = "3.14"
 typeCheckingMode = "strict"
 include = ["src", "tests", "plugins"]
-exclude = ["tests/vivarium"]
+# The Ghidra helper runs on pyghidra's own Python (nix/reverse-tools.nix), whose Java packages no checker here sees.
+exclude = ["tests/vivarium", "plugins/reverse/ghidra_helper.py"]
 
 [tool.ruff]
 target-version = "py314"
