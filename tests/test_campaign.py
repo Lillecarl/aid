@@ -420,6 +420,7 @@ async def test_the_root_session_supervises_each_repository(
     assert alpha["state"] == "done"
     assert infos["audit.alpha"].supervisor == "audit"
     assert isinstance(boss, NativeSpec) and boss.agent == "supervisor" and boss.private is not None
+    assert boss.fresh_turns
     assert boss.tools is not None and not {"man_page", "tldr_page"} & set(boss.tools)
 
 

@@ -181,8 +181,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `start`/`status`/`pause`/`resume`, `aid campaign`). `CampaignConfig` (name, root, repos or every `.git` dir, model +
   settings, `hosts` → every session private, env, python_path, `max_context`, `Limits`, concurrency, attempts,
   supervise, backoff). `resume` may take a revised config, same name and root, stored in place: sessions made after
-  follow it, existing sessions keep their specs and planned units their files. Root session `<name>`: agent `supervisor` on the campaign model, ceiling `SUPERVISOR_TOOLS` (no man/tldr: they run
-  programs). Per repository `<name>.<slug>` (`session_names`): instructions spec, ceiling `AUDITOR_TOOLS`,
+  follow it, existing sessions keep their specs and planned units their files. Root session `<name>`: agent `supervisor` on the campaign model, `fresh_turns`, ceiling `SUPERVISOR_TOOLS` (no
+  man/tldr: they run programs); it supervises only with `supervise` (default off: the plugin drives a clear
+  directive). Outages (`aid.drive`) cost no attempt. Per repository `<name>.<slug>` (`session_names`): instructions spec, ceiling `AUDITOR_TOOLS`,
   `fresh_turns`, `instruction_providers=[]` (nothing from the audited tree composes), parent root, supervisor root if
   `supervise`. `units.py` (pure): `git ls-files`, skip excluded/links/oversized/binary, chunk by file and byte caps;
   `uncovered`: a file is read when completed `read` calls' `[offset, offset+limit)` ranges cover every line, events

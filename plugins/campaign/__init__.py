@@ -117,8 +117,10 @@ class CampaignConfig(BaseModel):
     """Repositories audited at once."""
     attempts: Annotated[int, Field(ge=1)] = 3
     """Turns a unit gets, retries for unread files and for turn errors together."""
-    supervise: bool = True
-    """The root session supervises each repository session: one supervisor turn per unit on the same model."""
+    supervise: bool = False
+    """The root session supervises each repository session: one supervisor turn per unit on the same model. Off by
+    default: the plugin drives each turn to a clear directive and judges coverage itself. Measured on the dynamist
+    campaign: 1686 supervisor wakes, 45M input tokens, 15 messages sent."""
     split_units: Annotated[int, Field(ge=0)] = 6
     """A repository with more units than this is mapped into subsystems, each audited by a session of its own
     (`subsystems`); 0 never splits."""
@@ -193,6 +195,8 @@ def root_spec(config: CampaignConfig) -> NativeSpec:
         max_context=config.max_context,
         tools=[re.escape(tool) for tool in SUPERVISOR_TOOLS],
         permission=PermissionMode.DENY,
+        # Each wake carries what it needs (the turn's tail, the goals); a history of every unit is cost alone.
+        fresh_turns=True,
         supervisor_classifier=None,
         private=_private(config),
         tags={"campaign": config.name},

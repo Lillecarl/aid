@@ -33,7 +33,9 @@ code and no finding leaves the operator's infrastructure.
 4. **Campaign plugin.** Built: `plugins/campaign/`, `aid campaign start CONFIG.json`. Units from `git ls-files`,
    with size and binary filters. One private session per repository on an instructions spec with a read-only
    ceiling, fresh turns and no instructions from the audited tree. A brief first, then one turn per unit; a unit
-   is done when the recorded reads cover every line of its files. The root session supervises on the same model.
+   is done when the recorded reads cover every line of its files. With `supervise`, the root session supervises on the same model, a fresh turn per wake.
+   It is off by default: the plugin already judges coverage and retries, and a full run's supervisor spent 45M
+   input tokens on 15 messages before its history outgrew the window.
    Bounded concurrency; a restart resumes from the database. A big repository is mapped into subsystems by the
    model and checked by the plugin (every file in exactly one), audited by a child session per subsystem, and ends
    with an integration turn that looks for issues across them. The daemon's model slots keep the server at its best
