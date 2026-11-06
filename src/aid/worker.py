@@ -159,6 +159,11 @@ class _Worker:
         self._turn: str | None = None
         self.reported: list[SessionTool] = []
         """The tools the daemon last heard of, in Hello or ToolsReported."""
+        if isinstance(backend, CompactionBackend):
+            backend.compacted = self._compacted
+
+    async def _compacted(self, detail: str, digest: str) -> None:
+        await self.record(uuid.uuid4().hex, Lifecycle(event="compacted", detail=detail, summary=digest))
 
     async def serve_hooks(self, sock: zmq.asyncio.Socket) -> None:
         """Answer `aid/hook.py`'s fast path: Hook requests on the worker's own ROUTER, past the daemon. Pass

@@ -101,6 +101,7 @@ NOT_FORKED: Final = "Not run in this fork: the parent session runs it."
 DEFAULT_DESIRED_MAX: Final = 100_000
 """Tokens the context gauge assumes when the session names no `max_context` and models.dev knows no window for the
 model; a known window gives half of it. Unknown models err toward compacting early, which fails safe."""
+AUTO_COMPACT: Final = "keep what the next turns need to go on with the work, and every open request."
 CONTINUE: Final = (
     "Your reply above stopped at the output token limit, mid-sentence. Continue it from exactly where it stopped, "
     "as if it had never been interrupted. Do not restart or summarize it."
@@ -440,6 +441,8 @@ class NativeBackend:
         # Takes the messages waiting for the session (the daemon's inbox), between the steps of a turn.
         self._receive = receive
         self._history_lock = anyio.Lock()
+        self.compacted: Callable[[str, str], Awaitable[None]] | None = None
+        """Told of a compaction the backend chose (detail, digest): the worker records it."""
         # A model object is its owner's to price; aid prices only the transports it builds from a name.
         self._looked_up = self._owned is None
         self._price: Price | None = None
@@ -534,6 +537,7 @@ class NativeBackend:
             )
             del self._history[lead:]
             self._open_tail = 0
+        await self._auto_compact(text)
         await self._look_up()
         messages: list[ModelMessage] = []
         if not self._history and self._agent.instructions:
@@ -781,9 +785,29 @@ class NativeBackend:
         compaction is when a long session picks that up. Without a refresher they stay as they are.
         During a turn it changes only the older prefix: turn finalization appends the run's new messages."""
         async with self._history_lock:
-            return await self._compact(instructions)
+            digest = await self._compact(instructions)
+        return "history is short; nothing compacted" if digest is None else digest
 
-    async def _compact(self, instructions: str) -> str:
+    async def _auto_compact(self, prompt: str) -> None:
+        """Compact before a turn whose opening request would reach the gauge. Measured (campaign supervisor,
+        2026-10-30): a session nothing compacts grows past the model's window, and then every turn fails."""
+        if self._fresh_turns:
+            return
+        opening = [*self._history, ModelRequest(parts=[UserPromptPart(prompt)])]
+        used = context_tokens(opening, len(self._history), preserve_signed_thinking=self._preserve_signed_thinking())
+        if used < self._desired_max:
+            return
+        try:
+            async with self._history_lock:
+                digest = await self._compact(AUTO_COMPACT)
+        except Exception:
+            # The turn may still fit the model's window: the gauge is half of it by default.
+            log.exception("auto_compact_failed")
+            return
+        if digest is not None and self.compacted is not None:
+            await self.compacted("auto", digest)
+
+    async def _compact(self, instructions: str) -> str | None:
         tail_at = max(
             (i for i, m in enumerate(self._history) if any(p.part_kind == "user-prompt" for p in m.parts)),
             default=None,
@@ -793,7 +817,7 @@ class NativeBackend:
             len(self._history),
         )
         if tail_at is None or not self._history[lead:tail_at]:
-            return "history is short; nothing compacted"
+            return None
         if self._refresh_instructions is None:
             head = self._history[:lead]
         else:

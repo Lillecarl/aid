@@ -585,6 +585,41 @@ async def test_in_turn_compaction_survives_turn_end(tmp_path: Path, cancel_after
     assert prompts == ["[Summary of earlier work]\ndecisions kept", "second", "compact now"]
 
 
+async def _answer(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
+    yield "answered"
+
+
+@pytest.mark.parametrize("full", [True, False])
+async def test_a_turn_over_the_gauge_compacts_first(tmp_path: Path, full: bool) -> None:
+    history: list[ModelMessage] = [
+        ModelRequest(parts=[UserPromptPart("first " * 400)]),
+        ModelResponse(parts=[TextPart("one")]),
+        ModelRequest(parts=[UserPromptPart("second")]),
+        ModelResponse(parts=[TextPart("two")]),
+    ]
+    told: list[tuple[str, str]] = []
+
+    async def compacted(detail: str, digest: str) -> None:
+        told.append((detail, digest))
+
+    async def emit(event: SessionEvent) -> None:
+        pass
+
+    agent = Agent(FunctionModel(_summary, stream_function=_answer))
+    async with backend(tmp_path, agent, history=history, desired_max=50 if full else 100_000) as session:
+        session.compacted = compacted
+        with anyio.fail_after(10):
+            assert (await session.prompt("third", emit)).output == "answered"
+    prompts = prompts_of(await stored(tmp_path))
+    if full:
+        # The latest turn stays whole; what came before it is the digest.
+        assert prompts == ["[Summary of earlier work]\ndecisions kept", "second", "third"]
+        assert told == [("auto", "decisions kept")]
+    else:
+        assert prompts == ["first " * 400, "second", "third"]
+        assert told == []
+
+
 async def test_a_request_that_fails_before_output_stores_no_empty_response(tmp_path: Path) -> None:
     """A provider refusal (missing key, 400) leaves no assistant message behind: an empty one would be sent on
     every later turn, and DeepSeek refuses those, so the session could never answer again."""

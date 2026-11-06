@@ -330,6 +330,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - `src/aid/agents.py` — `aid.AgentDefinition` and `aid.InstructionsProvider`, interfaces plugins implement. Never
   import agent plugins in the daemon itself: it asks `aid.catalog` in a subprocess. `AgentDefinition.
   instruction_providers` picks the providers composed for its sessions (the supervisor: none); a spec's overrides.
+  Auto-compaction: a native turn whose opening request reaches the gauge (`max_context`) compacts first
+  (`AUTO_COMPACT`, recorded `Lifecycle(compacted, auto)` through `CompactionBackend.compacted`); a failed one is
+  logged and the turn goes on. Not covered: a single turn that outgrows the window, a context-length 400 from a
+  gauge set above the model's window, and a session already past the window (the compaction request overflows too).
   `fresh_turns`: each native turn starts from the instructions alone (engine history cut back before the prompt;
   the transcript keeps every turn), one cached prefix for all.
 - `src/aid/env.py` — agent environments, minus the markers of the Claude session that started us.

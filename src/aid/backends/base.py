@@ -62,7 +62,10 @@ class HookBackend(Backend, Protocol):
 
 @runtime_checkable
 class CompactionBackend(Backend, Protocol):
-    """A backend that summarizes its own history into a digest on request."""
+    """A backend that summarizes its own history into a digest on request, and on its own when it fills up."""
+
+    compacted: Callable[[str, str], Awaitable[None]] | None
+    """Set by the worker: told of each compaction the backend chose (detail, digest)."""
 
     async def compact(self, instructions: str) -> str:
         """Replace older history with a digest focused by `instructions`; return the digest."""
