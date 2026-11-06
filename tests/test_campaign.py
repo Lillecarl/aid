@@ -398,9 +398,9 @@ async def test_a_resume_takes_a_revised_config_for_what_is_left(
     stored = CampaignConfig.model_validate_json(str(db.execute("SELECT config FROM campaigns").get))
     db.close()
     assert [(r["path"], r["state"]) for r in done] == [("alpha", "done"), ("beta", "done")]
-    # A session made before the revision keeps its spec; one made after takes the window.
+    # A session made before the revision keeps its spec; one made after takes half the window as its gauge.
     assert isinstance(alpha, NativeSpec) and isinstance(beta, NativeSpec)
-    assert (alpha.max_context, beta.max_context) == (None, 200_000)
+    assert (alpha.max_context, beta.max_context) == (None, 100_000)
     assert stored.max_context == 200_000
 
 

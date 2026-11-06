@@ -110,7 +110,7 @@ class CampaignConfig(BaseModel):
     python_path: list[str] = Field(default_factory=list[str])
     """`NativeSpec.python_path` of every campaign session: where a model provider plugin's own imports live."""
     max_context: Annotated[int, Field(gt=0)] | None = None
-    """`NativeSpec.max_context` of every campaign session: the model's window, where models.dev knows none."""
+    """The model's window, where models.dev knows none. Each session's gauge (`NativeSpec.max_context`) is half."""
     instructions: str = INSTRUCTIONS
     limits: Limits = Field(default_factory=Limits)
     concurrency: Annotated[int, Field(ge=1)] = 2
@@ -135,6 +135,10 @@ class CampaignConfig(BaseModel):
     outage_backoff: Annotated[float, Field(ge=0)] = 30.0
     """Seconds after a model outage (`aid.drive.Pacing`); it costs no attempt, and each in a row waits twice as long."""
     outage_max: Annotated[float, Field(ge=0)] = 600.0
+
+    @property
+    def gauge(self) -> int | None:
+        return None if self.max_context is None else self.max_context // 2
 
     @property
     def pacing(self) -> Pacing:
@@ -192,7 +196,7 @@ def root_spec(config: CampaignConfig) -> NativeSpec:
         model_settings=config.model_settings,
         env=config.env,
         python_path=config.python_path,
-        max_context=config.max_context,
+        max_context=config.gauge,
         tools=[re.escape(tool) for tool in SUPERVISOR_TOOLS],
         permission=PermissionMode.DENY,
         # Each wake carries what it needs (the turn's tail, the goals); a history of every unit is cost alone.
@@ -211,7 +215,7 @@ def repo_spec(config: CampaignConfig, repo: Path) -> NativeSpec:
         model_settings=config.model_settings,
         env=config.env,
         python_path=config.python_path,
-        max_context=config.max_context,
+        max_context=config.gauge,
         tools=[re.escape(tool) for tool in AUDITOR_TOOLS],
         permission=PermissionMode.DENY,
         instruction_providers=[],
