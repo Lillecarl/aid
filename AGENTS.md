@@ -186,12 +186,11 @@ on reusable decisions and current boundaries; put long investigations and dated 
   directive). Outages (`aid.drive`) cost no attempt. Per repository `<name>.<slug>` (`session_names`): instructions spec, ceiling `AUDITOR_TOOLS`,
   `fresh_turns`, `instruction_providers=[]` (nothing from the audited tree composes), parent root, supervisor root if
   `supervise`. `units.py` (pure): `git ls-files`, skip excluded/links/oversized/binary, chunk by file and byte caps;
-  `uncovered`: a file is read when completed `read` calls' `[offset, offset+limit)` ranges cover every line, events
-  merged per (turn, tool_call_id) (models renumber calls each turn); `credited`: only turns ending in `Output` with
-  `end_turn` earn their reads (failed, cut off at max_tokens or never ended earn nothing: one rule, no cases). Brief
-  turn, then a turn per unit; unread files prompted again (brief included: turns are fresh) until `attempts`; failed
-  turns back off; a busy refusal costs no attempt. `store.py` (`campaign.db`, migrations): units keep `covered` and
-  the running attempt's `start_seq`; a resume credits what that attempt recorded. Calls wait for `_ready`.
+  `unit_prompt` carries each file whole in `<file path lines>` blocks, numbered as `aid.coding.numbered` (mirrored,
+  tested equal): a unit is done when its turn ends with `end_turn` (failed or cut off at max_tokens: again, until
+  `attempts`; brief included: turns are fresh); failed turns back off; a busy refusal or an outage costs no attempt.
+  `store.py` (`campaign.db`, migrations): units keep `covered` (files a turn that ended carried; older rows: what
+  reads covered) and only the rest is prompted; `incomplete` only in older rows. Calls wait for `_ready`.
   Splitting (`subsystems.py`, pure): a briefed repository with more than `split_units` units, none started, gets a map
   turn (`overview` capped at `OVERVIEW_LINES`); `parse_map` takes 2–12 subsystems, a bare dir or one-level glob
   covers its tree, first match wins, the rest is `OTHER`; more than `OTHER_SHARE` unmatched is refused with a sample

@@ -6,14 +6,13 @@ from typing import TYPE_CHECKING
 import anyio
 import pytest
 
-from aid.coding import READ_LIMIT
-from aid.protocol import AidError, HistoryEntry, ToolCall
-from plugins.campaign.units import READ_LINES, FileInfo, Limits, chunk, credited, examine, tracked, uncovered
+from aid.coding import numbered as aid_numbered
+from aid.protocol import AidError
+from plugins.campaign.units import FileInfo, Limits, chunk, examine, load, numbered, tracked, unit_prompt
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from pydantic import JsonValue
 
 GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null"}
 
@@ -25,10 +24,6 @@ async def git_repo(root: Path, files: dict[str, bytes]) -> Path:
     await anyio.run_process(["git", "init", "-q"], cwd=root, env=GIT_ENV)
     await anyio.run_process(["git", "add", "."], cwd=root, env=GIT_ENV)
     return root
-
-
-def test_read_lines_is_what_read_returns() -> None:
-    assert READ_LINES == READ_LIMIT
 
 
 @pytest.mark.anyio
@@ -79,64 +74,16 @@ def test_units_close_at_either_cap_in_path_order() -> None:
     assert [[f.path for f in group] for group in groups] == [["d/a", "d/b"], ["d/c"], ["d/e"]]
 
 
-def call(call_id: str, turn: str = "t1", **fields: JsonValue) -> tuple[str, ToolCall]:
-    return turn, ToolCall.model_validate({"tool_call_id": call_id, **fields})
+def test_numbered_is_what_read_returns() -> None:
+    text = "one\n\ttwo\r\nthree\fx\n"
+    assert numbered(text) == aid_numbered(text, 1, 100)
 
 
-def test_a_file_is_covered_only_when_completed_reads_return_every_line(tmp_path: Path) -> None:
-    long = FileInfo(path="long.py", lines=4500, size=1)
-    short = FileInfo(path="src/short.py", lines=10, size=1)
-    failed = FileInfo(path="failed.py", lines=1, size=1)
-    empty = FileInfo(path="empty", lines=0, size=0)
-    calls = [
-        call("1", tool="read", status="in_progress", input={"path": "./src/../src/short.py"}),
-        call("1", status="completed"),
-        call("2", tool="read", status="in_progress", input={"path": "long.py"}),
-        call("2", status="completed"),
-        call("3", tool="read", status="in_progress", input={"path": "long.py", "offset": 2001, "limit": 2000}),
-        call("3", status="completed"),
-        call("4", tool="read", status="in_progress", input={"path": "failed.py"}),
-        call("4", status="failed"),
-        call("5", tool="read", status="in_progress", input={"path": str(tmp_path / "empty")}),
-        call("5", status="completed"),
-        call("6", tool="search", status="completed", input={"path": "long.py"}),
-    ]
-    assert uncovered(tmp_path, [long, short, failed, empty], calls) == ["long.py", "failed.py"]
-    calls += [call("7", tool="read", status="completed", input={"path": "long.py", "offset": 4001, "limit": 600})]
-    assert uncovered(tmp_path, [long, short, empty], calls) == []
-    outside = [call("8", tool="read", status="completed", input={"path": "../repo2/short.py"})]
-    assert uncovered(tmp_path / "x", [short], outside) == ["src/short.py"]
-
-
-def test_only_turns_that_ended_earn_their_reads() -> None:
-    def entry(seq: int, turn: str, item: JsonValue) -> HistoryEntry:
-        return HistoryEntry.model_validate({"seq": seq, "at": 0, "turn": turn, "item": item})
-
-    read: JsonValue = {
-        "type": "tool_call",
-        "tool_call_id": "c",
-        "tool": "read",
-        "status": "completed",
-        "input": {"path": "x"},
-    }
-    entries = [
-        entry(0, "ended", read),
-        entry(1, "ended", {"type": "output", "output": "ok", "stop_reason": "end_turn"}),
-        entry(2, "cut", read),
-        entry(3, "cut", {"type": "output", "output": "", "stop_reason": "max_tokens"}),
-        entry(4, "failed", read),
-        entry(5, "failed", {"type": "error", "code": "agent_error", "message": "ReadError"}),
-        entry(6, "interrupted", read),
-    ]
-    assert [turn for turn, _ in credited(entries)] == ["ended"]
-
-
-def test_calls_numbered_afresh_each_turn_stay_apart(tmp_path: Path) -> None:
-    files = [FileInfo(path="a.py", lines=1, size=1), FileInfo(path="b.py", lines=1, size=1)]
-    calls = [
-        call("call_0", "t1", tool="read", status="in_progress", input={"path": "b.py"}),
-        call("call_0", "t1", status="completed"),
-        call("call_0", "t2", tool="read", status="in_progress", input={"path": "a.py"}),
-        call("call_0", "t2", status="completed"),
-    ]
-    assert uncovered(tmp_path, files, calls) == []
+def test_a_unit_prompt_carries_every_line(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x = 1\ny = 2\n")
+    (tmp_path / "b.py").write_bytes(b"caf\xe9\n")
+    files = [FileInfo(path="a.py", lines=2, size=12), FileInfo(path="b.py", lines=1, size=5)]
+    prompt = unit_prompt("A brief.", load(tmp_path, files))
+    assert prompt.startswith("Repository brief:\nA brief.\n\n")
+    assert '<file path="a.py" lines="2">\n     1\tx = 1\n     2\ty = 2\n</file>' in prompt
+    assert '<file path="b.py" lines="1">\n     1\tcaf\ufffd\n</file>' in prompt

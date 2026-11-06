@@ -23,9 +23,9 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 import aid
-from aid.drive import BUSY, END_TURN, Pacing, idle, is_outage, newest_seq, since, turn
+from aid.drive import BUSY, END_TURN, Pacing, idle, is_outage, newest_seq, turn
 from aid.paths import default_paths
-from aid.protocol import AidError, HistoryEntry
+from aid.protocol import AidError
 from aid.spec import NativeSpec, PermissionMode, Private
 from aid.sql import ask
 
@@ -53,7 +53,7 @@ from .subsystems import (
     parse_map,
     subsystem_context,
 )
-from .units import BRIEF_PROMPT, Limits, chunk, credited, examine, tracked, uncovered, unit_prompt
+from .units import BRIEF_PROMPT, Limits, chunk, examine, load, tracked, unit_prompt
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
@@ -247,11 +247,6 @@ async def _repositories(config: CampaignConfig) -> list[str]:
     if config.repos is not None:
         return sorted(config.repos)
     return sorted([d.name async for d in root.iterdir() if await (d / ".git").exists()])
-
-
-def _read(path: Path, unit: Unit, entries: list[HistoryEntry]) -> set[str]:
-    """The unit's files read in full by turns in `entries` that ended."""
-    return {f.path for f in unit.files} - set(uncovered(path, unit.files, credited(entries)))
 
 
 class Campaigns(aid.Plugin):
@@ -626,25 +621,23 @@ class Campaigns(aid.Plugin):
         return await turn(session, prompt, config.pacing)
 
     async def _unit(self, config: CampaignConfig, session: aid.Session, path: Path, brief: str, unit: Unit) -> None:
-        """Attempts until every file is read in turns that ended (`credited`), or the attempts run out. Each attempt
-        records where it begins; a resumed unit credits what its cut attempt recorded, so a failed, cut-off or
-        interrupted turn, or a session made again, needs no case of its own."""
+        """Attempts until a turn over the unit's files ends on its own, or the attempts run out; an outage costs none.
+        The prompt carries the files whole (`unit_prompt`), so such a turn covers them. `covered` keeps what a turn
+        that ended carried (a unit from a campaign before that holds the files its reads covered): only the rest is
+        prompted, and an interrupted attempt simply goes again."""
         store = self.store
         covered = set(unit.covered)
-        if unit.start_seq is not None:
-            covered |= _read(path, unit, await since(session, unit.start_seq))
-        attempts, error, answer, outages = unit.attempts, unit.error, None, 0
-        missing = [f.path for f in unit.files if f.path not in covered]
+        attempts, error, outages = unit.attempts, unit.error, 0
+        missing = [f for f in unit.files if f.path not in covered]
         while missing and attempts < config.attempts:
             if config.name in self._pausing:
-                # Left running with its attempt recorded: a resume credits it. A cancelled turn ends here, not again.
                 return
+            contents = await anyio.to_thread.run_sync(load, path, missing)
             await idle(session)
-            start = await newest_seq(session)
-            await store.attempt_started(unit, start)
-            outage = False
+            await store.attempt_started(unit, await newest_seq(session))
+            outage, answer = False, None
             try:
-                result = await session.run(unit_prompt(brief, [f for f in unit.files if f.path in missing]))
+                result = await session.run(unit_prompt(brief, contents))
                 error = None if result.stop_reason == END_TURN else f"stopped at {result.stop_reason}"
                 answer = str(result.output) if error is None else None
             except AidError as failure:
@@ -656,10 +649,10 @@ class Campaigns(aid.Plugin):
             outages = outages + 1 if outage else 0
             if not outage:
                 attempts += 1
-            covered |= _read(path, unit, await since(session, start))
-            missing = [f.path for f in unit.files if f.path not in covered]
-            await store.attempt_ended(unit, attempts, sorted(covered), missing, error, answer)
-            if missing and error is not None:
+            if error is None:
+                covered |= {f.path for f in missing}
+                missing = []
+            await store.attempt_ended(unit, attempts, sorted(covered), [f.path for f in missing], error, answer)
+            if missing:
                 await anyio.sleep(config.pacing.outage_delay(outages) if outage else config.backoff)
-        unread = UnitState.FAILED if error is not None else UnitState.INCOMPLETE
-        await store.unit_ended(unit, unread if missing else UnitState.DONE)
+        await store.unit_ended(unit, UnitState.FAILED if missing else UnitState.DONE)

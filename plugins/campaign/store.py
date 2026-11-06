@@ -1,7 +1,7 @@
 """A campaign's state, in the plugin's own database: every step resumes from these rows alone.
 
-A unit records the history seq before each attempt (`start_seq`) and, after it, the files read in full (`covered`):
-a restart credits what the cut attempt recorded before prompting again.
+A unit records the history seq before each attempt (`start_seq`) and, after it, the files a turn that ended carried
+(`covered`): a restart prompts only the rest.
 """
 
 from __future__ import annotations
@@ -109,7 +109,8 @@ class UnitState(StrEnum):
     RUNNING = "running"
     DONE = "done"
     INCOMPLETE = "incomplete"
-    """Attempts ran out with files not read in full; `missing` names them."""
+    """Attempts ran out with files not read in full; `missing` names them. Only from campaigns before the prompt
+    carried the files."""
     FAILED = "failed"
     """Attempts ran out on turn errors; `error` holds the last."""
 
@@ -143,9 +144,9 @@ class Unit(BaseModel):
     state: UnitState
     attempts: int
     start_seq: int | None
-    """Where the running attempt began in the session's history: a resumed unit credits what it recorded since."""
+    """Where the running attempt began in the session's history."""
     covered: list[str]
-    """Files earlier attempts read every line of, in turns that ended."""
+    """Files a turn that ended carried; before the prompt carried them, the files such turns read every line of."""
     missing: list[str]
     error: str | None
     subsystem: int | None

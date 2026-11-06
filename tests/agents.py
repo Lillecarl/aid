@@ -235,19 +235,18 @@ async def _planned_stream(messages: list[ModelMessage], info: AgentInfo) -> Asyn
 coder = Agent(FunctionModel(_planned, stream_function=_planned_stream), toolsets=[aid.coding_tools])
 
 
-_LISTED = re.compile(r"^- (\S+) \((\d+) lines\)$", re.MULTILINE)
+_FILES = re.compile(r'^<file path="([^"]+)" lines="\d+">\n(.*?)\n?</file>$', re.MULTILINE | re.DOTALL)
 
 
-def _auditing(messages: list[ModelMessage], *, lazy: bool) -> ModelResponse:
-    """A campaign's auditor: reads every file the unit prompt lists, in 2000-line parts, reports a finding where a
-    file holds `hunter2`, then answers. `lazy` leaves the first file unread when the prompt lists more than one."""
+def _auditing(messages: list[ModelMessage]) -> ModelResponse:
+    """A campaign's auditor: reports a finding where a file the unit prompt carries holds `hunter2`, then answers."""
     start = max(
         i
         for i, m in enumerate(messages)
         if any(isinstance(p, UserPromptPart) and not _is_note(p.content) for p in m.parts)
     )
     prompt = next(p.content for p in messages[start].parts if isinstance(p, UserPromptPart) and not _is_note(p.content))
-    listed = [(path, int(lines)) for path, lines in _LISTED.findall(str(prompt))]
+    carried: list[tuple[str, str]] = _FILES.findall(str(prompt))
     if "Answer with one JSON block" in str(prompt):
         # A subsystem map: one subsystem per top-level directory the overview names.
         dirs = re.findall(r"^([^/\s]+)/  \d+ files", str(prompt), re.MULTILINE)
@@ -262,31 +261,24 @@ def _auditing(messages: list[ModelMessage], *, lazy: bool) -> ModelResponse:
         return ModelResponse(parts=[TextPart(f"{len(ids)} findings judged.")])
     if "cross subsystems" in str(prompt):
         return ModelResponse(parts=[TextPart("Nothing crosses the subsystems.")])
-    if not listed:
+    if not carried:
         return ModelResponse(parts=[TextPart("A test repository.")])
-    if lazy and len(listed) > 1:
-        listed = listed[1:]
-    turn = messages[start:]
-    called = [p for m in turn for p in m.parts if isinstance(p, ToolCallPart)]
-    planned = [
-        {"path": path, "offset": offset, "limit": 2000}
-        for path, lines in listed
-        for offset in range(1, max(lines, 1) + 1, 2000)
-    ]
-    if len(called) < len(planned):
-        return ModelResponse(parts=[ToolCallPart("read", planned[len(called)], tool_call_id=f"read{len(called)}")])
-    returns = [p for m in turn for p in m.parts if isinstance(p, ToolReturnPart) and p.tool_name == "read"]
-    leaked = next((p for p in returns if "hunter2" in str(p.content)), None)
+    called = [p for m in messages[start:] for p in m.parts if isinstance(p, ToolCallPart)]
+    leaked = next((path for path, text in carried if "hunter2" in text), None)
     if leaked is not None and not any(c.tool_name == "report_finding" for c in called):
-        source = next(c for c in called if c.tool_call_id == leaked.tool_call_id)
-        path = source.args_as_dict()["path"]
-        report = {"path": path, "category": "secret", "severity": "high", "title": "Password", "detail": "In source."}
+        report: dict[str, JsonValue] = {
+            "path": leaked,
+            "category": "secret",
+            "severity": "high",
+            "title": "Password",
+            "detail": "In source.",
+        }
         return ModelResponse(parts=[ToolCallPart("report_finding", report, tool_call_id="report")])
-    return ModelResponse(parts=[TextPart("\n".join(f"{path}: read" for path, _ in listed))])
+    return ModelResponse(parts=[TextPart("\n".join(f"{path}: read" for path, _ in carried))])
 
 
-async def _auditing_stream(messages: list[ModelMessage], *, lazy: bool) -> AsyncIterator[str | DeltaToolCalls]:
-    match _auditing(messages, lazy=lazy).parts:
+async def _auditing_stream(messages: list[ModelMessage]) -> AsyncIterator[str | DeltaToolCalls]:
+    match _auditing(messages).parts:
         case [ToolCallPart() as call]:
             yield {
                 0: DeltaToolCall(name=call.tool_name, json_args=call.args_as_json_str(), tool_call_id=call.tool_call_id)
@@ -298,12 +290,7 @@ async def _auditing_stream(messages: list[ModelMessage], *, lazy: bool) -> Async
 
 
 async def _audit(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
-    async for delta in _auditing_stream(messages, lazy=False):
-        yield delta
-
-
-async def _audit_lazily(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
-    async for delta in _auditing_stream(messages, lazy=True):
+    async for delta in _auditing_stream(messages):
         yield delta
 
 
@@ -312,7 +299,7 @@ _FLAKY_FAILURES: dict[str, int] = {}
 
 async def _audit_flakily(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
     """As the auditor, but its first answer after reading fails, as a gateway that drops the connection does."""
-    async for delta in _auditing_stream(messages, lazy=False):
+    async for delta in _auditing_stream(messages):
         if isinstance(delta, str) and ": read" in delta and not _FLAKY_FAILURES.get("answer"):
             _FLAKY_FAILURES["answer"] = 1
             raise ConnectionError("the gateway dropped the connection")
@@ -321,7 +308,7 @@ async def _audit_flakily(messages: list[ModelMessage], info: AgentInfo) -> Async
 
 async def _audit_through_outage(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
     """As the auditor, but its first three answers fail as a model out of reach does."""
-    async for delta in _auditing_stream(messages, lazy=False):
+    async for delta in _auditing_stream(messages):
         if isinstance(delta, str) and ": read" in delta and _FLAKY_FAILURES.get("outage", 0) < 3:
             _FLAKY_FAILURES["outage"] = _FLAKY_FAILURES.get("outage", 0) + 1
             raise AidError("model_unavailable", "InternalServerError: no available server")
@@ -331,7 +318,7 @@ async def _audit_through_outage(messages: list[ModelMessage], info: AgentInfo) -
 async def _audit_then_hang(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
     """As the auditor, but the first time it would answer a unit it drops the `AID_HANG_GATE` file and hangs: a test
     stops the daemon there, mid-answer. The file outlives the worker, so the next one answers."""
-    async for delta in _auditing_stream(messages, lazy=False):
+    async for delta in _auditing_stream(messages):
         gate = anyio.Path(os.environ["AID_HANG_GATE"])
         if isinstance(delta, str) and ": read" in delta and not await gate.exists():
             await gate.touch()
@@ -368,7 +355,6 @@ auditor = Agent(FunctionModel(stream_function=_audit))
 hanging_auditor = Agent(FunctionModel(stream_function=_audit_then_hang))
 flaky_auditor = Agent(FunctionModel(stream_function=_audit_flakily))
 outage_auditor = Agent(FunctionModel(stream_function=_audit_through_outage))
-lazy_auditor = Agent(FunctionModel(stream_function=_audit_lazily))
 
 
 async def control_call(request: dict[str, JsonValue]) -> str:

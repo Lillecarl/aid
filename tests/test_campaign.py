@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -13,7 +14,7 @@ import aid
 from aid.daemon import Daemon
 from aid.paths import ENV_STATE_DIR
 from aid.plugins import ENV_PLUGINS_PATH
-from aid.protocol import CallPlugin, GetSpec, PromptEntry, QueryResult, ToolCall
+from aid.protocol import CallPlugin, GetSpec, PromptEntry, QueryResult
 from aid.spec import AgentSpecAdapter, NativeSpec
 from plugins.campaign import CampaignConfig, child_session, session_names, subsystem_session, survey_spec
 from plugins.campaign.store import CAMPAIGN_FILE
@@ -32,6 +33,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.anyio
 
 TIMEOUT = int(os.environ.get("AID_TEST_TIMEOUT", "60"))
+CARRIED = re.compile(r'^<file path="([^"]+)"', re.MULTILINE)
 PLUGINS = Path(__file__).parent.parent / "plugins"
 
 SCRIPTED = """\
@@ -42,7 +44,6 @@ from aid.model import StreamDelta
 
 MODELS = {
     "auditor": agents.auditor,
-    "lazy": agents.lazy_auditor,
     "flaky": agents.flaky_auditor,
     "outage": agents.outage_auditor,
     "hanging": agents.hanging_auditor,
@@ -170,12 +171,9 @@ async def settled(client: aid.Client, name: str) -> list[dict[str, JsonValue]]:
 
 
 async def read_paths(client: aid.Client, session: str) -> list[str]:
+    """The files the session's prompts carried, in order: each unit prompt holds its files whole."""
     entries = (await client.session(session).history(limit=1000)).entries
-    return [
-        str(e.item.input["path"])
-        for e in entries
-        if isinstance(e.item, ToolCall) and e.item.tool == "read" and isinstance(e.item.input, dict)
-    ]
+    return [path for e in entries if isinstance(e.item, PromptEntry) for path in CARRIED.findall(e.item.text)]
 
 
 async def test_a_campaign_reads_every_line_of_every_tracked_file(
@@ -205,7 +203,7 @@ async def test_a_campaign_reads_every_line_of_every_tracked_file(
         ("beta", "done", {"done": 1}, 1),
     ]
     assert sorted(alpha) == ["a.py", "b.py", "c.py"]
-    assert beta == ["long.py", "long.py", "long.py"]
+    assert beta == ["long.py"]
     assert QueryResult.model_validate(findings).rows == [["audit.alpha", "a.py", "secret"]]
     # Reviewed after the audit, by the repository's review session, not by the session that reported it.
     assert QueryResult.model_validate(verdicts).rows == [[1, "confirmed", child_session("audit", "alpha", "review")]]
@@ -220,24 +218,6 @@ async def test_a_campaign_reads_every_line_of_every_tracked_file(
     # The brief ran in a survey session with no tool to report with, deleted once the brief was in.
     assert not any(name.endswith(".survey") for name in listed)
     assert all(listed[name].private for name in ("audit", "audit.alpha", "audit.beta"))
-
-
-async def test_a_unit_is_prompted_again_with_what_was_left_unread(
-    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
-    root = tmp_path / "tree"
-    await repos(root)
-    with anyio.fail_after(TIMEOUT):
-        async with serving(paths, launcher) as client:
-            await client.call_plugin(
-                "campaign", "start", config=config(tmp_path, root, model="scripted/lazy", repos=["alpha"])
-            )
-            [alpha] = await settled(client, "audit")
-            reads = await read_paths(client, "audit.alpha")
-    assert (alpha["state"], alpha["units"]) == ("done", {"done": 2})
-    # Unit one: b.py, then a.py when prompted again alone; unit two: c.py alone, which the lazy model reads.
-    assert reads == ["b.py", "a.py", "c.py"]
 
 
 async def test_a_turn_that_fails_after_its_reads_is_audited_again(
@@ -295,21 +275,6 @@ async def test_an_answer_cut_off_at_the_output_limit_is_audited_again(
             reads = await read_paths(client, "audit.alpha")
     assert (alpha["state"], alpha["units"]) == ("done", {"done": 1})
     assert reads.count("a.py") == 2
-
-
-async def test_attempts_run_out_on_a_file_never_read(
-    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
-    root = tmp_path / "tree"
-    await repos(root)
-    with anyio.fail_after(TIMEOUT):
-        async with serving(paths, launcher) as client:
-            await client.call_plugin(
-                "campaign", "start", config=config(tmp_path, root, model="scripted/echo", repos=["alpha"], attempts=2)
-            )
-            [alpha] = await settled(client, "audit")
-    assert (alpha["state"], alpha["units"]) == ("done", {"incomplete": 2})
 
 
 async def test_a_campaign_off_its_hosts_stops_with_the_reason(

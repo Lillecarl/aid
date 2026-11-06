@@ -7,8 +7,10 @@ code and no finding leaves the operator's infrastructure.
 ## Decisions
 
 - **A plugin drives the walk, not a model.** The campaign plugin lists the repositories and their tracked files
-  and prompts one unit at a time. It measures coverage from the reads the session recorded, not from what the
-  model says it did. Its state is in a database, so a daemon restart resumes the campaign.
+  and prompts one unit at a time. The prompt carries every line of the unit's files, numbered as `read` numbers
+  them, so coverage holds by construction and not by what the model says it read. A unit is done when a turn over
+  it ends on its own. Its state is in a database, so a daemon restart resumes the campaign. Measured on the first
+  full run, when the model read each file through tools: 13.6 requests per unit, about 420 thinking tokens each.
 - **Findings come in through one tool.** `report_finding` writes one row to the findings database. It takes no
   path to write to. The plugin takes the repository from the caller's spec, and the daemon stamps the caller.
   A model with a read-only ceiling gets this tool and no other write.
@@ -33,7 +35,7 @@ code and no finding leaves the operator's infrastructure.
 4. **Campaign plugin.** Built: `plugins/campaign/`, `aid campaign start CONFIG.json`. Units from `git ls-files`,
    with size and binary filters. One private session per repository on an instructions spec with a read-only
    ceiling, fresh turns and no instructions from the audited tree. A brief first, then one turn per unit; a unit
-   is done when the recorded reads cover every line of its files. With `supervise`, the root session supervises on the same model, a fresh turn per wake.
+   is done when a turn over its prompt, which carries the files whole, ends on its own. With `supervise`, the root session supervises on the same model, a fresh turn per wake.
    It is off by default: the plugin already judges coverage and retries, and a full run's supervisor spent 45M
    input tokens on 15 messages before its history outgrew the window.
    Bounded concurrency; a restart resumes from the database. A big repository is mapped into subsystems by the

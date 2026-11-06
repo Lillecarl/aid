@@ -1,7 +1,8 @@
-"""A campaign's units, pure: which files of a repository to audit, in which groups, and whether a turn read them.
+"""A campaign's units, pure: which files of a repository to audit, in which groups, and the prompt that carries them.
 
-Coverage comes from the session's recorded `read` calls, never from what the model says it did: a file counts as
-read when the line ranges of its completed reads cover every line.
+A unit's prompt holds every line of its files, numbered as `read` numbers them, so coverage holds by construction:
+a unit is audited once a turn over it ends on its own. Measured on the dynamist campaign (2026-11): with the model
+reading each file through tools, a unit took 13.6 requests, and each request cost about 420 thinking tokens.
 """
 
 from __future__ import annotations
@@ -12,15 +13,11 @@ from typing import TYPE_CHECKING, Annotated, Final
 import anyio
 from pydantic import BaseModel, ConfigDict, Field
 
-from aid.drive import END_TURN
-from aid.protocol import AidError, HistoryEntry, Output, ToolCall
+from aid.protocol import AidError
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
-READ_LINES: Final = 2000
-"""`aid.coding.READ_LIMIT`, the lines a `read` without `limit` returns: not imported, so the daemon need not load
-aid.coding."""
 SNIFF_BYTES: Final = 8192
 
 
@@ -111,68 +108,6 @@ def chunk(files: Sequence[FileInfo], limits: Limits) -> list[list[FileInfo]]:
     return units
 
 
-def _merged(calls: Iterable[tuple[str, ToolCall]]) -> list[ToolCall]:
-    """One record per call: later events fill what earlier ones left empty, as `ToolCall` says. Keyed by turn too:
-    a model may number its calls afresh each turn (`call_0`), and fresh turns make that likelier."""
-    merged: dict[tuple[str, str], ToolCall] = {}
-    for turn, call in calls:
-        key = (turn, call.tool_call_id)
-        earlier = merged.get(key)
-        if earlier is None:
-            merged[key] = call
-        else:
-            given = call.model_dump(exclude_defaults=True, exclude={"type"})
-            merged[key] = earlier.model_copy(update=given)
-    return list(merged.values())
-
-
-def _relative(repo: Path, given: str) -> str | None:
-    root = repo.resolve()
-    target = (root / given).resolve() if not Path(given).is_absolute() else Path(given).resolve()
-    return str(target.relative_to(root)) if target.is_relative_to(root) else None
-
-
-def read_ranges(repo: Path, calls: Iterable[tuple[str, ToolCall]]) -> dict[str, list[tuple[int, int]]]:
-    """Each file's line ranges `[first, past)` that completed `read` calls returned; `calls` are `(turn, event)`."""
-    ranges: dict[str, list[tuple[int, int]]] = {}
-    for call in _merged(calls):
-        if call.tool != "read" or call.status != "completed" or not isinstance(call.input, dict):
-            continue
-        path, offset, limit = call.input.get("path"), call.input.get("offset", 1), call.input.get("limit", READ_LINES)
-        if not isinstance(path, str) or not isinstance(offset, int) or not isinstance(limit, int):
-            continue
-        if (relative := _relative(repo, path)) is not None:
-            first = max(offset, 1)
-            ranges.setdefault(relative, []).append((first, first + max(limit, 0)))
-    return ranges
-
-
-def _covers(ranges: Sequence[tuple[int, int]], lines: int) -> bool:
-    if not ranges:
-        return False
-    reached = 1
-    for first, past in sorted(ranges):
-        if first > reached:
-            return False
-        reached = max(reached, past)
-    return reached > lines
-
-
-def credited(entries: Iterable[HistoryEntry]) -> list[tuple[str, ToolCall]]:
-    """The tool call events of turns that ended on their own (`Output` with `end_turn`). A turn that failed, was cut
-    off at its output limit or never ended (a daemon stopped mid-answer) never answered for what it read, and the
-    next fresh turn remembers none of it: its reads earn nothing."""
-    listed = list(entries)
-    ended = {e.turn for e in listed if isinstance(e.item, Output) and e.item.stop_reason == END_TURN}
-    return [(e.turn, e.item) for e in listed if isinstance(e.item, ToolCall) and e.turn in ended]
-
-
-def uncovered(repo: Path, files: Sequence[FileInfo], calls: Iterable[tuple[str, ToolCall]]) -> list[str]:
-    """The unit's files some line of which no completed `read` returned."""
-    ranges = read_ranges(repo, calls)
-    return [file.path for file in files if not _covers(ranges.get(file.path, []), file.lines)]
-
-
 BRIEF_PROMPT: Final = (
     "Look over this repository before the audit: list its top level, and read its README and build or package "
     "files if there are any. Answer with a brief of at most 200 words: what it is, its languages and frameworks, how "
@@ -180,12 +115,25 @@ BRIEF_PROMPT: Final = (
 )
 
 
-def unit_prompt(brief: str, files: Sequence[FileInfo]) -> str:
-    listed = "\n".join(f"- {file.path} ({file.lines} lines)" for file in files)
+def numbered(text: str) -> str:
+    """Every line as `aid.coding.numbered` gives it, which the model knows from `read`: not imported, so the daemon
+    need not load aid.coding."""
+    return "\n".join(f"{n:>6}\t{line}" for n, line in enumerate(text.splitlines(), start=1))
+
+
+def load(repo: Path, files: Sequence[FileInfo]) -> list[tuple[FileInfo, str]]:
+    """Each file's text, read as `examine` read it. Blocking: run it in a thread."""
+    return [(file, (repo / file.path).read_bytes().decode(errors="replace")) for file in files]
+
+
+def unit_prompt(brief: str, contents: Sequence[tuple[FileInfo, str]]) -> str:
+    shown = "\n\n".join(
+        f'<file path="{file.path}" lines="{file.lines}">\n{numbered(text)}\n</file>' for file, text in contents
+    )
     return (
         f"Repository brief:\n{brief}\n\n"
-        f"Audit these files. Read each one in full with read; for a file over {READ_LINES} lines, read it in parts "
-        f"with offset and limit until you have seen every line.\n{listed}\n\n"
-        "Record each real issue with report_finding as soon as you are sure of it. You may search and read other "
-        "files for context. End with one line per file: its path and what you found, or that you found nothing."
+        "Audit the files below. Each one is here in full, numbered as read numbers it: you need not read them again. "
+        "Record each real issue with report_finding as soon as you are sure of it, with the line numbers shown. You "
+        "may search and read other files for context. End with one line per file: its path and what you found, or "
+        f"that you found nothing.\n\n{shown}"
     )
