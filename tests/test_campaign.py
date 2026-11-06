@@ -44,6 +44,7 @@ MODELS = {
     "auditor": agents.auditor,
     "lazy": agents.lazy_auditor,
     "flaky": agents.flaky_auditor,
+    "outage": agents.outage_auditor,
     "hanging": agents.hanging_auditor,
     "echo": agents.echo,
 }
@@ -256,6 +257,28 @@ async def test_a_turn_that_fails_after_its_reads_is_audited_again(
     assert (alpha["state"], alpha["units"]) == ("done", {"done": 1})
     assert reads.count("a.py") == 2
     assert QueryResult.model_validate(findings).rows == [["a.py"], ["a.py"]]
+
+
+async def test_a_model_outage_costs_no_attempt(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    root = tmp_path / "tree"
+    await repos(root)
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            fields: dict[str, JsonValue] = {
+                "model": "scripted/outage",
+                "repos": ["alpha"],
+                "limits": {"unit_files": 3},
+                "attempts": 1,
+                "review": False,
+                "outage_backoff": 0,
+            }
+            await client.call_plugin("campaign", "start", config=config(tmp_path, root, **fields))
+            [alpha] = await settled(client, "audit")
+    # Three outages and one attempt: the unit is done, where an outage counted as a failed turn would fail it.
+    assert (alpha["state"], alpha["units"]) == ("done", {"done": 1})
 
 
 async def test_an_answer_cut_off_at_the_output_limit_is_audited_again(

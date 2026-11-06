@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Annotated, Final
 import anyio
 from pydantic import BaseModel, ConfigDict, Field
 
+from aid.drive import END_TURN
 from aid.protocol import AidError, HistoryEntry, Output, ToolCall
 
 if TYPE_CHECKING:
@@ -21,7 +22,6 @@ READ_LINES: Final = 2000
 """`aid.coding.READ_LIMIT`, the lines a `read` without `limit` returns: not imported, so the daemon need not load
 aid.coding."""
 SNIFF_BYTES: Final = 8192
-END_TURN: Final = "end_turn"
 
 
 class FileInfo(BaseModel):

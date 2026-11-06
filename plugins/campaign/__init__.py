@@ -23,7 +23,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 import aid
-from aid.history import MAX_PAGE
+from aid.drive import BUSY, END_TURN, Pacing, idle, is_outage, newest_seq, since, turn
 from aid.paths import default_paths
 from aid.protocol import AidError, HistoryEntry
 from aid.spec import NativeSpec, PermissionMode, Private
@@ -53,20 +53,16 @@ from .subsystems import (
     parse_map,
     subsystem_context,
 )
-from .units import BRIEF_PROMPT, END_TURN, Limits, chunk, credited, examine, tracked, uncovered, unit_prompt
+from .units import BRIEF_PROMPT, Limits, chunk, credited, examine, tracked, uncovered, unit_prompt
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
 
     from anyio.abc import TaskGroup
 
-    from aid.client import RunResult
-
 log = structlog.get_logger(__name__)
 
 PLUGIN: Final = "campaign"
-BUSY: Final = "busy"
-"""The daemon's refusal of a prompt to a session in a turn."""
 NAME_CHARS: Final = 24
 AUDITOR_TOOLS: Final = ("ls", "read", "outline", "search", "report_finding")
 REVIEWER_TOOLS: Final = ("ls", "read", "outline", "search", "record_verdict")
@@ -133,7 +129,14 @@ class CampaignConfig(BaseModel):
     review_batch: Annotated[int, Field(ge=1)] = 8
     """Findings one review turn judges."""
     backoff: Annotated[float, Field(ge=0)] = 10.0
-    """Seconds a unit waits after a failed turn before its next attempt: a gateway's 503 passes."""
+    """Seconds a unit waits after a failed turn before its next attempt."""
+    outage_backoff: Annotated[float, Field(ge=0)] = 30.0
+    """Seconds after a model outage (`aid.drive.Pacing`); it costs no attempt, and each in a row waits twice as long."""
+    outage_max: Annotated[float, Field(ge=0)] = 600.0
+
+    @property
+    def pacing(self) -> Pacing:
+        return Pacing(self.attempts, self.backoff, self.outage_backoff, self.outage_max)
 
 
 def child_session(campaign: str, repo: str, suffix: str) -> str:
@@ -238,41 +241,9 @@ async def _repositories(config: CampaignConfig) -> list[str]:
     return sorted([d.name async for d in root.iterdir() if await (d / ".git").exists()])
 
 
-async def _since(session: aid.Session, seq: int) -> list[HistoryEntry]:
-    entries: list[HistoryEntry] = []
-    while True:
-        page = await session.history(after=seq, limit=MAX_PAGE)
-        entries.extend(page.entries)
-        if not page.entries or not page.has_newer:
-            return entries
-        seq = page.entries[-1].seq
-
-
 def _read(path: Path, unit: Unit, entries: list[HistoryEntry]) -> set[str]:
     """The unit's files read in full by turns in `entries` that ended."""
     return {f.path for f in unit.files} - set(uncovered(path, unit.files, credited(entries)))
-
-
-async def _newest_seq(session: aid.Session) -> int:
-    page = await session.history(limit=1)
-    return page.entries[-1].seq if page.entries else -1
-
-
-async def _ended(session: aid.Session, prompt: str) -> RunResult[JsonValue]:
-    """A turn that ended on its own: one cut off (`max_tokens`, measured on vLLM's GLM spending a 4000-token budget
-    on reasoning) has not answered, and counts as failed."""
-    result = await session.run(prompt)
-    if result.stop_reason != END_TURN:
-        raise AidError("stopped", f"the turn stopped at {result.stop_reason}")
-    return result
-
-
-async def _idle(session: aid.Session) -> None:
-    """Until the session runs no turn: a prompt to a busy session is refused."""
-    async with contextlib.aclosing(session.follow_status()) as statuses:
-        async for status in statuses:
-            if not status.busy:
-                return
 
 
 class Campaigns(aid.Plugin):
@@ -512,6 +483,7 @@ class Campaigns(aid.Plugin):
         database = default_paths().plugin_dir(FINDINGS_PLUGIN) / FINDINGS_FILE
         name = child_session(config.name, repo.path, "review")
         tries: dict[int, int] = {}
+        outages = 0
         while config.name not in self._pausing:
             try:
                 left = pending(await ask({FINDINGS_PLUGIN: database}, pending_sql(where)))
@@ -523,13 +495,18 @@ class Campaigns(aid.Plugin):
                 return
             await self._session(name, reviewer_spec(config, path, repo.session))
             session = self.client.session(name)
-            await _idle(session)
+            await idle(session)
             try:
                 await session.run(review_prompt(brief, batch))
+                outages = 0
             except AidError as failure:
                 if failure.code == BUSY:
                     continue
                 log.warning("review_turn_failed", session=name, error=failure.message)
+                if is_outage(failure):
+                    outages += 1
+                    await anyio.sleep(config.pacing.outage_delay(outages))
+                    continue
                 await anyio.sleep(config.backoff)
             for finding in batch:
                 tries[finding.id] = tries.get(finding.id, 0) + 1
@@ -638,21 +615,7 @@ class Campaigns(aid.Plugin):
         await self.store.repo_ended(config.name, repo.path, RepoState.INTEGRATED)
 
     async def _turn(self, config: CampaignConfig, session: aid.Session, prompt: str) -> str:
-        """The answer of a turn that ended on its own, from up to `attempts` turns; the last failure raises."""
-        attempts = 0
-        while True:
-            await _idle(session)
-            try:
-                result = await _ended(session, prompt)
-                return result.output if isinstance(result.output, str) else str(result.output)
-            except AidError as failure:
-                if failure.code == BUSY:
-                    continue
-                attempts += 1
-                log.warning("turn_failed", session=session.name, error=failure.message)
-                if attempts >= config.attempts:
-                    raise
-                await anyio.sleep(config.backoff)
+        return await turn(session, prompt, config.pacing)
 
     async def _unit(self, config: CampaignConfig, session: aid.Session, path: Path, brief: str, unit: Unit) -> None:
         """Attempts until every file is read in turns that ended (`credited`), or the attempts run out. Each attempt
@@ -661,16 +624,17 @@ class Campaigns(aid.Plugin):
         store = self.store
         covered = set(unit.covered)
         if unit.start_seq is not None:
-            covered |= _read(path, unit, await _since(session, unit.start_seq))
-        attempts, error, answer = unit.attempts, unit.error, None
+            covered |= _read(path, unit, await since(session, unit.start_seq))
+        attempts, error, answer, outages = unit.attempts, unit.error, None, 0
         missing = [f.path for f in unit.files if f.path not in covered]
         while missing and attempts < config.attempts:
             if config.name in self._pausing:
                 # Left running with its attempt recorded: a resume credits it. A cancelled turn ends here, not again.
                 return
-            await _idle(session)
-            start = await _newest_seq(session)
+            await idle(session)
+            start = await newest_seq(session)
             await store.attempt_started(unit, start)
+            outage = False
             try:
                 result = await session.run(unit_prompt(brief, [f for f in unit.files if f.path in missing]))
                 error = None if result.stop_reason == END_TURN else f"stopped at {result.stop_reason}"
@@ -679,13 +643,15 @@ class Campaigns(aid.Plugin):
                 if failure.code == BUSY:
                     # A turn the unit never asked for, such as a supervisor's message, woke the session first.
                     continue
-                error = f"{failure.code}: {failure.message}"
+                error, outage = f"{failure.code}: {failure.message}", is_outage(failure)
                 log.warning("unit_turn_failed", session=session.name, unit=unit.idx, error=error)
-            attempts += 1
-            covered |= _read(path, unit, await _since(session, start))
+            outages = outages + 1 if outage else 0
+            if not outage:
+                attempts += 1
+            covered |= _read(path, unit, await since(session, start))
             missing = [f.path for f in unit.files if f.path not in covered]
             await store.attempt_ended(unit, attempts, sorted(covered), missing, error, answer)
             if missing and error is not None:
-                await anyio.sleep(config.backoff)
+                await anyio.sleep(config.pacing.outage_delay(outages) if outage else config.backoff)
         unread = UnitState.FAILED if error is not None else UnitState.INCOMPLETE
         await store.unit_ended(unit, unread if missing else UnitState.DONE)

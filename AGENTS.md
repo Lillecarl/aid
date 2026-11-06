@@ -336,6 +336,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - `src/aid/client.py` — public API: `aid.connect()`, `Client`, `Session.run/stream`.
 - `src/aid/client.py:daemon_call` — what hosted loops await daemon calls through: silence past
   `DAEMON_CALL_TIMEOUT` exits loudly, so the supervisor restarts into a fresh baseline.
+- `src/aid/drive.py` — for plugins that drive sessions turn by turn (campaign, PR review): `idle`, `ended` (a turn
+  that ended on its own), `turn`, `Pacing`. An outage (`OUTAGE` codes) costs no attempt and backs off doubling to
+  `outage_max`.
 - `src/aid/settle.py` — settled turn ends, platform-agnostic: `Tracker` fed by turn and supervision events,
   `settled_turns` calling back per settled episode. Both chat plugins share it.
 - `plugins/supervision/` — supervision, bundled, `autostart` (read, message, prompt, permissions, supervise). Follows each

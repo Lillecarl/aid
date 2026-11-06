@@ -319,6 +319,15 @@ async def _audit_flakily(messages: list[ModelMessage], info: AgentInfo) -> Async
         yield delta
 
 
+async def _audit_through_outage(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    """As the auditor, but its first three answers fail as a model out of reach does."""
+    async for delta in _auditing_stream(messages, lazy=False):
+        if isinstance(delta, str) and ": read" in delta and _FLAKY_FAILURES.get("outage", 0) < 3:
+            _FLAKY_FAILURES["outage"] = _FLAKY_FAILURES.get("outage", 0) + 1
+            raise AidError("model_unavailable", "InternalServerError: no available server")
+        yield delta
+
+
 async def _audit_then_hang(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
     """As the auditor, but the first time it would answer a unit it drops the `AID_HANG_GATE` file and hangs: a test
     stops the daemon there, mid-answer. The file outlives the worker, so the next one answers."""
@@ -358,6 +367,7 @@ investigator = Agent(FunctionModel(stream_function=_investigate))
 auditor = Agent(FunctionModel(stream_function=_audit))
 hanging_auditor = Agent(FunctionModel(stream_function=_audit_then_hang))
 flaky_auditor = Agent(FunctionModel(stream_function=_audit_flakily))
+outage_auditor = Agent(FunctionModel(stream_function=_audit_through_outage))
 lazy_auditor = Agent(FunctionModel(stream_function=_audit_lazily))
 
 
