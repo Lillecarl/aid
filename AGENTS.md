@@ -223,7 +223,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   (`@aid.mcptool`, so offered everywhere past a ceiling: the plugin takes it only from the judge of the PR under
   review, `_judging`). Comments checked against `review.diff_lines` (hunk counts, not prefixes: a removed `-- `
   line reads `--- `); refused → the model's retry. No review after a judge turn → again, prompt whole plus
-  `NO_REVIEW`, `attempts`. `store.py` (`prreview.db`): runs, prs, builds, angle_reviews (answer, last `Usage`),
+  `NO_REVIEW`, `attempts`. `store.py` (`prreview.db`, migrations): runs, prs (`step`: what the PR under review does now, `status` `current`), builds, angle_reviews (answer, last `Usage`),
   reviews, each keyed by (run, number, head); an interrupted PR redoes all but its stored angles. The `finally`
   (shielded) deletes the PR's sessions, its outputs (`nix store delete`, one call) and worktree, then `git gc
   --prune=now`.

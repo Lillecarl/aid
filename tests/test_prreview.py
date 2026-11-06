@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import anyio
+import apsw
 import pytest
 
 import aid
@@ -17,6 +18,7 @@ from aid.plugins import ENV_PLUGINS_PATH
 from aid.protocol import GetSpec, QueryResult
 from aid.spec import AgentSpecAdapter, NativeSpec
 from plugins.prreview import PrReviewConfig, angle_spec, judge_spec
+from plugins.prreview.store import PRREVIEW_FILE, SCHEMA, PrStore
 from tests.conftest import TESTS
 from tests.models import HOST
 from tests.test_campaign_units import GIT_ENV
@@ -178,14 +180,14 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
             assert refused.value.code == "forbidden"
             await client.call_plugin("prreview", "start", config=config(tmp_path, origin, found))
             await until(client, "SELECT 1 FROM runs WHERE state != 'running'")
-            prs = await rows(client, "SELECT number, head, state, error FROM prs")
+            prs = await rows(client, "SELECT number, head, state, error, step FROM prs")
             builds = await rows(client, "SELECT attr, outcome, closure_size FROM builds ORDER BY attr")
             angles = await rows(client, "SELECT angle, answer, usage IS NOT NULL FROM angle_reviews ORDER BY angle")
             reviews = await rows(client, "SELECT event, body, comments, session FROM reviews")
             checks = await rows(client, "SELECT candidates, answer, beaten_by FROM duplicate_checks")
             root = AgentSpecAdapter.validate_python(await client.call(GetSpec(session="nixrev")))
             listed = [info.name for info in await client.sessions()]
-    assert prs == [[7, head, "reviewed", None]]
+    assert prs == [[7, head, "reviewed", None, "judging"]]
     assert builds == [["broken", "failed", None], ["hello", "built", 2**20]]
     assert [a[0] for a in angles] == ["alternatives", "conventions", "correctness", "security"]
     assert all(answer == "No issues. broken: failed hello: built" and used for _, answer, used in angles)
@@ -224,6 +226,19 @@ async def test_a_pr_ci_says_rebuilds_too_much_is_skipped_unbuilt(
     assert prs == [["skipped", "CI lists 2 rebuilds, more than 1"]]
     assert reviewed == [[0]]
     assert not (found / "nix.log").exists()
+
+
+async def test_a_version_1_database_gains_the_step_column(tmp_path: Path) -> None:
+    file = tmp_path / PRREVIEW_FILE
+    db = apsw.Connection(str(file))
+    db.execute(SCHEMA.replace("    step TEXT,\n", ""))
+    db.execute("PRAGMA user_version = 1")
+    db.close()
+    store = await PrStore.open(file)
+    await store.aclose()
+    db = apsw.Connection(str(file))
+    assert "step" in [str(row[1]) for row in db.execute("PRAGMA table_info(prs)")]
+    db.close()
 
 
 def related_pr(found: Path, number: int, state: str, updated: str, path: str) -> None:

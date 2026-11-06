@@ -25,7 +25,8 @@ if TYPE_CHECKING:
     from .review import Build, Pr, Review
 
 PRREVIEW_FILE: Final = "prreview.db"
-SCHEMA_VERSION: Final = 1
+SCHEMA_VERSION: Final = 2
+MIGRATIONS: Final = {1: "ALTER TABLE prs ADD COLUMN step TEXT"}
 SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS runs (
     name TEXT PRIMARY KEY,
@@ -48,6 +49,7 @@ CREATE TABLE IF NOT EXISTS prs (
     skipped TEXT,
     duplicate_of INTEGER,
     error TEXT,
+    step TEXT,
     started REAL NOT NULL,
     ended REAL,
     PRIMARY KEY (run, number, head)
@@ -150,6 +152,8 @@ class PrRow(BaseModel):
     number: int
     head: str
     state: PrState
+    step: str | None = None
+    """What a PR under review is doing now: a build, the angles, the judge."""
 
 
 def _create(db: apsw.Connection, name: str, config: str) -> None:
@@ -247,7 +251,7 @@ class PrStore:
     @classmethod
     async def open(cls, path: Path) -> PrStore:
         await anyio.Path(path).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        return cls(await Database.open(path, SCHEMA, SCHEMA_VERSION))
+        return cls(await Database.open(path, SCHEMA, SCHEMA_VERSION, MIGRATIONS))
 
     async def aclose(self) -> None:
         await self._db.aclose()
@@ -265,10 +269,20 @@ class PrStore:
 
     async def prs(self, run: str) -> list[PrRow]:
         def rows(db: apsw.Connection) -> list[PrRow]:
-            found = db.execute("SELECT number, head, state FROM prs WHERE run = ? ORDER BY started", (run,))
-            return [PrRow(number=int(str(n)), head=str(h), state=PrState(str(s))) for n, h, s in found]
+            found = db.execute("SELECT number, head, state, step FROM prs WHERE run = ? ORDER BY started", (run,))
+            return [
+                PrRow(number=int(str(n)), head=str(h), state=PrState(str(s)), step=None if t is None else str(t))
+                for n, h, s, t in found
+            ]
 
         return await self._db.run(rows)
+
+    async def step(self, run: str, pr: Pr, step: str) -> None:
+        await self._db.run(
+            lambda db: db.execute(
+                "UPDATE prs SET step = ? WHERE run = ? AND number = ? AND head = ?", (step, run, pr.number, pr.head)
+            )
+        )
 
     async def started(self, run: str, pr: Pr) -> None:
         await self._db.run(_started, run, pr)

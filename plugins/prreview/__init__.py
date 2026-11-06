@@ -10,6 +10,7 @@ sessions. Bundled, `autostart`.
 
 from __future__ import annotations
 
+import contextlib
 import re
 import tempfile
 from dataclasses import dataclass
@@ -348,8 +349,11 @@ class PrReviews(aid.Plugin):
             if name is not None and run.name != name:
                 continue
             counts: dict[str, JsonValue] = {}
+            current: list[JsonValue] = []
             for row in await self.store.prs(run.name):
                 counts[row.state] = int(str(counts.get(row.state, 0))) + 1
+                if row.state not in ENDED and run.name in running:
+                    current.append({"number": row.number, "head": row.head, "step": row.step})
             result.append(
                 {
                     "name": run.name,
@@ -357,6 +361,7 @@ class PrReviews(aid.Plugin):
                     "error": run.error,
                     "running": run.name in running,
                     "prs": counts,
+                    "current": current,
                 }
             )
         if name is not None and not result:
@@ -424,6 +429,7 @@ class PrReviews(aid.Plugin):
         log.info("pr_review", run=config.name, pr=pr.number, head=pr.head)
         try:
             await commands.clone(cmds, repo)
+            await store.step(config.name, pr, "checking out")
             await commands.checkout(cmds, repo, config.remote, pr, worktree)
             with tempfile.TemporaryDirectory(prefix="prreview-") as into:
                 changed = await commands.rebuild_list(cmds, pr.head, Path(into))
@@ -437,17 +443,21 @@ class PrReviews(aid.Plugin):
                 await store.ended(config.name, pr.number, pr.head, PrState.SKIPPED, skipped)
                 return
             diff = await commands.diff(cmds, pr.number)
+            await store.step(config.name, pr, "checking for duplicates")
             if config.duplicates and await self._beaten(config, pr, worktree, diff, attrs):
                 return
             builds: list[Build] = []
-            for attr in attrs:
+            for n, attr in enumerate(attrs, 1):
+                await store.step(config.name, pr, f"building {attr} ({n} of {len(attrs)})")
                 built = await commands.build(cmds, worktree, attr, config.build_timeout)
                 outputs.extend(built.out_paths)
                 builds.append(built)
             await store.built(config.name, pr, diff, builds, None)
+            await store.step(config.name, pr, f"reviewing from {len(config.angles)} angles")
             await self._angles(config, pr, worktree, angle_prompt(pr, diff, builds, None, config.diff_limit))
             answers = await store.angles(config.name, pr.number, pr.head)
             prompt = judge_prompt(pr, diff, builds, None, config.diff_limit, answers)
+            await store.step(config.name, pr, "judging")
             await self._judge(config, pr, worktree, prompt, diff_lines(diff))
             await store.ended(config.name, pr.number, pr.head, PrState.REVIEWED)
         except AidError as failure:
@@ -485,6 +495,15 @@ class PrReviews(aid.Plugin):
             await self.store.duplicate_check(config.name, pr, DuplicateCheck(candidates=[]))
             return False
         name = session_name(config, pr.number, DUPLICATES)
+        try:
+            return await self._compare(config, pr, worktree, diff, candidates, name)
+        finally:
+            with anyio.CancelScope(shield=True), contextlib.suppress(AidError):
+                await self.client.session(name).delete()
+
+    async def _compare(
+        self, config: PrReviewConfig, pr: Pr, worktree: Path, diff: str, candidates: list[Candidate], name: str
+    ) -> bool:
         session = await self._session(name, duplicates_spec(config, worktree))
         prompt = duplicates_prompt(pr, diff, candidates, config.diff_limit)
         asked, answer, problem = prompt, "", "no answer"
