@@ -68,6 +68,18 @@ in
       '';
     };
 
+    modelSlots = lib.mkOption {
+      type = lib.types.attrsOf lib.types.ints.positive;
+      default = { };
+      example = {
+        "vllm.example.org" = 2;
+      };
+      description = ''
+        Model requests in flight per host, across every session (`aid daemon --model-slots HOST=N`): a shared or
+        self-hosted server's share for this daemon.
+      '';
+    };
+
     web = {
       enable = lib.mkEnableOption "the aid web UI, behind OIDC login";
 
@@ -159,7 +171,11 @@ in
       // cfg.environment;
     serviceConfig = {
       Type = "exec";
-      ExecStart = "${lib.getExe cfg.package} daemon" + lib.optionalString cfg.allowWorkerCommand " --allow-worker-command";
+      ExecStart = lib.concatStringsSep " " (
+        [ "${lib.getExe cfg.package} daemon" ]
+        ++ lib.optional cfg.allowWorkerCommand "--allow-worker-command"
+        ++ lib.mapAttrsToList (host: slots: "--model-slots ${lib.escapeShellArg "${host}=${toString slots}"}") cfg.modelSlots
+      );
       Restart = "on-failure";
       RestartSec = "2s";
       # SIGTERM reaches only the daemon, which stops its workers; stragglers get SIGKILL after the timeout.
