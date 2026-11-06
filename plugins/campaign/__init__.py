@@ -124,8 +124,9 @@ class CampaignConfig(BaseModel):
     split_units: Annotated[int, Field(ge=0)] = 6
     """A repository with more units than this is mapped into subsystems, each audited by a session of its own
     (`subsystems`); 0 never splits."""
-    subsystems_at_once: Annotated[int, Field(ge=1)] = 2
-    """Subsystem sessions of one repository running at once; model slots bound what reaches the server."""
+    subsystems_at_once: Annotated[int, Field(ge=1)] = 1
+    """Subsystem sessions of one repository running at once. With `concurrency`'s default, a campaign keeps 2 turns in
+    flight: a shared server keeps lanes for others. The daemon's model slots bound what reaches it in any case."""
     review: bool = True
     """After its audit, a repository's findings are each judged by a session that did not report them (`review`)."""
     review_batch: Annotated[int, Field(ge=1)] = 8
