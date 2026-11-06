@@ -430,6 +430,17 @@ def _parser() -> argparse.ArgumentParser:
     investigation_query.add_argument(
         "--table", action="store_true", help="tab-separated columns and rows instead of JSON"
     )
+    prreview = sub.add_parser("prreview", help="nixpkgs PR reviews: angle reviewers and a judge, recorded, not posted")
+    prreview_sub = prreview.add_subparsers(dest="prreview_command", required=True)
+    prreview_sub.add_parser("start", help="start a run from a JSON config; prints its status").add_argument(
+        "config", type=Path, help="a PrReviewConfig (plugins/prreview): name, model, ..."
+    )
+    prreview_sub.add_parser("status", help="runs and their PR counts, as JSON").add_argument("name", nargs="?")
+    prreview_sub.add_parser("pause", help="stop a run now; its PR is reviewed again on resume").add_argument("name")
+    prreview_sub.add_parser("resume", help="run a paused run again").add_argument("name")
+    prreview_query = prreview_sub.add_parser("query", help="one read-only SQL statement over the reviews")
+    prreview_query.add_argument("sql", help="tables: runs, prs, builds, angle_reviews, reviews")
+    prreview_query.add_argument("--table", action="store_true", help="tab-separated columns and rows instead of JSON")
 
     for command in ("start", "cancel", "stop", "delete"):
         sub.add_parser(command, help=f"{command} a session").add_argument("name")
@@ -829,11 +840,18 @@ async def _client_command(args: argparse.Namespace) -> None:
                 print(json.dumps(await client.call_plugin("reverse", "start", config=config)))
             case "investigation" if args.investigation_command == "status":
                 print(json.dumps(await client.call_plugin("reverse", "status", name=args.name)))
-            case "supervision" | "findings" | "investigation":
+            case "prreview" if args.prreview_command == "start":
+                config = _JSON.validate_json(args.config.read_bytes())
+                print(json.dumps(await client.call_plugin("prreview", "start", config=config)))
+            case "prreview" if args.prreview_command in {"status", "pause", "resume"}:
+                print(json.dumps(await client.call_plugin("prreview", args.prreview_command, name=args.name)))
+            case "supervision" | "findings" | "investigation" | "prreview":
                 if args.command == "supervision":
                     answer = await client.call_plugin("supervision", "query", sql=args.sql, session=args.session)
                 elif args.command == "investigation":
                     answer = await client.call_plugin("reverse", "query", sql=args.sql)
+                elif args.command == "prreview":
+                    answer = await client.call_plugin("prreview", "query", sql=args.sql)
                 else:
                     answer = await client.call_plugin("findings", "query", sql=args.sql)
                 result = QueryResult.model_validate(answer)
