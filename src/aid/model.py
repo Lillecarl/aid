@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from google import genai
     from google.genai.types import (
         ContentDict,
+        ContentUnionDict,
         FunctionCallDict,
         FunctionDeclarationDict,
         FunctionResponseDict,
@@ -867,7 +868,9 @@ class GoogleModel:
         if info.output_type is not str:
             ours["response_mime_type"] = "application/json"
             ours["response_json_schema"] = TypeAdapter(info.output_type).json_schema()
-        system, contents = google_contents(messages)
+        system, merged = google_contents(messages)
+        # The SDK's list is invariant: a list[ContentDict] is no list of its union.
+        contents: list[ContentUnionDict] = [*merged]
         if system:
             ours["system_instruction"] = {"parts": system}
         # The session's settings are Google's field names; the SDK's model checks them.

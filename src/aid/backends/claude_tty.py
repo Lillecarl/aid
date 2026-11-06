@@ -572,10 +572,7 @@ class ClaudeTtyBackend:
             turn.claim.ended.set()
 
     async def _pane_alive(self) -> bool:
-        def alive() -> bool:
-            return any(p.id == self._pane.id and not p.dead for p in self._server.panes)
-
-        return await anyio.to_thread.run_sync(alive)
+        return any(p.id == self._pane.id and not p.dead for p in await self._server.panes())
 
     async def _find_transcript(self) -> Path | None:
         return await anyio.to_thread.run_sync(find_transcript, self._transcripts, self._session_id)
@@ -586,9 +583,9 @@ class ClaudeTtyBackend:
         claim = _Claim(emit)
         self._claim = claim
         try:
-            await anyio.to_thread.run_sync(self._pane.send_keys, f"\x1b[200~{text}\x1b[201~", False)  # pyrefly: ignore[bad-argument-type] -- pyright accepts run_sync's ParamSpec; exercised at runtime
+            await self._pane.send_keys(f"\x1b[200~{text}\x1b[201~", enter=False)
             await anyio.sleep(PASTE_SETTLE)
-            await anyio.to_thread.run_sync(self._pane.send_key, "Enter")
+            await self._pane.send_key("Enter")
             async with anyio.create_task_group() as tg:
 
                 async def watch_pane() -> None:
@@ -611,36 +608,29 @@ class ClaudeTtyBackend:
         return claim.output
 
     async def cancel(self) -> None:
-        await anyio.to_thread.run_sync(self._pane.send_key, "Escape")
+        await self._pane.send_key("Escape")
 
     def pane_address(self) -> PaneAddress:
         return PaneAddress(socket=self._server.socket_path, pane=self._pane.id)
 
     async def screen(self, *, stylesheet: bool, since: int | None, wait: float) -> PaneView:
         if since is not None and since >= 0:
-            # Abandoned on cancel: a viewer that leaves must not hold up the worker's stop for the whole wait.
-            await anyio.to_thread.run_sync(
-                lambda: self._pane.wait_for_change(since=since, timeout=wait), abandon_on_cancel=True
-            )
-
-        def capture() -> PaneView:
-            # Asked of the server: Pane.revision is the snapshot from when the Pane was read, and a wait since that
-            # answers at once, every time. Read before drawing, so the frame is at least this new and the next wait
-            # misses nothing. The refresh is for in_mode and mode below, snapshot fields too.
-            revision = self._pane.current_revision()
-            self._pane.refresh()
-            html = self._pane.capture_html()
-            css = self._server.html_stylesheet(self._pane) if stylesheet else None
-            # pymux draws a mode (copy mode, a popup) above the pane, and the pane's page does not hold it.
-            overlay = (self._pane.mode or "a pymux mode") if self._pane.in_mode else None
-            return PaneView(revision=revision, html=html, stylesheet=css, overlay=overlay)
-
-        return await anyio.to_thread.run_sync(capture)
+            await self._pane.wait_for_change(since=since, timeout=wait)
+        # Asked of the server: Pane.revision is the snapshot from when the Pane was read, and a wait since that answers
+        # at once, every time. Read before drawing, so the frame is at least this new and the next wait misses
+        # nothing. The refresh is for in_mode and mode below, snapshot fields too.
+        revision = await self._pane.current_revision()
+        await self._pane.refresh()
+        html = await self._pane.capture_html()
+        css = await self._server.html_stylesheet(self._pane) if stylesheet else None
+        # pymux draws a mode (copy mode, a popup) above the pane, and the pane's page does not hold it.
+        overlay = (self._pane.mode or "a pymux mode") if self._pane.in_mode else None
+        return PaneView(revision=revision, html=html, stylesheet=css, overlay=overlay)
 
 
 async def _ensure_server(spec: ClaudeTtySpec, socket: str) -> Server:
     server = Server(socket)
-    if await anyio.to_thread.run_sync(server.is_alive):
+    if await server.is_alive():
         return server
     await anyio.Path(socket).parent.mkdir(parents=True, exist_ok=True)
     size = ["-x", str(PANE_COLUMNS), "-y", str(PANE_ROWS)]
@@ -648,7 +638,7 @@ async def _ensure_server(spec: ClaudeTtySpec, socket: str) -> Server:
         [*spec.pymux_command, "-S", socket, "new-session", "-d", "-s", PYMUX_SESSION, *size], check=False
     )
     # Two workers can race to start it; the loser's error is fine once a server answers.
-    if not await anyio.to_thread.run_sync(server.is_alive):
+    if not await server.is_alive():
         raise RuntimeError(f"could not start pymux on {socket}: {result.stderr.decode(errors='replace').strip()}")
     return server
 
@@ -656,17 +646,17 @@ async def _ensure_server(spec: ClaudeTtySpec, socket: str) -> Server:
 async def _wait_ready(pane: Pane, trust: bool) -> None:
     with anyio.fail_after(START_TIMEOUT):
         while True:
-            screen = classify(await anyio.to_thread.run_sync(pane.capture))
+            screen = classify(await pane.capture())
             if screen is Screen.READY:
                 return
             if screen is Screen.TRUST:
                 if not trust:
                     raise RuntimeError("Claude Code asks whether to trust the cwd; set trust_cwd to answer yes")
-                await anyio.to_thread.run_sync(pane.send_key, "Down")
-                await anyio.to_thread.run_sync(pane.send_key, "Enter")
+                await pane.send_key("Down")
+                await pane.send_key("Enter")
             if screen is Screen.CHANNELS:
                 # Its first option, and the default, is "I am using this for local development".
-                await anyio.to_thread.run_sync(pane.send_key, "Enter")
+                await pane.send_key("Enter")
             if screen is Screen.API_KEY:
                 # Which account pays is the person's choice, not aid's.
                 raise RuntimeError(
@@ -711,15 +701,13 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
     socket = spec.pymux_socket or str(default_paths().runtime_dir / "pymux.sock")
     server = await _ensure_server(spec, socket)
 
-    def new_window() -> Pane:
-        window = server.session.new_window(
-            command=str(launcher), name=f"aid:{state_dir.name}", start_directory=spec.cwd, select=False
-        )
-        if window is None or not window.panes:
-            raise RuntimeError("pymux made no window")
-        return window.panes[0]
-
-    pane = await anyio.to_thread.run_sync(new_window)
+    window = await (await server.session()).new_window(
+        command=str(launcher), name=f"aid:{state_dir.name}", start_directory=spec.cwd, select=False
+    )
+    panes = [] if window is None else await window.panes()
+    if not panes:
+        raise RuntimeError("pymux made no window")
+    pane = panes[0]
     log.info("pane_started", session=session_id, pane=pane.id, socket=socket, resumed=resume)
     try:
         await _wait_ready(pane, spec.trust_cwd)
@@ -728,4 +716,4 @@ async def open_claude_tty(spec: ClaudeTtySpec, state_dir: anyio.Path) -> AsyncGe
         yield ClaudeTtyBackend(server, pane, transcripts, id_file, session_id, started, offset)
     finally:
         with anyio.CancelScope(shield=True):
-            await anyio.to_thread.run_sync(lambda: server.cmd(["kill-window", "-t", pane.window_id], check=False))
+            await server.cmd(["kill-window", "-t", pane.window_id], check=False)

@@ -23,8 +23,8 @@ from pygments.token import (
     String,
     Token,
 )
-from pymux.style_base16 import base16_roles  # pyright: ignore[reportMissingTypeStubs] -- annotated, no py.typed
-from pymux.style_pygments import pygments_roles  # pyright: ignore[reportMissingTypeStubs]
+from pymux.style.style_base16 import base16_roles  # pyright: ignore[reportMissingTypeStubs] -- annotated, no py.typed
+from pymux.style.style_pygments import pygments_roles  # pyright: ignore[reportMissingTypeStubs]
 
 CODE: Final = ".hl"
 # The page without a theme: its own light and dark, and these two for code.

@@ -7,7 +7,6 @@ import sys
 from typing import TYPE_CHECKING
 
 import anyio
-import anyio.to_thread
 import pytest
 import zmq.asyncio
 from libpymux import Server
@@ -336,9 +335,9 @@ async def test_a_turn_typed_into_the_pane_is_recorded(daemon: Paths, tmp_path: P
             session = await client.create("tty", fake_spec(tmp_path, pymux_socket))
             first = await session.run("hello")
             address = await session.pane()
-            pane = next(p for p in Server(address.socket).panes if p.id == address.pane)
-            await anyio.to_thread.run_sync(pane.send_keys, "typed", False)  # pyrefly: ignore[bad-argument-type] -- pyright accepts run_sync's ParamSpec; exercised at runtime
-            await anyio.to_thread.run_sync(pane.send_key, "Enter")
+            pane = next(p for p in await Server(address.socket).panes() if p.id == address.pane)
+            await pane.send_keys("typed", enter=False)
+            await pane.send_key("Enter")
             typed = await typed_items(session)
             after = await session.run("after")
     assert first.text == "echo: hello"
@@ -372,9 +371,9 @@ async def test_a_subagents_tokens_are_recorded(daemon: Paths, tmp_path: Path, py
 
 async def type_command(session: aid.Session, command: str) -> None:
     address = await session.pane()
-    pane = next(p for p in Server(address.socket).panes if p.id == address.pane)
-    await anyio.to_thread.run_sync(pane.send_keys, command, False)  # pyrefly: ignore[bad-argument-type] -- pyright accepts run_sync's ParamSpec; exercised at runtime
-    await anyio.to_thread.run_sync(pane.send_key, "Enter")
+    pane = next(p for p in await Server(address.socket).panes() if p.id == address.pane)
+    await pane.send_keys(command, enter=False)
+    await pane.send_key("Enter")
 
 
 async def recorded(session: aid.Session, kind: type[HistoryItem], after: int = -1) -> HistoryItem:
@@ -460,9 +459,9 @@ async def test_tool_modes_restart_claude_once_its_turn_ends(daemon: Paths, tmp_p
                 await session.set_permissions(default=PermissionMode.ASK)
             before = (await session.status()).pid
             address = await session.pane()
-            pane = next(p for p in Server(address.socket).panes if p.id == address.pane)
-            await anyio.to_thread.run_sync(pane.send_keys, "hold", False)  # pyrefly: ignore[bad-argument-type] -- pyright accepts run_sync's ParamSpec; exercised at runtime
-            await anyio.to_thread.run_sync(pane.send_key, "Enter")
+            pane = next(p for p in await Server(address.socket).panes() if p.id == address.pane)
+            await pane.send_keys("hold", enter=False)
+            await pane.send_key("Enter")
             while not (await session.status()).working:  # noqa: ASYNC110 -- the UserPromptSubmit hook says so
                 await anyio.sleep(0.05)
             await session.set_permissions({"Bash": PermissionMode.DENY, "WebFetch": PermissionMode.ASK})
