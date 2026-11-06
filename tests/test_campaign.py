@@ -239,6 +239,25 @@ async def test_a_turn_that_fails_after_its_reads_is_audited_again(
     assert QueryResult.model_validate(findings).rows == [["a.py"], ["a.py"]]
 
 
+async def test_the_review_judges_only_its_severities(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    root = tmp_path / "tree"
+    await repos(root)
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            fields: dict[str, JsonValue] = {"repos": ["alpha"], "review_severities": ["critical"]}
+            await client.call_plugin("campaign", "start", config=config(tmp_path, root, **fields))
+            [alpha] = await settled(client, "audit")
+            findings = await client.call_plugin("findings", "query", sql="SELECT severity FROM findings")
+            verdicts = await client.call_plugin("findings", "query", sql="SELECT finding FROM verdicts")
+    # The auditor reports its finding as high: left for a person, no review session made for it.
+    assert alpha["state"] == "done"
+    assert QueryResult.model_validate(findings).rows == [["high"]]
+    assert QueryResult.model_validate(verdicts).rows == []
+
+
 async def test_a_model_outage_costs_no_attempt(
     paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

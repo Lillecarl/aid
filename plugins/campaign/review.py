@@ -38,10 +38,13 @@ def _literal(text: str) -> str:
     return "'" + text.replace("'", "''") + "'"
 
 
-def pending_sql(repo: str) -> str:
-    """The findings in `repo` no AI verdict judged yet, oldest first. A literal: `ask` takes no parameters."""
+def pending_sql(repo: str, severities: Sequence[str]) -> str:
+    """The findings in `repo` of `severities` no AI verdict judged yet, oldest first. Literals: `ask` takes no
+    parameters."""
+    wanted = ", ".join(_literal(severity) for severity in severities)
     return (
-        f"SELECT {', '.join(COLUMNS)} FROM findings WHERE repo = {_literal(repo)} AND id NOT IN"
+        f"SELECT {', '.join(COLUMNS)} FROM findings WHERE repo = {_literal(repo)} AND severity IN ({wanted})"
+        " AND id NOT IN"
         f" (SELECT finding FROM verdicts WHERE pass = {_literal(AI_REVIEW)}) ORDER BY path, id"
     )
 

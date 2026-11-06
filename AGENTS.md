@@ -202,7 +202,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   run in a `.survey` child session without `report_finding` (`survey_spec`; a ceiling holds per session, and the
   pilot's brief turn filed the brief as a finding), deleted once they are done. Review (`review.py`, `review`): after
   the audit a `.review` child session (`REVIEWER_TOOLS`: read tools + `record_verdict`) judges the repository's
-  findings in batches of `review_batch`; the findings database is the record (`pending_sql`, read-only `ask` on
+  findings of `review_severities` (default medium and worse) in batches of `review_batch`; the findings database is the record (`pending_sql`, read-only `ask` on
   `findings.db`): a finding with an `ai` verdict is reviewed, so a resume keeps no state; `attempts` turns each.
 - `plugins/reverse/` — reverse-engineering investigations, bundled, `autostart` (read, prompt, manage, supervise,
   private); plan `docs/reverse-engineering.md`. `aid investigation start|status|query` (operator only):
