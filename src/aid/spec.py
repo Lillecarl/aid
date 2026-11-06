@@ -285,6 +285,10 @@ class AcpSpec(_Spec):
         return self.permission
 
 
+SELF_TOOLS: Final = frozenset({"compact"})
+"""Offered to an instructions spec past its ceiling (`NativeSpec.offers`)."""
+
+
 class NativeSpec(_Spec):
     """A native agent: `agent`, the name of an `aid.AgentDefinition` on the plugins path, `target`, a
     `package.module:attribute` that is an agent itself, or `instructions`, which makes the spec the agent. Exactly
@@ -344,7 +348,11 @@ class NativeSpec(_Spec):
     their own endpoints. Children and forks inherit it; agents never set it."""
 
     def offers(self, tool_name: str) -> bool:
-        return self.tools is None or any(re.fullmatch(pattern, tool_name) for pattern in self.tools)
+        if self.tools is None or any(re.fullmatch(pattern, tool_name) for pattern in self.tools):
+            return True
+        # User's rule: a spec-as-agent may always compact itself before the gauge forces it. It writes only the
+        # session's own history. A fresh-turns session drops its history each turn, so it has nothing to compact.
+        return tool_name in SELF_TOOLS and self.instructions is not None and not self.fresh_turns
 
     @model_validator(mode="after")
     def _one_source(self) -> Self:

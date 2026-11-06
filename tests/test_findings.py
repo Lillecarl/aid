@@ -142,7 +142,7 @@ async def test_a_session_on_a_read_only_ceiling_records_findings(
         async with serving(paths, launcher) as client:
             session = await client.create("auditor", auditor_spec(tmp_path, repo))
             offered = {tool.name for tool in (await session.status()).tools}
-            assert offered == {"ls", "read", "outline", "report_finding"}
+            assert offered == {"ls", "read", "outline", "report_finding", "compact"}
             output = (
                 await session.run(
                     calls(

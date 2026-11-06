@@ -520,7 +520,8 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   field until each enforces it (Claude: `--tools` needs its built-in names; ACP: refuse).
   Spec as the agent: `NativeSpec.instructions`, a third source beside `agent`/`target`, requires `model` and
   `tools`; `open_native` builds `Agent(model, instructions, [coding_tools, supervisor_tools])` plus aid's toolset, so the ceiling
-  picks from every named tool and `tools=[]` offers none. `spec.runs` names it "instructions" (`Started.agent`,
+  picks from every named tool and `tools=[]` offers none but `SELF_TOOLS` (`compact`, User's rule: it may always
+  compact itself before the gauge forces it; not with `fresh_turns`, which keeps no history). `spec.runs` names it "instructions" (`Started.agent`,
   `SessionStatus.runs`). `aid new-py NAME --instructions[-file] … --model … --tool …`; the form's agent choice
   "none". Agents spawn such specs through `plugins/spawn/`, attenuated by `aid.spawn.child_spec` (pure).
 - Native tool permissions: a mode per tool name. `NativeSpec.tool_permissions` overrides; unset, a `Tool.asks`

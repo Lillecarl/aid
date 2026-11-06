@@ -249,7 +249,8 @@ async def test_a_spec_with_instructions_is_the_agent(daemon: Paths, tmp_path: Pa
             result = await session.run(plan(("shell", {"command": "touch made"}), ("ls", {})))
             status = await session.status()
             history = [entry.item for entry in (await session.history()).entries]
-    assert sorted(by_name(status.tools)) == ["goals", "ls", "send_message"]
+    # compact past the ceiling: a spec-as-agent may always compact itself.
+    assert sorted(by_name(status.tools)) == ["compact", "goals", "ls", "send_message"]
     assert status.runs == "instructions"
     assert not (work / "made").exists()
     assert "a.txt" in str(result.output)
@@ -264,6 +265,13 @@ def test_a_spec_with_instructions_names_its_model_and_tools() -> None:
             NativeSpec.model_validate({"cwd": "/", "instructions": "x", **partial})
     with pytest.raises(ValidationError, match="exactly one of agent, target and instructions"):
         NativeSpec(cwd="/", agent="coder", instructions="x", model="a/b", tools=[])
+
+
+def test_an_instructions_spec_may_always_compact_itself() -> None:
+    assert NativeSpec(cwd="/", instructions="x", model="a/b", tools=[]).offers("compact")
+    # Nothing to compact in a fresh-turns session; an agent definition picks its own tools.
+    assert not NativeSpec(cwd="/", instructions="x", model="a/b", tools=[], fresh_turns=True).offers("compact")
+    assert not NativeSpec(cwd="/", target="m:a", tools=[]).offers("compact")
 
 
 def test_a_tool_pattern_matches_the_whole_name() -> None:

@@ -123,7 +123,8 @@ async def test_a_child_works_on_a_cut_ceiling_and_its_turns_reach_the_parent(dae
             answer = (await parent.run(spawning(tools=["ls|read", "send_message"], task="hello"))).output
             assert isinstance(answer, str)
             started = json.loads(answer)
-            assert started == {"session": "parent.helper", "tools": ["ls", "read", "send_message"]}
+            # compact past the cut ceiling: a spec-as-agent may always compact itself.
+            assert started == {"session": "parent.helper", "tools": ["compact", "ls", "read", "send_message"]}
             child = client.session("parent.helper")
             spec = AgentSpecAdapter.validate_python(await client.call(GetSpec(session=child.name)))
             assert isinstance(spec, NativeSpec)
