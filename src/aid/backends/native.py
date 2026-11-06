@@ -615,7 +615,8 @@ class NativeBackend:
                         broken = 0
                     except StreamBroken as error:
                         if broken >= STREAM_RETRIES:
-                            raise
+                            # A code of its own: a driver waits this out without counting it against the work.
+                            raise AidError("model_unavailable", str(error)) from error
                         broken += 1
                         # What streamed of it stays in the transcript; the engine history drops it.
                         messages.pop()

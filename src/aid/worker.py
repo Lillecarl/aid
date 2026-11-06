@@ -32,6 +32,7 @@ from aid.backends.base import (
 )
 from aid.protocol import (
     Activity,
+    AidError,
     AnswerPermission,
     Cancel,
     CompactSession,
@@ -330,7 +331,11 @@ class _Worker:
         except Exception as error:
             log.exception("prompt_failed", id=request.id)
             await self._report_tools()
-            await self.send(Failure(id=request.id, code="agent_error", message=f"{type(error).__name__}: {error}"))
+            if isinstance(error, AidError):
+                failure = Failure(id=request.id, code=error.code, message=error.message)
+            else:
+                failure = Failure(id=request.id, code="agent_error", message=f"{type(error).__name__}: {error}")
+            await self.send(failure)
         else:
             await emit(output)
             await self._report_tools()

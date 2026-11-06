@@ -482,8 +482,10 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   persists available new messages and usage on success, failure and cancellation. Compaction owns the old
   history prefix; finalization appends only the run's new messages, never overwrites that prefix. Unanswered
   tool calls are closed as interrupted, not replayed: their effects may already have happened. A model request is
-  replayed: a transport's `StreamBroken` (a dropped connection mid-response, `model.BROKEN`) sends it again,
-  `STREAM_RETRIES` in a row with backoff, its partial response gone from the engine history, kept in the transcript.
+  replayed: a transport's `StreamBroken` (a dropped connection mid-response, `model.BROKEN`) or `ModelUnavailable`
+  (refused before answering: no connection, 5xx, 408/409/429, `model.unavailable`) sends it again, `STREAM_RETRIES`
+  in a row with backoff, its partial response gone from the engine history, kept in the transcript; then the turn
+  fails `model_unavailable`. The worker passes an `AidError`'s code through; any other exception is `agent_error`.
 - multiprocessing re-imports the parent's `__main__` in each worker: every entry script needs a
   `if __name__ == "__main__":` guard.
 - Daemon shutdown: `_stop_all` runs inside the task group; worker watchers are shielded and must see every exit.

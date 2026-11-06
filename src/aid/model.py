@@ -103,6 +103,27 @@ class StreamBroken(Exception):
     """The connection failed after the response began. No tool call of it ran, so the request may go again."""
 
 
+class ModelUnavailable(StreamBroken):
+    """The server refused the request or was out of reach before it answered: nothing of it ran."""
+
+
+TRANSIENT_STATUS: Final = frozenset({408, 409, 429})
+"""Statuses below 500 a request may go again after, as the SDKs' own retries decide."""
+
+
+def unavailable(error: BaseException) -> bool:
+    """A failure to send again later: no connection, a timeout, a 5xx, or a rate limit. Measured 2026-11: a vLLM
+    gateway answered 503 "no available server" for hours, past the SDK's two quick retries."""
+    match error:
+        case openai.APIConnectionError() | anthropic.APIConnectionError():
+            return True
+        case openai.APIStatusError() | anthropic.APIStatusError():
+            return error.status_code >= 500 or error.status_code in TRANSIENT_STATUS
+        case _:
+            code = getattr(error, "code", None) if type(error).__module__.startswith("google.genai") else None
+            return isinstance(code, int) and (code >= 500 or code in TRANSIENT_STATUS)
+
+
 BROKEN: Final = (httpx.TransportError, httpx2.TransportError)
 """What a dropped stream raises: Gemini's client is httpx, the OpenAI and Anthropic clients httpx2. The SDKs raise
 it bare from a response body (openai 2.x, measured 2026-10-28: vLLM dropped 7 streams in 5 hours, 61 to 545 s in)."""
@@ -419,7 +440,12 @@ class OpenAIChatModel:
                 # After the leading instructions, so every request keeps the same cached prefix.
                 lead = next((i for i, w in enumerate(wired) if w.get("role") != "system"), len(wired))
                 wired.insert(lead, {"role": "system", "content": note})
-        stream = await client.chat.completions.create(**request)
+        try:
+            stream = await client.chat.completions.create(**request)
+        except Exception as error:
+            if unavailable(error):
+                raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
+            raise
         ids: dict[int, str] = {}
         try:
             async for chunk in stream:
@@ -621,7 +647,12 @@ class AnthropicModel:
             }
         if system:
             request["system"] = system
-        stream = await client.messages.create(**request)
+        try:
+            stream = await client.messages.create(**request)
+        except Exception as error:
+            if unavailable(error):
+                raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
+            raise
         arguments: dict[int, bool] = {}
         try:
             async for event in stream:
@@ -841,9 +872,14 @@ class GoogleModel:
             ours["system_instruction"] = {"parts": system}
         # The session's settings are Google's field names; the SDK's model checks them.
         config = GenerateContentConfig.model_validate({**settings, **ours})
-        stream = await client.aio.models.generate_content_stream(  # pyright: ignore[reportUnknownMemberType] -- PIL, absent, in its contents union
-            model=self._model, contents=contents, config=config
-        )
+        try:
+            stream = await client.aio.models.generate_content_stream(  # pyright: ignore[reportUnknownMemberType] -- PIL, absent, in its contents union
+                model=self._model, contents=contents, config=config
+            )
+        except Exception as error:
+            if unavailable(error) or isinstance(error, BROKEN):
+                raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
+            raise
         calls = 0
         try:
             async for chunk in stream:

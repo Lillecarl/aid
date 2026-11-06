@@ -177,8 +177,10 @@ async def test_a_broken_stream_goes_again(tmp_path: Path, monkeypatch: pytest.Mo
     agent = Agent("openai/local", model_settings={"api_key": "test-broken", "api_base": "https://example.test/v1"})
     async with backend(tmp_path, agent) as session:
         if breaks > native_backend.STREAM_RETRIES:
-            with pytest.raises(StreamBroken):
+            with pytest.raises(AidError) as raised:
                 await session.prompt("hello", emit)
+            assert raised.value.code == "model_unavailable"
+            assert isinstance(raised.value.__cause__, StreamBroken)
         else:
             assert (await session.prompt("hello", emit)).output == "done"
     assert sent == min(breaks + 1, native_backend.STREAM_RETRIES + 1)
@@ -189,6 +191,44 @@ async def test_a_broken_stream_goes_again(tmp_path: Path, monkeypatch: pytest.Mo
     [response] = [m for m in history if isinstance(m, ModelResponse)]
     kind = TextPart if breaks <= native_backend.STREAM_RETRIES else ThinkingPart
     assert [type(part) for part in response.parts] == [kind]
+
+
+@pytest.mark.parametrize(("status", "replayed"), [(503, True), (429, True), (400, False)])
+async def test_a_refused_request_goes_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status: int, replayed: bool
+) -> None:
+    sent = 0
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        nonlocal sent
+        sent += 1
+        if sent == 1:
+            return httpx2.Response(status, json={"error": {"message": "no available server"}})
+        data = event({"content": "done"}) + event({}, usage={"prompt_tokens": 10, "completion_tokens": 1})
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=data + b"data: [DONE]\n\n")
+
+    def make_client(**kwargs: Any) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
+
+    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setattr(native_backend, "STREAM_BACKOFF", 0)
+
+    async def emit(item: SessionEvent) -> None:
+        pass
+
+    # max_retries 0: the SDK's own retries would hide the first answer.
+    settings: dict[str, JsonValue] = {
+        "api_key": "test-refused",
+        "api_base": "https://example.test/v1",
+        "max_retries": 0,
+    }
+    async with backend(tmp_path, Agent("openai/local", model_settings=settings)) as session:
+        if replayed:
+            assert (await session.prompt("hello", emit)).output == "done"
+        else:
+            with pytest.raises(openai.BadRequestError):
+                await session.prompt("hello", emit)
+    assert sent == (2 if replayed else 1)
 
 
 async def test_openai_stream_cancellation_closes_transport(monkeypatch: pytest.MonkeyPatch) -> None:
