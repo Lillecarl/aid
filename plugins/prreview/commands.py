@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from aid.protocol import AidError
 
+from .duplicates import Candidate
 from .review import Build, Pr
 
 if TYPE_CHECKING:
@@ -28,7 +29,8 @@ ARTIFACT: Final = "comparison"
 CHANGED_PATHS: Final = "changed-paths.json"
 HEAD_REF: Final = "refs/prreview/head"
 LOG_LINES: Final = 60
-PR_FIELDS: Final = "number,headRefOid,baseRefName,title,body,author,url"
+PR_FIELDS: Final = "number,headRefOid,baseRefName,title,body,author,url,updatedAt"
+CANDIDATE_FIELDS: Final = "number,title,state,updatedAt,files"
 
 
 class Commands(BaseModel):
@@ -58,6 +60,19 @@ class _PrView(BaseModel):
     body: str | None = None
     author: _Author | None = None
     url: str = ""
+    updatedAt: str = ""
+
+
+class _File(BaseModel):
+    path: str
+
+
+class _CandidateView(BaseModel):
+    number: int
+    title: str = ""
+    state: str
+    updatedAt: str = ""
+    files: list[_File] = Field(default_factory=list[_File])
 
 
 class _WorkflowRun(BaseModel):
@@ -109,6 +124,49 @@ async def pr(commands: Commands, number: int) -> Pr:
         body=view.body or "",
         author=view.author.login if view.author else "",
         url=view.url,
+        updated=view.updatedAt,
+    )
+
+
+async def related(commands: Commands, terms: Sequence[str], merged_since: str, limit: int) -> list[int]:
+    """PRs whose title names one of `terms`: open ones, and ones merged since `merged_since` (YYYY-MM-DD)."""
+    found: list[int] = []
+    for term in terms:
+        for state in (["--state", "open"], ["--merged", "--merged-at", f">={merged_since}"]):
+            out = await _run(
+                [
+                    *commands.gh,
+                    "search",
+                    "prs",
+                    "--repo",
+                    REPO,
+                    f"{term} in:title",
+                    *state,
+                    "--limit",
+                    str(limit),
+                    "--json",
+                    "number,updatedAt",
+                ],
+                "gh search prs",
+            )
+            found.extend(hit.number for hit in _HITS.validate_json(out) if hit.number not in found)
+    return found
+
+
+async def candidate(commands: Commands, number: int, files: set[str]) -> Candidate | None:
+    """PR `number` as a possible duplicate: None unless it is open or merged and touches one of `files`."""
+    out = await _run(
+        [*commands.gh, "pr", "view", str(number), "--repo", REPO, "--json", CANDIDATE_FIELDS], "gh pr view"
+    )
+    view = _CandidateView.model_validate_json(out)
+    if view.state not in {"OPEN", "MERGED"} or not files & {f.path for f in view.files}:
+        return None
+    return Candidate(
+        number=view.number,
+        title=view.title,
+        state="OPEN" if view.state == "OPEN" else "MERGED",
+        updated=view.updatedAt,
+        diff=await diff(commands, number),
     )
 
 

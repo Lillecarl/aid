@@ -211,7 +211,12 @@ on reusable decisions and current boundaries; put long investigations and dated 
   prefixes, tests point them at `tests/prreview_fakes.py`). One PR at a time (`_one`), across runs: `commands.py`
   fetches `refs/pull/N/head` `--depth 1` into the plugin's bare repo (head moved → skipped), detached worktree
   `worktrees/<run>`; `gh` finds the head's `PR` workflow run and its `comparison` artifact, `review.rebuilds` reads
-  `rebuildsByPlatform.x86_64-linux` (missing or over `max_builds` → skipped, nothing built); each attribute `nix
+  `rebuildsByPlatform.x86_64-linux` (missing or over `max_builds` → skipped, nothing built). Duplicates
+  (`duplicates.py`, pure; before any build): `search_terms` (title's `pkg:` + rebuilds, `TERMS`), open and merged in
+  `merged_days` PRs by title, kept if they touch one of its files (`max_candidates`); with any, a `.duplicates`
+  session (read tools) answers a JSON block, refused → asked again; `beaten_by`: merged duplicate wins, else the
+  model's winner, "equal" → latest `updatedAt`. Beaten → `duplicate` (`duplicate_of`), unbuilt; every check in
+  `duplicate_checks`. Each attribute `nix
   build --file WORKTREE --arg config '{ }' --arg overlays '[ ]'`, timeout recorded as an outcome. Sessions
   `<run>.<number>.<angle|judge>`, parent root `<run>` (instructions, `tools=[]`, never prompted; keeps chat plugins
   off), `fresh_turns`, `instruction_providers=[]`, ceiling `READ_TOOLS`, the judge's plus `submit_review`

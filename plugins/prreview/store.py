@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final
 
@@ -45,6 +46,7 @@ CREATE TABLE IF NOT EXISTS prs (
     diff TEXT,
     state TEXT NOT NULL,
     skipped TEXT,
+    duplicate_of INTEGER,
     error TEXT,
     started REAL NOT NULL,
     ended REAL,
@@ -75,6 +77,20 @@ CREATE TABLE IF NOT EXISTS angle_reviews (
     PRIMARY KEY (run, number, head, angle),
     FOREIGN KEY (run, number, head) REFERENCES prs (run, number, head)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS duplicate_checks (
+    run TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    head TEXT NOT NULL,
+    candidates TEXT NOT NULL,
+    answer TEXT,
+    duplicates TEXT,
+    winner TEXT,
+    beaten_by INTEGER,
+    session TEXT,
+    at REAL NOT NULL,
+    PRIMARY KEY (run, number, head),
+    FOREIGN KEY (run, number, head) REFERENCES prs (run, number, head)
+) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS reviews (
     run TEXT NOT NULL,
     number INTEGER NOT NULL,
@@ -102,12 +118,25 @@ class PrState(StrEnum):
     BUILT = "built"
     REVIEWED = "reviewed"
     """The judge recorded its review."""
+    DUPLICATE = "duplicate"
+    """Another PR makes the same change and wins (`duplicate_of`): a merged one, or the better open one."""
     SKIPPED = "skipped"
     """Not reviewed: `skipped` says why (no CI artifact, too many rebuilds, the head moved)."""
     FAILED = "failed"
 
 
-ENDED: Final = frozenset({PrState.REVIEWED, PrState.SKIPPED, PrState.FAILED})
+ENDED: Final = frozenset({PrState.REVIEWED, PrState.DUPLICATE, PrState.SKIPPED, PrState.FAILED})
+
+
+@dataclass(frozen=True)
+class DuplicateCheck:
+    candidates: list[int]
+    answer: str | None = None
+    """The model's last answer; None when no candidate needed asking."""
+    duplicates: list[int] | None = None
+    winner: int | str | None = None
+    beaten_by: int | None = None
+    session: str | None = None
 
 
 class Run(BaseModel):
@@ -144,7 +173,8 @@ def _started(db: apsw.Connection, run: str, pr: Pr) -> None:
         db.execute(
             "INSERT INTO prs (run, number, head, base, title, body, author, url, state, started)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            " ON CONFLICT (run, number, head) DO UPDATE SET state = excluded.state, error = NULL, skipped = NULL",
+            " ON CONFLICT (run, number, head) DO UPDATE SET state = excluded.state, error = NULL, skipped = NULL,"
+            " duplicate_of = NULL",
             (run, pr.number, pr.head, pr.base, pr.title, pr.body, pr.author, pr.url, PrState.STARTED, time.time()),
         )
         db.execute("DELETE FROM builds WHERE run = ? AND number = ? AND head = ?", (run, pr.number, pr.head))
@@ -248,6 +278,45 @@ class PrStore:
 
     async def ended(self, run: str, number: int, head: str, state: PrState, note: str | None = None) -> None:
         await self._db.run(_ended, run, number, head, state, note)
+
+    async def duplicate_check(self, run: str, pr: Pr, check: DuplicateCheck) -> None:
+        """The check's record; a PR beaten by another ends `DUPLICATE` with it."""
+
+        def write(db: apsw.Connection) -> None:
+            with db:
+                db.execute(
+                    "INSERT OR REPLACE INTO duplicate_checks"
+                    " (run, number, head, candidates, answer, duplicates, winner, beaten_by, session, at)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        run,
+                        pr.number,
+                        pr.head,
+                        json.dumps(check.candidates),
+                        check.answer,
+                        None if check.duplicates is None else json.dumps(check.duplicates),
+                        None if check.winner is None else str(check.winner),
+                        check.beaten_by,
+                        check.session,
+                        time.time(),
+                    ),
+                )
+                if check.beaten_by is not None:
+                    db.execute(
+                        "UPDATE prs SET state = ?, duplicate_of = ?, skipped = ?, ended = ?"
+                        " WHERE run = ? AND number = ? AND head = ?",
+                        (
+                            PrState.DUPLICATE,
+                            check.beaten_by,
+                            f"a duplicate of #{check.beaten_by}",
+                            time.time(),
+                            run,
+                            pr.number,
+                            pr.head,
+                        ),
+                    )
+
+        await self._db.run(write)
 
     async def angles(self, run: str, number: int, head: str) -> dict[str, str]:
         return await self._db.run(_angles, run, number, head)

@@ -59,6 +59,8 @@ class Pr:
     body: str
     author: str
     url: str
+    updated: str = ""
+    """GitHub's `updatedAt`, ISO 8601: between equal duplicates, the latest wins."""
 
 
 @dataclass(frozen=True)
@@ -138,7 +140,7 @@ def clipped(text: str, limit: int) -> tuple[str, bool]:
     return (text, False) if len(text) <= limit else (text[:limit], True)
 
 
-def _pr_block(pr: Pr) -> str:
+def pr_block(pr: Pr) -> str:
     return (
         f'<pr number="{pr.number}" url="{pr.url}" author="{pr.author}" base="{pr.base}" head="{pr.head}">\n'
         f"<title>{pr.title}</title>\n<body>\n{pr.body}\n</body>\n</pr>"
@@ -157,7 +159,7 @@ def _builds_block(builds: Sequence[Build], skipped: str | None) -> str:
     return f'<builds system="{SYSTEM}">\n' + ("\n".join(rows) or "CI lists nothing to rebuild.") + "\n</builds>"
 
 
-def _diff_block(diff: str, limit: int) -> str:
+def diff_block(diff: str, limit: int) -> str:
     text, cut = clipped(diff, limit)
     note = f' truncated="at {limit} characters; read the files for the rest"' if cut else ""
     return f"<diff{note}>\n{text}\n</diff>"
@@ -167,9 +169,9 @@ def angle_prompt(pr: Pr, diff: str, builds: Sequence[Build], skipped: str | None
     return "\n\n".join(
         [
             f"Review nixpkgs pull request #{pr.number} from the angle your instructions give.",
-            _pr_block(pr),
+            pr_block(pr),
             _builds_block(builds, skipped),
-            _diff_block(diff, diff_limit),
+            diff_block(diff, diff_limit),
             UNTRUSTED,
             "The pull request's head is checked out in your working directory: read the files the diff touches, "
             "and what they use, with ls, read, outline and search. Answer with each issue you found: the file and "
@@ -186,9 +188,9 @@ def judge_prompt(
     return "\n\n".join(
         [
             f"Reviewers each read nixpkgs pull request #{pr.number} from one angle. Write the one review it gets.",
-            _pr_block(pr),
+            pr_block(pr),
             _builds_block(builds, skipped),
-            _diff_block(diff, diff_limit),
+            diff_block(diff, diff_limit),
             f"<angle-reviews>\n{reviews}\n</angle-reviews>",
             UNTRUSTED + " The angle reviews came from models that read the same data: check a claim in the files "
             "before you keep it.",

@@ -30,6 +30,12 @@ The daemon needs `gh` (logged in), `git` and `nix` on its PATH, or `commands` in
   plugin builds each attribute from the worktree, with an empty nixpkgs config. It does not evaluate nixpkgs itself.
   A PR without the artifact, or with more than `max_builds` rebuilds, is skipped. A failed or timed-out build is a
   result the reviewers read.
+- **Duplicates first.** Before the builds, the plugin searches for PRs whose title names the same package or
+  rebuilt attribute: open ones, and ones merged in the last 30 days. It keeps those that touch one of the PR's
+  files. A read-only session compares their diffs and names the duplicates and the better change. A merged
+  duplicate always wins, as master has the change. Between open ones the model's choice wins; when it calls them
+  equal, the most recently updated PR wins. A PR that loses ends as a duplicate of the winner: nothing is built or
+  reviewed. Every check is in `duplicate_checks`.
 - **Reviewers only read.** The model is abliterated, so its sessions get `ls`, `read`, `outline` and `search`, and
   nothing that writes or runs a program. The plugin runs git, gh and Nix, never the model.
 - **Angles are sessions, the judge is one more.** The default angles are security, conventions, alternatives and
@@ -43,9 +49,10 @@ The daemon needs `gh` (logged in), `git` and `nix` on its PATH, or `commands` in
 
 ## State
 
-`prreview.db` in the plugin directory: `runs`, `prs` (number, head, title, body, diff, state, why skipped, error),
-`builds` (attribute, outcome, log tail, outputs, closure size), `angle_reviews` (angle, answer, the turn's usage),
-`reviews` (event, body, comments, session). Every row is keyed by run, PR number and head, so a head that moved is a
+`prreview.db` in the plugin directory: `runs`, `prs` (number, head, title, body, diff, state, why skipped,
+`duplicate_of`, error), `duplicate_checks` (candidates, the model's answer, the winner), `builds` (attribute,
+outcome, log tail, outputs, closure size), `angle_reviews` (angle, answer, the turn's usage), `reviews` (event, body,
+comments, session). Every row is keyed by run, PR number and head, so a head that moved is a
 new review. An interrupted PR starts again, but keeps the angle answers it has.
 
 ## Open

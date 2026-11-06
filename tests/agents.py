@@ -358,13 +358,17 @@ JUDGE_COMMENTS: Final = (
 
 async def _review_pr(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
     """A PR review's angle answers with the build rows its prompt carries; its judge submits a comment off the diff,
-    then, refused, one on it, then ends."""
+    then, refused, one on it, then ends; its duplicate check calls every candidate an equal duplicate."""
     prompt = next(
         str(p.content)
         for m in reversed(messages)
         for p in m.parts
         if isinstance(p, UserPromptPart) and not _is_note(p.content)
     )
+    if "make the same change as" in prompt:
+        numbers = [int(n) for n in re.findall(r'^<candidate number="(\d+)"', prompt, re.MULTILINE)]
+        yield f"```json\n{json.dumps({'duplicates': numbers, 'winner': 'equal'})}\n```"
+        return
     if "Write the one review it gets" not in prompt:
         yield "No issues. " + " ".join(re.findall(r"^- (\S+: \w+)", prompt, re.MULTILINE))
         return

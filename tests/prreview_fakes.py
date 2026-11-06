@@ -1,5 +1,6 @@
 """`gh` and `nix` for the PR review tests: `python prreview_fakes.py gh|nix FIXTURES ARGS...`. Answers come from files
-in FIXTURES (`pr.json`, `diff`, `changed-paths.json`); each nix call is logged to `nix.log`, one JSON argv a line."""
+in FIXTURES (`pr.json`, `diff`, `changed-paths.json`; `related.json` {"open": [N], "merged": [N]} with `pr-N.json`
+and `diff-N` per related PR); each nix call is logged to `nix.log`, one JSON argv a line."""
 
 from __future__ import annotations
 
@@ -10,12 +11,19 @@ from pathlib import Path
 
 def gh(fixtures: Path, args: list[str]) -> int:
     match args:
-        case ["search", "prs", *_]:
+        case ["search", "prs", *rest] if "--checks" in rest:
             print(json.dumps([{"number": json.loads((fixtures / "pr.json").read_text())["number"], "updatedAt": "x"}]))
-        case ["pr", "view", *_]:
-            print((fixtures / "pr.json").read_text())
-        case ["pr", "diff", *_]:
-            sys.stdout.write((fixtures / "diff").read_text())
+        case ["search", "prs", *rest]:
+            file = fixtures / "related.json"
+            related: dict[str, list[int]] = json.loads(file.read_text()) if file.exists() else {}
+            found = related.get("merged" if "--merged" in rest else "open", [])
+            print(json.dumps([{"number": n, "updatedAt": "x"} for n in found]))
+        case ["pr", "view", number, *_]:
+            own = fixtures / f"pr-{number}.json"
+            print((own if own.exists() else fixtures / "pr.json").read_text())
+        case ["pr", "diff", number, *_]:
+            own = fixtures / f"diff-{number}"
+            sys.stdout.write((own if own.exists() else fixtures / "diff").read_text())
         case ["api", *_]:
             print(json.dumps({"workflow_runs": [{"id": 11, "name": "PR", "conclusion": "success"}]}))
         case ["run", "download", *rest]:
