@@ -1,0 +1,3 @@
+version = "0.1.0"
+description = "nixpkgs PR review: angle reviewers and a judge on a self-hosted model; reviews recorded, never posted."
+autostart = true

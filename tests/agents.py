@@ -350,6 +350,33 @@ async def _investigate(messages: list[ModelMessage], info: AgentInfo) -> AsyncIt
     yield "\n".join(str(p.content if isinstance(p, ToolReturnPart) else p.model_response()) for p in returns)
 
 
+JUDGE_COMMENTS: Final = (
+    [{"path": "pkgs/hello/default.nix", "line": 999, "body": "Off the diff."}],
+    [{"path": "pkgs/hello/default.nix", "line": 3, "body": "Pin the tag."}],
+)
+
+
+async def _review_pr(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
+    """A PR review's angle answers with the build rows its prompt carries; its judge submits a comment off the diff,
+    then, refused, one on it, then ends."""
+    prompt = next(
+        str(p.content)
+        for m in reversed(messages)
+        for p in m.parts
+        if isinstance(p, UserPromptPart) and not _is_note(p.content)
+    )
+    if "Write the one review it gets" not in prompt:
+        yield "No issues. " + " ".join(re.findall(r"^- (\S+: \w+)", prompt, re.MULTILINE))
+        return
+    returns = [p for m in messages for p in m.parts if isinstance(p, ToolReturnPart | RetryPromptPart)]
+    if len(returns) < len(JUDGE_COMMENTS):
+        review = {"event": "COMMENT", "body": "One point.", "comments": JUDGE_COMMENTS[len(returns)]}
+        yield {0: DeltaToolCall(name="submit_review", json_args=json.dumps(review), tool_call_id=f"r{len(returns)}")}
+        return
+    yield "Reviewed."
+
+
+pr_reviewer = Agent(FunctionModel(stream_function=_review_pr))
 investigator = Agent(FunctionModel(stream_function=_investigate))
 auditor = Agent(FunctionModel(stream_function=_audit))
 hanging_auditor = Agent(FunctionModel(stream_function=_audit_then_hang))
