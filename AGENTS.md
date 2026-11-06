@@ -204,6 +204,24 @@ on reusable decisions and current boundaries; put long investigations and dated 
   the audit a `.review` child session (`REVIEWER_TOOLS`: read tools + `record_verdict`) judges the repository's
   findings of `review_severities` (default medium and worse) in batches of `review_batch`; the findings database is the record (`pending_sql`, read-only `ask` on
   `findings.db`): a finding with an `ai` verdict is reviewed, so a resume keeps no state; `attempts` turns each.
+- `plugins/prreview/` — nixpkgs PR review, bundled, `autostart` (read, prompt, manage, private); plan
+  `docs/pr-review.md`. `aid prreview start|status|pause|resume|query` (operator only). `PrReviewConfig` (name, model,
+  optional `hosts` → private, `query` = `gh search prs` filters, default open + green checks + `10.rebuild-linux:
+  1-10`, `max_prs`, `max_builds`, `angles` name → instructions, `angles_at_once` 2, `commands` = gh/git/nix argv
+  prefixes, tests point them at `tests/prreview_fakes.py`). One PR at a time (`_one`), across runs: `commands.py`
+  fetches `refs/pull/N/head` `--depth 1` into the plugin's bare repo (head moved → skipped), detached worktree
+  `worktrees/<run>`; `gh` finds the head's `PR` workflow run and its `comparison` artifact, `review.rebuilds` reads
+  `rebuildsByPlatform.x86_64-linux` (missing or over `max_builds` → skipped, nothing built); each attribute `nix
+  build --file WORKTREE --arg config '{ }' --arg overlays '[ ]'`, timeout recorded as an outcome. Sessions
+  `<run>.<number>.<angle|judge>`, parent root `<run>` (instructions, `tools=[]`, never prompted; keeps chat plugins
+  off), `fresh_turns`, `instruction_providers=[]`, ceiling `READ_TOOLS`, the judge's plus `submit_review`
+  (`@aid.mcptool`, so offered everywhere past a ceiling: the plugin takes it only from the judge of the PR under
+  review, `_judging`). Comments checked against `review.diff_lines` (hunk counts, not prefixes: a removed `-- `
+  line reads `--- `); refused → the model's retry. No review after a judge turn → again, prompt whole plus
+  `NO_REVIEW`, `attempts`. `store.py` (`prreview.db`): runs, prs, builds, angle_reviews (answer, last `Usage`),
+  reviews, each keyed by (run, number, head); an interrupted PR redoes all but its stored angles. The `finally`
+  (shielded) deletes the PR's sessions, its outputs (`nix store delete`, one call) and worktree, then `git gc
+  --prune=now`.
 - `plugins/reverse/` — reverse-engineering investigations, bundled, `autostart` (read, prompt, manage, supervise,
   private); plan `docs/reverse-engineering.md`. `aid investigation start|status|query` (operator only):
   `InvestigationConfig` (name, workspace, goal, model, `machines` name → SSH destination, `private` hosts, supervise)

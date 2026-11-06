@@ -4,34 +4,52 @@ Goal: a self-hosted model reviews open nixpkgs pull requests from several angles
 into one review. Nothing reaches GitHub: the judge's "post" tool records the review in a local database, so stronger
 models and people can analyse the reviews before any posting is built.
 
+## Use
+
+```sh
+aid prreview start run.json       # {"name": "nixrev", "model": "vllm/glm-5.3-flash", "max_prs": 3}
+aid prreview status nixrev
+aid prreview query --table "SELECT number, event, body FROM reviews"
+aid prreview pause nixrev         # stops at once; the PR is reviewed again on resume
+aid prreview resume nixrev
+```
+
+The daemon needs `gh` (logged in), `git` and `nix` on its PATH, or `commands` in the config names them.
+
 ## Decisions
 
 - **A plugin drives it, like a campaign.** `plugins/prreview/` picks PRs, prepares each one, runs the reviewer
   turns and records the results. It drives sessions through `aid.drive`, so a model outage costs no attempt.
-- **One PR at a time.** Disk stays bounded: one worktree of a shared nixpkgs clone, and the outputs of one build.
-  The worktree goes away after the PR, and the build outputs are deleted (`nix store delete`, only those paths).
-- **Only PRs that build cheaply.** Open, every check green (`--checks success`), label `10.rebuild-linux: 1-10`.
-  No public cache holds PR outputs, but for such a PR only its own derivations build here. Everything else comes
-  from cache.nixos.org.
-- **CI says what to build.** The PR workflow's `comparison` artifact lists `rebuildsByPlatform.<system>`. The plugin
-  builds those attributes from the worktree. It does not evaluate nixpkgs itself.
-- **Reviewers only read.** The model is abliterated, so its sessions get read tools and nothing that writes or runs
-  a program. The plugin runs git and Nix, never the model. A reviewer reads the build's results in its prompt.
-- **Angles are sessions, the judge is one more.** Each angle (security, nixpkgs conventions, a better way, and
-  others in the config) is an instructions spec on fresh turns, in the PR's worktree. Its answer is stored. The judge
-  gets the PR, the diff, the build results and every angle's answer. Its `submit_review` tool records one review:
-  an event (approve, comment, request changes), a body, and line comments. The plugin checks that each comment
-  names a line the diff shows, as GitHub would.
+- **One PR at a time.** Disk stays bounded. The plugin fetches only the PR's head (`--depth 1`) into a bare
+  repository of its own and checks it out as a worktree. After the PR, the worktree, the fetched objects and the
+  built outputs go (`nix store delete` on those paths only).
+- **Only PRs that build cheaply.** Open, every check green (`--checks success`), not a draft, label
+  `10.rebuild-linux: 1-10`. No public cache holds PR outputs, but for such a PR only its own derivations build
+  here. Everything else comes from cache.nixos.org.
+- **CI says what to build.** The PR workflow's `comparison` artifact lists `rebuildsByPlatform.x86_64-linux`. The
+  plugin builds each attribute from the worktree, with an empty nixpkgs config. It does not evaluate nixpkgs itself.
+  A PR without the artifact, or with more than `max_builds` rebuilds, is skipped. A failed or timed-out build is a
+  result the reviewers read.
+- **Reviewers only read.** The model is abliterated, so its sessions get `ls`, `read`, `outline` and `search`, and
+  nothing that writes or runs a program. The plugin runs git, gh and Nix, never the model.
+- **Angles are sessions, the judge is one more.** The default angles are security, conventions, alternatives and
+  correctness; the config can replace them. Each angle is a session with fresh turns in the worktree, two at a time.
+  The judge gets the PR, the diff, the build results and every angle's answer. Its `submit_review` tool records one
+  review: an event (APPROVE, COMMENT, REQUEST_CHANGES), a body and line comments. The plugin refuses a comment on a
+  line the diff does not show, as GitHub would, and the judge tries again in the same turn. A judge turn that ends
+  without a review is repeated, up to `attempts`.
 - **PR text is untrusted.** The title, body, diff and files are data. The reviewer tools cannot act on them. The
   worst a poisoned PR can do is a wrong review, which is recorded and not posted.
 
 ## State
 
-`prreview.db` in the plugin directory: `prs` (number, head sha, title, state, error, times), `builds` (attribute,
-outcome, log tail, closure size), `angle_reviews` (angle, session, answer, usage), `reviews` (event, body, comments,
-session). A PR whose head moved since its review is a new row.
+`prreview.db` in the plugin directory: `runs`, `prs` (number, head, title, body, diff, state, why skipped, error),
+`builds` (attribute, outcome, log tail, outputs, closure size), `angle_reviews` (angle, answer, the turn's usage),
+`reviews` (event, body, comments, session). Every row is keyed by run, PR number and head, so a head that moved is a
+new review. An interrupted PR starts again, but keeps the angle answers it has.
 
 ## Open
 
 - Posting: a later operator command, after the recorded reviews are checked.
 - A calibration set: merged PRs and their human reviews, to measure the judge against.
+- A failed PR is not retried.
