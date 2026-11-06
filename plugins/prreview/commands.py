@@ -4,10 +4,13 @@ runs these, never a model.
 
 from __future__ import annotations
 
+import contextlib
+import shutil
 import time
 from typing import TYPE_CHECKING, Final
 
 import anyio
+import anyio.to_thread
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
@@ -212,8 +215,15 @@ async def clone(commands: Commands, path: Path) -> None:
 
 
 async def checkout(commands: Commands, repo: Path, remote: str, pr: Pr, worktree: Path) -> None:
-    """The PR's head, alone (`--depth 1`), as a detached worktree. A head that moved since `pr` refuses."""
+    """The PR's head, alone (`--depth 1`), as a detached worktree. A head that moved since `pr` refuses. A worktree
+    left behind (a daemon killed mid-PR, measured 2026-11-07) goes first: `worktree add` refuses a path that exists."""
     git = [*commands.git, "-C", str(repo)]
+    if await anyio.Path(worktree).exists():
+        log.warning("stale_worktree", path=str(worktree))
+        with contextlib.suppress(AidError):
+            await _run([*git, "worktree", "remove", "--force", str(worktree)], "git worktree remove")
+        if await anyio.Path(worktree).exists():
+            await anyio.to_thread.run_sync(shutil.rmtree, worktree)
     await _run([*git, "worktree", "prune"], "git worktree prune")
     ref = f"+refs/pull/{pr.number}/head:{HEAD_REF}"
     await _run([*git, "fetch", "--quiet", "--no-tags", "--depth", "1", remote, ref], "git fetch")

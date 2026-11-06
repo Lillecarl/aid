@@ -173,6 +173,10 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
     monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
     origin, head = await remote(tmp_path)
     found = fixtures(tmp_path, head, ["hello", "broken"])
+    # Left by a daemon killed mid-PR: `git worktree add` refuses a path that exists.
+    stale = paths.state_dir / "plugins" / "prreview" / "worktrees" / "nixrev"
+    stale.mkdir(parents=True)
+    (stale / "leftover").write_text("x")
     with anyio.fail_after(TIMEOUT):
         async with serving(paths, launcher) as client:
             with pytest.raises(aid.AidError) as refused:
