@@ -313,6 +313,9 @@ async def test_a_pr_an_equal_later_duplicate_beats_ends_unbuilt(
         async with serving(paths, launcher) as client:
             await client.call_plugin("prreview", "start", config=config(tmp_path, origin, found))
             await until(client, "SELECT 1 FROM prs WHERE state != 'started'")
+            # Nothing left to review: the root says it waits, once, as no session works meanwhile.
+            while len(await notes(client, "nixrev")) < 2:  # noqa: ASYNC110 -- the note is the plugin's, not an event here
+                await anyio.sleep(0.05)
             await client.call_plugin("prreview", "pause", name="nixrev")
             prs = await rows(client, "SELECT state, duplicate_of, skipped FROM prs")
             checks = await rows(
@@ -327,7 +330,8 @@ async def test_a_pr_an_equal_later_duplicate_beats_ends_unbuilt(
     assert checks == [["[8]", "[8]", "equal", 8, "nixrev.7.duplicates"]]
     assert listed == ["nixrev", "nixrev.7", "nixrev.7.duplicates"]
     assert root_notes == [
-        ("prreview", "[#7 hello: 1 -> 2](https://github.com/NixOS/nixpkgs/pull/7): duplicate of #8 hello: 1 -> 2 (8)")
+        ("prreview", "[#7 hello: 1 -> 2](https://github.com/NixOS/nixpkgs/pull/7): duplicate of #8 hello: 1 -> 2 (8)"),
+        ("prreview", "No pull request left to review; searching again every 15 min."),
     ]
     assert not (found / "nix.log").exists()
 

@@ -445,6 +445,8 @@ class PrReviews(aid.Plugin):
     async def _loop(self, config: PrReviewConfig) -> bool:
         """True once `max_prs` reviews are recorded."""
         await self._root(config)
+        idle = False
+        """A waiting note is on the root since the last PR: one per idle stretch, not one per search."""
         while True:
             rows = await self.store.prs(config.name)
             if config.max_prs is not None and sum(r.state == PrState.REVIEWED for r in rows) >= config.max_prs:
@@ -455,11 +457,17 @@ class PrReviews(aid.Plugin):
             async with self.client.session(config.name).work("Looking for a pull request to review") as root:
                 pr = await self._next(config, ended)
                 if pr is not None:
+                    idle = False
                     await self._say([root], f"Reviewing #{pr.number} {pr.title}\n")
                     async with self._one:
                         await self._review(config, pr, root)
             if pr is None:
                 log.info("poll_wait", run=config.name, seconds=config.poll)
+                if not idle:
+                    # Idle, not stuck: the root says so, as no session works while it waits.
+                    minutes = f"{config.poll / 60:g} min"
+                    await self._note(config.name, f"No pull request left to review; searching again every {minutes}.")
+                    idle = True
                 await anyio.sleep(config.poll)
 
     async def _next(self, config: PrReviewConfig, ended: set[tuple[int, str]]) -> Pr | None:

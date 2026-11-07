@@ -224,7 +224,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   off). Notes (#57, `AppendNote`, failures logged only): the holder gets start, builds, the review, the end; the root
   one line per PR's end. A PR's end hides its holder (#59), reason `PR <state>: why`; a failed one stays. Work turns (#61): the root
   per search + review, each step as live text; the holder per PR, with `git fetch --progress` and `nix build
-  --print-build-logs` streamed (`commands.streamed`, `SAY_EVERY`). `fresh_turns`, `instruction_providers=["skills"]` with `AID_SKILLS_ONLY` = `review-skills/` (not
+  --print-build-logs` streamed (`commands.streamed`, `SAY_EVERY`). A search with nothing to review notes the
+  root once per idle stretch ("No pull request left to review …"): no session works while it waits. `fresh_turns`, `instruction_providers=["skills"]` with `AID_SKILLS_ONLY` = `review-skills/` (not
   `skills/`: the skills plugin lists that to every session), `review.skill_hints` names a diff's guides in the
   prompt, ceiling `READ_TOOLS` (+ `skill`), the judge's plus `submit_review`
   (`@aid.mcptool`, so offered everywhere past a ceiling: the plugin takes it only from the judge of the PR under
