@@ -188,6 +188,8 @@
       }
       case "remote_control":
         return [row("assistant", `[Open remote session](${item.session_url})`)];
+      case "note":
+        return [row("message", `Note from ${item.by ?? "the operator"}: ${item.text}`)];
     }
   }
 

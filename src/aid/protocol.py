@@ -20,6 +20,8 @@ from aid.plugins import Grant, PluginSpec
 from aid.spec import AgentKind, AgentSpec, PermissionMode, Sandbox, TagKey, TagValue
 
 PROTOCOL_VERSION = 1
+NOTE_LIMIT: Final = 20_000
+"""Characters in one `Note`: a progress line, not a transcript."""
 
 
 class AidError(Exception):
@@ -115,6 +117,15 @@ class SetSupervisor(_Request):
     op: Literal["supervisor"] = "supervisor"
     session: str
     supervisor: str | None
+
+
+class AppendNote(_Request):
+    """Write a `Note` into a session's history: no turn, no model, the worker untouched. Plugins (`manage`) and the
+    operator; never agents. The daemon stamps `by` with the plugin's name."""
+
+    op: Literal["note"] = "note"
+    session: str
+    text: str = Field(min_length=1, max_length=NOTE_LIMIT)
 
 
 class SetTags(_Request):
@@ -493,6 +504,7 @@ type Request = Annotated[
     | SetSandbox
     | SetSupervisor
     | SetTags
+    | AppendNote
     | RequestDirectory
     | AnswerDirectory
     | ListAgents
@@ -911,6 +923,16 @@ class Lifecycle(_Message):
     """A compaction's summary: what the agent keeps of the conversation before it."""
 
 
+class Note(_Message):
+    """A line a plugin or the operator wrote into the session's history, outside any turn: what a driver did for
+    the session (a review run's progress). The agent never sees it; no model runs for it."""
+
+    type: Literal["note"] = "note"
+    text: str
+    by: str | None = None
+    """The plugin that wrote it, stamped by the daemon; None for the operator."""
+
+
 class PromptEntry(_Message):
     type: Literal["prompt"] = "prompt"
     text: str
@@ -938,6 +960,7 @@ type HistoryItem = Annotated[
     | MessageEntry
     | Started
     | Lifecycle
+    | Note
     | TextDelta
     | ThoughtDelta
     | ToolCall

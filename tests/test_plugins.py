@@ -13,6 +13,7 @@ from aid.plugins import ENV_PLUGINS_DIST, ENV_PLUGINS_PATH, Grant, PluginSpec, p
 from aid.protocol import (
     AidError,
     MessageEntry,
+    Note,
     PermissionDecider,
     PermissionDecision,
     PermissionRequest,
@@ -79,6 +80,26 @@ def test_describe_names_versions_grants_and_declined() -> None:
         ToolInfo(name="add", description="Add two numbers.", module="plugintools"),
         ToolInfo(name="whoami", description="The plugin tool that names itself.", module="plugintools"),
     ]
+
+
+async def test_a_note_lands_in_history_named_by_its_writer(daemon: Paths, tmp_path: Path) -> None:
+    """`manage` plugins and the operator write notes, no worker or model involved; the daemon names the plugin,
+    whatever it claims; a plugin without `manage` is refused."""
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as control:
+            session = await control.create("noted", py_spec(tmp_path, "agents:echo"))
+            await session.stop()
+            await register_plugin(control, daemon, "driver", frozenset({Grant.MANAGE}))
+            await register_plugin(control, daemon, "reader", frozenset({Grant.READ}))
+            async with aid.connect(daemon, plugin="driver") as driver, aid.connect(daemon, plugin="reader") as reader:
+                await driver.session("noted").note("PR 42 reviewed: APPROVE")
+                with pytest.raises(AidError, match="may not send 'note'"):
+                    await reader.session("noted").note("nope")
+            await session.note("checked by hand")
+            notes = [e.item for e in (await session.history()).entries if isinstance(e.item, Note)]
+            status = await session.status()
+    assert notes == [Note(text="PR 42 reviewed: APPROVE", by="driver"), Note(text="checked by hand", by=None)]
+    assert not status.running
 
 
 async def test_a_plugin_may_do_what_it_is_granted_and_nothing_more(daemon: Paths, tmp_path: Path) -> None:

@@ -37,6 +37,7 @@ from aid.protocol import (
     AidError,
     AnswerDirectory,
     AnswerPermission,
+    AppendNote,
     CallPlugin,
     CallResult,
     Cancel,
@@ -596,6 +597,10 @@ class Session:
     async def set_tags(self, tags: Mapping[str, str | None]) -> None:
         """Set each tag to its value, or remove it when the value is None (`SetTags`); others stay."""
         await self._client.call(SetTags(session=self.name, tags=dict(tags)))
+
+    async def note(self, text: str) -> None:
+        """Write a `Note` into the history (`AppendNote`): no turn, no model. Plugins with `manage`, the operator."""
+        await self._client.call(AppendNote(session=self.name, text=text))
 
     async def change_directory(self, cwd: str) -> str:
         """Move the session to `cwd` (`ChangeDirectory`), relative to its current one; returns the absolute path."""

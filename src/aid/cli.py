@@ -31,6 +31,7 @@ from aid.protocol import (
     Lifecycle,
     ListModelSlots,
     MessageEntry,
+    Note,
     Output,
     PermissionDecider,
     PermissionDecision,
@@ -688,6 +689,8 @@ def _history_line(entry: HistoryEntry, titles: dict[str, str]) -> str:
             body = _permission_line(item)
         case Lifecycle():
             body = " ".join(p for p in (f"[{item.event}]", item.detail) if p)
+        case Note():
+            body = f"[note {item.by or 'operator'}] {item.text}"
         case RemoteControl():
             body = f"[remote] {item.session_url}"
     return f"{entry.seq:>6}  {body}"

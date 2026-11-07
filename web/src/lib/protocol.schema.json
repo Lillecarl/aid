@@ -1266,6 +1266,7 @@
           "error": "#/$defs/TurnError",
           "lifecycle": "#/$defs/Lifecycle",
           "message": "#/$defs/MessageEntry",
+          "note": "#/$defs/Note",
           "output": "#/$defs/Output",
           "permission_decision": "#/$defs/PermissionDecision",
           "permission_request": "#/$defs/PermissionRequest",
@@ -1291,6 +1292,9 @@
         },
         {
           "$ref": "#/$defs/Lifecycle"
+        },
+        {
+          "$ref": "#/$defs/Note"
         },
         {
           "$ref": "#/$defs/TextDelta"
@@ -2148,6 +2152,38 @@
         "kind"
       ],
       "title": "NativeSpec",
+      "type": "object"
+    },
+    "Note": {
+      "additionalProperties": false,
+      "description": "A line a plugin or the operator wrote into the session's history, outside any turn: what a driver did for\nthe session (a review run's progress). The agent never sees it; no model runs for it.",
+      "properties": {
+        "by": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "text": {
+          "type": "string"
+        },
+        "type": {
+          "const": "note",
+          "default": "note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "text",
+        "by"
+      ],
+      "title": "Note",
       "type": "object"
     },
     "Output": {

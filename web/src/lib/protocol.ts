@@ -87,6 +87,7 @@ export type HistoryItem =
   | MessageEntry
   | Started
   | Lifecycle
+  | Note
   | TextDelta
   | ThoughtDelta
   | ToolCall
@@ -877,6 +878,18 @@ export interface Lifecycle {
   event: "compacted" | "cleared" | "ended" | "moved" | "sandboxed" | "supervised";
   summary: string | null;
   type: "lifecycle";
+}
+/**
+ * A line a plugin or the operator wrote into the session's history, outside any turn: what a driver did for
+ * the session (a review run's progress). The agent never sees it; no model runs for it.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "Note".
+ */
+export interface Note {
+  by: string | null;
+  text: string;
+  type: "note";
 }
 /**
  * A prompt that ended in a Failure rather than an Output.

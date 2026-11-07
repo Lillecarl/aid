@@ -36,6 +36,7 @@ from aid.protocol import (
     AidError,
     AnswerDirectory,
     AnswerPermission,
+    AppendNote,
     CallPlugin,
     CallResult,
     Cancel,
@@ -67,6 +68,7 @@ from aid.protocol import (
     LiveChunk,
     MessageEntry,
     MessageHook,
+    Note,
     Notify,
     Observed,
     PermissionDecision,
@@ -906,6 +908,10 @@ class Daemon:
                 return Done(id=request.id)
             case SetTags():
                 await self._set_tags(self._session(request.session), request.tags)
+                return Done(id=request.id)
+            case AppendNote():
+                session = self._session(request.session)
+                await session.history.append(Note(text=request.text, by=client.plugin), uuid.uuid4().hex)
                 return Done(id=request.id)
             case RequestDirectory():
                 session = self._session(request.session)

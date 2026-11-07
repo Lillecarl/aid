@@ -95,6 +95,7 @@ NEEDS: Final[dict[str, Grant]] = {
     "sandbox": Grant.MANAGE,
     "supervisor": Grant.MANAGE,
     "tags": Grant.MANAGE,
+    "note": Grant.MANAGE,
     "create": Grant.MANAGE,
     "start": Grant.MANAGE,
     "stop": Grant.MANAGE,
