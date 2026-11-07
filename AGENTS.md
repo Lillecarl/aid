@@ -222,7 +222,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `<run>.<number>.<angle|judge|duplicates>`, parent the PR's holder `<run>.<number>` (`holder_spec`), whose parent
   is root `<run>` (both instructions, `tools=[]`, never prompted, stopped once made; the root keeps chat plugins
   off). Notes (#57, `AppendNote`, failures logged only): the holder gets start, builds, the review, the end; the root
-  one line per PR's end. A PR's end hides its holder (#59), reason `PR <state>: why`; a failed one stays. `fresh_turns`, `instruction_providers=["skills"]` with `AID_SKILLS_ONLY` = `review-skills/` (not
+  one line per PR's end. A PR's end hides its holder (#59), reason `PR <state>: why`; a failed one stays. Work turns (#61): the root
+  per search + review, each step as live text; the holder per PR, with `git fetch --progress` and `nix build
+  --print-build-logs` streamed (`commands.streamed`, `SAY_EVERY`). `fresh_turns`, `instruction_providers=["skills"]` with `AID_SKILLS_ONLY` = `review-skills/` (not
   `skills/`: the skills plugin lists that to every session), `review.skill_hints` names a diff's guides in the
   prompt, ceiling `READ_TOOLS` (+ `skill`), the judge's plus `submit_review`
   (`@aid.mcptool`, so offered everywhere past a ceiling: the plugin takes it only from the judge of the PR under
@@ -341,6 +343,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   word also matches part of a name, any case; while set it searches the left-out sessions too, #58).
 - Notes: `AppendNote` (op `note`; control, plugin `manage`; never agents) appends `Note(text, by)` to a history: no
   turn, no worker; `by` = the plugin's name, stamped. For drivers to show progress on sessions they never prompt.
+- Work turns (#61): `OpenWork(session, title)` → a daemon turn id (`session.turn`, `work_until`); the session lists
+  working, `WorkOutput(turn, text)` renews and streams as live output (`_live`, never recorded), prompts get busy,
+  `CloseWork` ends it through `_end_turn`; `_expire_work` ends one unrenewed for `WORK_TTL`. Plugin `manage`; not
+  page, not agents. Client `Session.work(title)`: renews every `WORK_TTL/4` (never raises), closes bounded.
 - Web list (`links.ts`): left out are supervisors, their helpers, and a child with no children (a tab of its
   parent); a child with children of its own is listed, never a tab of its parent.
 - Hiding and finding (#59, `session_query.py`, pure): `SessionInfo.hidden` = why lists leave it out: its own reason

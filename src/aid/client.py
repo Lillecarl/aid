@@ -7,6 +7,7 @@ async with aid.connect() as client:
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 from contextlib import asynccontextmanager
@@ -32,6 +33,8 @@ from aid.plugins import (
     PluginSpec,
 )
 from aid.protocol import (
+    WORK_OUTPUT_LIMIT,
+    WORK_TTL,
     AddPlugin,
     AgentCatalog,
     AidError,
@@ -42,6 +45,7 @@ from aid.protocol import (
     CallResult,
     Cancel,
     ChangeDirectory,
+    CloseWork,
     CompactSession,
     CreateSession,
     DeleteSession,
@@ -64,6 +68,7 @@ from aid.protocol import (
     ListSessions,
     MessageEntry,
     ModelListing,
+    OpenWork,
     Output,
     PaneAddress,
     PaneView,
@@ -86,6 +91,7 @@ from aid.protocol import (
     StartSession,
     StopSession,
     TextDelta,
+    WorkOutput,
     decode_reply,
     encode,
 )
@@ -452,6 +458,26 @@ class Client:
         return _MESSAGES.validate_python(await self.call(ReceiveMessages(session=session, wait=wait)))
 
 
+@dataclass
+class Work:
+    """An open work turn (`Session.work`)."""
+
+    _client: Client
+    session: str
+    turn: str
+
+    async def say(self, text: str) -> None:
+        """Live output for the session, never recorded; long text goes as its newest part."""
+        await self._client.call(WorkOutput(session=self.session, turn=self.turn, text=text[-WORK_OUTPUT_LIMIT:]))
+
+    async def renew(self) -> None:
+        """Never raises: a failed renewal must not cancel the driver's block; the turn then expires."""
+        while True:
+            await anyio.sleep(WORK_TTL / 4)
+            with contextlib.suppress(AidError):
+                await self.say("")
+
+
 class Session:
     def __init__(self, client: Client, name: str) -> None:
         self._client = client
@@ -604,6 +630,26 @@ class Session:
     async def set_tags(self, tags: Mapping[str, str | None]) -> None:
         """Set each tag to its value, or remove it when the value is None (`SetTags`); others stay."""
         await self._client.call(SetTags(session=self.name, tags=dict(tags)))
+
+    @asynccontextmanager
+    async def work(self, title: str) -> AsyncGenerator[Work]:
+        """Hold the session as working while the block runs (`OpenWork`), renewed on a timer, closed on leaving.
+        What the block passes to `Work.say` streams as the session's live output."""
+        opened = await self._client.call(OpenWork(session=self.name, title=title))
+        turn = str(opened["turn"]) if isinstance(opened, dict) else ""
+        work = Work(self._client, self.name, turn)
+        try:
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(work.renew)
+                try:
+                    yield work
+                finally:
+                    tg.cancel_scope.cancel()
+        finally:
+            # Bounded: a daemon gone during shutdown never answers, and the turn expires there anyway.
+            with anyio.CancelScope(shield=True) as close, contextlib.suppress(AidError):
+                close.deadline = anyio.current_time() + DAEMON_CALL_TIMEOUT
+                await self._client.call(CloseWork(session=self.name, turn=turn))
 
     async def hide(self, reason: str | None) -> None:
         """Hide the session from lists, saying why, or show it again with None (`SetHidden`)."""

@@ -31,6 +31,7 @@ from aid.messaging import AID_SENDER, BACKGROUND_SENDER, wake_prompt
 from aid.paths import hook_socket
 from aid.plugins import PLUGIN_FILE, Grant, PluginSpec
 from aid.protocol import (
+    WORK_TTL,
     AcquireModelSlot,
     Activity,
     AddPlugin,
@@ -42,6 +43,7 @@ from aid.protocol import (
     CallResult,
     Cancel,
     ChangeDirectory,
+    CloseWork,
     CompactSession,
     CreateSession,
     DeleteSession,
@@ -73,6 +75,7 @@ from aid.protocol import (
     Note,
     Notify,
     Observed,
+    OpenWork,
     PermissionDecision,
     PermissionEvent,
     PermissionRequest,
@@ -107,6 +110,7 @@ from aid.protocol import (
     ToolsReported,
     TurnEvent,
     Usage,
+    WorkOutput,
     decode_reply,
     decode_request,
     encode,
@@ -157,6 +161,8 @@ OPEN_SESSIONS: Final = b"\0open " + events.SESSIONS
 SPEC_FILE: Final = "spec.json"
 TOOLS_FILE: Final = "tools.json"
 """The tools the last worker reported, so a stopped session still lists them."""
+WORK_CHECK: Final = 5.0
+"""Seconds between looks for expired work turns."""
 HIDDEN_FILE: Final = "hidden.txt"
 """The reason a session was hidden with (`SetHidden`); absent while it is shown."""
 SessionToolsAdapter: Final = TypeAdapter(list[SessionTool])
@@ -213,6 +219,8 @@ class _Session:
     """Why it was hidden (`SetHidden`), as `HIDDEN_FILE` holds it."""
     active_at: float = 0.0
     """When its history last grew."""
+    work_until: float | None = None
+    """While `turn` is a driver's work turn (`OpenWork`): when it expires unless renewed."""
 
     @property
     def running(self) -> bool:
@@ -496,6 +504,7 @@ class Daemon:
                 tg.start_soon(self._worker_loop)
                 tg.start_soon(self._plugin_loop)
                 tg.start_soon(self._plugin_loop, self._local_plugins, True)
+                tg.start_soon(self._expire_work)
                 task_status.started()
                 self._serving = True
                 for session in self._sessions.values():
@@ -808,6 +817,26 @@ class Daemon:
                 return Done(id=request.id, data=page.model_dump(mode="json"))
             case SetHidden():
                 await self._set_hidden(self._session(request.session), request.reason)
+                return Done(id=request.id)
+            case OpenWork():
+                session = self._session(request.session)
+                if session.turn is not None:
+                    raise AidError("busy", f"{session.name!r} is in a turn")
+                turn = uuid.uuid4().hex
+                session.turn, session.work_until = turn, time.monotonic() + WORK_TTL
+                await self._live(session, f"{request.title}\n")
+                await self._publish_turn(session.name, turn, "started", "work")
+                return Done(id=request.id, data={"turn": turn})
+            case WorkOutput():
+                session = self._work(request.session, request.turn)
+                session.work_until = time.monotonic() + WORK_TTL
+                if request.text:
+                    await self._live(session, request.text)
+                return Done(id=request.id)
+            case CloseWork():
+                session = self._work(request.session, request.turn)
+                session.work_until = None
+                await self._end_turn(session.name, request.turn, "done")
                 return Done(id=request.id)
             case ListAgents():
                 return Done(id=request.id, data=(await listing()).model_dump(mode="json"))
@@ -1443,6 +1472,26 @@ class Daemon:
             session.spec = spec
         await session.history.append(Lifecycle(event="supervised", detail=supervisor or "off"), uuid.uuid4().hex)
 
+    def _work(self, name: str, turn: str) -> _Session:
+        session = self._session(name)
+        if session.turn != turn or session.work_until is None:
+            raise AidError("no_work", f"{name!r} has no open work turn {turn!r}")
+        return session
+
+    async def _expire_work(self) -> None:
+        """Close work turns whose driver stopped renewing them: a session must not show working forever."""
+        while True:
+            await anyio.sleep(WORK_CHECK)
+            now = time.monotonic()
+            expired = [s for s in self._sessions.values() if s.work_until is not None and s.work_until < now]
+            for session in expired:
+                if (turn := session.turn) is not None:
+                    log.warning("work_expired", session=session.name)
+                    session.work_until = None
+                    await self._end_turn(session.name, turn, "expired")
+            if expired:
+                await self._publish_changes()
+
     async def _set_hidden(self, session: _Session, reason: str | None) -> None:
         if reason == session.hidden:
             return
@@ -1619,7 +1668,7 @@ class Daemon:
             if session.turn is not None:
                 with contextlib.suppress(zmq.ZMQError):
                     await self._publish_turn(session.name, session.turn, "ended", "worker_exited")
-                session.turn = None
+                session.turn, session.work_until = None, None
             session.permissions.clear()
             session.working, session.attention = False, None
             with contextlib.suppress(zmq.ZMQError):  # Shutting down: nobody is subscribed any more.

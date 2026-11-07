@@ -17,9 +17,11 @@ from aid.protocol import (
     Cost,
     Failure,
     GetHistory,
+    GetLive,
     GetSpec,
     GetStatus,
     Lifecycle,
+    OpenWork,
     Output,
     PermissionDecider,
     PermissionDecision,
@@ -29,6 +31,7 @@ from aid.protocol import (
     ToolMode,
     TurnError,
     Usage,
+    WorkOutput,
     decode_reply,
     encode,
 )
@@ -507,6 +510,39 @@ async def test_a_hidden_session_keeps_its_reason_until_it_is_used(
                 assert ([info.name for info in page.sessions], page.hidden) == (["done", "other"], 0)
             tg.cancel_scope.cancel()
     assert not (paths.session_dir("done") / "hidden.txt").exists()
+
+
+async def test_a_work_turn_shows_a_driver_working_until_it_closes_or_expires(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("aid.daemon.WORK_TTL", 0.5)
+    monkeypatch.setattr("aid.daemon.WORK_CHECK", 0.1)
+    working, live = False, None
+    with anyio.fail_after(TIMEOUT):
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
+            async with aid.connect(paths) as client:
+                session = await client.create("held", py_spec(tmp_path, "agents:echo"))
+                await session.stop()
+                async with session.work("Building hello") as work:
+                    await work.say("building '/nix/store/x-hello.drv'...\n")
+                    working = {i.name: i.working for i in await client.sessions()}["held"]
+                    live = await client.call(GetLive(session="held"))
+                    with pytest.raises(AidError, match="busy"):
+                        await session.run("not now")
+                assert not {i.name: i.working for i in await client.sessions()}["held"]
+                await session.stop()
+                # A driver that stops renewing: the turn expires instead of showing working forever.
+                opened = await client.call(OpenWork(session="held", title="Gone quiet"))
+                assert {i.name: i.working for i in await client.sessions()}["held"]
+                await anyio.sleep(1.5)
+                assert not {i.name: i.working for i in await client.sessions()}["held"]
+                assert isinstance(opened, dict)
+                with pytest.raises(AidError, match="no_work"):
+                    await client.call(WorkOutput(session="held", turn=str(opened["turn"]), text="late"))
+            tg.cancel_scope.cancel()
+    assert working
+    assert isinstance(live, dict) and live["text"] == "Building hello\nbuilding '/nix/store/x-hello.drv'...\n"
 
 
 async def test_delete_removes_state(daemon: Paths, tmp_path: Path) -> None:

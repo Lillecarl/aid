@@ -24,6 +24,9 @@ NOTE_LIMIT: Final = 20_000
 """Characters in one `Note`: a progress line, not a transcript."""
 HIDE_REASON_LIMIT: Final = 200
 FIND_LIMIT: Final = 1000
+WORK_TTL: Final = 120.0
+"""Seconds an open work turn lasts without a `WorkOutput` for it."""
+WORK_OUTPUT_LIMIT: Final = 65536
 
 
 class AidError(Exception):
@@ -142,6 +145,32 @@ class AppendNote(_Request):
     op: Literal["note"] = "note"
     session: str
     text: str = Field(min_length=1, max_length=NOTE_LIMIT)
+
+
+class OpenWork(_Request):
+    """Hold a session as working while a driver works for it outside any model turn (a plugin cloning, building):
+    a turn of the daemon's, answered with its id. Lists show the session working, its live output streams what
+    `WorkOutput` sends, and prompts are refused as busy until `CloseWork`, or until `WORK_TTL` passes without a
+    call for it (a driver that died)."""
+
+    op: Literal["work_open"] = "work_open"
+    session: str
+    title: str = Field(min_length=1, max_length=HIDE_REASON_LIMIT)
+
+
+class WorkOutput(_Request):
+    """Text for an open work turn's live output (never recorded), and a renewal of its `WORK_TTL`."""
+
+    op: Literal["work_output"] = "work_output"
+    session: str
+    turn: str
+    text: str = Field(default="", max_length=WORK_OUTPUT_LIMIT)
+
+
+class CloseWork(_Request):
+    op: Literal["work_close"] = "work_close"
+    session: str
+    turn: str
 
 
 class SetHidden(_Request):
@@ -531,6 +560,9 @@ type Request = Annotated[
     | SetTags
     | SetHidden
     | FindSessions
+    | OpenWork
+    | WorkOutput
+    | CloseWork
     | AppendNote
     | RequestDirectory
     | AnswerDirectory
