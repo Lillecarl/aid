@@ -47,7 +47,15 @@ IDLE = {
     "supervisor": None,
     "private": False,
     "tags": dict[str, str](),
+    "hidden": None,
 }
+
+
+def timeless(infos: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Session infos without `active_at`, which is the clock's."""
+    return [{k: v for k, v in i.items() if k != "active_at"} for i in infos]
+
+
 REFUSED = "other@example.com"
 # bcrypt of "password", from dex's example configuration.
 PASSWORD_HASH = "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W"

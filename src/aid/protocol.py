@@ -22,6 +22,8 @@ from aid.spec import AgentKind, AgentSpec, PermissionMode, Sandbox, TagKey, TagV
 PROTOCOL_VERSION = 1
 NOTE_LIMIT: Final = 20_000
 """Characters in one `Note`: a progress line, not a transcript."""
+HIDE_REASON_LIMIT: Final = 200
+FIND_LIMIT: Final = 1000
 
 
 class AidError(Exception):
@@ -51,7 +53,21 @@ class CreateSession(_Request):
 
 
 class ListSessions(_Request):
+    """Every session the caller may see, the most recently active first, hidden ones too (`SessionInfo.hidden`)."""
+
     op: Literal["list"] = "list"
+
+
+class FindSessions(_Request):
+    """The sessions `query` matches, without hidden ones, a page at a time (`aid.session_query.find`). Terms:
+    a word (a tag key or a part of the name), `key=value`, `is:hidden|running|working|stopped`. A working session is
+    on every first page."""
+
+    op: Literal["find_sessions"] = "find_sessions"
+    query: str = ""
+    limit: int = Field(default=100, ge=1, le=FIND_LIMIT)
+    after: str | None = None
+    """The `next` of the page before."""
 
 
 class Prompt(_Request):
@@ -126,6 +142,15 @@ class AppendNote(_Request):
     op: Literal["note"] = "note"
     session: str
     text: str = Field(min_length=1, max_length=NOTE_LIMIT)
+
+
+class SetHidden(_Request):
+    """Hide a session from lists, saying why, or show it again (None). A prompt, a message or a start shows it
+    again by itself."""
+
+    op: Literal["hide"] = "hide"
+    session: str
+    reason: str | None = Field(default=None, min_length=1, max_length=HIDE_REASON_LIMIT)
 
 
 class SetTags(_Request):
@@ -504,6 +529,8 @@ type Request = Annotated[
     | SetSandbox
     | SetSupervisor
     | SetTags
+    | SetHidden
+    | FindSessions
     | AppendNote
     | RequestDirectory
     | AnswerDirectory
@@ -1045,6 +1072,18 @@ class SessionInfo(_Message):
     """The spec sets `private`: only the operator, `private` plugins and private sessions see this one."""
     tags: dict[str, str] = Field(default_factory=dict[str, str])
     """The spec's `tags`."""
+    hidden: str | None = None
+    """Why lists leave it out: its own reason (`SetHidden`), else `linked`, `tab of <parent>` or `stale: …`."""
+    active_at: float = 0.0
+    """The newest history entry's time, notes included, to the minute; at a daemon start the history file's."""
+
+
+class SessionPage(_Message):
+    sessions: list[SessionInfo]
+    hidden: int
+    """Hidden sessions the query matched and left out."""
+    next: str | None = None
+    """The cursor of the next page, if there is one."""
 
 
 class SessionTool(_Message):

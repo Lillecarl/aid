@@ -112,6 +112,7 @@ export type PageReply = Event | Done | Failure;
  */
 export type PageRequest =
   | ListSessions
+  | FindSessions
   | ListAgents
   | ListModels
   | CreateSession
@@ -127,6 +128,7 @@ export type PageRequest =
   | SetSandbox
   | SetSupervisor
   | SetTags
+  | SetHidden
   | StartSession
   | StopSession
   | DeleteSession
@@ -776,6 +778,21 @@ export interface FileView {
   truncated: boolean;
 }
 /**
+ * The sessions `query` matches, without hidden ones, a page at a time (`aid.session_query.find`). Terms:
+ * a word (a tag key or a part of the name), `key=value`, `is:hidden|running|working|stopped`. A working session is
+ * on every first page.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "FindSessions".
+ */
+export interface FindSessions {
+  after?: string | null;
+  id?: string;
+  limit?: number;
+  op: "find_sessions";
+  query?: string;
+}
+/**
  * A page of a session's history: the newest entries before `before`, the oldest after `after`, or the
  * newest of all when neither is given.
  *
@@ -935,6 +952,8 @@ export interface ListModels {
   provider?: string | null;
 }
 /**
+ * Every session the caller may see, the most recently active first, hidden ones too (`SessionInfo.hidden`).
+ *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "ListSessions".
  */
@@ -1078,6 +1097,19 @@ export interface SetTags {
   };
 }
 /**
+ * Hide a session from lists, saying why, or show it again (None). A prompt, a message or a start shows it
+ * again by itself.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "SetHidden".
+ */
+export interface SetHidden {
+  id?: string;
+  op: "hide";
+  reason?: string | null;
+  session: string;
+}
+/**
  * Start a stopped session's worker without a turn; for interactive Claude, its pane. A running one is left be.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
@@ -1127,7 +1159,9 @@ export interface Received {
  * via the `definition` "SessionInfo".
  */
 export interface SessionInfo {
+  active_at: number;
   attention: string | null;
+  hidden: string | null;
   kind: AgentKind;
   name: string;
   parent: string | null;

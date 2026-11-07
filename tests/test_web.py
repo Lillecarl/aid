@@ -33,6 +33,7 @@ from tests.web_harness import (
     login,
     needs_dex,
     running_dex,
+    timeless,
     wait_for,
 )
 
@@ -292,7 +293,7 @@ async def test_zws_control_relays_what_the_page_may_ask(web: Web, tmp_path: Path
     # The daemon names a turn by its request id: the relay's, never one the page chose.
     assert {e["turn"] for e in page["data"]["entries"] if e["item"]["type"] == "output"} - {"p"}
     assert ponged == b"\x02\x04PONGhello"
-    assert listed[0]["data"] == [{"name": "echo", "kind": "native", "running": True, **IDLE}]
+    assert timeless(listed[0]["data"]) == [{"name": "echo", "kind": "native", "running": True, **IDLE}]
     assert [e["item"]["type"] for e in page["data"]["entries"]][-3:] == ["text", "usage", "output"]
     assert (totals["data"]["turns"], totals["data"]["starts"]) == (1, 1)
     assert (unasked["reply"], unasked["code"]) == ("failure", "no_pending")

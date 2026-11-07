@@ -7,6 +7,7 @@ import json
 import os
 import shlex
 import shutil
+import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -19,7 +20,7 @@ import zmq
 import zmq.asyncio
 from pydantic import TypeAdapter, ValidationError
 
-from aid import events, model_lists, plugin_host, plugins, sandbox, zap
+from aid import events, model_lists, plugin_host, plugins, sandbox, session_query, zap
 from aid.catalog import listing
 from aid.client import spawn_plugin_client
 from aid.control import AGENT_ID_PREFIX, authorize
@@ -48,6 +49,7 @@ from aid.protocol import (
     Done,
     Event,
     Failure,
+    FindSessions,
     GetHistory,
     GetLive,
     GetPane,
@@ -87,6 +89,7 @@ from aid.protocol import (
     SessionStatus,
     SessionTool,
     SetAttention,
+    SetHidden,
     SetPermissions,
     SetSandbox,
     SetSupervisor,
@@ -154,6 +157,8 @@ OPEN_SESSIONS: Final = b"\0open " + events.SESSIONS
 SPEC_FILE: Final = "spec.json"
 TOOLS_FILE: Final = "tools.json"
 """The tools the last worker reported, so a stopped session still lists them."""
+HIDDEN_FILE: Final = "hidden.txt"
+"""The reason a session was hidden with (`SetHidden`); absent while it is shown."""
 SessionToolsAdapter: Final = TypeAdapter(list[SessionTool])
 # A spec holds env values and MCP headers, which are often credentials.
 SESSION_DIR_MODE: Final = 0o700
@@ -204,6 +209,10 @@ class _Session:
     restarts under them."""
     spec_lock: anyio.Lock = field(default_factory=anyio.Lock)
     """Held from reading the spec to writing its change, so two changes never write over each other."""
+    hidden: str | None = None
+    """Why it was hidden (`SetHidden`), as `HIDDEN_FILE` holds it."""
+    active_at: float = 0.0
+    """When its history last grew."""
 
     @property
     def running(self) -> bool:
@@ -246,6 +255,9 @@ class _Session:
             supervisor=self.spec.supervisor,
             private=is_private(self.spec),
             tags=self.spec.tags,
+            hidden=self.hidden,
+            # To the minute: the list republishes on each change, and history grows by the second.
+            active_at=self.active_at // 60 * 60,
         )
 
     @property
@@ -392,14 +404,17 @@ class Daemon:
         allow_worker_command: bool = False,
         plugin_dirs: Sequence[Path] | None = None,
         model_slots: Mapping[str, int] | None = None,
+        stale_after: float = session_query.STALE_AFTER,
     ) -> None:
         """`workers_listen`: endpoints for workers besides `paths.workers`, such as `ws://` for remote ones.
         `allow_worker_command`: let sessions name their own worker command. It runs as the daemon with the
         session's worker credentials, so only allow it where session creators are trusted.
         `plugin_dirs`: where in-process plugins load from; None means the standard tiers
         (`aid.plugins.plugins_path`). Tests pass `[]` for no hosted plugins.
-        `model_slots`: model hosts and how many requests each takes at once, across all sessions (`aid.slots`)."""
+        `model_slots`: model hosts and how many requests each takes at once, across all sessions (`aid.slots`).
+        `stale_after`: seconds a stopped session goes unused before lists hide it as stale."""
         self._paths = paths
+        self._stale_after = stale_after
         self._launcher = launcher
         self._workers_listen = list(workers_listen)
         self._allow_worker_command = allow_worker_command
@@ -534,6 +549,10 @@ class Daemon:
                     session.tools = SessionToolsAdapter.validate_json(await tools_file.read_bytes())
                 except ValidationError:
                     log.warning("invalid_session_tools", session=session_dir.name)
+            if await (hidden_file := session_dir / HIDDEN_FILE).exists():
+                session.hidden = (await hidden_file.read_text()).strip() or None
+            history_file = session_dir / HISTORY_FILE
+            session.active_at = (await (history_file if await history_file.exists() else spec_file).stat()).st_mtime
             session.attention = await session.inbox.restore()
             if session.inbox:
                 session.mail.set()
@@ -596,11 +615,16 @@ class Daemon:
     def _state(self) -> dict[bytes, bytes]:
         """Each status by its topic, the list, and under `OPEN_SESSIONS` the list without private sessions."""
         current = {events.status_topic(s.name): s.status().model_dump_json().encode() for s in self._sessions.values()}
-        current[events.SESSIONS] = SessionInfosAdapter.dump_json([s.info() for s in self._sessions.values()])
-        current[OPEN_SESSIONS] = SessionInfosAdapter.dump_json(
-            [s.info() for s in self._sessions.values() if not is_private(s.spec)]
-        )
+        current[events.SESSIONS] = SessionInfosAdapter.dump_json(self._infos(cleared=True))
+        current[OPEN_SESSIONS] = SessionInfosAdapter.dump_json(self._infos(cleared=False))
         return current
+
+    def _infos(self, *, cleared: bool) -> list[SessionInfo]:
+        """The sessions a viewer sees, most recently active first, each with why lists hide it. Derived over the
+        viewer's own set: a count of hidden ones must not leak the private ones."""
+        infos = [s.info() for s in self._sessions.values() if cleared or not is_private(s.spec)]
+        annotated = session_query.annotate(infos, now=time.time(), stale_after=self._stale_after)
+        return session_query.ordered(annotated)
 
     async def _publish_changes(self) -> None:
         """Publish each status and the list if it differs from what was published last."""
@@ -773,8 +797,18 @@ class Daemon:
                 await self._create(request)
                 return Done(id=request.id, data={"name": request.name})
             case ListSessions():
-                infos = [s.info() for s in self._sessions.values() if cleared or not is_private(s.spec)]
-                return Done(id=request.id, data=[info.model_dump(mode="json") for info in infos])
+                return Done(id=request.id, data=[info.model_dump(mode="json") for info in self._infos(cleared=cleared)])
+            case FindSessions():
+                try:
+                    page = session_query.find(
+                        self._infos(cleared=cleared), request.query, limit=request.limit, after=request.after
+                    )
+                except ValueError as error:
+                    raise AidError("bad_query", str(error)) from None
+                return Done(id=request.id, data=page.model_dump(mode="json"))
+            case SetHidden():
+                await self._set_hidden(self._session(request.session), request.reason)
+                return Done(id=request.id)
             case ListAgents():
                 return Done(id=request.id, data=(await listing()).model_dump(mode="json"))
             case ListModels():
@@ -786,6 +820,7 @@ class Daemon:
                     raise AidError("busy", f"{session.name!r} is in a turn")
                 session.turn = request.id
                 try:
+                    await self._set_hidden(session, None)
                     await self._ensure_running(session)
                     recorder = Recorder(session.history, request.id)
                     await recorder.prompt(request.text)
@@ -841,6 +876,7 @@ class Daemon:
                 session = self._session(request.session)
                 if session.turn is not None:
                     raise AidError("busy", f"{session.name!r} is in a turn")
+                await self._set_hidden(session, None)
                 await self._ensure_running(session)
                 # The compaction holds the session as a turn does: a message arriving meanwhile waits for its
                 # end, where the worker would refuse a wake turn as busy and the message would be lost.
@@ -887,6 +923,7 @@ class Daemon:
                 return None
             case StartSession():
                 session = self._session(request.session)
+                await self._set_hidden(session, None)
                 await self._ensure_running(session)
                 if session.inbox and not session.uses_channel and self._tg is not None:
                     self._tg.start_soon(self._deliver, session)
@@ -1096,11 +1133,14 @@ class Daemon:
         return result.data
 
     def _new_session(self, name: str, spec: AgentSpec) -> _Session:
-        history = HistoryLog(
-            anyio.Path(self._paths.session_dir(name)) / HISTORY_FILE,
-            on_append=lambda entry: self._publish_entry(name, entry),
-        )
-        return _Session(name, spec, history, Inbox(anyio.Path(self._paths.session_dir(name)) / INBOX_FILE, history))
+        async def appended(entry: HistoryEntry) -> None:
+            session.active_at = entry.at
+            await self._publish_entry(name, entry)
+
+        history = HistoryLog(anyio.Path(self._paths.session_dir(name)) / HISTORY_FILE, on_append=appended)
+        inbox = Inbox(anyio.Path(self._paths.session_dir(name)) / INBOX_FILE, history)
+        session = _Session(name, spec, history, inbox, active_at=time.time())
+        return session
 
     def _forget(self, session: _Session) -> bool:
         """Drop `session` from the table if it is still the one there. A delete and a failed first start can both
@@ -1185,6 +1225,7 @@ class Daemon:
         if session.uses_channel and not session.spec.aid_tools:
             raise AidError("cannot_receive", f"{session.name!r} has aid_tools off, so nothing reads its messages")
         await self._gate_message(request)
+        await self._set_hidden(session, None)
         await self._accept_message(
             session,
             MessageEntry(sender=request.sender, text=request.text, delivery=request.delivery),
@@ -1401,6 +1442,16 @@ class Daemon:
             )
             session.spec = spec
         await session.history.append(Lifecycle(event="supervised", detail=supervisor or "off"), uuid.uuid4().hex)
+
+    async def _set_hidden(self, session: _Session, reason: str | None) -> None:
+        if reason == session.hidden:
+            return
+        hidden_file = anyio.Path(self._paths.session_dir(session.name)) / HIDDEN_FILE
+        if reason is None:
+            await hidden_file.unlink(missing_ok=True)
+        else:
+            await hidden_file.write_text(reason)
+        session.hidden = reason
 
     async def _set_tags(self, session: _Session, tags: Mapping[str, str | None]) -> None:
         async with session.spec_lock:

@@ -9,6 +9,7 @@ from aid.protocol import (
     AidError,
     CallPlugin,
     CompactSession,
+    FindSessions,
     GetHistory,
     GetPane,
     GetScreen,
@@ -22,6 +23,7 @@ from aid.protocol import (
     ReleaseModelSlot,
     RequestDirectory,
     SendMessage,
+    SetHidden,
 )
 
 if TYPE_CHECKING:
@@ -50,6 +52,7 @@ def authorize(request: Request, session: str) -> Request:
     match request:
         case (
             ListSessions()
+            | FindSessions()
             | ListAgents()
             | ListModels()
             | GetStatus()
@@ -67,7 +70,9 @@ def authorize(request: Request, session: str) -> Request:
             return request.model_copy(update={"session": session})
         case ReleaseModelSlot():
             return request
-        case CompactSession() | ReceiveMessages() | Hook() | RequestDirectory() if request.session == session:
+        case CompactSession() | ReceiveMessages() | Hook() | RequestDirectory() | SetHidden() if (
+            request.session == session
+        ):
             return request
         case _:
             raise AidError("forbidden", f"agent {session!r} may not send {request.op!r} with this authority")

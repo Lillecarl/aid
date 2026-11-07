@@ -134,6 +134,12 @@ async def test_a_plugin_without_the_grant_never_sees_a_private_session(
                     assert (hidden.value.code, hidden.value.message) == ("not_found", "no session named 'secret'")
                 with pytest.raises(AidError, match="forbidden"):
                     await chat.create("another", private_spec(tmp_path))
+                await control.session("secret").hide("done")
+                with pytest.raises(AidError, match="not_found"):
+                    await chat.session("secret").hide("seen")
+                found = await chat.find_sessions("is:hidden")
+                assert (found.sessions, found.hidden) == ([], 0)
+                assert (await chat.find_sessions("")).hidden == 0
                 assert sorted(info.name for info in await keeper.sessions()) == ["open", "secret"]
                 assert (await keeper.session("secret").status()).private
 

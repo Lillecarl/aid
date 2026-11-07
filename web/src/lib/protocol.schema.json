@@ -1096,6 +1096,46 @@
       "title": "FileView",
       "type": "object"
     },
+    "FindSessions": {
+      "additionalProperties": false,
+      "description": "The sessions `query` matches, without hidden ones, a page at a time (`aid.session_query.find`). Terms:\na word (a tag key or a part of the name), `key=value`, `is:hidden|running|working|stopped`. A working session is\non every first page.",
+      "properties": {
+        "after": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "id": {
+          "type": "string"
+        },
+        "limit": {
+          "default": 100,
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "op": {
+          "const": "find_sessions",
+          "default": "find_sessions",
+          "type": "string"
+        },
+        "query": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "title": "FindSessions",
+      "type": "object"
+    },
     "GetHistory": {
       "additionalProperties": false,
       "description": "A page of a session's history: the newest entries before `before`, the oldest after `after`, or the\nnewest of all when neither is given.",
@@ -1482,6 +1522,7 @@
     },
     "ListSessions": {
       "additionalProperties": false,
+      "description": "Every session the caller may see, the most recently active first, hidden ones too (`SessionInfo.hidden`).",
       "properties": {
         "id": {
           "type": "string"
@@ -2242,6 +2283,8 @@
           "compact": "#/$defs/CompactSession",
           "create": "#/$defs/CreateSession",
           "delete": "#/$defs/DeleteSession",
+          "find_sessions": "#/$defs/FindSessions",
+          "hide": "#/$defs/SetHidden",
           "history": "#/$defs/GetHistory",
           "list": "#/$defs/ListSessions",
           "live": "#/$defs/GetLive",
@@ -2261,6 +2304,9 @@
       "oneOf": [
         {
           "$ref": "#/$defs/ListSessions"
+        },
+        {
+          "$ref": "#/$defs/FindSessions"
         },
         {
           "$ref": "#/$defs/ListAgents"
@@ -2306,6 +2352,9 @@
         },
         {
           "$ref": "#/$defs/SetTags"
+        },
+        {
+          "$ref": "#/$defs/SetHidden"
         },
         {
           "$ref": "#/$defs/StartSession"
@@ -2919,7 +2968,22 @@
     "SessionInfo": {
       "additionalProperties": false,
       "properties": {
+        "active_at": {
+          "default": 0.0,
+          "type": "number"
+        },
         "attention": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "hidden": {
           "anyOf": [
             {
               "type": "string"
@@ -2990,7 +3054,9 @@
         "parent",
         "supervisor",
         "private",
-        "tags"
+        "tags",
+        "hidden",
+        "active_at"
       ],
       "title": "SessionInfo",
       "type": "object"
@@ -3294,6 +3360,42 @@
         "files"
       ],
       "title": "SessionSummary",
+      "type": "object"
+    },
+    "SetHidden": {
+      "additionalProperties": false,
+      "description": "Hide a session from lists, saying why, or show it again (None). A prompt, a message or a start shows it\nagain by itself.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "op": {
+          "const": "hide",
+          "default": "hide",
+          "type": "string"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "session"
+      ],
+      "title": "SetHidden",
       "type": "object"
     },
     "SetPermissions": {

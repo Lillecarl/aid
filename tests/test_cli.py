@@ -16,7 +16,6 @@ from aid.cli import (
     _shortlist_sql,  # pyright: ignore[reportPrivateUsage]
     _spec,  # pyright: ignore[reportPrivateUsage]
     _split_agent_command,  # pyright: ignore[reportPrivateUsage]
-    _tagged,  # pyright: ignore[reportPrivateUsage]
     _tags,  # pyright: ignore[reportPrivateUsage]
     _tool_line,  # pyright: ignore[reportPrivateUsage]
 )
@@ -154,14 +153,6 @@ def test_new_takes_tags() -> None:
     with pytest.raises(SystemExit):
         _tags(["novalue"])
     assert _tags(["gone="]) == {"gone": None}
-
-
-@pytest.mark.parametrize(
-    ("wanted", "shown"), [([], True), (["team"], True), (["team=web"], True), (["team=api"], False), (["x"], False)]
-)
-def test_list_filters_by_tag(wanted: list[str], shown: bool) -> None:
-    info = SessionInfo(name="a", kind=AgentKind.NATIVE, running=False, tags={"team": "web"})
-    assert _tagged(info, wanted) is shown
 
 
 def test_new_sdk_builds_spec() -> None:

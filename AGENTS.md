@@ -337,12 +337,21 @@ on reusable decisions and current boundaries; put long investigations and dated 
   in the new cwd and knows it moved; native history is aid's; native turns name `cwd` in metadata. opencode 1.19.4
   keeps the conversation but its tools stay in the session's first directory (unsupported; not worked around).
 - Tags: `spec.tags` (`TagKey`/`TagValue`), labels aid never acts on. `SetTags` (control, page, `aid tag`, plugin
-  `manage`; never agents) merges, None removes; `SessionInfo.tags`; `aid list --tag`, the page's list filter (a bare
+  `manage`; never agents) merges, None removes; `SessionInfo.tags`; `aid list` terms (`--tag` too), the page's list filter (a bare
   word also matches part of a name, any case; while set it searches the left-out sessions too, #58).
 - Notes: `AppendNote` (op `note`; control, plugin `manage`; never agents) appends `Note(text, by)` to a history: no
   turn, no worker; `by` = the plugin's name, stamped. For drivers to show progress on sessions they never prompt.
 - Web list (`links.ts`): left out are supervisors, their helpers, and a child with no children (a tab of its
-  parent); a child with children of its own is listed, never a tab of its parent. Hiding and paging: #59.
+  parent); a child with children of its own is listed, never a tab of its parent.
+- Hiding and finding (#59, `session_query.py`, pure): `SessionInfo.hidden` = why lists leave it out: its own reason
+  (`SetHidden`, op `hide`: control, page, `aid hide|unhide`, plugin `manage`, an agent its own session only; saved
+  as `hidden.txt` in the session dir; cleared by a prompt, compact, start or a message to it), else derived over the
+  viewer's set: `linked`, `tab of <parent>`, `stale: unused N days` (stopped, `active_at` older than the daemon's
+  `stale_after`, 7 days). `active_at` = newest history entry (notes too; file mtime at load), to the minute: the list
+  republishes on each change. `ListSessions` = all, newest activity first, hidden included. `FindSessions` (op
+  `find_sessions`; `aid list TERMS`): terms word / `key=value` / `is:hidden|running|working|stopped`; hidden left
+  out and counted (`SessionPage.hidden`), shown by `is:hidden` or a word naming one whole; working sessions on
+  every first page, matched or not; `limit` + cursor `next`. The page still reads `ListSessions` (next: #59).
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.
 - Recording: each turn ends with `Usage` (tokens, models, context, the agent's session cost) before `Output`; each
   worker start records `Started` (agent session id, agent, model) under a turn id of its own. What a turn's tokens

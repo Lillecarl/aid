@@ -49,6 +49,7 @@ from aid.protocol import (
     Done,
     Event,
     Failure,
+    FindSessions,
     GetHistory,
     GetPane,
     GetScreen,
@@ -74,8 +75,10 @@ from aid.protocol import (
     ServeCalls,
     SessionInfo,
     SessionInfosAdapter,
+    SessionPage,
     SessionStatus,
     SessionSummary,
+    SetHidden,
     SetPermissions,
     SetSandbox,
     SetSupervisor,
@@ -401,6 +404,10 @@ class Client:
     async def sessions(self) -> list[SessionInfo]:
         return SessionInfosAdapter.validate_python(await self.call(ListSessions()))
 
+    async def find_sessions(self, query: str = "", *, limit: int = 100, after: str | None = None) -> SessionPage:
+        """One page of the sessions `query` matches, without hidden ones (`FindSessions`)."""
+        return SessionPage.model_validate(await self.call(FindSessions(query=query, limit=limit, after=after)))
+
     async def agents(self) -> AgentCatalog:
         """The `aid.AgentDefinition`s on the daemon's plugins path, and what failed to load."""
         return AgentCatalog.model_validate(await self.call(ListAgents()))
@@ -597,6 +604,10 @@ class Session:
     async def set_tags(self, tags: Mapping[str, str | None]) -> None:
         """Set each tag to its value, or remove it when the value is None (`SetTags`); others stay."""
         await self._client.call(SetTags(session=self.name, tags=dict(tags)))
+
+    async def hide(self, reason: str | None) -> None:
+        """Hide the session from lists, saying why, or show it again with None (`SetHidden`)."""
+        await self._client.call(SetHidden(session=self.name, reason=reason))
 
     async def note(self, text: str) -> None:
         """Write a `Note` into the history (`AppendNote`): no turn, no model. Plugins with `manage`, the operator."""

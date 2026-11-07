@@ -18,6 +18,7 @@ from aid.protocol import HistoryEntry, StreamChunk
 from aid.spec import PermissionMode
 from tests.conftest import py_spec
 from tests.test_coding import plan
+from tests.web_harness import timeless
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
@@ -112,7 +113,7 @@ async def test_the_daemon_publishes_changes(daemon: Paths, tmp_path: Path) -> No
             nothing_new = await sub.quiet()
             await session.stop()
             stopped = await sub.until(events.SESSIONS, lambda infos: not infos[0]["running"])
-    assert listed == [
+    assert timeless(listed) == [
         {
             "name": "echo",
             "kind": "native",
@@ -124,6 +125,7 @@ async def test_the_daemon_publishes_changes(daemon: Paths, tmp_path: Path) -> No
             "supervisor": None,
             "private": False,
             "tags": {},
+            "hidden": None,
         }
     ]
     assert idle["name"] == "echo"

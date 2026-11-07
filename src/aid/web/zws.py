@@ -39,6 +39,7 @@ from aid.protocol import (
     Done,
     Event,
     Failure,
+    FindSessions,
     GetHistory,
     GetLive,
     GetStatus,
@@ -47,6 +48,7 @@ from aid.protocol import (
     ListModels,
     ListSessions,
     Prompt,
+    SetHidden,
     SetPermissions,
     SetSandbox,
     SetSupervisor,
@@ -81,6 +83,7 @@ WS_POLICY_VIOLATION: Final = 1008
 
 type PageRequest = Annotated[
     ListSessions
+    | FindSessions
     | ListAgents
     | ListModels
     | CreateSession
@@ -96,6 +99,7 @@ type PageRequest = Annotated[
     | SetSandbox
     | SetSupervisor
     | SetTags
+    | SetHidden
     | StartSession
     | StopSession
     | DeleteSession

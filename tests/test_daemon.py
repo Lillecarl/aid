@@ -482,6 +482,33 @@ async def test_a_stopped_session_lists_its_tools_after_a_daemon_restart(
             tg.cancel_scope.cancel()
 
 
+async def test_a_hidden_session_keeps_its_reason_until_it_is_used(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path
+) -> None:
+    with anyio.fail_after(TIMEOUT):
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
+            async with aid.connect(paths) as client:
+                done = await client.create("done", py_spec(tmp_path, "agents:echo"))
+                await client.create("other", py_spec(tmp_path, "agents:echo"))
+                await done.hide("PR reviewed: COMMENT")
+            tg.cancel_scope.cancel()
+
+        async with anyio.create_task_group() as tg:
+            await tg.start(Daemon(paths, launcher, plugin_dirs=[]).serve)
+            async with aid.connect(paths) as client:
+                listed = {info.name: info.hidden for info in await client.sessions()}
+                assert listed == {"done": "PR reviewed: COMMENT", "other": None}
+                page = await client.find_sessions()
+                assert ([info.name for info in page.sessions], page.hidden) == (["other"], 1)
+                assert [info.name for info in (await client.find_sessions("done")).sessions] == ["done"]
+                await client.session("done").run("back")
+                page = await client.find_sessions()
+                assert ([info.name for info in page.sessions], page.hidden) == (["done", "other"], 0)
+            tg.cancel_scope.cancel()
+    assert not (paths.session_dir("done") / "hidden.txt").exists()
+
+
 async def test_delete_removes_state(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:

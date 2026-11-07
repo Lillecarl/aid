@@ -28,6 +28,7 @@ from aid.protocol import (
     RequestAdapter,
     RequestDirectory,
     SendMessage,
+    SetHidden,
     Started,
     Usage,
     decode_reply,
@@ -236,6 +237,13 @@ def test_agent_requests_cannot_use_administrator_authority(op: str) -> None:
     request = RequestAdapter.validate_python({"op": op, **bodies[op]})
     with pytest.raises(AidError, match="forbidden"):
         authorize(request, "actor")
+
+
+def test_an_agent_hides_only_its_own_session() -> None:
+    own = SetHidden(session="actor", reason="done")
+    assert authorize(own, "actor") == own
+    with pytest.raises(AidError, match="forbidden"):
+        authorize(SetHidden(session="other", reason="done"), "actor")
 
 
 def test_an_agents_message_names_its_own_session_and_claims_no_usage() -> None:

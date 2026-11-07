@@ -25,6 +25,7 @@ from aid.mcp import from_claude_config
 from aid.paths import default_paths
 from aid.plugins import ENV_PLUGINS_PATH, Grant, plugins_path
 from aid.protocol import (
+    FIND_LIMIT,
     AidError,
     Delivery,
     JsonValue,
@@ -135,14 +136,20 @@ def _parser() -> argparse.ArgumentParser:
         help="at most N requests to model host HOST at once, across all sessions (a self-hosted server); repeatable",
     )
     sub.add_parser("worker", help="run one worker; `aid daemon --worker-command` starts it and sends its arguments")
-    sessions = sub.add_parser("list", help="list sessions")
+    sessions = sub.add_parser("list", help="list sessions, the most recently active first, without hidden ones")
+    sessions.add_argument(
+        "terms",
+        nargs="*",
+        metavar="TERM",
+        help="a part of the name or a tag key, KEY=VALUE, or is:hidden|running|working|stopped; all must hold",
+    )
     sessions.add_argument("--json", action="store_true", help="one session JSON object per line")
     sessions.add_argument(
         "--tag",
         action="append",
         default=[],
         metavar="KEY[=VALUE]",
-        help="only sessions with this tag, or with this key at all; repeat to need several",
+        help="a TERM: this tag, or this key (or part of a name); repeat to need several",
     )
 
     web = sub.add_parser(
@@ -372,6 +379,12 @@ def _parser() -> argparse.ArgumentParser:
     tag = sub.add_parser("tag", help="show a session's tags, or set and remove some")
     tag.add_argument("name")
     tag.add_argument("tags", nargs="*", metavar="KEY=VALUE", help="KEY= removes the tag; tags not named stay")
+
+    hide = sub.add_parser("hide", help="hide a session from lists, saying why; a prompt, message or start shows it")
+    hide.add_argument("name")
+    hide.add_argument("reason", nargs="?", default="hidden by the operator")
+    unhide = sub.add_parser("unhide", help="show a hidden session in lists again")
+    unhide.add_argument("name")
 
     supervise = sub.add_parser("supervise", help="set or end the session supervising another")
     supervise.add_argument("name")
@@ -703,6 +716,8 @@ def _session_line(info: SessionInfo) -> str:
         parts.append(f"{info.permissions} permission{'s' if info.permissions != 1 else ''}")
     if info.tags:
         parts.append(" ".join(f"{key}={value}" for key, value in sorted(info.tags.items())))
+    if info.hidden:
+        parts.append(f"hidden: {info.hidden}")
     if info.attention:
         parts.append(info.attention)
     return "\t".join(parts)
@@ -729,9 +744,16 @@ async def _client_command(args: argparse.Namespace) -> None:
                 await client.create(args.name, _spec(args))
                 print(args.name)
             case "list":
-                for info in await client.sessions():
-                    if _tagged(info, args.tag):
+                query = " ".join([*args.terms, *args.tag])
+                after: str | None = None
+                while True:
+                    page = await client.find_sessions(query, limit=FIND_LIMIT, after=after)
+                    for info in page.sessions:
                         print(info.model_dump_json() if args.json else _session_line(info))
+                    if (after := page.next) is None:
+                        break
+                if page.hidden:
+                    print(f"{page.hidden} hidden sessions match too: add is:hidden", file=sys.stderr)
             case "summary":
                 print((await client.session(args.name).summary()).model_dump_json(indent=2))
             case "history":
@@ -818,6 +840,10 @@ async def _client_command(args: argparse.Namespace) -> None:
                         raise SystemExit(f"aid tag: no session {args.name!r}")
                     for key, value in sorted(found.tags.items()):
                         print(f"{key}={value}")
+            case "hide":
+                await client.session(args.name).hide(args.reason)
+            case "unhide":
+                await client.session(args.name).hide(None)
             case "supervise":
                 await client.session(args.name).set_supervisor(args.supervisor)
             case "findings" if args.findings_command == "verdict":
@@ -901,14 +927,6 @@ def _tags(settings: Sequence[str]) -> dict[str, str | None]:
             raise SystemExit(f"aid: {setting!r} is not KEY=VALUE")
         tags[key] = value or None
     return tags
-
-
-def _tagged(info: SessionInfo, wanted: Sequence[str]) -> bool:
-    for want in wanted:
-        key, sep, value = want.partition("=")
-        if key not in info.tags or (sep and info.tags[key] != value):
-            return False
-    return True
 
 
 def _tool_modes(settings: list[str]) -> dict[str, PermissionMode | None]:

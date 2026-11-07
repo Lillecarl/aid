@@ -81,6 +81,7 @@ class Grant(StrEnum):
 
 NEEDS: Final[dict[str, Grant]] = {
     "list": Grant.READ,
+    "find_sessions": Grant.READ,
     "agents": Grant.READ,
     "models": Grant.READ,
     "status": Grant.READ,
@@ -96,6 +97,7 @@ NEEDS: Final[dict[str, Grant]] = {
     "supervisor": Grant.MANAGE,
     "tags": Grant.MANAGE,
     "note": Grant.MANAGE,
+    "hide": Grant.MANAGE,
     "create": Grant.MANAGE,
     "start": Grant.MANAGE,
     "stop": Grant.MANAGE,
