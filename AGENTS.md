@@ -349,6 +349,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   page, not agents. Client `Session.work(title)`: renews every `WORK_TTL/4` (never raises), closes bounded.
 - Web list (`links.ts`): left out are supervisors, their helpers, and a child with no children (a tab of its
   parent); a child with children of its own is listed, never a tab of its parent.
+- User's rule, no exceptions: a working session (`SessionInfo.working`) is never hidden and lists above every idle
+  one: daemon (`annotate` gives it no reason, `ordered` sorts it first) and page (`linkedOnly`, `listed`), filter
+  or not. A PR's angle sessions at work must be in view.
 - Hiding and finding (#59, `session_query.py`, pure): `SessionInfo.hidden` = why lists leave it out: its own reason
   (`SetHidden`, op `hide`: control, page, `aid hide|unhide`, plugin `manage`, an agent its own session only; saved
   as `hidden.txt` in the session dir; cleared by a prompt, compact, start or a message to it), else derived over the

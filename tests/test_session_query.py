@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from aid.protocol import SessionInfo
-from aid.session_query import DAY, annotate, find, matches, parse
+from aid.session_query import DAY, annotate, find, matches, ordered, parse
 from aid.spec import AgentKind
 
 NOW = 100 * DAY
@@ -48,6 +48,11 @@ def test_hiding_names_its_reason() -> None:
         info("old", at=NOW - 9 * DAY),
         info("old-but-running", at=NOW - 9 * DAY, running=True),
         info("recent", at=NOW - 6 * DAY),
+        # At work, so in view, whatever would hide it.
+        info("run.7.security", parent="run.7", working=True),
+        info("busy-own", hidden="done", working=True),
+        info("busy-supervisor", working=True),
+        info("busy-worker", supervisor="busy-supervisor"),
     ]
     reasons = {i.name: i.hidden for i in annotate(infos, now=NOW)}
     assert reasons == {
@@ -60,7 +65,16 @@ def test_hiding_names_its_reason() -> None:
         "old": "stale: unused 9 days",
         "old-but-running": None,
         "recent": None,
+        "run.7.security": None,
+        "busy-own": None,
+        "busy-supervisor": None,
+        "busy-worker": None,
     }
+
+
+def test_working_sessions_come_first() -> None:
+    infos = [info("new", at=NOW), info("old-busy", at=NOW - DAY, working=True), info("older", at=NOW - 2 * DAY)]
+    assert [i.name for i in ordered(infos)] == ["old-busy", "new", "older"]
 
 
 def test_a_find_leaves_hidden_sessions_out_and_counts_them() -> None:
@@ -77,14 +91,14 @@ def test_a_find_leaves_hidden_sessions_out_and_counts_them() -> None:
 
 def test_a_working_session_is_on_every_first_page() -> None:
     infos = [info("idle", at=NOW), info("busy", at=NOW - DAY * 30, working=True, hidden="done")]
-    assert [i.name for i in find(infos, "idle", limit=1).sessions] == ["idle", "busy"]
+    assert [i.name for i in find(infos, "idle", limit=1).sessions] == ["busy", "idle"]
     assert [i.name for i in find(infos, "nothing", limit=1).sessions] == ["busy"]
 
 
 def test_pages_follow_the_most_recently_active_first() -> None:
     infos = [info(f"s{n}", at=NOW - n) for n in range(5)] + [info("w", working=True)]
     first = find(infos, "s", limit=2)
-    assert [i.name for i in first.sessions] == ["s0", "w", "s1"]
+    assert [i.name for i in first.sessions] == ["w", "s0", "s1"]
     names: list[str] = [i.name for i in first.sessions if not i.working]
     after = first.next
     while after is not None:

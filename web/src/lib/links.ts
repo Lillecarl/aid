@@ -1,7 +1,8 @@
 import type { SessionInfo } from "./api";
 
 /** Sessions the list leaves out: every supervisor and every session working for one (its classifier), which
- * show as tabs under the sessions they watch; and every child with no children of its own, a tab of its parent. */
+ * show as tabs under the sessions they watch; and every child with no children of its own, a tab of its parent.
+ * Never a session in a turn: what is at work stays in view. */
 export function linkedOnly(sessions: SessionInfo[]): Set<string> {
   const names = new Set(sessions.map((s) => s.name));
   const parents = new Map(sessions.map((s) => [s.name, s.parent]));
@@ -14,7 +15,7 @@ export function linkedOnly(sessions: SessionInfo[]): Set<string> {
     const parent = parents.get(name);
     return parent != null && depth < sessions.length && linked(parent, depth + 1);
   };
-  return new Set(sessions.filter((s) => linked(s.name, 0) || tab(s)).map((s) => s.name));
+  return new Set(sessions.filter((s) => !s.working && (linked(s.name, 0) || tab(s))).map((s) => s.name));
 }
 
 /** `name`'s tabs: itself and the sessions working for it, then its supervisor and the sessions working for

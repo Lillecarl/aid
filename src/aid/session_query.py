@@ -66,7 +66,7 @@ def matches(info: SessionInfo, terms: Sequence[Term]) -> bool:
 def annotate(infos: Sequence[SessionInfo], *, now: float, stale_after: float = STALE_AFTER) -> list[SessionInfo]:
     """`infos` with `hidden` set where a session's own reason leaves it unset: `linked` (a supervisor, or working
     for one), `tab of <parent>` (a child with no children of its own), or stale (stopped and unused for
-    `stale_after`). The same rules as `web/src/lib/links.ts`."""
+    `stale_after`). A working session is never hidden. The same rules as `web/src/lib/links.ts`."""
     names = {i.name for i in infos}
     parents = {i.name: i.parent for i in infos}
     supervisors = {i.supervisor for i in infos if i.supervisor}
@@ -84,6 +84,8 @@ def annotate(infos: Sequence[SessionInfo], *, now: float, stale_after: float = S
         return False
 
     def reason(info: SessionInfo) -> str | None:
+        if info.working:
+            return None  # User's rule: a session at work is always in view, whatever would hide it.
         if info.hidden is not None:
             return info.hidden
         if linked(info.name):
@@ -102,8 +104,8 @@ def _order(info: SessionInfo) -> tuple[float, str]:
 
 
 def ordered(infos: Sequence[SessionInfo]) -> list[SessionInfo]:
-    """The most recently active first (#54); names break ties."""
-    return sorted(infos, key=_order)
+    """Working sessions first, then the most recently active (#54); names break ties."""
+    return sorted(infos, key=lambda i: (not i.working, *_order(i)))
 
 
 def cursor(info: SessionInfo) -> str:

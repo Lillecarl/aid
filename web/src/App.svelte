@@ -17,10 +17,14 @@
   const hidden = $derived(linkedOnly(list));
   let filter = $state("");
   const terms = $derived(parseFilter(filter));
-  // A search reaches every session, linked ones too: a campaign's children are found by name.
-  const listed = $derived(
-    list.filter((s) => (showLinked || terms.length > 0 || !hidden.has(s.name)) && matches(s, terms)),
-  );
+  // A search reaches every session, linked ones too: a campaign's children are found by name. A working session
+  // is always listed, on top, whatever the filter says (User's rule): what is at work must be in view.
+  const listed = $derived([
+    ...list.filter((s) => s.working),
+    ...list.filter(
+      (s) => !s.working && (showLinked || terms.length > 0 || !hidden.has(s.name)) && matches(s, terms),
+    ),
+  ]);
 
   async function refresh(): Promise<void> {
     try {

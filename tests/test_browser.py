@@ -549,6 +549,12 @@ async def test_a_run_s_holders_are_listed_and_their_children_are_tabs(
     # Labels drop the parent's prefix: the holder itself reads "7".
     assert sorted([await t.text_content() or "" for t in await tabs.all()]) == ["7", "judge", "security"]
     assert await listing.get_by_role("button").filter(has_text="run.7.security").count() == 0
+    # While at work a tab is listed too, above every idle session (User's rule), and goes back when done.
+    security = listing.get_by_role("button").filter(has_text="run.7.security")
+    async with aid.connect(session_daemon) as client, client.session("run.7.security").work("Reading the diff"):
+        await security.wait_for(timeout=TIMEOUT * 1000)
+        assert (await listing.get_by_role("button").first.text_content() or "").startswith("run.7.security")
+    await security.wait_for(state="detached", timeout=TIMEOUT * 1000)
     await listing.get_by_role("button", name=re.compile(r"^run ")).click()
     await page.get_by_role("heading", name="run", exact=True).wait_for(timeout=TIMEOUT * 1000)
     assert await page.locator("[data-testid=linked-tab]:visible").count() <= 1
