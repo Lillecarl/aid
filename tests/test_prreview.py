@@ -159,6 +159,12 @@ async def rows(client: aid.Client, sql: str) -> list[list[JsonValue]]:
     return QueryResult.model_validate(await client.call_plugin("prreview", "query", sql=sql)).rows
 
 
+async def stays_running(client: aid.Client) -> bool:
+    status = await client.call_plugin("prreview", "status", name="nixrev")
+    assert isinstance(status, list) and isinstance(status[0], dict)
+    return status[0]["running"] is True
+
+
 async def until(client: aid.Client, sql: str) -> None:
     """Polled: the plugin publishes no event."""
     found = await rows(client, sql)
@@ -224,7 +230,14 @@ async def test_a_pr_ci_says_rebuilds_too_much_is_skipped_unbuilt(
         async with serving(paths, launcher) as client:
             await client.call_plugin("prreview", "start", config=config(tmp_path, origin, found, max_builds=1))
             await until(client, "SELECT 1 FROM prs WHERE state != 'started'")
+            # Long enough to be past the PR, in the search or the poll's sleep: a pause stops the run there too.
+            await anyio.sleep(3)
             await client.call_plugin("prreview", "pause", name="nixrev")
+            with anyio.fail_after(10):
+                running = await stays_running(client)
+                while running:
+                    await anyio.sleep(0.1)
+                    running = await stays_running(client)
             prs = await rows(client, "SELECT state, skipped FROM prs")
             reviewed = await rows(client, "SELECT count(*) FROM angle_reviews")
     assert prs == [["skipped", "CI lists 2 rebuilds, more than 1"]]

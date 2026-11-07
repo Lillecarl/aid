@@ -384,6 +384,7 @@ class PrReviews(aid.Plugin):
                 await self.store.set_state(config.name, RunState.PAUSED, f"{type(error).__name__}: {error}")
             finally:
                 self._running.pop(config.name, None)
+        log.info("run_stopped", run=config.name, paused=scope.cancelled_caught)
 
     async def _loop(self, config: PrReviewConfig) -> bool:
         """True once `max_prs` reviews are recorded."""
@@ -393,8 +394,10 @@ class PrReviews(aid.Plugin):
             if config.max_prs is not None and sum(r.state == PrState.REVIEWED for r in rows) >= config.max_prs:
                 return True
             ended = {(r.number, r.head) for r in rows if r.state in ENDED}
+            log.info("pr_search", run=config.name)
             pr = await self._next(config, ended)
             if pr is None:
+                log.info("poll_wait", run=config.name, seconds=config.poll)
                 await anyio.sleep(config.poll)
                 continue
             async with self._one:
