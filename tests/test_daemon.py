@@ -621,7 +621,8 @@ async def test_a_delete_during_the_first_start_waits_for_it(daemon: Paths, tmp_p
         async with aid.connect(daemon) as client:
             assert await client.sessions() == []
     assert deleted in (["deleted"], ["not_found"]), deleted
-    assert not daemon.session_dir("doomed").exists()
+    left = daemon.session_dir("doomed")
+    assert not left.exists(), sorted(p.name for p in left.iterdir())
     assert not (daemon.runtime_dir / "hook-doomed.sock").exists()
 
 
