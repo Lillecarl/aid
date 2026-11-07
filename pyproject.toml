@@ -55,7 +55,7 @@ dependencies = [
 [project.optional-dependencies]
 # playwright drives the web UI through real browsers in tests/test_browser.py; the browsers themselves come
 # from nixpkgs (PLAYWRIGHT_BROWSERS_PATH), never from a download.
-test = ["playwright", "pytest", "pytest-xdist", "trustme", "websockets"]
+test = ["playwright", "pytest", "pytest-timeout", "pytest-xdist", "trustme", "websockets"]
 
 [project.scripts]
 aid = "aid.cli:main"
@@ -69,6 +69,9 @@ testpaths = ["tests"]
 # in a background thread at startup: ~2.7 s holding the GIL in every pytest process, enough to starve tests with
 # short deadlines. Nothing here collects xonsh tests.
 addopts = "--dist loadgroup -p no:xonsh"
+# Every test, so a hang fails instead of waiting forever. Above the daemon tests' own 60 s deadlines
+# (AID_TEST_TIMEOUT), which report more. A test that needs longer says so: @pytest.mark.timeout(N).
+timeout = 90
 filterwarnings = [
   "error",
   # google-genai's types module uses typing._UnionGenericAlias at import (googleapis/python-genai#1640).
