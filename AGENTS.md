@@ -219,8 +219,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   model's winner, "equal" → latest `updatedAt`. Beaten → `duplicate` (`duplicate_of`), unbuilt; every check in
   `duplicate_checks`. Each attribute `nix
   build --file WORKTREE --arg config NIXPKGS_CONFIG --arg overlays '[ ]'` (`nixpkgs_config`, default unfree allowed: CI lists unfree rebuilds), timeout recorded as an outcome. Sessions
-  `<run>.<number>.<angle|judge>`, parent root `<run>` (instructions, `tools=[]`, never prompted; keeps chat plugins
-  off), `fresh_turns`, `instruction_providers=["skills"]` with `AID_SKILLS_ONLY` = `review-skills/` (not
+  `<run>.<number>.<angle|judge|duplicates>`, parent the PR's holder `<run>.<number>` (`holder_spec`), whose parent
+  is root `<run>` (both instructions, `tools=[]`, never prompted, stopped once made; the root keeps chat plugins
+  off). Notes (#57, `AppendNote`, failures logged only): the holder gets start, builds, the review, the end; the root
+  one line per PR's end. `fresh_turns`, `instruction_providers=["skills"]` with `AID_SKILLS_ONLY` = `review-skills/` (not
   `skills/`: the skills plugin lists that to every session), `review.skill_hints` names a diff's guides in the
   prompt, ceiling `READ_TOOLS` (+ `skill`), the judge's plus `submit_review`
   (`@aid.mcptool`, so offered everywhere past a ceiling: the plugin takes it only from the judge of the PR under
@@ -228,8 +230,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   line reads `--- `); refused → the model's retry. No review after a judge turn → again, prompt whole plus
   `NO_REVIEW`, `attempts`. `store.py` (`prreview.db`, migrations): runs, prs (`step`: what the PR under review does now, `status` `current`), builds, angle_reviews (answer, last `Usage`),
   reviews, each keyed by (run, number, head); an interrupted PR redoes all but its stored angles. The `finally`
-  (shielded) deletes the PR's sessions, its outputs (`nix store delete`, one call) and worktree, then `git gc
-  --prune=now`.
+  (shielded) stops the PR's sessions (kept: their transcripts are the record; their cwd, the worktree, is gone),
+  deletes its outputs (`nix store delete`, one call) and worktree, then `git gc --prune=now`.
 - `plugins/reverse/` — reverse-engineering investigations, bundled, `autostart` (read, prompt, manage, supervise,
   private); plan `docs/reverse-engineering.md`. `aid investigation start|status|query` (operator only):
   `InvestigationConfig` (name, workspace, goal, model, `machines` name → SSH destination, `private` hosts, supervise)
@@ -335,7 +337,12 @@ on reusable decisions and current boundaries; put long investigations and dated 
   in the new cwd and knows it moved; native history is aid's; native turns name `cwd` in metadata. opencode 1.19.4
   keeps the conversation but its tools stay in the session's first directory (unsupported; not worked around).
 - Tags: `spec.tags` (`TagKey`/`TagValue`), labels aid never acts on. `SetTags` (control, page, `aid tag`, plugin
-  `manage`; never agents) merges, None removes; `SessionInfo.tags`; `aid list --tag`, the page's list filter.
+  `manage`; never agents) merges, None removes; `SessionInfo.tags`; `aid list --tag`, the page's list filter (a bare
+  word also matches part of a name, any case; while set it searches the left-out sessions too, #58).
+- Notes: `AppendNote` (op `note`; control, plugin `manage`; never agents) appends `Note(text, by)` to a history: no
+  turn, no worker; `by` = the plugin's name, stamped. For drivers to show progress on sessions they never prompt.
+- Web list (`links.ts`): left out are supervisors, their helpers, and a child with no children (a tab of its
+  parent); a child with children of its own is listed, never a tab of its parent. Hiding and paging: #59.
 - `src/aid/transcript.py` — Claude Code transcript entries → aid events.
 - Recording: each turn ends with `Usage` (tokens, models, context, the agent's session cost) before `Output`; each
   worker start records `Started` (agent session id, agent, model) under a turn id of its own. What a turn's tokens

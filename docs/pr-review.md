@@ -23,6 +23,10 @@ The daemon needs `gh` (logged in), `git` and `nix` on its PATH, or `commands` in
 - **One PR at a time.** Disk stays bounded. The plugin fetches only the PR's head (`--depth 1`) into a bare
   repository of its own and checks it out as a worktree. After the PR, the worktree, the fetched objects and the
   built outputs go (`nix store delete` on those paths only).
+- **Every review stays readable in the UI (#57).** Each PR gets a holder session `<run>.<PR>` under the run's root;
+  the duplicate check, the angles and the judge are its children, shown as its tabs. They stop after the PR and
+  stay. The plugin writes notes, which need no model turn: on the holder, the start, the builds, the review and
+  the end; on the root, one line per PR. The root's Chat is the run's log.
 - **Only PRs that build cheaply.** Open, every check green (`--checks success`), not a draft, label
   `10.rebuild-linux: 1-10`. No public cache holds PR outputs, but for such a PR only its own derivations build
   here. Everything else comes from cache.nixos.org.

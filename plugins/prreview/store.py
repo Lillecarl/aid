@@ -352,8 +352,14 @@ class PrStore:
         return await self._db.run(_review, run, number, head, review, session)
 
     async def reviewed(self, run: str, number: int, head: str) -> bool:
-        def found(db: apsw.Connection) -> bool:
-            sql = "SELECT 1 FROM reviews WHERE run = ? AND number = ? AND head = ?"
-            return db.execute(sql, (run, number, head)).get is not None
+        return await self.event(run, number, head) is not None
+
+    async def event(self, run: str, number: int, head: str) -> str | None:
+        """The recorded review's event, None before one is recorded."""
+
+        def found(db: apsw.Connection) -> str | None:
+            sql = "SELECT event FROM reviews WHERE run = ? AND number = ? AND head = ?"
+            row = db.execute(sql, (run, number, head)).fetchone()
+            return None if row is None else str(row[0])
 
         return await self._db.run(found)

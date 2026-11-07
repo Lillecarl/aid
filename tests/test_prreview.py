@@ -15,9 +15,9 @@ import aid
 from aid.daemon import Daemon
 from aid.paths import ENV_STATE_DIR
 from aid.plugins import ENV_PLUGINS_PATH
-from aid.protocol import GetSpec, QueryResult
+from aid.protocol import GetSpec, Note, QueryResult
 from aid.spec import AgentSpecAdapter, NativeSpec
-from plugins.prreview import PrReviewConfig, angle_spec, judge_spec
+from plugins.prreview import PrReviewConfig, angle_spec, holder_spec, judge_spec
 from plugins.prreview.store import PRREVIEW_FILE, SCHEMA, PrStore
 from tests.conftest import TESTS
 from tests.models import HOST
@@ -160,6 +160,11 @@ async def rows(client: aid.Client, sql: str) -> list[list[JsonValue]]:
     return QueryResult.model_validate(await client.call_plugin("prreview", "query", sql=sql)).rows
 
 
+async def notes(client: aid.Client, session: str) -> list[tuple[str | None, str]]:
+    page = await client.session(session).history(limit=1000)
+    return [(e.item.by, e.item.text) for e in page.entries if isinstance(e.item, Note)]
+
+
 async def stays_running(client: aid.Client) -> bool:
     status = await client.call_plugin("prreview", "status", name="nixrev")
     assert isinstance(status, list) and isinstance(status[0], dict)
@@ -197,7 +202,9 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
             reviews = await rows(client, "SELECT event, body, comments, session FROM reviews")
             checks = await rows(client, "SELECT candidates, answer, beaten_by FROM duplicate_checks")
             root = AgentSpecAdapter.validate_python(await client.call(GetSpec(session="nixrev")))
-            listed = [info.name for info in await client.sessions()]
+            infos = {info.name: info for info in await client.sessions()}
+            root_notes = await notes(client, "nixrev")
+            holder_notes = await notes(client, "nixrev.7")
     assert prs == [[7, head, "reviewed", None, "judging"]]
     assert builds == [["broken", "failed", None], ["hello", "built", 2**20]]
     assert [a[0] for a in angles] == ["alternatives", "conventions", "correctness", "security"]
@@ -216,8 +223,21 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
     # No PR touches its files, so no model compared any.
     assert checks == [["[]", None, None]]
     assert isinstance(root, NativeSpec) and root.tools == []
-    # Each PR's sessions, worktree and outputs go with it; only the run's root stays.
-    assert listed == ["nixrev"]
+    # Each PR's sessions stay, stopped, under its holder; the worktree and the outputs go.
+    roles = ["alternatives", "conventions", "correctness", "judge", "security"]
+    assert sorted(infos) == ["nixrev", "nixrev.7", *(f"nixrev.7.{role}" for role in roles)]
+    assert infos["nixrev.7"].parent == "nixrev"
+    assert all(infos[f"nixrev.7.{role}"].parent == "nixrev.7" for role in roles)
+    assert not any(info.running for info in infos.values())
+    # The root tells the run, PR by PR; the holder tells the PR. Both by the plugin, no model turn.
+    link = "[#7 hello: 1 -> 2](https://github.com/NixOS/nixpkgs/pull/7)"
+    assert root_notes == [("prreview", f"{link}: reviewed: COMMENT")]
+    assert [text.split("\n")[0] for _, text in holder_notes] == [
+        f"Reviewing {link} by someone at {head[:12]}.",
+        "Built:",
+        "Review: COMMENT",
+        "Reviewed: COMMENT",
+    ]
     assert not (paths.state_dir / "plugins" / "prreview" / "worktrees" / "nixrev").exists()
     calls = [json.loads(line) for line in (found / "nix.log").read_text().splitlines()]
     assert [c for c in calls if c[:2] == ["store", "delete"]] == [["store", "delete", "/nix/store/fake-hello"]]
@@ -293,21 +313,27 @@ async def test_a_pr_an_equal_later_duplicate_beats_ends_unbuilt(
             checks = await rows(
                 client, "SELECT candidates, duplicates, winner, beaten_by, session FROM duplicate_checks"
             )
-            listed = [info.name for info in await client.sessions()]
+            listed = sorted(info.name for info in await client.sessions())
+            root_notes = await notes(client, "nixrev")
     assert prs == [["duplicate", 8, "a duplicate of #8"]]
     # #9 touches none of #7's files; #8 is as good and updated later.
     assert checks == [["[8]", "[8]", "equal", 8, "nixrev.7.duplicates"]]
-    assert listed == ["nixrev"]
+    assert listed == ["nixrev", "nixrev.7", "nixrev.7.duplicates"]
+    assert root_notes == [
+        ("prreview", "[#7 hello: 1 -> 2](https://github.com/NixOS/nixpkgs/pull/7): duplicate of #8 hello: 1 -> 2 (8)")
+    ]
     assert not (found / "nix.log").exists()
 
 
 def test_angles_only_read_and_only_the_judge_records(tmp_path: Path) -> None:
     cfg = PrReviewConfig.model_validate({"name": "r", "model": "m/x"})
-    angle = angle_spec(cfg, tmp_path, "security")
+    angle = angle_spec(cfg, tmp_path, "security", "r.1")
+    judge = judge_spec(cfg, tmp_path, "r.1")
     assert angle.tools == ["ls", "read", "outline", "search", "skill"]
-    assert judge_spec(cfg, tmp_path).tools == ["ls", "read", "outline", "search", "skill", "submit_review"]
+    assert judge.tools == ["ls", "read", "outline", "search", "skill", "submit_review"]
     # Skills from the plugin alone: a pull request can add a skill directory to its own checkout.
     assert angle.env["AID_SKILLS_ONLY"] == str(PLUGINS / "prreview" / "review-skills")
     assert angle.instruction_providers == ["skills"]
-    assert angle_spec(cfg, tmp_path, "security").private is None
-    assert (judge_spec(cfg, tmp_path).parent, judge_spec(cfg, tmp_path).fresh_turns) == ("r", True)
+    assert angle.private is None
+    assert (judge.parent, judge.fresh_turns) == ("r.1", True)
+    assert (holder_spec(cfg, tmp_path).parent, holder_spec(cfg, tmp_path).tools) == ("r", [])

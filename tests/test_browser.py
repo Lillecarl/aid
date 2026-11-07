@@ -13,6 +13,7 @@ isolated tab from its cookies. Tests seed their sessions on the shared session d
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -529,6 +530,29 @@ async def test_linked_sessions_are_tabs_under_the_chat(page: Page, session_daemo
     assert await page.locator("[data-testid=chat-log]:visible").get_by_text("echo hello boss").count() == 0
     await page.get_by_test_id("show-linked").click()
     await listing.get_by_role("button").filter(has_text="boss.classifier").wait_for(timeout=TIMEOUT * 1000)
+
+
+async def test_a_run_s_holders_are_listed_and_their_children_are_tabs(
+    page: Page, session_daemon: Paths, tmp_path: Path
+) -> None:
+    """#57: a review run's root, one holder per PR, the PR's sessions under it. The holder is listed with its
+    sessions as tabs; it is not a tab of the root, which would grow one per PR."""
+    await seed_session(session_daemon, tmp_path, "run", "agents:echo")
+    async with aid.connect(session_daemon) as client:
+        spec = py_spec(tmp_path, "agents:echo")
+        await client.create("run.7", spec.model_copy(update={"parent": "run"}))
+        for role in ("security", "judge"):
+            await client.create(f"run.7.{role}", spec.model_copy(update={"parent": "run.7"}))
+    listing = page.get_by_test_id("session-list")
+    await open_session(page, "run.7")
+    tabs = page.locator("[data-testid=linked-tab]:visible")
+    await tabs.filter(has_text="judge").wait_for(timeout=TIMEOUT * 1000)
+    # Labels drop the parent's prefix: the holder itself reads "7".
+    assert sorted([await t.text_content() or "" for t in await tabs.all()]) == ["7", "judge", "security"]
+    assert await listing.get_by_role("button").filter(has_text="run.7.security").count() == 0
+    await listing.get_by_role("button", name=re.compile(r"^run ")).click()
+    await page.get_by_role("heading", name="run", exact=True).wait_for(timeout=TIMEOUT * 1000)
+    assert await page.locator("[data-testid=linked-tab]:visible").count() <= 1
 
 
 async def test_tags_label_and_filter_sessions(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
