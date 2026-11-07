@@ -182,9 +182,6 @@ def test_a_persons_settings_join_aids_hooks(tmp_path: Path) -> None:
     ]
 
 
-pytestmark = pytest.mark.anyio
-
-
 @needs_pymux
 async def test_live_hook_socket_answers_past_the_daemon(daemon: Paths, tmp_path: Path, pymux_socket: str) -> None:
     """hook.py's fast path against a real worker: the decoy control answers anything it hears, so silence

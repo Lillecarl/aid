@@ -10,8 +10,6 @@ from aid.web import files
 if TYPE_CHECKING:
     from pathlib import Path
 
-pytestmark = pytest.mark.anyio
-
 
 async def test_directories_come_first(tmp_path: Path) -> None:
     (tmp_path / "b.txt").write_text("bb")

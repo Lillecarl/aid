@@ -25,7 +25,6 @@ if TYPE_CHECKING:
     from aid.launcher import ForkserverLauncher
     from aid.paths import Paths
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = int(os.environ.get("AID_TEST_TIMEOUT", "30"))
 PLUGINS = Path(__file__).parent.parent / "plugins"

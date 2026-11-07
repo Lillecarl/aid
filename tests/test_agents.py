@@ -36,7 +36,6 @@ def test_spec_needs_exactly_one_source() -> None:
         NativeSpec(cwd="/", agent="a", target="m:a")
 
 
-@pytest.mark.anyio
 async def test_daemon_lists_and_runs_agents(daemon: Paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The catalog runs in a subprocess of this process; workers take the path from the spec.
     monkeypatch.setenv(ENV_PLUGINS_PATH, str(AGENT_DIR))

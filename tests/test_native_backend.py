@@ -51,9 +51,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-pytestmark = pytest.mark.anyio
-
-
 @asynccontextmanager
 async def backend(
     directory: Path,

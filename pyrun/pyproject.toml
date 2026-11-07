@@ -17,6 +17,7 @@ packages = ["src/pyrun"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+anyio_mode = "auto"
 
 [tool.pyright]
 pythonVersion = "3.14"

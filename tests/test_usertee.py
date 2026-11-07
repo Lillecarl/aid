@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 
     from aid.paths import Paths
 
-pytestmark = pytest.mark.anyio
 
 DATA = b"line one\n\xff\xfe not utf-8\n" + "café — done\n".encode() * 3000
 

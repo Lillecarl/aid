@@ -10,8 +10,6 @@ import pytest
 
 from plugins.discord.rest import DiscordError, Rest, action_rows
 
-pytestmark = pytest.mark.anyio
-
 TOKEN = "tok"
 
 

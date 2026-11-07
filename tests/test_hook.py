@@ -6,7 +6,6 @@ import time
 from typing import TYPE_CHECKING
 
 import anyio
-import pytest
 import zmq.asyncio
 
 from aid import hook
@@ -16,8 +15,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from aid.paths import Paths
-
-pytestmark = pytest.mark.anyio
 
 
 def test_the_request_is_aids_hook_request() -> None:

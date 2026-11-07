@@ -29,7 +29,6 @@ if TYPE_CHECKING:
 
     from aid.protocol import SessionEvent
 
-pytestmark = pytest.mark.anyio
 
 FAKE_ID = "sess-123"
 

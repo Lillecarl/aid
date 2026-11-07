@@ -21,7 +21,6 @@ if TYPE_CHECKING:
     from aid.model import Transport
     from aid.paths import Paths
 
-pytestmark = pytest.mark.anyio
 
 CATALOG: dict[str, Any] = {
     "zen": {

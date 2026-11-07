@@ -69,6 +69,8 @@ testpaths = ["tests"]
 # in a background thread at startup: ~2.7 s holding the GIL in every pytest process, enough to starve tests with
 # short deadlines. Nothing here collects xonsh tests.
 addopts = "--dist loadgroup -p no:xonsh"
+# Every async test and fixture runs on anyio: no `pytest.mark.anyio` anywhere.
+anyio_mode = "auto"
 # Every test, so a hang fails instead of waiting forever. Above the daemon tests' own 60 s deadlines
 # (AID_TEST_TIMEOUT), which report more. A test that needs longer says so: @pytest.mark.timeout(N).
 timeout = 90

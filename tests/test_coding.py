@@ -46,7 +46,6 @@ if TYPE_CHECKING:
 
     from aid.paths import Paths
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = 60
 REMOVAL_DEFAULTS = Removal().model_dump(mode="json")

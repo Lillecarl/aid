@@ -17,7 +17,6 @@ from aid.summary import summarize
 if TYPE_CHECKING:
     from pathlib import Path
 
-pytestmark = pytest.mark.anyio
 
 HAIKU = {"input": 0.1, "output": 0.5, "cache_read": 0.01, "cache_write": 0.125}
 CATALOG: dict[str, Any] = {

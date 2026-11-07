@@ -19,8 +19,6 @@ from aid.protocol import AidError
 from plugins import opencode, openrouter
 from tests.test_model import event
 
-pytestmark = pytest.mark.anyio
-
 PLUGINS = Path(__file__).parent.parent / "plugins"
 ZEN = "https://opencode.ai/inference"
 CATALOG: dict[str, Any] = {

@@ -44,8 +44,6 @@ if TYPE_CHECKING:
     from aid.launcher import ForkserverLauncher, Launcher, WorkerHandle
     from aid.paths import Paths
 
-pytestmark = pytest.mark.anyio
-
 
 @dataclass
 class RecordingLauncher:

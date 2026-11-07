@@ -155,7 +155,6 @@ def test_untracked_only_keeps_what_git_tracks(tmp_path: Path) -> None:
         plan(root, Removal(globs=["*"], untracked_only=True), None)
 
 
-@pytest.mark.anyio
 async def test_git_state_reads_tracked_and_ignored(tmp_path: Path) -> None:
     root = tree(tmp_path)
     assert await git_state(root) is None
@@ -188,7 +187,6 @@ def test_execution_removes_the_plan_not_a_new_match(tmp_path: Path) -> None:
     assert sorted(p.name for p in root.iterdir()) == ["keep.txt", "out"]
 
 
-@pytest.mark.anyio
 async def test_the_store_records_entries_and_outcomes(tmp_path: Path) -> None:
     root = tree(tmp_path)
     removal = Removal(paths=["build"], excludes=["build/a.txt"])

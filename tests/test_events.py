@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 import anyio
-import pytest
 import zmq
 import zmq.asyncio
 
@@ -24,8 +23,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable
     from pathlib import Path
 
-
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = 30
 # A SUB socket misses what is published before its subscription reaches the PUB: the slow joiner.

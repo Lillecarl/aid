@@ -6,7 +6,6 @@ import time
 from typing import TYPE_CHECKING, Any, cast
 
 import anyio
-import pytest
 
 from aid.agent import Agent
 from aid.backends.native import (
@@ -33,8 +32,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from tests.models import AgentInfo
-
-pytestmark = pytest.mark.anyio
 
 
 def _history() -> list[ModelMessage]:

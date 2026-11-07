@@ -18,8 +18,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from pathlib import Path
 
-pytestmark = pytest.mark.anyio
-
 
 @pytest.fixture(params=["ipc", "ws"])
 def endpoint(request: pytest.FixtureRequest, tmp_path: Path) -> str:

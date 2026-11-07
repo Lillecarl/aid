@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import anyio
-import pytest
 
 import aid
 from aid.protocol import (
@@ -75,7 +74,6 @@ def test_summary_of_nothing() -> None:
     assert summarize([]).turns == 0
 
 
-@pytest.mark.anyio
 async def test_daemon_summary(daemon: Paths, tmp_path: Path) -> None:
     with anyio.fail_after(TIMEOUT):
         async with aid.connect(daemon) as client:

@@ -42,7 +42,6 @@ if TYPE_CHECKING:
     from aid.client import Client
     from aid.paths import Paths
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = 30
 GUILD = "g1"

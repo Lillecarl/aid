@@ -35,7 +35,6 @@ from tests.test_native_backend import backend
 if TYPE_CHECKING:
     from pathlib import Path
 
-pytestmark = pytest.mark.anyio
 
 SIGNATURE = base64.b64encode(b"signed").decode()
 

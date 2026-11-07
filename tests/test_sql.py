@@ -12,7 +12,6 @@ if TYPE_CHECKING:
 
     import apsw
 
-pytestmark = pytest.mark.anyio
 
 SCHEMA = "CREATE TABLE IF NOT EXISTS things (name TEXT, size INTEGER, data BLOB);"
 

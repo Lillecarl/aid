@@ -11,7 +11,6 @@ import pyrun
 if TYPE_CHECKING:
     from pathlib import Path
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = 20
 

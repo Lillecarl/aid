@@ -4,14 +4,11 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 import anyio
-import pytest
 import zmq
 import zmq.asyncio
 
 if TYPE_CHECKING:
     from collections.abc import Generator
-
-pytestmark = pytest.mark.anyio
 
 
 def test_libzmq_has_ws() -> None:

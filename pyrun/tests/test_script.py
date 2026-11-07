@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from pyrun import Command
     from pyrun.files import FileAccess
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = 30
 

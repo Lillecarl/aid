@@ -60,7 +60,6 @@ if TYPE_CHECKING:
     from aid.paths import Paths
     from aid.protocol import HistoryItem
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = int(os.environ.get("AID_TEST_TIMEOUT", "30"))
 PLUGINS = Path(__file__).parent.parent / "plugins"

@@ -60,7 +60,6 @@ def test_speech_becomes_text(recognizer: Recognizer) -> None:
     assert heard[-1].final
 
 
-@pytest.mark.anyio
 async def test_two_speakers_share_one_recognizer(recognizer: Recognizer) -> None:
     results: list[str] = []
 

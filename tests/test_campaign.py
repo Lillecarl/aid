@@ -30,7 +30,6 @@ if TYPE_CHECKING:
     from aid.launcher import ForkserverLauncher
     from aid.paths import Paths
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = int(os.environ.get("AID_TEST_TIMEOUT", "60"))
 CARRIED = re.compile(r'^<file path="([^"]+)"', re.MULTILINE)

@@ -17,8 +17,6 @@ from aid.model import ModelInfo, RequestUsage
 from aid.providers import resolve
 from tests.test_model import event
 
-pytestmark = pytest.mark.anyio
-
 PLUGINS = Path(__file__).parent.parent / "plugins"
 
 

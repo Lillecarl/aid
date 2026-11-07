@@ -47,7 +47,6 @@ if TYPE_CHECKING:
     from aid.paths import Paths
 
 pytestmark = [
-    pytest.mark.anyio,
     # One worker under xdist: the run's one browser and one dex login, as the harness intends.
     pytest.mark.xdist_group("browser"),
     needs_dex,

@@ -42,7 +42,6 @@ from tests.conftest import py_spec
 if TYPE_CHECKING:
     from aid.paths import Paths
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = 30
 CHAT = 1234

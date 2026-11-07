@@ -25,7 +25,6 @@ if TYPE_CHECKING:
 
     from aid.model import Transport
 
-pytestmark = pytest.mark.anyio
 
 CATALOG: dict[str, Any] = {
     "zen": {"api": "https://zen.test/v1", "npm": "@ai-sdk/openai-compatible", "env": ["ZEN_KEY", "ZEN_OTHER"]},

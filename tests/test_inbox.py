@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import anyio
-import pytest
 
 from aid.history import HistoryLog
 from aid.inbox import Inbox
@@ -11,8 +10,6 @@ from aid.protocol import Delivery, MessageEntry, TurnError
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-pytestmark = pytest.mark.anyio
 
 
 async def test_restore_keeps_pending_messages_and_their_order(tmp_path: Path) -> None:

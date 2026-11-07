@@ -49,8 +49,6 @@ if TYPE_CHECKING:
 
     from pydantic import JsonValue
 
-pytestmark = pytest.mark.anyio
-
 
 def event(delta: dict[str, Any], *, usage: dict[str, Any] | None = None, finish: str | None = None) -> bytes:
     choice = {"index": 0, "delta": delta, "finish_reason": finish}

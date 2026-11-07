@@ -19,7 +19,6 @@ if TYPE_CHECKING:
 
     from pyrun import Command
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = 20
 

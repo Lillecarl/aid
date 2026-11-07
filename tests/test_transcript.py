@@ -24,8 +24,6 @@ if TYPE_CHECKING:
 
     from pydantic import JsonValue
 
-pytestmark = pytest.mark.anyio
-
 
 def assistant(block: dict[str, JsonValue], stop_reason: str = "tool_use") -> dict[str, JsonValue]:
     return {"type": "assistant", "message": {"id": "msg_1", "stop_reason": stop_reason, "content": [block]}}

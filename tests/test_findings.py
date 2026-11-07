@@ -124,7 +124,6 @@ def calls(*steps: tuple[str, dict[str, JsonValue]]) -> str:
     return json.dumps([list(step) for step in steps])
 
 
-@pytest.mark.anyio
 async def test_a_session_on_a_read_only_ceiling_records_findings(
     paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -171,7 +170,6 @@ async def test_a_session_on_a_read_only_ceiling_records_findings(
                 await client.call_plugin("findings", "report", **finding)
 
 
-@pytest.mark.anyio
 async def test_a_reviewer_judges_findings_in_its_directory_but_not_its_own(
     paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, repo: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

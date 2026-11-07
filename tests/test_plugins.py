@@ -27,7 +27,6 @@ from tests.conftest import acp_spec, py_spec
 if TYPE_CHECKING:
     from aid.paths import Paths
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = 30
 PLUGIN_DIR = Path(__file__).parent / "plugin_dir"

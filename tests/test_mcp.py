@@ -51,7 +51,6 @@ def test_names_are_unique_and_plain() -> None:
         McpHttp(name="has space", url="http://x")
 
 
-@pytest.mark.anyio
 async def test_acp_agent_gets_the_servers_on_new_and_load(daemon: Paths, tmp_path: Path) -> None:
     spec = acp_spec(tmp_path, AID_PLUGINS_PATH="/plugins").model_copy(update={"mcp_servers": SERVERS})
     with anyio.fail_after(TIMEOUT):
@@ -93,7 +92,6 @@ async def test_acp_agent_gets_the_servers_on_new_and_load(daemon: Paths, tmp_pat
     assert env[ENV_PLUGINS_PATH].split(":")[0] == "/plugins"
 
 
-@pytest.mark.anyio
 async def test_aid_tools_can_be_left_out(daemon: Paths, tmp_path: Path) -> None:
     spec = acp_spec(tmp_path).model_copy(update={"aid_tools": False})
     with anyio.fail_after(TIMEOUT):
@@ -107,7 +105,6 @@ def test_the_name_aid_is_reserved() -> None:
         AcpSpec(cwd="/", command=["a"], mcp_servers=[McpHttp(name="aid", url="http://x")])
 
 
-@pytest.mark.anyio
 async def test_acp_agent_without_the_transport_fails_to_start(daemon: Paths, tmp_path: Path) -> None:
     spec = acp_spec(tmp_path).model_copy(update={"mcp_servers": [McpSse(name="old", url="http://x")]})
     with anyio.fail_after(TIMEOUT):
@@ -116,7 +113,6 @@ async def test_acp_agent_without_the_transport_fails_to_start(daemon: Paths, tmp
                 await client.create("sse", spec)
 
 
-@pytest.mark.anyio
 async def test_acp_approves_aid_tools_by_their_name(daemon: Paths, tmp_path: Path) -> None:
     denying = acp_spec(tmp_path, PermissionMode.DENY)
     with anyio.fail_after(TIMEOUT):

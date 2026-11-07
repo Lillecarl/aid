@@ -53,7 +53,6 @@ def test_no_allow_option_leaves_it() -> None:
     assert verdict(request) is None
 
 
-@pytest.mark.anyio
 async def test_the_guard_answers_as_a_plugin(daemon: Paths, tmp_path: Path) -> None:
     read = ""
     with anyio.fail_after(30):

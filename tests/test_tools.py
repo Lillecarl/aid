@@ -6,7 +6,6 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 import anyio
-import pytest
 
 import aid
 from aid.discovery import discover
@@ -19,11 +18,11 @@ from tests.test_agents import AGENT_DIR
 if TYPE_CHECKING:
     from pathlib import Path
 
+    import pytest
     from anyio.abc import ByteReceiveStream, ByteSendStream
 
     from aid.paths import Paths
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = 30
 

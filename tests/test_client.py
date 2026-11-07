@@ -13,8 +13,6 @@ from aid.protocol import AidError, ListSessions
 if TYPE_CHECKING:
     from pathlib import Path
 
-pytestmark = pytest.mark.anyio
-
 
 async def test_calls_fail_closed_once_nothing_reads_replies(tmp_path: Path) -> None:
     """A shielded cleanup calling after its daemon went must fail, not wait for a reply nothing reads (#61)."""

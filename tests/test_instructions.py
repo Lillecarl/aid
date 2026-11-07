@@ -33,7 +33,6 @@ if TYPE_CHECKING:
 
     from aid.protocol import SessionEvent
 
-pytestmark = pytest.mark.anyio
 
 PROVIDER_DIR = Path(__file__).parent / "provider_dir"
 EXAMPLE_FILE = Path(__file__).parents[1] / "examples" / "file_instructions" / "__init__.py"

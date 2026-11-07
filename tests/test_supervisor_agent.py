@@ -13,8 +13,6 @@ from aid.discovery import discover
 from plugins.supervision.agent import MODEL
 from plugins.supervision.reference import ENV_TLDR_PAGES, man_page, tldr_page
 
-pytestmark = pytest.mark.anyio
-
 PLUGINS = Path(__file__).parent.parent / "plugins"
 FAKE_MAN = """#!/bin/sh
 # Records its argv, then prints a page with groff's terminal bold, as man -P cat does.

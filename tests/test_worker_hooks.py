@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import anyio
-import pytest
 import zmq.asyncio
 
 from aid.protocol import Done, Hook, decode_reply, encode
@@ -16,8 +15,6 @@ if TYPE_CHECKING:
 
     from aid.backends.base import Emit
     from aid.protocol import Output, Started
-
-pytestmark = pytest.mark.anyio
 
 
 class _HookBackend:

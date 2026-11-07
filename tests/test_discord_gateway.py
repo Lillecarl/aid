@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from anyio.abc import AnyByteStream, SocketStream
     from pydantic import JsonValue
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = 30
 

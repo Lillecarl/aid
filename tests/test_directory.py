@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 
     from aid.paths import Paths
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = 30
 MOVE_SENDER = "aid:directory"

@@ -37,7 +37,6 @@ if TYPE_CHECKING:
     from aid.paths import Paths
     from aid.protocol import Request
 
-pytestmark = pytest.mark.anyio
 
 TIMEOUT = 30
 

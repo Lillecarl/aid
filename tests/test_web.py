@@ -42,7 +42,7 @@ if TYPE_CHECKING:
 
     from aid.paths import Paths
 
-pytestmark = [pytest.mark.anyio, needs_dex]
+pytestmark = needs_dex
 
 
 async def test_login_is_required(web: Web) -> None:

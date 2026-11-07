@@ -26,7 +26,6 @@ async def git_repo(root: Path, files: dict[str, bytes]) -> Path:
     return root
 
 
-@pytest.mark.anyio
 async def test_tracked_files_are_what_git_lists(tmp_path: Path) -> None:
     repo = await git_repo(tmp_path / "repo", {"a.py": b"x\n", "sub/b.py": b"y\n", ".gitignore": b"build/\n"})
     (repo / "build").mkdir()
