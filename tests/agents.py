@@ -357,7 +357,8 @@ JUDGE_COMMENTS: Final = (
 
 
 async def _review_pr(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str | DeltaToolCalls]:
-    """A PR review's angle answers with the build rows its prompt carries; its judge submits a comment off the diff,
+    """A PR review's angle loads the first skill its prompt names, then answers with the build rows its prompt carries
+    and the loaded skill's first line; its judge submits a comment off the diff,
     then, refused, one on it, then ends; its duplicate check calls every candidate an equal duplicate."""
     prompt = next(
         str(p.content)
@@ -370,7 +371,15 @@ async def _review_pr(messages: list[ModelMessage], info: AgentInfo) -> AsyncIter
         yield f"```json\n{json.dumps({'duplicates': numbers, 'winner': 'equal'})}\n```"
         return
     if "Write the one review it gets" not in prompt:
-        yield "No issues. " + " ".join(re.findall(r"^- (\S+: \w+)", prompt, re.MULTILINE))
+        hinted = re.search(r"Skills that fit this pull request: skill:([a-z-]+)", prompt)
+        loaded = [p for m in messages for p in m.parts if isinstance(p, ToolReturnPart | RetryPromptPart)]
+        if hinted is not None and not loaded:
+            args = json.dumps({"name": hinted.group(1)})
+            yield {0: DeltaToolCall(name="skill", json_args=args, tool_call_id="skill0")}
+            return
+        builds = " ".join(re.findall(r"^- (\S+: \w+)", prompt, re.MULTILINE))
+        head = str(loaded[0].content if isinstance(loaded[0], ToolReturnPart) else loaded[0].model_response())
+        yield f"No issues. {builds} | loaded: {head.splitlines()[0]}" if loaded else f"No issues. {builds}"
         return
     returns = [p for m in messages for p in m.parts if isinstance(p, ToolReturnPart | RetryPromptPart)]
     if len(returns) < len(JUDGE_COMMENTS):

@@ -220,7 +220,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `duplicate_checks`. Each attribute `nix
   build --file WORKTREE --arg config NIXPKGS_CONFIG --arg overlays '[ ]'` (`nixpkgs_config`, default unfree allowed: CI lists unfree rebuilds), timeout recorded as an outcome. Sessions
   `<run>.<number>.<angle|judge>`, parent root `<run>` (instructions, `tools=[]`, never prompted; keeps chat plugins
-  off), `fresh_turns`, `instruction_providers=[]`, ceiling `READ_TOOLS`, the judge's plus `submit_review`
+  off), `fresh_turns`, `instruction_providers=["skills"]` with `AID_SKILLS_ONLY` = `review-skills/` (not
+  `skills/`: the skills plugin lists that to every session), `review.skill_hints` names a diff's guides in the
+  prompt, ceiling `READ_TOOLS` (+ `skill`), the judge's plus `submit_review`
   (`@aid.mcptool`, so offered everywhere past a ceiling: the plugin takes it only from the judge of the PR under
   review, `_judging`). Comments checked against `review.diff_lines` (hunk counts, not prefixes: a removed `-- `
   line reads `--- `); refused → the model's retry. No review after a judge turn → again, prompt whole plus

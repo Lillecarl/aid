@@ -2,13 +2,16 @@ from __future__ import annotations
 
 import json
 
+from plugins.prreview import SKILLS
 from plugins.prreview.review import (
+    SKILL_HINTS,
     LineComment,
     Pr,
     angle_prompt,
     comment_problems,
     diff_lines,
     rebuilds,
+    skill_hints,
 )
 
 DIFF = """\
@@ -67,6 +70,27 @@ def test_rebuilds_are_ci_s_list_for_the_platform() -> None:
     changed = {"rebuildsByPlatform": {"x86_64-linux": ["b", "a", "a"], "aarch64-linux": ["c"]}, "labels": {}}
     assert rebuilds(json.dumps(changed)) == ["a", "b"]
     assert rebuilds(json.dumps({"attrdiff": {}})) == []
+
+
+def test_skill_hints_follow_paths_and_builders() -> None:
+    bump = (
+        "--- a/pkgs/development/python-modules/foo/default.nix\n+++ b/pkgs/development/python-modules/foo/default.nix\n"
+        '-  version = "1";\n+  version = "2";\n   build-system = [ setuptools ];\n'
+    )
+    assert skill_hints("python3Packages.foo: 1 -> 2", bump) == [
+        "nixpkgs-packaging",
+        "nixpkgs-updates",
+        "python-packages",
+    ]
+    module = "+++ b/nixos/modules/services/x.nix\n+  services.x.enable = true;\n"
+    assert skill_hints("nixos/x: add option", module) == ["nixos-modules"]
+    assert skill_hints("rust thing: 1 -> 2", "+++ b/README.md\n") == ["nixpkgs-updates"]
+
+
+def test_every_hinted_skill_exists() -> None:
+    assert sorted(name for name, _ in SKILL_HINTS) == sorted(
+        p.name for p in SKILLS.iterdir() if (p / "SKILL.md").is_file()
+    )
 
 
 def test_a_long_diff_is_cut_and_says_so() -> None:

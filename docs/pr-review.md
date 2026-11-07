@@ -45,6 +45,11 @@ The daemon needs `gh` (logged in), `git` and `nix` on its PATH, or `commands` in
   review: an event (APPROVE, COMMENT, REQUEST_CHANGES), a body and line comments. The plugin refuses a comment on a
   line the diff does not show, as GitHub would, and the judge tries again in the same turn. A judge turn that ends
   without a review is repeated, up to `attempts`.
+- **Nix guides on demand.** The instructions carry a short block of Nix knowledge. Eight guides in the Agent
+  Skills format (`review-skills/`: packaging, updates, Python, Rust, Go, JavaScript, NixOS modules, binary
+  packages) load with the `skill` tool. The plugin names the ones a diff calls for in the prompt, from the paths and
+  builders it touches. They are the reviewers' only skill source (`AID_SKILLS_ONLY`): a PR can add skill
+  directories to its own checkout.
 - **PR text is untrusted.** The title, body, diff and files are data. The reviewer tools cannot act on them. The
   worst a poisoned PR can do is a wrong review, which is recorded and not posted.
 

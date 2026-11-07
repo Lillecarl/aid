@@ -165,7 +165,36 @@ def diff_block(diff: str, limit: int) -> str:
     return f"<diff{note}>\n{text}\n</diff>"
 
 
-def angle_prompt(pr: Pr, diff: str, builds: Sequence[Build], skipped: str | None, diff_limit: int) -> str:
+SKILL_HINTS: Final = (
+    ("nixpkgs-packaging", re.compile(r"^\+\+\+ b/pkgs/.*\.nix$", re.MULTILINE)),
+    ("nixpkgs-updates", re.compile(r"^[-+]\s*version = ", re.MULTILINE)),
+    ("python-packages", re.compile(r"python-modules/|buildPython(Package|Application)|python3Packages")),
+    ("rust-packages", re.compile(r"cargoHash|buildRustPackage|Cargo\.lock")),
+    ("go-packages", re.compile(r"vendorHash|buildGoModule")),
+    ("js-packages", re.compile(r"npmDepsHash|buildNpmPackage|pnpm|yarn|package\.json")),
+    ("nixos-modules", re.compile(r"^\+\+\+ b/nixos/(modules|tests)/", re.MULTILINE)),
+    ("binary-packages", re.compile(r"autoPatchelfHook|buildFHSEnv|appimageTools|sourceProvenance|binaryNativeCode")),
+)
+"""Skills (`review-skills/`) a diff calls for, by the paths it touches and the builders it names."""
+
+
+def skill_hints(title: str, diff: str) -> list[str]:
+    hints = [name for name, pattern in SKILL_HINTS if pattern.search(diff)]
+    if "->" in title and "nixpkgs-updates" not in hints:
+        hints.append("nixpkgs-updates")
+    return hints
+
+
+def _skills_line(skills: Sequence[str]) -> str:
+    if not skills:
+        return "Your instructions list skills for kinds of nixpkgs change: load the ones this one calls for."
+    named = ", ".join(f"skill:{s}" for s in skills)
+    return f"Skills that fit this pull request: {named}. Load them with the skill tool before you review."
+
+
+def angle_prompt(
+    pr: Pr, diff: str, builds: Sequence[Build], skipped: str | None, diff_limit: int, skills: Sequence[str] = ()
+) -> str:
     return "\n\n".join(
         [
             f"Review nixpkgs pull request #{pr.number} from the angle your instructions give.",
@@ -173,6 +202,7 @@ def angle_prompt(pr: Pr, diff: str, builds: Sequence[Build], skipped: str | None
             _builds_block(builds, skipped),
             diff_block(diff, diff_limit),
             UNTRUSTED,
+            _skills_line(skills),
             "The pull request's head is checked out in your working directory: read the files the diff touches, "
             "and what they use, with ls, read, outline and search. Answer with each issue you found: the file and "
             "line, what is wrong, why it matters and how to fix it. Say only what the code shows. If you found "
@@ -182,7 +212,13 @@ def angle_prompt(pr: Pr, diff: str, builds: Sequence[Build], skipped: str | None
 
 
 def judge_prompt(
-    pr: Pr, diff: str, builds: Sequence[Build], skipped: str | None, diff_limit: int, angles: Mapping[str, str]
+    pr: Pr,
+    diff: str,
+    builds: Sequence[Build],
+    skipped: str | None,
+    diff_limit: int,
+    angles: Mapping[str, str],
+    skills: Sequence[str] = (),
 ) -> str:
     reviews = "\n\n".join(f'<angle name="{name}">\n{answer}\n</angle>' for name, answer in angles.items())
     return "\n\n".join(
@@ -194,6 +230,7 @@ def judge_prompt(
             f"<angle-reviews>\n{reviews}\n</angle-reviews>",
             UNTRUSTED + " The angle reviews came from models that read the same data: check a claim in the files "
             "before you keep it.",
+            _skills_line(skills),
             "Drop what is wrong or not supported by the code, merge what repeats, and keep what matters to a "
             "maintainer. Then call submit_review once: event APPROVE when nothing needs to change, REQUEST_CHANGES "
             "when something must change before merge, COMMENT otherwise; body the review; comments one per issue "

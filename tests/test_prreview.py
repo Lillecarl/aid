@@ -122,7 +122,8 @@ def config(tmp_path: Path, origin: Path, found: Path, **fields: JsonValue) -> di
     plugins = tmp_path / "worker-plugins"
     (plugins / "scripted").mkdir(parents=True)
     (plugins / "scripted" / "__init__.py").write_text(SCRIPTED)
-    (plugins / "prreview").symlink_to(PLUGINS / "prreview")
+    for name in ("prreview", "skills"):
+        (plugins / name).symlink_to(PLUGINS / name)
     fake = [sys.executable, str(FAKES)]
     return {
         "name": "nixrev",
@@ -200,7 +201,9 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
     assert prs == [[7, head, "reviewed", None, "judging"]]
     assert builds == [["broken", "failed", None], ["hello", "built", 2**20]]
     assert [a[0] for a in angles] == ["alternatives", "conventions", "correctness", "security"]
-    assert all(answer == "No issues. broken: failed hello: built" and used for _, answer, used in angles)
+    # Each angle loaded the skill its prompt named, from the plugin's own directory: the checkout holds none.
+    loaded = f"loaded: Skill nixpkgs-packaging, from {PLUGINS / 'prreview' / 'review-skills' / 'nixpkgs-packaging'}."
+    assert all(answer == f"No issues. broken: failed hello: built | {loaded}" and used for _, answer, used in angles)
     # The comment off the diff was refused inside the judge's turn; the one on it was recorded.
     assert reviews == [
         [
@@ -300,7 +303,11 @@ async def test_a_pr_an_equal_later_duplicate_beats_ends_unbuilt(
 
 def test_angles_only_read_and_only_the_judge_records(tmp_path: Path) -> None:
     cfg = PrReviewConfig.model_validate({"name": "r", "model": "m/x"})
-    assert angle_spec(cfg, tmp_path, "security").tools == ["ls", "read", "outline", "search"]
-    assert judge_spec(cfg, tmp_path).tools == ["ls", "read", "outline", "search", "submit_review"]
+    angle = angle_spec(cfg, tmp_path, "security")
+    assert angle.tools == ["ls", "read", "outline", "search", "skill"]
+    assert judge_spec(cfg, tmp_path).tools == ["ls", "read", "outline", "search", "skill", "submit_review"]
+    # Skills from the plugin alone: a pull request can add a skill directory to its own checkout.
+    assert angle.env["AID_SKILLS_ONLY"] == str(PLUGINS / "prreview" / "review-skills")
+    assert angle.instruction_providers == ["skills"]
     assert angle_spec(cfg, tmp_path, "security").private is None
     assert (judge_spec(cfg, tmp_path).parent, judge_spec(cfg, tmp_path).fresh_turns) == ("r", True)
