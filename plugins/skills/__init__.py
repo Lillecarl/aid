@@ -10,6 +10,10 @@ Where skills come from, the first directory with a name winning:
 - `~/.config/aid/skills` (XDG_CONFIG_HOME), `~/.agents/skills`, `~/.claude/skills`,
 - each plugin's `skills/` directory, in plugins path order.
 
+`AID_SKILLS_ONLY` (directories joined with `:`) replaces all of these: a session whose directory holds untrusted
+files, such as a pull request under review, takes skills from the named directories alone. Set it in the spec's
+`env`, which agents cannot change.
+
 Frontmatter follows the spec: `name` (1-64 lowercase letters, digits and single hyphens, equal to the directory's
 name) and `description` (1-1024 characters) are required. A skill that breaks either is left out and logged.
 Drop one skill from a session with `skip_instructions: ["skill:<name>"]`; drop them all by leaving the `skills`
@@ -34,6 +38,7 @@ from aid.plugins import plugins_path
 log = structlog.get_logger(__name__)
 
 ENV_SKILLS_PATH: Final = "AID_SKILLS_PATH"
+ENV_SKILLS_ONLY: Final = "AID_SKILLS_ONLY"
 SKILL_FILE: Final = "SKILL.md"
 PROJECT_DIRS: Final = (".aid/skills", ".agents/skills", ".claude/skills")
 NAME: Final = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
@@ -54,6 +59,8 @@ class Skill:
 
 def search_dirs(cwd: Path, env: dict[str, str] | None = None) -> list[Path]:
     env = dict(os.environ) if env is None else env
+    if (only := env.get(ENV_SKILLS_ONLY)) is not None:
+        return [Path(part).expanduser() for part in only.split(":") if part]
     dirs: list[Path] = []
     for directory in (cwd, *cwd.parents):
         dirs.extend(directory / sub for sub in PROJECT_DIRS)

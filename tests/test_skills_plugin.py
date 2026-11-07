@@ -40,6 +40,7 @@ def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     monkeypatch.delenv("AID_SKILLS_PATH", raising=False)
+    monkeypatch.delenv("AID_SKILLS_ONLY", raising=False)
     return home
 
 
@@ -92,6 +93,22 @@ def test_nearest_directory_wins_a_name(tmp_path: Path, home: Path, monkeypatch: 
         "extra-only": "Does a thing.",
         "global-only": "Does a thing.",
     }
+
+
+def test_skills_only_names_the_one_source(tmp_path: Path, home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    write_skill(repo / ".claude" / "skills", "planted", "From the untrusted tree.")
+    write_skill(home / ".claude" / "skills", "personal")
+    extra = tmp_path / "extra"
+    write_skill(extra, "listed")
+    monkeypatch.setenv("AID_SKILLS_PATH", str(extra))
+    trusted = tmp_path / "trusted"
+    write_skill(trusted, "guide", "The reviewer's own.")
+    monkeypatch.setenv("AID_SKILLS_ONLY", str(trusted))
+    assert {name: s.description for name, s in skills().discover(repo).items()} == {"guide": "The reviewer's own."}
+    monkeypatch.setenv("AID_SKILLS_ONLY", "")
+    assert skills().discover(repo) == {}
 
 
 def test_plugins_offer_skills_after_the_global_dirs(
