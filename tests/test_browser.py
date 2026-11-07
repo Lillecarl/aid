@@ -509,6 +509,19 @@ async def test_linked_sessions_are_tabs_under_the_chat(page: Page, session_daemo
     await page.get_by_role("heading", name="worker \u203a boss").wait_for(timeout=TIMEOUT * 1000)
     box = page.locator("[data-testid=chat-input]:visible")
     await box.fill("hello boss")
+    # Lillecarl/aid#53: the answer shows twice for a moment now and then. Catch the chat as it is then.
+    await page.evaluate(
+        """() => {
+          const seen = () => [...document.querySelectorAll("[data-testid=chat-log]")]
+            .filter((l) => l.offsetParent !== null)
+            .map((l) => [...l.querySelectorAll("[data-testid=chat-row]")].map((r) => r.textContent.trim()));
+          new MutationObserver(() => {
+            const logs = seen();
+            if (!window.aidDup && logs.some((rows) => rows.filter((t) => t.includes("echo hello boss")).length > 1))
+              window.aidDup = JSON.stringify(logs);
+          }).observe(document.body, { subtree: true, childList: true, characterData: true });
+        }"""
+    )
     await box.press("Enter")
     try:
         await (
@@ -517,10 +530,7 @@ async def test_linked_sessions_are_tabs_under_the_chat(page: Page, session_daemo
             .wait_for(timeout=TIMEOUT * 1000)
         )
     except Exception:
-        # Lillecarl/aid#53: the answer shows twice now and then; one chat or two mounted ones?
-        logs = page.locator("[data-testid=chat-log]:visible")
-        for i in range(await logs.count()):
-            print(f"chat log {i}:", await logs.nth(i).inner_html())
+        print("chat logs when the answer showed twice:", await page.evaluate("() => window.aidDup ?? null"))
         raise
     await page.get_by_role("tab", name="Status").click()
     await page.get_by_role("tab", name="Chat").click()

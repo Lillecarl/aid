@@ -89,6 +89,9 @@
   let loading = $state(false);
   let text = $state("");
   let busy = $state(false);
+  // From this page's prompt until its rows are swapped for history (Lillecarl/aid#53): the turn's own stream
+  // chunks, arriving late on the events socket after its reply ended `busy`, would show its answer twice.
+  let settling = false;
   let log: HTMLDivElement | undefined = $state();
   let liveCount = 0;
   // What the agent pipes through `usertee` while a turn runs: shown live, never recorded, gone when the turn ends.
@@ -300,7 +303,8 @@
     guard(async () => {
       const page = await api.history(name, { limit: Math.min(PAGE, windowSize) });
       // Keep what the page made meanwhile (slash output typed before the page arrived): history never holds it.
-      rows = [...fromHistory(page.entries), ...rows.filter((r) => r.local)];
+      // Nor yet the rows of this page's own turn, if one runs: its `reconcile` swaps them for their entries.
+      rows = [...fromHistory(page.entries), ...rows.filter((r) => r.local || (settling && r.seq === undefined))];
       newest = page.entries.at(-1)?.seq ?? -1;
       hasOlder = page.has_older;
       hasNewer = false;
@@ -403,6 +407,7 @@
       return;
     }
     busy = true;
+    settling = true;
     if (hasNewer) await loadLatest();
     rows.push({ key: `l${liveCount++}`, kind: "user", text: prompt });
     await toBottom();
@@ -412,7 +417,11 @@
       rows.push({ key: `l${liveCount++}`, kind: "error", local: true, text: e instanceof Error ? e.message : String(e) });
     } finally {
       busy = false;
-      await reconcile().catch(() => undefined);
+      try {
+        await reconcile().catch(() => undefined);
+      } finally {
+        settling = false;
+      }
       await onchange();
     }
   }
@@ -636,7 +645,7 @@
     });
     // Text and thinking of turns this page did not send stream here; its own turn streams on its prompt.
     const unwatchStream = api.followStream(name, (chunk) => {
-      if (!busy && !hasNewer && !endedTurns.has(chunk.turn)) apply(chunk.event);
+      if (!settling && !hasNewer && !endedTurns.has(chunk.turn)) apply(chunk.event);
     });
     const unwatchStatus = api.followStatus(
       name,
