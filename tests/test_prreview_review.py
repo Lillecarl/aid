@@ -13,6 +13,7 @@ from plugins.prreview.review import (
     rebuilds,
     skill_hints,
 )
+from tests.test_skills_plugin import skills
 
 DIFF = """\
 diff --git a/a.nix b/a.nix
@@ -87,7 +88,10 @@ def test_skill_hints_follow_paths_and_builders() -> None:
     assert skill_hints("rust thing: 1 -> 2", "+++ b/README.md\n") == ["nixpkgs-updates"]
 
 
-def test_every_hinted_skill_exists() -> None:
+def test_every_hinted_skill_exists_and_parses() -> None:
+    # Each must pass the skills plugin's own check: a frontmatter it refuses is left out without a word to the model.
+    for guide in SKILLS.glob("*/SKILL.md"):
+        skills().parse(guide)
     assert sorted(name for name, _ in SKILL_HINTS) == sorted(
         p.name for p in SKILLS.iterdir() if (p / "SKILL.md").is_file()
     )

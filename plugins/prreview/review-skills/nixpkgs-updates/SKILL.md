@@ -1,6 +1,6 @@
 ---
 name: nixpkgs-updates
-description: Reviewing a version bump - what changed upstream, hashes, dropped patches, breaking changes for dependants, update scripts, and security fixes. Load for any PR whose title reads `pkg: old -> new`.
+description: Reviewing a version bump - what changed upstream, hashes, dropped patches, breaking changes for dependants, update scripts, and security fixes. Load for any PR whose title reads "pkg old -> new".
 ---
 
 # Reviewing a version bump
