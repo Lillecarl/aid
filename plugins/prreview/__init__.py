@@ -58,7 +58,11 @@ from .review import (
 from .store import ENDED, PRREVIEW_FILE, DuplicateCheck, PrState, PrStore, RunState
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from anyio.abc import TaskGroup
+
+    from aid.client import Work
 
 log = structlog.get_logger(__name__)
 
@@ -447,13 +451,16 @@ class PrReviews(aid.Plugin):
                 return True
             ended = {(r.number, r.head) for r in rows if r.state in ENDED}
             log.info("pr_search", run=config.name)
-            pr = await self._next(config, ended)
+            # The root shows the run working, and each step of the PR under review, while there is one.
+            async with self.client.session(config.name).work("Looking for a pull request to review") as root:
+                pr = await self._next(config, ended)
+                if pr is not None:
+                    await self._say([root], f"Reviewing #{pr.number} {pr.title}\n")
+                    async with self._one:
+                        await self._review(config, pr, root)
             if pr is None:
                 log.info("poll_wait", run=config.name, seconds=config.poll)
                 await anyio.sleep(config.poll)
-                continue
-            async with self._one:
-                await self._review(config, pr)
 
     async def _next(self, config: PrReviewConfig, ended: set[tuple[int, str]]) -> Pr | None:
         """The first PR the search finds at a head no review ended at; None also when GitHub does not answer."""
@@ -475,8 +482,30 @@ class PrReviews(aid.Plugin):
         elif info.tags.get("prreview") != config.name:
             raise AidError("exists", f"a session {config.name!r} exists that this run did not make")
 
-    async def _review(self, config: PrReviewConfig, pr: Pr) -> None:
+    async def _say(self, works: Sequence[Work], text: str) -> None:
+        """Live output is a view: one that fails is logged, never fails the PR."""
+        for work in works:
+            try:
+                await work.say(text)
+            except AidError as failure:
+                log.warning("say_failed", session=work.session, error=failure.message)
+
+    async def _review(self, config: PrReviewConfig, pr: Pr, root: Work) -> None:
+        holder = holder_name(config, pr.number)
+        await self._session(holder, holder_spec(config, self._dir))
+        async with self.client.session(holder).work(f"Reviewing #{pr.number} {pr.title}") as work:
+            await self._reviewing(config, pr, root, work)
+
+    async def _reviewing(self, config: PrReviewConfig, pr: Pr, root: Work, work: Work) -> None:
         store, cmds = self.store, config.commands
+
+        async def step(text: str) -> None:
+            await store.step(config.name, pr, text)
+            await self._say([root, work], f"\n▶ #{pr.number}: {text}\n")
+
+        async def build_log(text: str) -> None:
+            await self._say([work], text)
+
         repo = Path(config.clone) if config.clone else self._dir / "nixpkgs.git"
         worktree = self._dir / "worktrees" / config.name
         roles = [*config.angles, JUDGE, DUPLICATES]
@@ -484,12 +513,12 @@ class PrReviews(aid.Plugin):
         holder = holder_name(config, pr.number)
         await store.started(config.name, pr)
         log.info("pr_review", run=config.name, pr=pr.number, head=pr.head)
-        await self._session(holder, holder_spec(config, self._dir))
         await self._note(holder, f"Reviewing [#{pr.number} {pr.title}]({pr.url}) by {pr.author} at {pr.head[:12]}.")
         try:
             await commands.clone(cmds, repo)
-            await store.step(config.name, pr, "checking out")
-            await commands.checkout(cmds, repo, config.remote, pr, worktree)
+            await step("fetching the head and checking it out")
+            await commands.checkout(cmds, repo, config.remote, pr, worktree, say=build_log)
+            await step("reading CI's rebuild list")
             with tempfile.TemporaryDirectory(prefix="prreview-") as into:
                 changed = await commands.rebuild_list(cmds, pr.head, Path(into))
             attrs = [] if changed is None else rebuilds(changed)
@@ -502,26 +531,29 @@ class PrReviews(aid.Plugin):
                 await self._end(config, pr, PrState.SKIPPED, skipped)
                 return
             diff = await commands.diff(cmds, pr.number)
-            await store.step(config.name, pr, "checking for duplicates")
+            await step("checking for duplicates")
             if config.duplicates and await self._beaten(config, pr, worktree, diff, attrs):
                 return
             builds: list[Build] = []
             for n, attr in enumerate(attrs, 1):
-                await store.step(config.name, pr, f"building {attr} ({n} of {len(attrs)})")
-                built = await commands.build(cmds, worktree, attr, config.build_timeout, config.nixpkgs_config)
+                await step(f"building {attr} ({n} of {len(attrs)})")
+                built = await commands.build(
+                    cmds, worktree, attr, config.build_timeout, config.nixpkgs_config, say=build_log
+                )
                 outputs.extend(built.out_paths)
                 builds.append(built)
+                await self._say([root, work], f"{attr}: {built.outcome} in {built.seconds:.0f} s\n")
             await store.built(config.name, pr, diff, builds, None)
             if builds:
                 await self._note(
                     holder, "Built:\n" + "".join(f"\n- `{b.attr}`: {b.outcome} in {b.seconds:.0f} s" for b in builds)
                 )
-            await store.step(config.name, pr, f"reviewing from {len(config.angles)} angles")
+            await step(f"reviewing from {len(config.angles)} angles")
             skills = skill_hints(pr.title, diff)
             await self._angles(config, pr, worktree, angle_prompt(pr, diff, builds, None, config.diff_limit, skills))
             answers = await store.angles(config.name, pr.number, pr.head)
             prompt = judge_prompt(pr, diff, builds, None, config.diff_limit, answers, skills)
-            await store.step(config.name, pr, "judging")
+            await step("judging")
             await self._judge(config, pr, worktree, prompt, diff_lines(diff))
             await self._end(config, pr, PrState.REVIEWED, await store.event(config.name, pr.number, pr.head))
         except AidError as failure:

@@ -4,6 +4,7 @@ runs these, never a model.
 
 from __future__ import annotations
 
+import codecs
 import contextlib
 import shutil
 import time
@@ -20,7 +21,7 @@ from .duplicates import Candidate
 from .review import Build, Pr
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Sequence
     from pathlib import Path
 
 log = structlog.get_logger(__name__)
@@ -32,6 +33,9 @@ ARTIFACT: Final = "comparison"
 CHANGED_PATHS: Final = "changed-paths.json"
 HEAD_REF: Final = "refs/prreview/head"
 LOG_LINES: Final = 60
+SAY_EVERY: Final = 0.5
+"""Seconds between live-output sends while a command writes."""
+type Say = Callable[[str], Awaitable[None]]
 PR_FIELDS: Final = "number,headRefOid,baseRefName,title,body,author,url,updatedAt"
 CANDIDATE_FIELDS: Final = "number,title,state,updatedAt,files"
 
@@ -99,12 +103,52 @@ _PATH_INFO: Final[TypeAdapter[_PathInfos]] = TypeAdapter(_PathInfos)
 """`nix path-info --json`: an object keyed by path since Nix 2.19, a list before."""
 
 
-async def _run(argv: Sequence[str], what: str, cwd: Path | None = None) -> str:
-    result = await anyio.run_process(list(argv), check=False, cwd=cwd)
-    if result.returncode != 0:
-        tail = result.stderr.decode(errors="replace").strip()[-2000:]
-        raise AidError("command_failed", f"{what} exited {result.returncode}: {tail}")
-    return result.stdout.decode(errors="replace")
+async def _quiet(text: str) -> None:
+    pass
+
+
+async def streamed(argv: Sequence[str], say: Say = _quiet, cwd: Path | None = None) -> tuple[int, bytes, bytes]:
+    """Run `argv`, passing its stderr to `say` as it comes, at most every `SAY_EVERY` seconds; then its exit code,
+    stdout and stderr. A cancel kills it (anyio's `Process.aclose`)."""
+    out, err = bytearray(), bytearray()
+    decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    pending: list[str] = []
+    said = time.monotonic()
+
+    async def flush() -> None:
+        nonlocal said
+        if pending:
+            text = "".join(pending)
+            pending.clear()
+            said = time.monotonic()
+            await say(text)
+
+    async with await anyio.open_process(list(argv), cwd=cwd) as process:
+        assert process.stdout is not None and process.stderr is not None
+
+        async def pump_out() -> None:
+            async for chunk in process.stdout:  # pyright: ignore[reportOptionalIterable] -- asserted above
+                out.extend(chunk)
+
+        async with anyio.create_task_group() as tg:
+            tg.start_soon(pump_out)
+            async for chunk in process.stderr:
+                err.extend(chunk)
+                pending.append(decoder.decode(chunk))
+                if time.monotonic() - said >= SAY_EVERY:
+                    await flush()
+        pending.append(decoder.decode(b"", final=True))
+        await flush()
+        code = await process.wait()
+    return code, bytes(out), bytes(err)
+
+
+async def _run(argv: Sequence[str], what: str, cwd: Path | None = None, say: Say = _quiet) -> str:
+    code, stdout, stderr = await streamed(argv, say, cwd)
+    if code != 0:
+        tail = stderr.decode(errors="replace").strip()[-2000:]
+        raise AidError("command_failed", f"{what} exited {code}: {tail}")
+    return stdout.decode(errors="replace")
 
 
 async def search(commands: Commands, query: Sequence[str], limit: int) -> list[int]:
@@ -214,7 +258,7 @@ async def clone(commands: Commands, path: Path) -> None:
         await _run([*commands.git, "init", "--bare", "--quiet", str(path)], "git init")
 
 
-async def checkout(commands: Commands, repo: Path, remote: str, pr: Pr, worktree: Path) -> None:
+async def checkout(commands: Commands, repo: Path, remote: str, pr: Pr, worktree: Path, say: Say = _quiet) -> None:
     """The PR's head, alone (`--depth 1`), as a detached worktree. A head that moved since `pr` refuses. A worktree
     left behind (a daemon killed mid-PR, measured 2026-11-07) goes first: `worktree add` refuses a path that exists."""
     git = [*commands.git, "-C", str(repo)]
@@ -226,7 +270,7 @@ async def checkout(commands: Commands, repo: Path, remote: str, pr: Pr, worktree
             await anyio.to_thread.run_sync(shutil.rmtree, worktree)
     await _run([*git, "worktree", "prune"], "git worktree prune")
     ref = f"+refs/pull/{pr.number}/head:{HEAD_REF}"
-    await _run([*git, "fetch", "--quiet", "--no-tags", "--depth", "1", remote, ref], "git fetch")
+    await _run([*git, "fetch", "--progress", "--no-tags", "--depth", "1", remote, ref], "git fetch", say=say)
     fetched = (await _run([*git, "rev-parse", HEAD_REF], "git rev-parse")).strip()
     if fetched != pr.head:
         raise AidError("head_moved", f"the PR's head is {fetched}, not {pr.head}")
@@ -247,7 +291,9 @@ async def clean(commands: Commands, repo: Path, worktree: Path) -> None:
             log.warning("clean_failed", step=what, error=failure.message)
 
 
-async def build(commands: Commands, worktree: Path, attr: str, allowed: float, nixpkgs_config: str) -> Build:
+async def build(
+    commands: Commands, worktree: Path, attr: str, allowed: float, nixpkgs_config: str, say: Say = _quiet
+) -> Build:
     """One attribute of the worktree, outside any nixpkgs config of the daemon's user; past `allowed` seconds it is
     stopped and recorded as a timeout."""
     argv = [
@@ -264,18 +310,20 @@ async def build(commands: Commands, worktree: Path, attr: str, allowed: float, n
         attr,
         "--no-link",
         "--print-out-paths",
+        "--print-build-logs",
     ]
     started = time.monotonic()
     result = None
     with anyio.move_on_after(allowed):
-        result = await anyio.run_process(argv, check=False)
+        result = await streamed(argv, say)
     seconds = time.monotonic() - started
     if result is None:
         return Build(attr=attr, outcome="timeout", seconds=seconds, log_tail="")
-    tail = "\n".join(result.stderr.decode(errors="replace").splitlines()[-LOG_LINES:])
-    if result.returncode != 0:
+    code, stdout, stderr = result
+    tail = "\n".join(stderr.decode(errors="replace").splitlines()[-LOG_LINES:])
+    if code != 0:
         return Build(attr=attr, outcome="failed", seconds=seconds, log_tail=tail)
-    paths = tuple(line for line in result.stdout.decode().split() if line.startswith("/"))
+    paths = tuple(line for line in stdout.decode().split() if line.startswith("/"))
     return Build(
         attr=attr,
         outcome="built",

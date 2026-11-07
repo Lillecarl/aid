@@ -15,7 +15,7 @@ import aid
 from aid.daemon import Daemon
 from aid.paths import ENV_STATE_DIR
 from aid.plugins import ENV_PLUGINS_PATH
-from aid.protocol import GetSpec, Note, QueryResult
+from aid.protocol import GetLive, GetSpec, LiveChunk, Note, QueryResult
 from aid.spec import AgentSpecAdapter, NativeSpec
 from plugins.prreview import PrReviewConfig, angle_spec, holder_spec, judge_spec
 from plugins.prreview.store import PRREVIEW_FILE, SCHEMA, PrStore
@@ -205,6 +205,7 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
             infos = {info.name: info for info in await client.sessions()}
             root_notes = await notes(client, "nixrev")
             holder_notes = await notes(client, "nixrev.7")
+            live = LiveChunk.model_validate(await client.call(GetLive(session="nixrev.7")))
     assert prs == [[7, head, "reviewed", None, "judging"]]
     assert builds == [["broken", "failed", None], ["hello", "built", 2**20]]
     assert [a[0] for a in angles] == ["alternatives", "conventions", "correctness", "security"]
@@ -230,6 +231,10 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
     assert all(infos[f"nixrev.7.{role}"].parent == "nixrev.7" for role in roles)
     assert not any(info.running for info in infos.values())
     assert (infos["nixrev"].hidden, infos["nixrev.7"].hidden) == (None, "PR reviewed: COMMENT")
+    # While the plugin worked, the holder showed working and streamed each step and build as live output.
+    assert live.text.startswith("Reviewing #7 hello: 1 -> 2\n")
+    for line in ("▶ #7: fetching the head", "▶ #7: building hello (", "hello: built in", "▶ #7: judging"):
+        assert line in live.text
     # The root tells the run, PR by PR; the holder tells the PR. Both by the plugin, no model turn.
     link = "[#7 hello: 1 -> 2](https://github.com/NixOS/nixpkgs/pull/7)"
     assert root_notes == [("prreview", f"{link}: reviewed: COMMENT")]
