@@ -76,8 +76,10 @@ async def test_reconcile_creates_category_and_channels(daemon: Paths, tmp_path: 
             assert set(channel_map.channels) == {"echo", "otu"}
             echo_id = channel_map.channels["echo"]
             assert rest.created[0] == ("g1", "aid sessions", 4, None, None)
-            assert (rest.created[1][1], rest.created[1][3]) == ("echo", "new-0")
-            assert rest.created[1][4] == f"aid session echo: {await _state_word(control, 'echo')}"
+            # By name: the list's order is by activity, and two sessions made a minute apart swap.
+            made = next(c for c in rest.created[1:] if c[1] == "echo")
+            assert made[3] == "new-0"
+            assert made[4] == f"aid session echo: {await _state_word(control, 'echo')}"
             reloaded = await ChannelMap.load(tmp_path / CHANNELS_FILE)
             assert (reloaded.category_id, reloaded.channels) == ("new-0", channel_map.channels)
             created = len(rest.created)
