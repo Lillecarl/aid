@@ -151,13 +151,13 @@ async def _run(argv: Sequence[str], what: str, cwd: Path | None = None, say: Say
     return stdout.decode(errors="replace")
 
 
-async def search(commands: Commands, query: Sequence[str], limit: int) -> list[int]:
-    """Open PRs the search finds, least recently updated first: the oldest wait longest for a review."""
-    out = await _run(
-        [*commands.gh, "search", "prs", "--repo", REPO, *query, "--limit", str(limit), "--json", "number,updatedAt"],
-        "gh search prs",
-    )
-    return [hit.number for hit in sorted(_HITS.validate_json(out), key=lambda hit: hit.updatedAt)]
+async def search(commands: Commands, query: Sequence[str], limit: int, sort: str, order: str) -> list[int]:
+    """Open PRs the search finds, in GitHub's `sort` and `order`. GitHub sorts, never this: its default order is
+    best match, and `limit` cuts that (measured 2026-11-08: over 1000 matches, the first 30 all reviewed, so every
+    search came back empty)."""
+    argv = [*commands.gh, "search", "prs", "--repo", REPO, *query, "--sort", sort, "--order", order]
+    out = await _run([*argv, "--limit", str(limit), "--json", "number,updatedAt"], "gh search prs")
+    return [hit.number for hit in _HITS.validate_json(out)]
 
 
 async def pr(commands: Commands, number: int) -> Pr:

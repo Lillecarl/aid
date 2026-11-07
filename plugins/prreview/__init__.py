@@ -11,6 +11,7 @@ sessions. Bundled, `autostart`.
 from __future__ import annotations
 
 import contextlib
+import random
 import re
 import tempfile
 from dataclasses import dataclass
@@ -40,6 +41,7 @@ from .duplicates import (
     retry_note,
     search_terms,
 )
+from .picking import SOURCES, Source, pick_order
 from .review import (
     NO_REVIEW,
     Build,
@@ -78,6 +80,7 @@ ENV_SKILLS_ONLY: Final = "AID_SKILLS_ONLY"
 """`plugins/skills`' variable: not imported, as plugins load under their own names, apart."""
 SKILLS_PROVIDER: Final = "skills"
 DUPLICATES: Final = "duplicates"
+SEARCH_MAX: Final = 1000
 QUERY: Final = ("--state", "open", "--label", "10.rebuild-linux: 1-10", "--checks", "success", "--draft=false")
 COMMON: Final = (
     "You review one nixpkgs pull request from a single angle; other reviewers cover the others. You only read: ls, "
@@ -153,7 +156,10 @@ class PrReviewConfig(BaseModel):
     """The plugin's bare repository; None: `prreview/nixpkgs.git` in the plugin directory."""
     query: list[str] = Field(default_factory=lambda: list(QUERY))
     """`gh search prs` filters: PRs whose rebuilds come from cache.nixos.org but their own."""
-    search_limit: Annotated[int, Field(ge=1, le=100)] = 30
+    search_limit: Annotated[int, Field(ge=1, le=SEARCH_MAX)] = 100
+    """Hits each source reads: 100 is one request; GitHub's search answers at most `SEARCH_MAX`."""
+    sources: list[Source] = Field(default_factory=lambda: list(SOURCES), min_length=1)
+    """The orders a pick draws from (`picking.py`)."""
     max_prs: Annotated[int, Field(ge=1)] | None = None
     """Stop after this many reviews; None polls for new PRs without end."""
     poll: Annotated[float, Field(ge=60)] = 900.0
@@ -284,6 +290,7 @@ class PrReviews(aid.Plugin):
         self._judging: dict[str, _Judging] = {}
         """Judge session → the PR it judges: only that session records, and only that PR's review."""
         self._one = anyio.Lock()
+        self._rng = random.Random()  # Which PR comes next: chance, not secrecy.
         """One PR at a time: one worktree and one PR's outputs on disk."""
         self._ready = anyio.Event()
         self._dir = default_paths().plugin_dir(self.plugin_name())
@@ -471,10 +478,18 @@ class PrReviews(aid.Plugin):
                 await anyio.sleep(config.poll)
 
     async def _next(self, config: PrReviewConfig, ended: set[tuple[int, str]]) -> Pr | None:
-        """The first PR the search finds at a head no review ended at; None also when GitHub does not answer."""
+        """A PR at a head no review ended at, picked across the search's sources (`picking.pick_order`); None also
+        when GitHub does not answer. A source that fails is left out of this pick."""
         cmds = config.commands
+        hits: list[tuple[Source, list[int]]] = []
+        for source in config.sources:
+            try:
+                found = await commands.search(cmds, config.query, config.search_limit, source.sort, source.order)
+                hits.append((source, found))
+            except AidError as failure:
+                log.warning("search_failed", run=config.name, sort=source.sort, error=failure.message)
         try:
-            for number in await commands.search(cmds, config.query, config.search_limit):
+            for number in pick_order(hits, {number for number, _ in ended}, self._rng):
                 found = await commands.pr(cmds, number)
                 if (found.number, found.head) not in ended:
                     return found

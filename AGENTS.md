@@ -208,7 +208,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - `plugins/prreview/` — nixpkgs PR review, bundled, `autostart` (read, prompt, manage, private); plan
   `docs/pr-review.md`. `aid prreview start|status|pause|resume|query` (operator only). `PrReviewConfig` (name, model,
   optional `hosts` → private, `query` = `gh search prs` filters, default open + green checks + `10.rebuild-linux:
-  1-10`, `max_prs`, `max_builds`, `angles` name → instructions, `angles_at_once` 2, `commands` = gh/git/nix argv
+  1-10`, `sources` (`picking.py`, pure: sort/order/weight per search, `search_limit` 100 each; a source by weight,
+  then one of its first `HEAD_START` unreviewed hits; reviewed last), `max_prs`, `max_builds`, `angles` name → instructions, `angles_at_once` 2, `commands` = gh/git/nix argv
   prefixes, tests point them at `tests/prreview_fakes.py`). One PR at a time (`_one`), across runs: `commands.py`
   fetches `refs/pull/N/head` `--depth 1` into the plugin's bare repo (head moved → skipped), detached worktree
   `worktrees/<run>`; `gh` finds the head's `PR` workflow run and its `comparison` artifact, `review.rebuilds` reads

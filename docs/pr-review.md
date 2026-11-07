@@ -30,6 +30,11 @@ The daemon needs `gh` (logged in), `git` and `nix` on its PATH, or `commands` in
 - **Only PRs that build cheaply.** Open, every check green (`--checks success`), not a draft, label
   `10.rebuild-linux: 1-10`. No public cache holds PR outputs, but for such a PR only its own derivations build
   here. Everything else comes from cache.nixos.org.
+- **Picked across orders, by chance.** Over 1000 PRs match, and GitHub's search answers at most 1000 in one order,
+  so one order hides most of them for good. Each pick searches three orders, 100 hits each: recently updated
+  (weight 0.5), most thumbs-up (0.3), longest waiting (0.2). It picks an order at random by weight, then one of
+  that order's first 10 unreviewed PRs at random. Reviewed PRs come last, to catch a head that moved. The weights
+  are the run config's `sources`.
 - **CI says what to build.** The PR workflow's `comparison` artifact lists `rebuildsByPlatform.x86_64-linux`. The
   plugin builds each attribute from the worktree, with its own nixpkgs config: unfree allowed, as CI lists
   unfree packages too. It does not evaluate nixpkgs itself.

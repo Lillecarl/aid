@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import sys
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -18,6 +19,7 @@ from aid.plugins import ENV_PLUGINS_PATH
 from aid.protocol import GetLive, GetSpec, LiveChunk, Note, QueryResult
 from aid.spec import AgentSpecAdapter, NativeSpec
 from plugins.prreview import PrReviewConfig, angle_spec, holder_spec, judge_spec
+from plugins.prreview.picking import Source, pick_order
 from plugins.prreview.store import PRREVIEW_FILE, SCHEMA, PrStore
 from tests.conftest import TESTS
 from tests.models import HOST
@@ -334,6 +336,24 @@ async def test_a_pr_an_equal_later_duplicate_beats_ends_unbuilt(
         ("prreview", "No pull request left to review; searching again every 15 min."),
     ]
     assert not (found / "nix.log").exists()
+
+
+def test_a_pick_puts_every_unreviewed_pr_before_the_reviewed_ones() -> None:
+    """A search led by reviewed PRs found nothing new while hundreds waited (2026-11-08): every hit once, the
+    unreviewed ones first from any source, reviewed ones last, for a head that moved."""
+    recent, upvoted = Source(sort="updated"), Source(sort="reactions-+1")
+    order = pick_order([(recent, [5, 3, 9]), (upvoted, [9, 1, 7])], {3, 1}, random.Random(4))
+    assert sorted(order[:3]) == [5, 7, 9]
+    assert order[3:] == [3, 1]
+
+
+def test_picks_draw_from_each_source_by_weight() -> None:
+    heavy, light = Source(sort="updated", weight=0.9), Source(sort="updated", order="asc", weight=0.1)
+    hits = [(heavy, list(range(100, 200))), (light, list(range(200, 300)))]
+    firsts = [pick_order(hits, set(), random.Random(seed), head_start=10)[0] for seed in range(400)]
+    from_heavy = sum(n < 200 for n in firsts)
+    assert 320 < from_heavy < 395  # About nine in ten, and the light source still gets its turns.
+    assert all(n < 110 or 200 <= n < 210 for n in firsts)  # Each among its source's first ten.
 
 
 def test_angles_only_read_and_only_the_judge_records(tmp_path: Path) -> None:
