@@ -75,10 +75,18 @@ def current_user(connection: HTTPConnection) -> User | None:
 
 def same_origin(connection: HTTPConnection, config: OidcConfig) -> bool:
     """For a WebSocket, which carries no CSRF header: the browser's Origin must be aid's own. Another site's page
-    could otherwise open one with the user's cookie."""
-    expected = urlsplit(config.base_url)
+    could otherwise open one with the user's cookie.
+
+    aid's own is the base URL, or the address the browser reached this request at (its Host): a forward that
+    lands on another port (pymux takes the next free one when the client's port is busy) is still aid. A site
+    that rebinds its name to aid's address passes this, but has no login cookie for that name."""
     given = urlsplit(connection.headers.get("origin", ""))
-    return (given.scheme, given.netloc) == (expected.scheme, expected.netloc)
+    expected = urlsplit(config.base_url)
+    if (given.scheme, given.netloc) == (expected.scheme, expected.netloc):
+        return True
+    host = connection.headers.get("host")
+    scheme = "https" if connection.url.scheme in ("https", "wss") else "http"
+    return host is not None and (given.scheme, given.netloc) == (scheme, host)
 
 
 def csrf_ok(request: Request) -> bool:

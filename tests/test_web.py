@@ -37,6 +37,8 @@ from tests.web_harness import (
 )
 
 if TYPE_CHECKING:
+    from anyio.abc import ByteStream, SocketStream
+
     from aid.paths import Paths
 
 pytestmark = [pytest.mark.anyio, needs_dex]
@@ -363,6 +365,52 @@ async def test_zws_needs_the_login_the_origin_and_the_subprotocol(web: Web) -> N
                     additional_headers=headers,
                 ):
                     pass
+
+
+async def test_zws_takes_the_origin_of_a_forward_on_another_port(web: Web) -> None:
+    """A port forward that lands on another port than aid's own (pymux takes the next free one) is still aid's
+    origin: the browser's Origin and Host both name the forward."""
+    port = free_port()
+    target = web.url.removeprefix("http://")
+    target_host, target_port = target.rsplit(":", 1)
+
+    async def pipe(source: ByteStream, sink: ByteStream) -> None:
+        try:
+            async for chunk in source:
+                await sink.send(chunk)
+        except anyio.BrokenResourceError, anyio.ClosedResourceError:
+            pass
+        finally:
+            await sink.aclose()
+
+    async def forward(client: SocketStream) -> None:
+        upstream = await anyio.connect_tcp(target_host, int(target_port))
+        async with client, upstream, anyio.create_task_group() as tg:
+            tg.start_soon(pipe, client, upstream)
+            tg.start_soon(pipe, upstream, client)
+
+    with anyio.fail_after(TIMEOUT):
+        headers = await zws_cookie(web)
+        listener = await anyio.create_tcp_listener(local_host="127.0.0.1", local_port=port)
+        async with listener, anyio.create_task_group() as tg:
+            tg.start_soon(listener.serve, forward)
+            forwarded = f"http://127.0.0.1:{port}"
+            async with ws_connect(
+                f"ws://127.0.0.1:{port}/api/zws/events",
+                origin=cast(Origin, forwarded),
+                additional_headers=headers,
+                subprotocols=[cast(Subprotocol, "ZWS2.0")],
+            ):
+                pass
+            with pytest.raises(InvalidStatus):
+                async with ws_connect(
+                    f"ws://127.0.0.1:{port}/api/zws/events",
+                    origin=cast(Origin, "http://127.0.0.1:1"),
+                    additional_headers=headers,
+                    subprotocols=[cast(Subprotocol, "ZWS2.0")],
+                ):
+                    pass
+            tg.cancel_scope.cancel()
 
 
 @needs_pymux
