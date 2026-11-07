@@ -189,6 +189,7 @@ async def spawn_plugin_client(ctx: zmq.asyncio.Context, name: str, *, private: b
             opened.close(linger=0)
 
 
+WORK_CLOSE_TIMEOUT: Final = 5.0
 DAEMON_CALL_TIMEOUT: Final = 30.0
 """A daemon call slower than this means the daemon is gone: exit loudly and let the supervisor restart into a
 fresh baseline, rather than hang on a reply a restarted daemon never sends."""
@@ -280,6 +281,8 @@ class Client:
         self._send_lock = anyio.Lock()
         self._pending: dict[str, MemoryObjectSendStream[Reply]] = {}
         self._invocations: MemoryObjectSendStream[Invocation] | None = None
+        self._reading = True
+        """False once `read_replies` ended: nothing would answer a call."""
         self.sockets: set[zmq.asyncio.Socket] = set()
 
     @asynccontextmanager
@@ -334,12 +337,19 @@ class Client:
                 yield None if message is None else SessionInfosAdapter.validate_json(message[1])
 
     async def read_replies(self) -> None:
-        while True:
-            reply = decode_reply(await self._sock.recv())
-            if isinstance(reply, Event | Done | Failure) and (stream := self._pending.get(reply.id)) is not None:
-                stream.send_nowait(reply)
-            elif isinstance(reply, Invocation) and self._invocations is not None:
-                self._invocations.send_nowait(reply)
+        """Route replies until cancelled; then every call waiting, and every later one, fails `closed`. A shielded
+        cleanup calling after its daemon shut down would otherwise wait for a reply nothing reads."""
+        try:
+            while True:
+                reply = decode_reply(await self._sock.recv())
+                if isinstance(reply, Event | Done | Failure) and (stream := self._pending.get(reply.id)) is not None:
+                    stream.send_nowait(reply)
+                elif isinstance(reply, Invocation) and self._invocations is not None:
+                    self._invocations.send_nowait(reply)
+        finally:
+            self._reading = False
+            for stream in list(self._pending.values()):
+                stream.close()
 
     async def serve_calls(self, handler: CallHandler, hooks: Sequence[Literal["message"]] = ()) -> None:
         """As a plugin, answer the calls and `hooks` the daemon routes to it with `handler`, each in a task of its
@@ -372,6 +382,8 @@ class Client:
 
     @asynccontextmanager
     async def _exchange(self, request: Request) -> AsyncGenerator[MemoryObjectReceiveStream[Reply]]:
+        if not self._reading:
+            raise AidError("closed", "this client stopped reading replies")
         send, receive = anyio.create_memory_object_stream[Reply](math.inf)
         self._pending[request.id] = send
         try:
@@ -646,9 +658,10 @@ class Session:
                 finally:
                     tg.cancel_scope.cancel()
         finally:
-            # Bounded: a daemon gone during shutdown never answers, and the turn expires there anyway.
+            # Short and bounded: a daemon shutting down never answers (measured: two 30 s waits outran a test's
+            # teardown), and an unclosed turn expires there anyway.
             with anyio.CancelScope(shield=True) as close, contextlib.suppress(AidError):
-                close.deadline = anyio.current_time() + DAEMON_CALL_TIMEOUT
+                close.deadline = anyio.current_time() + WORK_CLOSE_TIMEOUT
                 await self._client.call(CloseWork(session=self.name, turn=turn))
 
     async def hide(self, reason: str | None) -> None:
