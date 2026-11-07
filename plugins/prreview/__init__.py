@@ -143,6 +143,10 @@ class PrReviewConfig(BaseModel):
     max_builds: Annotated[int, Field(ge=0)] = 10
     """A PR whose CI lists more rebuilds on x86_64-linux is skipped."""
     build_timeout: Annotated[float, Field(gt=0)] = 3600.0
+    nixpkgs_config: str = "{ allowUnfree = true; }"
+    """The worktree's `config`, as a Nix expression; the daemon user's own is never read. CI lists unfree packages
+    among the rebuilds, and an empty config refuses to evaluate them (measured: jetbrains-toolbox, 2026-11-07). The
+    outputs stay on this machine and are deleted after the PR."""
     diff_limit: Annotated[int, Field(ge=1000)] = 60_000
     """Characters of the diff in each prompt; the files are in the checkout."""
     angles: dict[Annotated[str, Field(pattern=r"^[a-z0-9-]{1,16}$")], str] = Field(
@@ -452,7 +456,7 @@ class PrReviews(aid.Plugin):
             builds: list[Build] = []
             for n, attr in enumerate(attrs, 1):
                 await store.step(config.name, pr, f"building {attr} ({n} of {len(attrs)})")
-                built = await commands.build(cmds, worktree, attr, config.build_timeout)
+                built = await commands.build(cmds, worktree, attr, config.build_timeout, config.nixpkgs_config)
                 outputs.extend(built.out_paths)
                 builds.append(built)
             await store.built(config.name, pr, diff, builds, None)

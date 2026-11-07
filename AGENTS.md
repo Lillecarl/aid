@@ -217,7 +217,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   session (read tools) answers a JSON block, refused → asked again; `beaten_by`: merged duplicate wins, else the
   model's winner, "equal" → latest `updatedAt`. Beaten → `duplicate` (`duplicate_of`), unbuilt; every check in
   `duplicate_checks`. Each attribute `nix
-  build --file WORKTREE --arg config '{ }' --arg overlays '[ ]'`, timeout recorded as an outcome. Sessions
+  build --file WORKTREE --arg config NIXPKGS_CONFIG --arg overlays '[ ]'` (`nixpkgs_config`, default unfree allowed: CI lists unfree rebuilds), timeout recorded as an outcome. Sessions
   `<run>.<number>.<angle|judge>`, parent root `<run>` (instructions, `tools=[]`, never prompted; keeps chat plugins
   off), `fresh_turns`, `instruction_providers=[]`, ceiling `READ_TOOLS`, the judge's plus `submit_review`
   (`@aid.mcptool`, so offered everywhere past a ceiling: the plugin takes it only from the judge of the PR under

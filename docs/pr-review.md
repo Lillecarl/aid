@@ -27,7 +27,8 @@ The daemon needs `gh` (logged in), `git` and `nix` on its PATH, or `commands` in
   `10.rebuild-linux: 1-10`. No public cache holds PR outputs, but for such a PR only its own derivations build
   here. Everything else comes from cache.nixos.org.
 - **CI says what to build.** The PR workflow's `comparison` artifact lists `rebuildsByPlatform.x86_64-linux`. The
-  plugin builds each attribute from the worktree, with an empty nixpkgs config. It does not evaluate nixpkgs itself.
+  plugin builds each attribute from the worktree, with its own nixpkgs config: unfree allowed, as CI lists
+  unfree packages too. It does not evaluate nixpkgs itself.
   A PR without the artifact, or with more than `max_builds` rebuilds, is skipped. A failed or timed-out build is a
   result the reviewers read.
 - **Duplicates first.** Before the builds, the plugin searches for PRs whose title names the same package or

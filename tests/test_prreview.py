@@ -218,6 +218,8 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
     assert not (paths.state_dir / "plugins" / "prreview" / "worktrees" / "nixrev").exists()
     calls = [json.loads(line) for line in (found / "nix.log").read_text().splitlines()]
     assert [c for c in calls if c[:2] == ["store", "delete"]] == [["store", "delete", "/nix/store/fake-hello"]]
+    built = next(c for c in calls if c[0] == "build")
+    assert built[built.index("config") + 1] == "{ allowUnfree = true; }"
 
 
 async def test_a_pr_ci_says_rebuilds_too_much_is_skipped_unbuilt(

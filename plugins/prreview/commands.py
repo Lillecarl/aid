@@ -247,7 +247,7 @@ async def clean(commands: Commands, repo: Path, worktree: Path) -> None:
             log.warning("clean_failed", step=what, error=failure.message)
 
 
-async def build(commands: Commands, worktree: Path, attr: str, allowed: float) -> Build:
+async def build(commands: Commands, worktree: Path, attr: str, allowed: float, nixpkgs_config: str) -> Build:
     """One attribute of the worktree, outside any nixpkgs config of the daemon's user; past `allowed` seconds it is
     stopped and recorded as a timeout."""
     argv = [
@@ -257,7 +257,7 @@ async def build(commands: Commands, worktree: Path, attr: str, allowed: float) -
         str(worktree),
         "--arg",
         "config",
-        "{ }",
+        nixpkgs_config,
         "--arg",
         "overlays",
         "[ ]",
