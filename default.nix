@@ -6,8 +6,8 @@
     type = "github";
     owner = "Lillecarl";
     repo = "pyterm";
-    rev = "c4e73263bf0e6d92eaed235fe06bad8270abfdcb";
-    narHash = "sha256-rsKku+T29/H+5ptIs70YpxlxB+mYDYZemtEgtslRL8A=";
+    rev = "166c59d1f1c9b69cfd3e551e13ba0b00f76d5357";
+    narHash = "sha256-weVWzCg12voGP2zTZ8hi2LaBP6JoxrsTwwRKGE7cbi0=";
   },
   # aid's agents edit through pyedit's library (`aid.coding`); the same pin as croshome's.
   pyedit ? builtins.fetchTree {
