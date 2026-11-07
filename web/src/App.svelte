@@ -6,7 +6,7 @@
   import { linkedOnly } from "./lib/links";
   import Session from "./lib/Session.svelte";
   import SessionList from "./lib/SessionList.svelte";
-  import { parseFilter, tagged } from "./lib/tags";
+  import { matches, parseFilter } from "./lib/tags";
 
   let email = $state("");
   let list: SessionInfo[] = $state([]);
@@ -17,8 +17,10 @@
   const hidden = $derived(linkedOnly(list));
   let filter = $state("");
   const terms = $derived(parseFilter(filter));
-  const anyTags = $derived(list.some((s) => Object.keys(s.tags).length > 0));
-  const listed = $derived(list.filter((s) => (showLinked || !hidden.has(s.name)) && tagged(s, terms)));
+  // A search reaches every session, linked ones too: a campaign's children are found by name.
+  const listed = $derived(
+    list.filter((s) => (showLinked || terms.length > 0 || !hidden.has(s.name)) && matches(s, terms)),
+  );
 
   async function refresh(): Promise<void> {
     try {
@@ -52,21 +54,19 @@
 <main>
   <aside>
     <h2>Sessions</h2>
-    {#if anyTags || filter}
-      <input
-        class="filter"
-        type="search"
-        placeholder="key or key=value …"
-        aria-label="Filter sessions by tag"
-        data-testid="tag-filter"
-        bind:value={filter}
-      />
-    {/if}
+    <input
+      class="filter"
+      type="search"
+      placeholder="name, tag or key=value …"
+      aria-label="Filter sessions by name or tag"
+      data-testid="tag-filter"
+      bind:value={filter}
+    />
     <SessionList
       sessions={listed}
       {current}
       onselect={(name) => (current = name)}
-      empty={terms.length > 0 ? "No session has these tags." : undefined}
+      empty={terms.length > 0 ? "No session matches." : undefined}
     />
     {#if hidden.size > 0}
       <button type="button" class="linked" data-testid="show-linked" onclick={() => (showLinked = !showLinked)}

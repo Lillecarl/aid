@@ -549,7 +549,20 @@ async def test_tags_label_and_filter_sessions(page: Page, session_daemon: Paths,
     await listing.get_by_role("button").filter(has_text="api").wait_for(state="detached", timeout=TIMEOUT * 1000)
     assert await listing.get_by_role("button").filter(has_text="web").count() == 1
     await page.get_by_test_id("tag-filter").fill("team=back")
-    await listing.get_by_text("No session has these tags.").wait_for(timeout=TIMEOUT * 1000)
+    await listing.get_by_text("No session matches.").wait_for(timeout=TIMEOUT * 1000)
+
+
+async def test_the_filter_finds_sessions_by_name(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """A bare word matches part of a name, in any case: a child of a campaign is found by its name."""
+    await seed_session(session_daemon, tmp_path, "review", "agents:echo")
+    await seed_session(session_daemon, tmp_path, "other", "agents:echo")
+    async with aid.connect(session_daemon) as client:
+        await client.create("review.pr-42", py_spec(tmp_path, "agents:echo").model_copy(update={"parent": "review"}))
+    await open_session(page, "other")
+    listing = page.get_by_test_id("session-list")
+    await page.get_by_test_id("tag-filter").fill("PR-4")
+    await listing.get_by_role("button").filter(has_text="review.pr-42").wait_for(timeout=TIMEOUT * 1000)
+    assert await listing.get_by_role("button").filter(has_text="other").count() == 0
 
 
 @needs_bwrap

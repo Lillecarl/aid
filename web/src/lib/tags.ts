@@ -14,9 +14,13 @@ export function parseFilter(text: string): TagTerm[] {
     });
 }
 
-export function tagged(info: SessionInfo, terms: TagTerm[]): boolean {
+/** Every term holds: `key=value` a tag; a bare word a tag key, or a part of the name (any case). */
+export function matches(info: SessionInfo, terms: TagTerm[]): boolean {
   const tags = info.tags;
-  return terms.every(({ key, value }) => key in tags && (value === null || tags[key] === value));
+  const name = info.name.toLowerCase();
+  return terms.every(({ key, value }) =>
+    value === null ? key in tags || name.includes(key.toLowerCase()) : tags[key] === value,
+  );
 }
 
 /** The tags in a stable order, as `key=value`. */
