@@ -100,14 +100,57 @@
     if (!chunk.text) return;
     // Each box follows its own bottom: the log, and the live block's own scroll area, kept at the end while it is
     // there and left alone once the person scrolls up in it.
-    const follow = nearBottom();
-    const followPre = !livePre || livePre.scrollHeight - livePre.scrollTop - livePre.clientHeight < EDGE_PX / 4;
+    if (live === null || live.turn !== chunk.turn) livePinned = true; // Each turn's block starts at its end.
+    const followPre = livePinned;
     const text = live !== null && live.turn === chunk.turn ? live.text + chunk.text : chunk.text;
     const lines = text.split("\n");
     live = { turn: chunk.turn, text: lines.length > LIVE_LINES ? lines.slice(-LIVE_LINES).join("\n") : text };
     await tick();
-    if (followPre && livePre) livePre.scrollTop = livePre.scrollHeight;
-    if (follow) void toBottom();
+    if (followPre && livePre) {
+      livePre.scrollTop = livePre.scrollHeight;
+      liveLastTop = livePre.scrollTop;
+    }
+    void follow();
+  }
+
+  // Pinned: the log keeps to its end as rows arrive. Any scroll up unpins it at once, however small: a distance
+  // threshold pulled a slow scroll back on every chunk. Reaching the end again, or the jump button, pins it.
+  let pinned = $state(true);
+  let lastTop = 0;
+  let livePinned = true;
+  let liveLastTop = 0;
+  const PIN_PX = 4;
+  const atEnd = (el: HTMLElement): boolean => el.scrollHeight - el.scrollTop - el.clientHeight <= PIN_PX;
+
+  function onlivescroll(): void {
+    if (!livePre) return;
+    if (atEnd(livePre)) livePinned = true;
+    else if (livePre.scrollTop < liveLastTop) livePinned = false;
+    liveLastTop = livePre.scrollTop;
+  }
+
+  /** A wheel turned up unpins before its scroll event lands: a row arriving between the two would pull it back. */
+  function onwheel(event: WheelEvent): void {
+    if (event.deltaY < 0) pinned = false;
+  }
+
+  /** The end, with `lastTop` noted now: a person's scroll in the same frame coalesces into one scroll event, which
+   * must still read as a move up. */
+  function toEnd(): void {
+    if (!log) return;
+    log.scrollTo({ top: log.scrollHeight });
+    lastTop = log.scrollTop;
+  }
+
+  async function follow(): Promise<void> {
+    if (!pinned) return;
+    await tick();
+    if (pinned) toEnd();
+  }
+
+  async function jumpToEnd(): Promise<void> {
+    if (hasNewer) await loadLatest();
+    else await toBottom();
   }
 
   function rowsOf(item: HistoryItem, key: string, seq?: number): Row[] {
@@ -220,8 +263,9 @@
   }
 
   async function toBottom(): Promise<void> {
+    pinned = true;
     await tick();
-    log?.scrollTo({ top: log.scrollHeight });
+    toEnd();
   }
 
   function trimTop(): void {
@@ -297,26 +341,28 @@
     }
     newest = entry.seq;
     if (entry.item.type === "output" || entry.item.type === "error") endedTurns.add(entry.turn);
-    const follow = nearBottom();
     // A recorded entry ends the block the stream topic was showing: history has it joined, or the next event closed
     // it. Both arrive on one socket, in the order the daemon published them.
     rows = rows.filter((r) => r.seq !== undefined || r.local);
     append(rows, entry.item, `h${entry.seq}`, entry.seq);
     trimTop();
-    if (follow) void toBottom();
+    void follow();
   }
 
   function onscroll(): void {
-    if (!log || loading) return;
+    if (!log) return;
+    if (atEnd(log)) pinned = !hasNewer;
+    else if (log.scrollTop < lastTop) pinned = false;
+    lastTop = log.scrollTop;
+    if (loading) return;
     if (log.scrollTop < EDGE_PX && hasOlder) void loadOlder();
     else if (nearBottom() && hasNewer) void loadNewer();
   }
 
   function apply(event: SessionEvent): void {
-    const follow = nearBottom();
     append(rows, event, `l${liveCount++}`);
     trimTop();
-    if (follow) void toBottom();
+    void follow();
   }
 
   /** Swap the streamed rows for the entries history recorded, which carry their seq, and fetch any the history
@@ -342,7 +388,7 @@
       catchingUp = false;
     }
     await keepingPosition(trimTop);
-    await toBottom();
+    await follow();
   }
 
   async function send(event?: SubmitEvent): Promise<void> {
@@ -676,7 +722,8 @@
   {/if}
 {/snippet}
 
-<div class="log" data-testid="chat-log" bind:this={log} {onscroll}>
+<div class="logbox">
+<div class="log" data-testid="chat-log" bind:this={log} {onscroll} {onwheel}>
   {#if hasOlder}<div class="more">{loading ? "Loading…" : "Scroll up for older entries"}</div>{/if}
   {#each groups as group (group.flow ? group.rows[0]?.key : group.row.key)}
     {#if group.flow}
@@ -693,9 +740,15 @@
   {#if live !== null && !hasNewer}
     <details class="live" data-testid="live-output" open>
       <summary>Live output <span class="gist">{live.text.trimEnd().split("\n").at(-1)}</span></summary>
-      <pre bind:this={livePre}>{live.text}</pre>
+      <pre bind:this={livePre} onscroll={onlivescroll}>{live.text}</pre>
     </details>
   {/if}
+</div>
+{#if !pinned}
+  <button type="button" class="jump" data-testid="jump-to-end" title="Go to the newest entry and follow it" onclick={jumpToEnd}>
+    ↓ Newest
+  </button>
+{/if}
 </div>
 {#if moveRequest !== null}
   <div class="move" data-testid="move-request">
@@ -796,6 +849,14 @@
     width: 5rem;
     display: inline;
   }
+  .logbox {
+    flex: 1;
+    min-height: 0;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0.5rem;
+  }
   .log {
     flex: 1;
     min-height: 0;
@@ -803,7 +864,14 @@
     border: 1px solid var(--line);
     border-radius: 0.3rem;
     padding: 0.5rem;
-    margin-bottom: 0.5rem;
+  }
+  .jump {
+    position: absolute;
+    right: 1.2rem;
+    bottom: 0.8rem;
+    padding: 0.3rem 0.8rem;
+    border-radius: 1rem;
+    box-shadow: 0 0.1rem 0.4rem rgb(0 0 0 / 30%);
   }
   .log > * {
     margin: 0.4rem 0;

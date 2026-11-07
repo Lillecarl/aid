@@ -633,6 +633,44 @@ async def test_live_output_follows_its_end_until_scrolled_up(page: Page, session
     await wait_for_idle(page)
 
 
+async def test_the_log_stays_where_a_slow_scroll_up_left_it(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """A scroll up of a few pixels unpins the log: output arriving after it leaves the view there. The jump
+    button pins it again, and so does scrolling back down to the end."""
+    gates = [tmp_path / f"gate{i}" for i in range(3)]
+    wait = "while [ ! -e {} ]; do sleep 0.1; done"
+    steps = [f"seq {i * 100 + 1} {i * 100 + 100} | usertee >/dev/null; {wait.format(g)}" for i, g in enumerate(gates)]
+    await page.set_viewport_size({"width": 800, "height": 420})
+    await seed_session(session_daemon, tmp_path, "slowscroll", "agents:coder", PermissionMode.ALLOW)
+    await open_session(page, "slowscroll")
+    await send_chat(page, json.dumps([["shell", {"command": "; ".join(steps)}]]))
+    log = page.locator("[data-testid=chat-log]:visible")
+    jump = page.get_by_test_id("jump-to-end")
+    await expect_text(page.get_by_test_id("live-output"), "100")
+    gap = "l => l.scrollHeight - l.scrollTop - l.clientHeight"
+    assert await log.evaluate("l => l.scrollHeight - l.clientHeight") > 40
+    assert await log.evaluate(gap) < 5
+    assert await jump.count() == 0
+    top = await log.evaluate("l => { l.scrollTop -= 20; return l.scrollTop; }")
+    await jump.wait_for(timeout=TIMEOUT * 1000)
+    await anyio.Path(gates[0]).write_text("go")
+    await expect_text(page.get_by_test_id("live-output"), "200")
+    await anyio.sleep(0.3)
+    assert await log.evaluate("l => l.scrollTop") == top
+    await jump.click()
+    await jump.wait_for(state="detached", timeout=TIMEOUT * 1000)
+    assert await log.evaluate(gap) < 5
+    await log.evaluate("l => { l.scrollTop -= 20; }")
+    await jump.wait_for(timeout=TIMEOUT * 1000)
+    await log.evaluate("l => { l.scrollTop = l.scrollHeight; }")
+    await jump.wait_for(state="detached", timeout=TIMEOUT * 1000)
+    await anyio.Path(gates[1]).write_text("go")
+    await expect_text(page.get_by_test_id("live-output"), "300")
+    await anyio.sleep(0.3)
+    assert await log.evaluate(gap) < 5
+    await anyio.Path(gates[2]).write_text("go")
+    await wait_for_idle(page)
+
+
 async def expect_text(locator: Locator, text: str) -> None:
     with anyio.fail_after(TIMEOUT):
         while True:
