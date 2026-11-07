@@ -25,7 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 import aid
 from aid.drive import Pacing, newest_seq, since, turn
 from aid.paths import default_paths
-from aid.protocol import AidError, Usage
+from aid.protocol import HIDE_REASON_LIMIT, AidError, Usage
 from aid.spec import NativeSpec, PermissionMode, Private
 from aid.sql import ask
 
@@ -387,6 +387,13 @@ class PrReviews(aid.Plugin):
         except AidError as failure:
             log.warning("note_failed", session=session, error=failure.message)
 
+    async def _hide(self, holder: str, reason: str) -> None:
+        """Out of lists once the PR is done with; like a note, a failure is logged only."""
+        try:
+            await self.client.session(holder).hide(clipped(reason, HIDE_REASON_LIMIT)[0])
+        except AidError as failure:
+            log.warning("hide_failed", session=holder, error=failure.message)
+
     async def _status(self, name: str | None) -> JsonValue:
         running = set(self._running)
         result: list[JsonValue] = []
@@ -540,7 +547,10 @@ class PrReviews(aid.Plugin):
     async def _end(self, config: PrReviewConfig, pr: Pr, state: PrState, why: str | None) -> None:
         await self.store.ended(config.name, pr.number, pr.head, state, None if state == PrState.REVIEWED else why)
         said = f": {why}" if why else ""
-        await self._note(holder_name(config, pr.number), f"{state.value.capitalize()}{said}")
+        holder = holder_name(config, pr.number)
+        if state != PrState.FAILED:  # A failure waits for a person; the rest is done with.
+            await self._hide(holder, f"PR {state.value}{said}")
+        await self._note(holder, f"{state.value.capitalize()}{said}")
         await self._note(config.name, f"[#{pr.number} {pr.title}]({pr.url}): {state.value}{said}")
 
     async def _beaten(self, config: PrReviewConfig, pr: Pr, worktree: Path, diff: str, attrs: list[str]) -> bool:
@@ -593,6 +603,7 @@ class PrReviews(aid.Plugin):
             await self.store.duplicate_check(config.name, pr, check)
             if beaten is not None:
                 said = f"duplicate of #{beaten.number} {beaten.title}"
+                await self._hide(holder, f"PR {said}")
                 await self._note(holder, f"Duplicate: {said}")
                 await self._note(config.name, f"[#{pr.number} {pr.title}]({pr.url}): {said}")
             return beaten is not None

@@ -222,7 +222,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `<run>.<number>.<angle|judge|duplicates>`, parent the PR's holder `<run>.<number>` (`holder_spec`), whose parent
   is root `<run>` (both instructions, `tools=[]`, never prompted, stopped once made; the root keeps chat plugins
   off). Notes (#57, `AppendNote`, failures logged only): the holder gets start, builds, the review, the end; the root
-  one line per PR's end. `fresh_turns`, `instruction_providers=["skills"]` with `AID_SKILLS_ONLY` = `review-skills/` (not
+  one line per PR's end. A PR's end hides its holder (#59), reason `PR <state>: why`; a failed one stays. `fresh_turns`, `instruction_providers=["skills"]` with `AID_SKILLS_ONLY` = `review-skills/` (not
   `skills/`: the skills plugin lists that to every session), `review.skill_hints` names a diff's guides in the
   prompt, ceiling `READ_TOOLS` (+ `skill`), the judge's plus `submit_review`
   (`@aid.mcptool`, so offered everywhere past a ceiling: the plugin takes it only from the judge of the PR under

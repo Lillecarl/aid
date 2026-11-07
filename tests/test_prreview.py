@@ -229,6 +229,7 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
     assert infos["nixrev.7"].parent == "nixrev"
     assert all(infos[f"nixrev.7.{role}"].parent == "nixrev.7" for role in roles)
     assert not any(info.running for info in infos.values())
+    assert (infos["nixrev"].hidden, infos["nixrev.7"].hidden) == (None, "PR reviewed: COMMENT")
     # The root tells the run, PR by PR; the holder tells the PR. Both by the plugin, no model turn.
     link = "[#7 hello: 1 -> 2](https://github.com/NixOS/nixpkgs/pull/7)"
     assert root_notes == [("prreview", f"{link}: reviewed: COMMENT")]
@@ -314,8 +315,10 @@ async def test_a_pr_an_equal_later_duplicate_beats_ends_unbuilt(
                 client, "SELECT candidates, duplicates, winner, beaten_by, session FROM duplicate_checks"
             )
             listed = sorted(info.name for info in await client.sessions())
+            hidden = {info.name: info.hidden for info in await client.sessions()}["nixrev.7"]
             root_notes = await notes(client, "nixrev")
     assert prs == [["duplicate", 8, "a duplicate of #8"]]
+    assert hidden is not None and hidden.startswith("PR duplicate of #8 ")
     # #9 touches none of #7's files; #8 is as good and updated later.
     assert checks == [["[8]", "[8]", "equal", 8, "nixrev.7.duplicates"]]
     assert listed == ["nixrev", "nixrev.7", "nixrev.7.duplicates"]
