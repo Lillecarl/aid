@@ -470,7 +470,15 @@ on reusable decisions and current boundaries; put long investigations and dated 
   required on `add`: vec0 refuses NULL) recorded in `vector_tables`; another model or shape → `vector_table_changed`
   until `drop`. `add` = delete + insert (vec0 refuses a known rowid, OR REPLACE too); `nearest` k ≤ `K_LIMIT` 4096,
   brute force (0.1.9 has no ANN index). `ask` attaches such files, but reading a vec0 table there fails (no module).
-  No embedder yet.
+- `src/aid/embedding.py` — embedders for it: `Embedder` (`model_name`, `dimensions`, `embed(texts)` → `Embedded`
+  vectors/tokens/cost, `host`, `aclose`); `OpenAIEmbedder` = `/v1/embeddings` via the OpenAI SDK (`encoding_format`
+  float: the SDK's base64 default is not universal; `BATCH` texts a request; 5xx/429/no connection →
+  `model_unavailable`; count, length or non-finite mismatch → `bad_embedding`). `providers.embedder(name, providers,
+  dimensions=, settings=)`: plugin `ModelProvider.embedder` (default `no_embeddings`), else `OpenAIEmbedder` by an
+  `OPENAI_COMPATIBLE` prefix or `api_base`. Runs in plugins/workers, never the daemon; private callers `check_host`.
+  OpenRouter serves it (`usage.cost` read). Current pick (vLLM hosts have no memory to spare):
+  `openrouter/qwen/qwen3-embedding-8b`, $0.01/M tokens, 40k context, `dimensions` honoured (1024 measured, default
+  4096). No consumer yet (#28).
 - `src/aid/removals.py` — `remove`'s plans: paths, globs (`glob.translate`, hidden included), regexes (searched),
   excludes and filters (kind, age, git tracked/ignored from two `git ls-files`) → every entry that goes, before
   anyone is asked. A matched directory goes whole (rmtree at execution, whatever it then holds); one holding a kept

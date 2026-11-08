@@ -13,6 +13,7 @@ import httpx
 from pydantic import BaseModel, Field, JsonValue
 
 import aid
+from aid.embedding import OpenAIEmbedder
 from aid.model import OpenAIChatModel, Provider
 from aid.protocol import AidError, ModelCost, ModelEntry
 
@@ -108,6 +109,10 @@ class OpenRouter(aid.ModelProvider):
 
     async def transport(self, model: str) -> OpenRouterChat:
         return OpenRouterChat(f"{self.name}/{model}", PROVIDER)
+
+    async def embedder(self, model: str, dimensions: int | None, settings: Mapping[str, JsonValue]) -> OpenAIEmbedder:
+        """OpenRouter's `/embeddings`; its usage carries the cost."""
+        return OpenAIEmbedder(f"{self.name}/{model}", PROVIDER, dimensions, settings)
 
     async def fetch_models(self) -> list[ModelEntry]:
         async with httpx.AsyncClient(timeout=FETCH_TIMEOUT) as client:

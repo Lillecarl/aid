@@ -311,7 +311,7 @@ def split_name(name: str) -> tuple[str, str]:
 
 
 @dataclass(frozen=True)
-class _ClientKey:
+class ClientKey:
     base_url: str | None
     api_key: str
     max_retries: int
@@ -324,9 +324,9 @@ def client_settings(name: str, settings: Mapping[str, JsonValue]) -> ClientSetti
         raise AidError("bad_model_settings", f"{name}: {e}") from e
 
 
-def _client_key(
+def client_key(
     name: str, settings: Mapping[str, JsonValue], key_env: str | None, base_url: str | None, *, local: bool = False
-) -> _ClientKey:
+) -> ClientKey:
     """The client's settings over the provider's: `key_env` and `base_url` apply where the settings name none."""
     client = client_settings(name, settings)
     api_key = client.api_key or (os.environ.get(key_env) if key_env else None)
@@ -334,7 +334,7 @@ def _client_key(
         if not local:
             raise AidError("missing_credentials", f"{name}: set {key_env or 'api_key in model_settings'}")
         api_key = "local"
-    return _ClientKey(client.base_url or base_url, api_key, client.max_retries)
+    return ClientKey(client.base_url or base_url, api_key, client.max_retries)
 
 
 def _request_settings(settings: Mapping[str, JsonValue], provider: Provider | None = None) -> dict[str, JsonValue]:
@@ -355,7 +355,7 @@ class OpenAIChatModel:
         self.model_name = name
         prefix, self._model = split_name(name)
         self._provider = provider or OPENAI_COMPATIBLE.get(prefix)
-        self._clients: dict[_ClientKey, openai.AsyncOpenAI] = {}
+        self._clients: dict[ClientKey, openai.AsyncOpenAI] = {}
 
     def _client(self, settings: Mapping[str, JsonValue]) -> openai.AsyncOpenAI:
         provider = self._provider
@@ -365,7 +365,7 @@ class OpenAIChatModel:
                 f"no provider {split_name(self.model_name)[0]!r}: use one of {', '.join(OPENAI_COMPATIBLE)}, "
                 "anthropic, or set api_base in model_settings",
             )
-        key = _client_key(
+        key = client_key(
             self.model_name,
             settings,
             provider.key_env if provider else None,
@@ -602,12 +602,12 @@ class AnthropicModel:
         self.model_name = name
         self._model = split_name(name)[1]
         self._provider = provider
-        self._clients: dict[_ClientKey, anthropic.AsyncAnthropic] = {}
+        self._clients: dict[ClientKey, anthropic.AsyncAnthropic] = {}
 
     def _client(self, settings: Mapping[str, JsonValue]) -> anthropic.AsyncAnthropic:
         provider = self._provider
         key_env = provider.key_env if provider else ANTHROPIC_KEY_ENV
-        key = _client_key(self.model_name, settings, key_env, provider.base_url if provider else None)
+        key = client_key(self.model_name, settings, key_env, provider.base_url if provider else None)
         if (client := self._clients.get(key)) is None:
             client = anthropic.AsyncAnthropic(
                 api_key=key.api_key,
@@ -819,12 +819,12 @@ class GoogleModel:
         self.model_name = name
         self._model = split_name(name)[1]
         self._provider = provider
-        self._clients: dict[_ClientKey, tuple[genai.Client, httpx.AsyncClient]] = {}
+        self._clients: dict[ClientKey, tuple[genai.Client, httpx.AsyncClient]] = {}
 
     def _client(self, settings: Mapping[str, JsonValue]) -> genai.Client:
         provider = self._provider
         key_env = provider.key_env if provider else GOOGLE_KEY_ENV
-        key = _client_key(self.model_name, settings, key_env, provider.base_url if provider else None)
+        key = client_key(self.model_name, settings, key_env, provider.base_url if provider else None)
         if (pair := self._clients.get(key)) is None:
             from google import genai  # noqa: PLC0415 -- half a second of every worker's start otherwise
             from google.genai.types import HttpOptions, HttpRetryOptions  # noqa: PLC0415 -- the same

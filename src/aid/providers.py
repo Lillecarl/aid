@@ -18,11 +18,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final
 
 from aid import models_dev
+from aid.embedding import Embedder, OpenAIEmbedder
 from aid.model import OPENAI_COMPATIBLE, AnthropicModel, GoogleModel, OpenAIChatModel, Provider, split_name
 from aid.protocol import AidError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+
+    from pydantic import JsonValue
 
     from aid.agents import ModelProvider
     from aid.model import Transport
@@ -67,3 +70,18 @@ async def resolve(name: str, providers: Mapping[str, type[ModelProvider]], sessi
         return OpenAIChatModel(name)
     provider = catalog_provider(await models_dev.catalog(), prefix)
     return OpenAIChatModel(name, provider)
+
+
+async def embedder(
+    name: str,
+    providers: Mapping[str, type[ModelProvider]],
+    *,
+    dimensions: int | None = None,
+    settings: Mapping[str, JsonValue] | None = None,
+) -> Embedder:
+    """The embedder for `name`: the plugin provider that claims its prefix, else an `OPENAI_COMPATIBLE` prefix, else
+    any prefix whose `settings` name an `api_base`. The caller closes it."""
+    prefix, model = split_name(name)
+    if (cls := providers.get(prefix)) is not None:
+        return await cls().embedder(model, dimensions, settings or {})
+    return OpenAIEmbedder(name, dimensions=dimensions, settings=settings or {})

@@ -24,8 +24,15 @@ from typing import TYPE_CHECKING, ClassVar
 
 from pydantic import BaseModel, ConfigDict
 
+from aid.protocol import AidError
+
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from pydantic import JsonValue
+
     from aid.agent import Agent
+    from aid.embedding import Embedder
     from aid.model import Transport
     from aid.protocol import ModelEntry
 
@@ -139,3 +146,7 @@ class ModelProvider(ABC):
         caches the list a day, and keeps the cached copy (else models.dev's list) when this raises. Empty:
         models.dev's list stands alone."""
         return []
+
+    async def embedder(self, model: str, dimensions: int | None, settings: Mapping[str, JsonValue]) -> Embedder:
+        """The embedder for `model`, the name after the prefix (`aid.embedding`). Unless overridden: none."""
+        raise AidError("no_embeddings", f"{self.provider_name()}/ serves no embeddings")
