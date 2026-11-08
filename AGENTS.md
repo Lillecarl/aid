@@ -462,7 +462,15 @@ on reusable decisions and current boundaries; put long investigations and dated 
   session's Chat stays mounted, so several `chat-input`s exist: browser tests select `:visible`.
 - `src/aid/sql.py` — apsw (`nix/apsw.nix`, its own SQLite): `Database`, one owner's writes in a worker thread, WAL;
   `ask`, one statement over files attached `mode=ro` under a read-only authorizer (ATTACH/PRAGMA still work on ro
-  files), capped in rows, cell size and time (progress handler). `QueryResult` in protocol.
+  files), capped in rows, cell size and time (progress handler). `QueryResult` in protocol. `Database.open(setup=)`
+  runs on the connection before the schema.
+- `src/aid/vectors.py` — vector store (#60): sqlite-vec `vec0` tables in an owner's `Database` (`setup=vectors.load`;
+  `AID_SQLITE_VEC` = nixpkgs `sqlite-vec`'s `lib/vec0`: wrapper, shell, tests). Loaded through the C API only: SQL
+  `load_extension()` stays off. `VectorTable` (name, dimensions, model, metric, equality-filter `columns`, each
+  required on `add`: vec0 refuses NULL) recorded in `vector_tables`; another model or shape → `vector_table_changed`
+  until `drop`. `add` = delete + insert (vec0 refuses a known rowid, OR REPLACE too); `nearest` k ≤ `K_LIMIT` 4096,
+  brute force (0.1.9 has no ANN index). `ask` attaches such files, but reading a vec0 table there fails (no module).
+  No embedder yet.
 - `src/aid/removals.py` — `remove`'s plans: paths, globs (`glob.translate`, hidden included), regexes (searched),
   excludes and filters (kind, age, git tracked/ignored from two `git ls-files`) → every entry that goes, before
   anyone is asked. A matched directory goes whole (rmtree at execution, whatever it then holds); one holding a kept

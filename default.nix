@@ -85,6 +85,8 @@ let
   grammars = pkgs.callPackage ./nix/tree-sitter-grammars.nix { };
   tldrPages = pkgs.callPackage ./nix/tldr-pages.nix { src = tldr; };
   reverseTools = pkgs.callPackage ./nix/reverse-tools.nix { };
+  # `aid.vectors` loads it into apsw's SQLite as a loadable extension, by the path without its suffix.
+  sqliteVec = "${pkgs.sqlite-vec}/lib/vec0";
   # The browsers the browser tests drive: chromium's headless shell for the sandbox run, firefox for a
   # developer's `--browser firefox` run. Fixed-output fetches, so the sandbox may use them.
   browsers = pkgs.playwright-driver.browsers.override {
@@ -266,6 +268,7 @@ let
             grammars
             browsers
             reverseTools
+            sqliteVec
             ;
           inherit (pkgs) cacert;
           fontsConf = pkgs.makeFontsConf { fontDirectories = [ pkgs.dejavu_fonts ]; };
@@ -321,6 +324,7 @@ in
           --set-default AID_TREE_SITTER_GRAMMARS ${grammars} \
           --set-default AID_TLDR_PAGES ${tldrPages} \
           --set-default AID_REVERSE_TOOLS ${reverseTools} \
+          --set-default AID_SQLITE_VEC ${sqliteVec} \
           --set-default AID_PLUGINS_DIST $out/share/aid/plugins
       '';
 
@@ -392,6 +396,7 @@ in
       export AID_TREE_SITTER_GRAMMARS=${grammars}
       export AID_TLDR_PAGES=${tldrPages}
       export AID_REVERSE_TOOLS=${reverseTools}
+      export AID_SQLITE_VEC=${sqliteVec}
       export PLAYWRIGHT_BROWSERS_PATH=${browsers}
       # The element the web build links in; `npm ci` in web/ removes it, and the next shell puts it back.
       mkdir -p ${lib.escapeShellArg (toString ./web)}/node_modules

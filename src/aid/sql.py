@@ -60,12 +60,23 @@ class Database:
         self._limiter = anyio.CapacityLimiter(1)
 
     @classmethod
-    async def open(cls, path: Path, schema: str, version: int, migrations: Mapping[int, str] | None = None) -> Database:
+    async def open(
+        cls,
+        path: Path,
+        schema: str,
+        version: int,
+        migrations: Mapping[int, str] | None = None,
+        *,
+        setup: Callable[[apsw.Connection], None] | None = None,
+    ) -> Database:
         """Open or create `path` in WAL mode, so readers on other connections never wait on the writer. A file at an
-        older `version` runs `migrations[n]` for each version n it passes, then the schema."""
+        older `version` runs `migrations[n]` for each version n it passes, then the schema. `setup` runs on the
+        connection first: an extension the schema needs (`aid.vectors.load`)."""
         await anyio.Path(path).parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         database = cls(await anyio.to_thread.run_sync(apsw.Connection, str(path)))
         try:
+            if setup is not None:
+                await database.run(setup)
             await database.run(_create, schema, version, migrations or {})
         except BaseException:
             await database.aclose()
