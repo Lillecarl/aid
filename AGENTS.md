@@ -264,13 +264,15 @@ on reusable decisions and current boundaries; put long investigations and dated 
   refuses a late acquire whose release overtook it (separate connections). Pricing asks the transport
   (`Transport.cache_reads_in_prompt`), never its class: wrappers hide classes.
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
+- `src/aid/wire.py` — aid's own model clients' HTTP (#65): `open_stream` (POST, 2xx or `StatusError` with the body),
+  `events` (SSE data), `client` (tests patch it). SDKs go one protocol at a time: Gemini done, then Anthropic, then
+  OpenAI; each SDK stays a test dependency for differential tests (`test_chunks_parse_as_google_parses_them`).
 - `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API, native blocks,
   `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions) and `GoogleModel`
-  (Gemini API over google-genai, imported on first use: +0.5 s per worker otherwise; aid's own httpx client, AFC
-  off; `thought_signature` kept base64 on the Text/ToolCall part that carried it, Gemini's call id as `google_id`
-  beside aid's; prompt counts include cache reads; `_UnionGenericAlias` warning filtered in pytest,
-  googleapis/python-genai#1640; the SDK sends on the stream's first iteration, so its errors map inside the loop), each
-  taking a
+  (Gemini `streamGenerateContent` over aid's own client, no SDK (#65): `aid.gemini` types the wire, settings are
+  its field names in either spelling, unknown → `bad_model_settings`; `thought_signature` kept as the API's base64
+  on the Text/ToolCall part that carried it, Gemini's call id as `google_id` beside aid's; prompt counts include
+  cache reads), each taking a
   `Provider` (base URL, key variable, default request settings, headers). A provider's quirks subclass
   `OpenAIChatModel` (`request_settings`, `reasoning`, `usage`, `wire`), never branch in it. `OPENAI_COMPATIBLE`:
   prefixes models.dev gives no URL for, and local servers. `model_settings` (JSON): `ClientSettings`

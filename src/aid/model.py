@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import base64
-import collections.abc
 import json
 import os
 import uuid
@@ -12,7 +10,6 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast,
 
 import anthropic
 import anyio
-import httpx
 import httpx2
 import openai
 from anthropic.types import (
@@ -35,6 +32,7 @@ from openai.types.chat import ChatCompletionAssistantMessageParam
 from openai.types.chat.completion_create_params import CompletionCreateParamsStreaming
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
+from aid import gemini, wire
 from aid.messages import (
     ModelMessage,
     ModelResponse,
@@ -53,17 +51,6 @@ if TYPE_CHECKING:
 
     from anthropic.types import ContentBlockParam, MessageDeltaUsage, MessageParam, TextBlockParam, ToolParam
     from anthropic.types import Usage as AnthropicUsage
-    from google import genai
-    from google.genai.types import (
-        ContentDict,
-        ContentUnionDict,
-        FunctionCallDict,
-        FunctionDeclarationDict,
-        FunctionResponseDict,
-        GenerateContentConfigDict,
-        GenerateContentResponseUsageMetadata,
-        PartDict,
-    )
     from openai.types import CompletionUsage
     from openai.types.chat import ChatCompletionFunctionToolParam, ChatCompletionMessageParam
     from openai.types.chat.chat_completion_chunk import ChoiceDelta
@@ -120,41 +107,21 @@ def unavailable(error: BaseException) -> bool:
             return True
         case openai.APIStatusError() | anthropic.APIStatusError():
             return error.status_code >= 500 or error.status_code in TRANSIENT_STATUS
+        case wire.StatusError():
+            return error.status >= 500 or error.status in TRANSIENT_STATUS
         case _:
-            code = getattr(error, "code", None) if type(error).__module__.startswith("google.genai") else None
-            return isinstance(code, int) and (code >= 500 or code in TRANSIENT_STATUS)
-
-
-GOOGLE_KEY_REASONS: Final = frozenset({"API_KEY_INVALID", "API_KEY_EXPIRED"})
-"""Gemini's `ErrorInfo.reason` for a key it refuses: it answers 400 INVALID_ARGUMENT, not 401 (measured 2026-11-13)."""
-
-
-class _GoogleErrorInfo(BaseModel):
-    reason: str | None = None
-
-
-class _GoogleError(BaseModel):
-    details: list[_GoogleErrorInfo] = []
-
-
-class _GoogleErrorBody(BaseModel):
-    error: _GoogleError | None = None
+            return False
 
 
 def rejected_key(error: BaseException) -> bool:
     """The server refused the key: a person must replace it, so sending again cannot help. Measured 2026-11-13 with a
-    bogus key: OpenAI, Anthropic, DeepSeek, OpenCode and OpenRouter answer 401; an expired OpenCode key too."""
+    bogus key: OpenAI, Anthropic, DeepSeek, OpenCode and OpenRouter answer 401; an expired OpenCode key too. Gemini
+    answers 400 with a reason (`gemini.refused_key`)."""
     match error:
         case openai.AuthenticationError() | anthropic.AuthenticationError():
             return True
-        case _ if type(error).__module__.startswith("google.genai"):
-            if getattr(error, "code", None) == 401:
-                return True
-            try:
-                body = _GoogleErrorBody.model_validate(getattr(error, "details", None))
-            except ValidationError:
-                return False
-            return body.error is not None and any(item.reason in GOOGLE_KEY_REASONS for item in body.error.details)
+        case wire.StatusError():
+            return error.status == 401
         case _:
             return False
 
@@ -163,9 +130,8 @@ def refused_key(name: str, error: BaseException) -> AidError:
     return AidError("bad_credentials", f"{name}: the server refused the key: {error}")
 
 
-BROKEN: Final = (httpx.TransportError, httpx2.TransportError)
-"""What a dropped stream raises: Gemini's client is httpx, the OpenAI and Anthropic clients httpx2. The SDKs raise
-it bare from a response body (openai 2.x, measured 2026-10-28: vLLM dropped 7 streams in 5 hours, 61 to 545 s in)."""
+BROKEN: Final = (httpx2.TransportError,)
+"""What a dropped stream raises: every client is httpx2. The SDKs raise it bare from a response body (openai 2.x, measured 2026-10-28: vLLM dropped 7 streams in 5 hours, 61 to 545 s in)."""
 
 
 class Model(Protocol):
@@ -763,96 +729,83 @@ def _anthropic_usage(usage: AnthropicUsage | MessageDeltaUsage) -> RequestUsage:
 GOOGLE_KEY_ENV: Final = "GEMINI_API_KEY"
 
 
-def _signature(value: bytes | None) -> dict[str, str]:
-    """A thought signature as a part's extra field: base64, so history stays JSON."""
-    return {"thought_signature": base64.b64encode(value).decode()} if value else {}
+def _signature(part: TextPart | ToolCallPart) -> str | None:
+    signature = (part.model_extra or {}).get("thought_signature")
+    return signature if isinstance(signature, str) else None
 
 
-def _signed(block: PartDict, part: TextPart | ToolCallPart) -> PartDict:
-    if signature := (part.model_extra or {}).get("thought_signature"):
-        block["thought_signature"] = base64.b64decode(signature)
-    return block
-
-
-def google_contents(messages: Sequence[ModelMessage]) -> tuple[list[PartDict], list[ContentDict]]:
+def google_contents(messages: Sequence[ModelMessage]) -> tuple[list[gemini.Part], list[gemini.Content]]:
     """Stored parts as the Gemini API's (system instruction parts, contents), merged by role as
     `anthropic_messages` does. A thought signature goes back on the part that carried it: Gemini 3 refuses a
     function call without its own. Thinking replays only signed."""
-    system: list[PartDict] = []
-    turns: list[tuple[str, list[PartDict]]] = []
+    system: list[gemini.Part] = []
+    turns: list[gemini.Content] = []
     ids: dict[str, str | None] = {}
 
-    def add(role: str, block: PartDict) -> None:
-        if turns and turns[-1][0] == role:
-            turns[-1][1].append(block)
+    def add(role: str, part: gemini.Part) -> None:
+        if turns and turns[-1].role == role:
+            turns[-1].parts.append(part)
         else:
-            turns.append((role, [block]))
+            turns.append(gemini.Content(role=role, parts=[part]))
 
-    def answer(part: ToolReturnPart | RetryPromptPart, response: dict[str, str]) -> PartDict:
-        block: FunctionResponseDict = {"name": part.tool_name, "response": response}
-        if google_id := ids.get(part.tool_call_id):
-            block["id"] = google_id
-        return {"function_response": block}
+    def answer(part: ToolReturnPart | RetryPromptPart, response: dict[str, JsonValue]) -> gemini.Part:
+        block = gemini.FunctionResponse(name=part.tool_name or "", response=response, id=ids.get(part.tool_call_id))
+        return gemini.Part(function_response=block)
 
     for message in messages:
         if isinstance(message, ModelResponse):
             for part in message.parts:
                 match part:
                     case ThinkingPart() if part.signature:
-                        add(
-                            "model",
-                            {
-                                "text": part.content,
-                                "thought": True,
-                                "thought_signature": base64.b64decode(part.signature),
-                            },
-                        )
+                        add("model", gemini.Part(text=part.content, thought=True, thought_signature=part.signature))
                     case TextPart() if part.content or part.model_extra:
-                        add("model", _signed({"text": part.content}, part))
+                        add("model", gemini.Part(text=part.content, thought_signature=_signature(part)))
                     case ToolCallPart():
                         try:
                             arguments = part.args_as_dict()
                         except ValueError:
                             arguments = {}
-                        call: FunctionCallDict = {"name": part.tool_name, "args": arguments}
-                        if google_id := (part.model_extra or {}).get("google_id"):
-                            call["id"] = google_id
+                        google_id = (part.model_extra or {}).get("google_id")
+                        google_id = google_id if isinstance(google_id, str) else None
                         ids[part.tool_call_id] = google_id
-                        add("model", _signed({"function_call": call}, part))
+                        call = gemini.FunctionCall(name=part.tool_name, args=arguments, id=google_id)
+                        add("model", gemini.Part(function_call=call, thought_signature=_signature(part)))
                     case _:
                         pass
             continue
         for part in message.parts:
             match part:
                 case SystemPromptPart() if not turns:
-                    system.append({"text": part.content})
+                    system.append(gemini.Part(text=part.content))
                 case SystemPromptPart():
-                    add("user", {"text": part.content})
+                    add("user", gemini.Part(text=part.content))
                 case UserPromptPart():
-                    add("user", {"text": str(part.content)})
+                    add("user", gemini.Part(text=str(part.content)))
                 case ToolReturnPart():
                     add("user", answer(part, {"output": part.model_response_str()}))
                 case RetryPromptPart() if part.tool_name:
                     add("user", answer(part, {"error": part.model_response()}))
                 case RetryPromptPart():
-                    add("user", {"text": part.model_response()})
+                    add("user", gemini.Part(text=part.model_response()))
                 case _:
                     raise ValueError("response part in a model request")
-    return system, [{"role": role, "parts": parts} for role, parts in turns]
+    return system, turns
 
 
-def google_tool(tool: Tool) -> FunctionDeclarationDict:
-    return {
-        "name": tool.name,
-        "description": tool.description,
-        "parameters_json_schema": tool.arguments.model_json_schema(),
-    }
+def google_tool(tool: Tool) -> gemini.FunctionDeclaration:
+    return gemini.FunctionDeclaration(
+        name=tool.name, description=tool.description, parameters_json_schema=tool.arguments.model_json_schema()
+    )
+
+
+RETRY_BACKOFF: Final = 0.5
+"""Seconds before a client retry (`max_retries`), doubling. The backend replays past them (`STREAM_RETRIES`)."""
 
 
 class GoogleModel:
-    """The Gemini API (`generateContent`) through Google's SDK, imported on first use: it adds half a second to a
-    worker's start (measured 2026-10-24). Thought signatures replay on their parts; Gemini assigns call ids only
-    sometimes, so aid makes its own and keeps Gemini's beside them."""
+    """The Gemini API (`streamGenerateContent`) over aid's own client (`aid.gemini`, `aid.wire`; #65). Thought
+    signatures replay on their parts; Gemini assigns call ids only sometimes, so aid makes its own and keeps
+    Gemini's beside them."""
 
     cache_reads_in_prompt: bool = True
 
@@ -861,78 +814,88 @@ class GoogleModel:
         self.model_name = name
         self._model = split_name(name)[1]
         self._provider = provider
-        self._clients: dict[ClientKey, tuple[genai.Client, httpx.AsyncClient]] = {}
+        self._http: httpx2.AsyncClient | None = None
 
-    def _client(self, settings: Mapping[str, JsonValue]) -> genai.Client:
+    def _key(self, settings: Mapping[str, JsonValue]) -> ClientKey:
         provider = self._provider
         key_env = provider.key_env if provider else GOOGLE_KEY_ENV
-        key = client_key(self.model_name, settings, key_env, provider.base_url if provider else None)
-        if (pair := self._clients.get(key)) is None:
-            from google import genai  # noqa: PLC0415 -- half a second of every worker's start otherwise
-            from google.genai.types import HttpOptions, HttpRetryOptions  # noqa: PLC0415 -- the same
-
-            # Ours, not the SDK's: it would pick aiohttp whenever that is installed.
-            http = httpx.AsyncClient(timeout=DEFAULT_TIMEOUT)
-            options = HttpOptions(
-                httpx_async_client=http,
-                base_url=key.base_url,
-                headers=dict(self._provider.headers) if self._provider and self._provider.headers else None,
-                retry_options=HttpRetryOptions(attempts=key.max_retries + 1) if key.max_retries else None,
-            )
-            pair = (genai.Client(vertexai=False, api_key=key.api_key, http_options=options), http)
-            self._clients[key] = pair
-        return pair[0]
+        return client_key(self.model_name, settings, key_env, provider.base_url if provider else None)
 
     def host(self, settings: Mapping[str, JsonValue]) -> str:
-        # google-genai keeps the URL it sends to only here: aid's own setting is None for its default.
-        base_url = self._client(settings)._api_client._http_options.base_url  # pyright: ignore[reportPrivateUsage] -- no public accessor
-        return httpx.URL(base_url or "").host
+        return httpx2.URL(gemini.stream_url(self._key(settings).base_url, self._model)).host
 
     async def aclose(self) -> None:
-        clients, self._clients = list(self._clients.values()), {}
-        for client, http in clients:
-            await client.aio.aclose()
-            client.close()
+        http, self._http = self._http, None
+        if http is not None:
             await http.aclose()
 
-    async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
-        client = self._client(info.settings)
-        from google.genai.types import GenerateContentConfig  # noqa: PLC0415 -- loaded with the client above
-
-        settings = _request_settings(info.settings, self._provider)
-        # aid runs the tool loop; the SDK's own would also log a warning on each worker's first request.
-        ours: GenerateContentConfigDict = {
-            "http_options": {"timeout": int(_TIMEOUT.validate_python(settings.pop("timeout")) * 1000)},
-            "automatic_function_calling": {"disable": True},
-        }
-        if info.tools:
-            ours["tools"] = [{"function_declarations": [google_tool(tool) for tool in info.tools]}]
-        if info.output_type is not str:
-            ours["response_mime_type"] = "application/json"
-            ours["response_json_schema"] = TypeAdapter(info.output_type).json_schema()
-        system, merged = google_contents(messages)
-        # The SDK's list is invariant: a list[ContentDict] is no list of its union.
-        contents: list[ContentUnionDict] = [*merged]
-        if system:
-            ours["system_instruction"] = {"parts": system}
-        # The session's settings are Google's field names; the SDK's model checks them.
-        config = GenerateContentConfig.model_validate({**settings, **ours})
-        stream = await client.aio.models.generate_content_stream(  # pyright: ignore[reportUnknownMemberType] -- PIL, absent, in its contents union
-            model=self._model, contents=contents, config=config
-        )
-        calls = 0
-        # The SDK sends the request on the first iteration, not at the call above: its refusals raise in the loop.
+    def _request(self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue]) -> bytes:
         try:
-            async for chunk in stream:
+            chosen = gemini.Settings.model_validate(settings)
+        except ValidationError as error:
+            raise AidError("bad_model_settings", f"{self.model_name}: {error}") from error
+        generation = chosen.generation()
+        if info.output_type is not str:
+            generation = (generation or gemini.GenerationConfig()).model_copy(
+                update={
+                    "response_mime_type": "application/json",
+                    "response_json_schema": TypeAdapter(info.output_type).json_schema(),
+                }
+            )
+        system, contents = google_contents(messages)
+        request = gemini.Request(
+            contents=contents,
+            system_instruction=gemini.Content(parts=system) if system else None,
+            tools=[gemini.Tool(function_declarations=[google_tool(tool) for tool in info.tools])]
+            if info.tools
+            else None,
+            generation_config=generation,
+            safety_settings=chosen.safety_settings,
+            tool_config=chosen.tool_config,
+            cached_content=chosen.cached_content,
+        )
+        return request.body()
+
+    async def _open(self, key: ClientKey, body: bytes, io_timeout: float) -> httpx2.Response:
+        if self._http is None:
+            self._http = wire.client(DEFAULT_TIMEOUT)
+        headers = {gemini.KEY_HEADER: key.api_key, **(self._provider.headers if self._provider else {})}
+        url = gemini.stream_url(key.base_url, self._model)
+        for attempt in range(key.max_retries + 1):
+            try:
+                return await wire.open_stream(self._http, url, body, headers, io_timeout)
+            except (wire.StatusError, httpx2.TransportError) as error:
+                if isinstance(error, wire.StatusError) and gemini.refused_key(error.body):
+                    raise refused_key(self.model_name, error) from error
+                if rejected_key(error):
+                    raise refused_key(self.model_name, error) from error
+                if not (isinstance(error, httpx2.TransportError) or unavailable(error)):
+                    raise
+                if attempt == key.max_retries:
+                    raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
+                await anyio.sleep(RETRY_BACKOFF * 2**attempt)
+        raise AssertionError("unreachable")
+
+    async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
+        key = self._key(info.settings)
+        settings = _request_settings(info.settings, self._provider)
+        timeout = _TIMEOUT.validate_python(settings.pop("timeout"))
+        response = await self._open(key, self._request(messages, info, settings), timeout)
+        calls = 0
+        try:
+            async for data in wire.events(response):
+                chunk = gemini.Response.model_validate_json(data)
                 if chunk.model_version:
                     yield StreamDelta(model_name=chunk.model_version)
                 if chunk.usage_metadata is not None:
                     yield StreamDelta(usage=_google_usage(chunk.usage_metadata))
-                for candidate in chunk.candidates or []:
+                for candidate in chunk.candidates:
                     if candidate.finish_reason == "MAX_TOKENS":
                         yield StreamDelta(truncated=True)
-                    for part in (candidate.content.parts if candidate.content else None) or []:
-                        extra = _signature(part.thought_signature)
+                    for part in candidate.content.parts if candidate.content else []:
+                        extra: dict[str, str] = {}
+                        if part.thought_signature:
+                            extra["thought_signature"] = part.thought_signature
                         if part.function_call is not None:
                             call = part.function_call
                             if call.id:
@@ -940,45 +903,32 @@ class GoogleModel:
                             yield StreamDelta(
                                 100 + calls,
                                 ToolCallPart(
-                                    call.name or "",
-                                    json.dumps(call.args or {}),
-                                    f"call_{uuid.uuid4().hex[:24]}",
-                                    **extra,
+                                    call.name, json.dumps(call.args), f"call_{uuid.uuid4().hex[:24]}", **extra
                                 ),
                             )
                             calls += 1
                         elif part.thought:
-                            yield StreamDelta(
-                                1, ThinkingPart(part.text or "", signature=extra.get("thought_signature"))
-                            )
+                            yield StreamDelta(1, ThinkingPart(part.text or "", signature=part.thought_signature))
                         elif part.text or extra:
                             yield StreamDelta(0, TextPart(part.text or "", **extra))
         except BROKEN as error:
             raise StreamBroken(repr(error)) from error
-        except Exception as error:
-            if unavailable(error):
-                raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
-            if rejected_key(error):
-                raise refused_key(self.model_name, error) from error
-            raise
         finally:
-            # Typed as an iterator; the SDK returns an async generator, which holds the response open.
-            if isinstance(stream, collections.abc.AsyncGenerator):
-                with anyio.CancelScope(shield=True):
-                    await stream.aclose()
+            with anyio.CancelScope(shield=True):
+                await response.aclose()
 
     async def request(self, messages: list[ModelMessage], info: ModelInfo) -> ModelResponse:
         return await collect(self, messages, info)
 
 
-def _google_usage(usage: GenerateContentResponseUsageMetadata) -> RequestUsage:
+def _google_usage(usage: gemini.UsageMetadata) -> RequestUsage:
     """Gemini counts cached tokens inside the prompt, as Chat Completions does, and thinking apart from the
     candidates while billing it as output."""
     thoughts = usage.thoughts_token_count
     return RequestUsage(
-        input_tokens=(usage.prompt_token_count or 0) + (usage.tool_use_prompt_token_count or 0),
-        output_tokens=(usage.candidates_token_count or 0) + (thoughts or 0),
-        cache_read_tokens=usage.cached_content_token_count or 0,
+        input_tokens=usage.prompt_token_count + usage.tool_use_prompt_token_count,
+        output_tokens=usage.candidates_token_count + (thoughts or 0),
+        cache_read_tokens=usage.cached_content_token_count,
         reasoning_tokens=thoughts,
     )
 

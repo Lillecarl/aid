@@ -6,10 +6,10 @@ import base64
 import json
 from typing import TYPE_CHECKING, Any, Final
 
-import google.genai  # noqa: F401  # pyright: ignore[reportUnusedImport] -- before `serve` patches httpx: the SDK subclasses httpx.AsyncClient at import
-import httpx
+import httpx2
 import pytest
 
+from aid import gemini, wire
 from aid import model as model_module
 from aid.agent import Agent
 from aid.backends.native import add_cost
@@ -33,6 +33,7 @@ from aid.providers import resolve
 from tests.test_native_backend import backend
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
     from pydantic import JsonValue
@@ -56,20 +57,23 @@ def chunk(parts: list[dict[str, Any]], *, usage: dict[str, Any] | None = None, f
     return f"data: {json.dumps(body)}\n\n".encode()
 
 
-def serve(monkeypatch: pytest.MonkeyPatch, answer: Any) -> list[httpx.Request]:
-    """Google's SDK, over aid's own httpx client, talks to `answer(request, body)` instead of Google."""
-    seen: list[httpx.Request] = []
-    real = httpx.AsyncClient
+def mock(monkeypatch: pytest.MonkeyPatch, handle: Callable[[httpx2.Request], httpx2.Response]) -> None:
+    def client(timeout: float) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), timeout=timeout)
 
-    def handle(request: httpx.Request) -> httpx.Response:
+    monkeypatch.setattr(wire, "client", client)
+
+
+def serve(monkeypatch: pytest.MonkeyPatch, answer: Any) -> list[httpx2.Request]:
+    """aid's client talks to `answer(request, body)` instead of Google."""
+    seen: list[httpx2.Request] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
         content = answer(request, json.loads(request.content))
-        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=content)
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=content)
 
-    def client(**kwargs: Any) -> httpx.AsyncClient:
-        return real(transport=httpx.MockTransport(handle), **kwargs)
-
-    monkeypatch.setattr(model_module.httpx, "AsyncClient", client)
+    mock(monkeypatch, handle)
     return seen
 
 
@@ -94,26 +98,26 @@ def test_history_goes_out_as_contents_with_signatures_on_their_parts() -> None:
         ModelResponse(parts=[TextPart("done", thought_signature=SIGNATURE)]),
     ]
     system, contents = google_contents(history)
-    assert system == [{"text": "be brief"}]
-    assert contents == [
+    assert [part.model_dump(exclude_none=True) for part in system] == [{"text": "be brief"}]
+    assert [content.model_dump(exclude_none=True) for content in contents] == [
         {"role": "user", "parts": [{"text": "add"}]},
         {
             "role": "model",
             "parts": [
-                {"text": "signed", "thought": True, "thought_signature": b"signed"},
-                {"function_call": {"name": "add", "args": {"a": 2}, "id": "g1"}, "thought_signature": b"signed"},
-                {"function_call": {"name": "add", "args": {"a": 3}}},
+                {"text": "signed", "thought": True, "thoughtSignature": SIGNATURE},
+                {"functionCall": {"name": "add", "args": {"a": 2}, "id": "g1"}, "thoughtSignature": SIGNATURE},
+                {"functionCall": {"name": "add", "args": {"a": 3}}},
             ],
         },
         {
             "role": "user",
             "parts": [
-                {"function_response": {"name": "add", "response": {"output": "5"}, "id": "g1"}},
-                {"function_response": {"name": "add", "response": {"error": RetryPromptPart("bad").model_response()}}},
+                {"functionResponse": {"name": "add", "response": {"output": "5"}, "id": "g1"}},
+                {"functionResponse": {"name": "add", "response": {"error": RetryPromptPart("bad").model_response()}}},
                 {"text": "later"},
             ],
         },
-        {"role": "model", "parts": [{"text": "done", "thought_signature": b"signed"}]},
+        {"role": "model", "parts": [{"text": "done", "thoughtSignature": SIGNATURE}]},
     ]
 
 
@@ -122,7 +126,7 @@ async def test_tool_loop_replays_gemini_signatures_and_counts_its_usage(
 ) -> None:
     bodies: list[dict[str, Any]] = []
 
-    def answer(request: httpx.Request, body: dict[str, Any]) -> bytes:
+    def answer(request: httpx2.Request, body: dict[str, Any]) -> bytes:
         bodies.append(body)
         usage = {"promptTokenCount": 100, "cachedContentTokenCount": 60, "candidatesTokenCount": 5}
         if len(bodies) == 1:
@@ -153,7 +157,7 @@ async def test_tool_loop_replays_gemini_signatures_and_counts_its_usage(
     assert bodies[0]["systemInstruction"]["parts"] == [{"text": "be brief"}]
     [declaration] = bodies[0]["tools"][0]["functionDeclarations"]
     assert declaration["name"] == "add"
-    assert declaration["parameters_json_schema"]["required"] == ["a", "b"]
+    assert declaration["parametersJsonSchema"]["required"] == ["a", "b"]
     [call, returned] = bodies[1]["contents"][1:]
     assert call["parts"] == [{"functionCall": {"name": "add", "args": {"a": 2, "b": 3}}, "thoughtSignature": SIGNATURE}]
     assert returned["parts"] == [{"functionResponse": {"name": "add", "response": {"output": "5"}}}]
@@ -174,7 +178,7 @@ async def test_tool_loop_replays_gemini_signatures_and_counts_its_usage(
 async def test_a_truncated_response_and_structured_output(monkeypatch: pytest.MonkeyPatch) -> None:
     bodies: list[dict[str, Any]] = []
 
-    def answer(request: httpx.Request, body: dict[str, Any]) -> bytes:
+    def answer(request: httpx2.Request, body: dict[str, Any]) -> bytes:
         bodies.append(body)
         return chunk([{"text": '{"a":'}], finish="MAX_TOKENS")
 
@@ -226,20 +230,15 @@ REFUSED_KEY: Final[JsonValue] = {
     ("status", "body", "expected"),
     [
         (400, REFUSED_KEY, "bad_credentials"),
+        (400, [REFUSED_KEY], "bad_credentials"),
+        (401, {"error": {"code": 401, "message": "no", "status": "UNAUTHENTICATED"}}, "bad_credentials"),
         (503, {"error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}}, "unavailable"),
+        (429, {"error": {"code": 429, "message": "slow down", "status": "RESOURCE_EXHAUSTED"}}, "unavailable"),
         (400, {"error": {"code": 400, "message": "bad field", "status": "INVALID_ARGUMENT"}}, "raised"),
     ],
 )
-async def test_refusals_are_named_where_the_sdk_raises_them(
-    monkeypatch: pytest.MonkeyPatch, status: int, body: JsonValue, expected: str
-) -> None:
-    """The SDK sends on the first iteration, not when the stream is made: its errors raise inside the loop."""
-    real = httpx.AsyncClient
-
-    def client(**kwargs: Any) -> httpx.AsyncClient:
-        return real(transport=httpx.MockTransport(lambda request: httpx.Response(status, json=body)), **kwargs)
-
-    monkeypatch.setattr(model_module.httpx, "AsyncClient", client)
+async def test_refusals_are_named(monkeypatch: pytest.MonkeyPatch, status: int, body: JsonValue, expected: str) -> None:
+    mock(monkeypatch, lambda request: httpx2.Response(status, json=body))
     model = GoogleModel("google/gemini-test")
     try:
         with pytest.raises(Exception) as caught:
@@ -258,4 +257,85 @@ async def test_refusals_are_named_where_the_sdk_raises_them(
         case "unavailable":
             assert isinstance(caught.value, ModelUnavailable)
         case _:
-            assert type(caught.value).__module__ == "google.genai.errors"
+            assert isinstance(caught.value, wire.StatusError)
+            assert caught.value.status == status
+
+
+async def test_max_retries_sends_again_before_the_backend_does(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent = 0
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        nonlocal sent
+        sent += 1
+        if sent == 1:
+            return httpx2.Response(503, json={"error": {"code": 503}})
+        return httpx2.Response(200, content=chunk([{"text": "ok"}]))
+
+    mock(monkeypatch, handle)
+    monkeypatch.setattr(model_module, "RETRY_BACKOFF", 0)
+    model = GoogleModel("google/gemini-test")
+    try:
+        response = await model.request(
+            [ModelRequest(parts=[UserPromptPart("go")])], ModelInfo(settings={"api_key": "k", "max_retries": 1})
+        )
+    finally:
+        await model.aclose()
+    assert (sent, response.parts) == (2, [TextPart("ok")])
+
+
+async def test_an_unknown_setting_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    mock(monkeypatch, lambda request: httpx2.Response(200, content=chunk([{"text": "ok"}])))
+    model = GoogleModel("google/gemini-test")
+    try:
+        with pytest.raises(AidError) as caught:
+            await model.request(
+                [ModelRequest(parts=[UserPromptPart("go")])], ModelInfo(settings={"api_key": "k", "temprature": 1})
+            )
+    finally:
+        await model.aclose()
+    assert caught.value.code == "bad_model_settings"
+
+
+def test_chunks_parse_as_google_parses_them() -> None:
+    """Differential: aid's response model against google-genai's, on the same chunk JSON (#65)."""
+    from google.genai.types import GenerateContentResponse  # noqa: PLC0415 -- a test dependency only
+
+    for raw in (
+        chunk([{"text": "planning", "thought": True}]),
+        chunk(
+            [{"functionCall": {"name": "add", "args": {"a": 2}, "id": "g1"}, "thoughtSignature": SIGNATURE}],
+            usage={"promptTokenCount": 100, "cachedContentTokenCount": 60, "candidatesTokenCount": 5},
+            finish="STOP",
+        ),
+        chunk([{"text": "ve", "thoughtSignature": SIGNATURE}], usage={"thoughtsTokenCount": 7}, finish="MAX_TOKENS"),
+    ):
+        data = raw.decode().removeprefix("data: ").strip()
+        ours = gemini.Response.model_validate_json(data)
+        theirs = GenerateContentResponse.model_validate_json(data)
+        assert ours.model_version == theirs.model_version
+        [candidate] = ours.candidates
+        [expected] = theirs.candidates or []
+        assert candidate.finish_reason == (expected.finish_reason.value if expected.finish_reason else None)
+        expected_parts = (expected.content.parts if expected.content else None) or []
+        assert len(candidate.content.parts if candidate.content else []) == len(expected_parts)
+        for part, other in zip(candidate.content.parts if candidate.content else [], expected_parts, strict=True):
+            assert (part.text, part.thought) == (other.text, other.thought)
+            signature = base64.b64encode(other.thought_signature).decode() if other.thought_signature else None
+            assert part.thought_signature == signature
+            if other.function_call is not None:
+                assert part.function_call is not None
+                call = other.function_call
+                assert (part.function_call.name, part.function_call.args, part.function_call.id) == (
+                    call.name,
+                    call.args,
+                    call.id,
+                )
+        usage, their_usage = ours.usage_metadata, theirs.usage_metadata
+        assert (usage is None) == (their_usage is None)
+        if usage is not None and their_usage is not None:
+            assert (usage.prompt_token_count, usage.cached_content_token_count, usage.candidates_token_count) == (
+                their_usage.prompt_token_count or 0,
+                their_usage.cached_content_token_count or 0,
+                their_usage.candidates_token_count or 0,
+            )
+            assert usage.thoughts_token_count == their_usage.thoughts_token_count
