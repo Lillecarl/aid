@@ -517,6 +517,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
 nix develop --file . shell --command sh -c 'ruff format src tests plugins && ruff check src tests plugins && pyright'
 nix develop --file . shell --command python -m pytest -p no:cacheprovider -n auto  # ~2 min; serial ~10
 nix build --file . tests      # the same suite in the sandbox, against a real pymux
+nix develop --file . shell --command env AID_LIVE_TESTS=1 python -m pytest -p no:cacheprovider -m live tests/test_live.py -n 4
+# ^ real servers, paid (~1 cent): a two-turn tool loop per provider route on its cheapest model, priced; a route
+#   without its key skips (#64). Run after touching a transport or a provider plugin.
 nix run --file . pyrefly -- check   # project mode: files and import roots come from pyrefly.toml
 ```
 

@@ -50,6 +50,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
     from pathlib import Path
 
+    from aid.model import Transport
+
 
 @asynccontextmanager
 async def backend(
@@ -61,6 +63,8 @@ async def backend(
     desired_max: int | None = None,
     open_tail: int = 0,
     receive: Callable[[], Awaitable[list[MessageEntry]]] | None = None,
+    transport: Transport | None = None,
+    price_as: str | None = None,
 ) -> AsyncGenerator[NativeBackend]:
     coding = Coding(
         cwd=directory,
@@ -81,6 +85,8 @@ async def backend(
         desired_max=desired_max,
         open_tail=open_tail,
         receive=receive,
+        transport=transport,
+        price_as=price_as,
     )
     try:
         yield session

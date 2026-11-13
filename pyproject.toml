@@ -74,6 +74,7 @@ anyio_mode = "auto"
 # Every test, so a hang fails instead of waiting forever. Above the daemon tests' own 60 s deadlines
 # (AID_TEST_TIMEOUT), which report more. A test that needs longer says so: @pytest.mark.timeout(N).
 timeout = 90
+markers = ["live: real provider servers, paid; runs only with AID_LIVE_TESTS=1 (tests/test_live.py)"]
 filterwarnings = [
   "error",
   # google-genai's types module uses typing._UnionGenericAlias at import (googleapis/python-genai#1640).
