@@ -15,9 +15,10 @@ from typing import TYPE_CHECKING, Final
 import pytest
 
 from aid.agent import Agent
+from aid.coding import read
 from aid.discovery import discover
 from aid.images import ImageStore
-from aid.messages import ModelMessagesTypeAdapter, ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
+from aid.messages import ImagePart, ModelMessagesTypeAdapter, ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 from aid.model import ModelInfo
 from aid.prices import ENV_PRICES
 from aid.protocol import AidError, Output, SessionEvent, Usage
@@ -152,6 +153,34 @@ async def test_an_image_in_the_prompt(tmp_path: Path, monkeypatch: pytest.Monkey
     if route.priced:
         assert usage.cost is not None
         assert 0 < usage.cost.amount < TURN_BOUND
+
+
+@pytest.mark.parametrize("route", ROUTES, ids=[route.model for route in ROUTES])
+async def test_an_image_from_a_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route) -> None:
+    """The model sees the image `read` hands back (#66): inside the tool result (Anthropic), after the tool messages
+    (Chat Completions), as a user part beside the function responses (Gemini)."""
+    keyed(monkeypatch, route.key, route.source_key)
+    monkeypatch.delenv(ENV_PRICES)
+    providers = discover([PLUGINS], only=[route.plugin]).model_providers if route.plugin else {}
+    name = route.vision or route.model
+    (tmp_path / "pic.png").write_bytes(png((0, 255, 0), size=256))
+    agent = Agent(name, "You are a test.", tools=[read], model_settings=dict(route.settings or {}))
+    transport = await resolve(name, providers, tmp_path.name)
+    async with backend(
+        tmp_path, agent, transport=transport, price_as=catalog_model(name, providers), images=ImageStore(tmp_path)
+    ) as session:
+        answer = await session.prompt(
+            "Read pic.png with the read tool. The image is one solid colour. Is it red, green or blue? Answer with one"
+            " word.",
+            emit_nothing,
+        )
+    assert "green" in str(answer.output).lower()
+    history = ModelMessagesTypeAdapter.validate_json((tmp_path / "history.json").read_bytes())
+    assert any(isinstance(p, ImagePart) and p.tool_call_id for m in history for p in m.parts)
+
+
+async def emit_nothing(item: SessionEvent) -> None:
+    pass
 
 
 @pytest.mark.parametrize("route", ROUTES, ids=[route.model for route in ROUTES])

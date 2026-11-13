@@ -15,6 +15,7 @@ from aid.agent import Agent
 from aid.backends.acp import AcpBackend
 from aid.backends.claude_sdk import ClaudeSdkBackend
 from aid.backends.claude_tty import ClaudeTtyBackend
+from aid.coding import read
 from aid.images import MAX_BYTES, MAX_PROMPT_BYTES, ImageStore, decoded, refs
 from aid.messages import (
     ImagePart,
@@ -180,13 +181,15 @@ def test_anthropic_puts_a_tools_image_in_its_result(history: tuple[list[ModelMes
 
 
 def test_gemini_sends_images_inline(history: tuple[list[ModelMessage], dict[str, str]]) -> None:
+    """A prompt's image is a user part; a tool's goes inside its own function response."""
     messages, encoded = history
     red, blue = encoded.values()
     _, contents = google_contents(messages, encoded)
     sent = [json.loads(c.model_dump_json(exclude_none=True)) for c in contents]
     assert sent[0]["parts"] == [{"text": "what colour?"}, {"inlineData": {"mimeType": "image/png", "data": red}}]
-    assert [list(p) for p in sent[2]["parts"]] == [["functionResponse"], ["inlineData"], ["functionResponse"]]
-    assert sent[2]["parts"][1]["inlineData"]["data"] == blue
+    first, second = (p["functionResponse"] for p in sent[2]["parts"])
+    assert first["parts"] == [{"inlineData": {"mimeType": "image/png", "data": blue}}]
+    assert "parts" not in second
 
 
 async def test_a_transport_reads_the_bytes_from_the_sessions_store(
@@ -291,6 +294,39 @@ async def test_models_dev_input_decides_whether_a_model_sees_images(
         assert isinstance(refused.value, AidError)
         assert (refused.value.code, seen) == (code, [])
         assert "models.dev input: text" in refused.value.message
+
+
+class Reading(Looking):
+    """Reads `pic.png` first, then answers."""
+
+    async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
+        self.seen.append((messages, dict(await info.encoded(messages))))
+        if len(self.seen) == 1:
+            yield StreamDelta(0, ToolCallPart("read", {"path": "pic.png"}, "c1"))
+        else:
+            yield StreamDelta(0, TextPart("blue"))
+
+
+@pytest.mark.parametrize("keeps", [True, False])
+async def test_read_hands_an_image_file_to_the_model(tmp_path: Path, keeps: bool) -> None:
+    """The image follows its tool answer in the same request, tied to the call; without a store the model gets
+    the note alone."""
+    (tmp_path / "pic.png").write_bytes(png((0, 0, 255)))
+    model = Reading()
+    async with backend(tmp_path, Agent(model, tools=[read]), images=ImageStore(tmp_path) if keeps else None) as session:
+        await session.prompt("what colour is pic.png?", emit)
+    messages, encoded = model.seen[1]
+    answer = messages[-1].parts
+    assert isinstance(answer[0], ToolReturnPart)
+    if keeps:
+        assert answer[0].content == f"pic.png: image/png, {len(png((0, 0, 255)))} bytes"
+        image = answer[1]
+        assert isinstance(image, ImagePart)
+        assert (image.tool_call_id, base64.b64decode(encoded[image.sha256])) == ("c1", png((0, 0, 255)))
+        assert image in (await stored(tmp_path))[-2].parts
+    else:
+        assert str(answer[0].content).endswith("; this model takes no images")
+        assert (len(answer), encoded) == (1, {})
 
 
 @pytest.mark.parametrize("engine", [AcpBackend, ClaudeSdkBackend, ClaudeTtyBackend])

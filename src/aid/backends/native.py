@@ -26,7 +26,7 @@ from aid.backends.permissions import PermissionWaits
 from aid.catalog import session_catalog
 from aid.client import connect
 from aid.coding import CODING, OUTPUTS_DIR, Coding, Verdict, asking_names, coding_tools
-from aid.images import ImageStore
+from aid.images import ImageStore, ToolImage
 from aid.instructions import compose, environment
 from aid.messages import (
     ImagePart,
@@ -34,6 +34,7 @@ from aid.messages import (
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
+    Part,
     RetryPromptPart,
     SystemPromptPart,
     TextPart,
@@ -509,6 +510,19 @@ class NativeBackend:
         await self._look_up()
         return self._price
 
+    async def _takes_images(self) -> bool:
+        """False only where models.dev lists the model's input without `image`: an undescribed model is asked."""
+        await self._look_up()
+        return self._inputs is None or "image" in self._inputs
+
+    async def _tool_return(self, call: ToolCallPart, result: object) -> list[Part]:
+        if not isinstance(result, ToolImage):
+            return [ToolReturnPart(call.tool_name, to_jsonable_python(result), call.tool_call_id)]
+        if self._images is None or not await self._takes_images():
+            return [ToolReturnPart(call.tool_name, f"{result.text}; this model takes no images", call.tool_call_id)]
+        image = await self._images.add(result.data, call.tool_call_id)
+        return [ToolReturnPart(call.tool_name, result.text, call.tool_call_id), image]
+
     def _preserve_signed_thinking(self) -> bool:
         """Anthropic rejects a signed block whose signature the wire dropped, so keep them whole. Gemini's signed
         thoughts replay the same way."""
@@ -527,13 +541,10 @@ class NativeBackend:
     async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
         if images and self._images is None:
             raise AidError("images_unsupported", "this session keeps no images")
-        if images:
-            await self._look_up()
-            if self._inputs is not None and "image" not in self._inputs:
-                name = self._price_as or self._model.model_name
-                raise AidError(
-                    "images_unsupported", f"{name} takes no images (models.dev input: {', '.join(self._inputs)})"
-                )
+        if images and not await self._takes_images():
+            name = self._price_as or self._model.model_name
+            listed = ", ".join(self._inputs or [])
+            raise AidError("images_unsupported", f"{name} takes no images (models.dev input: {listed})")
         parts = [await self._images.add(image) for image in images] if self._images else []
         self._coding.emit = emit
         token = CODING.set(self._coding)
@@ -736,9 +747,12 @@ class NativeBackend:
                                 result = verdict.refusal(f"{call.tool_name} stays unrun")
                         except ModelRetry as error:
                             part = RetryPromptPart(str(error), tool_name=call.tool_name, tool_call_id=call.tool_call_id)
+                            returned: list[Part] = [part]
                         else:
-                            part = ToolReturnPart(call.tool_name, to_jsonable_python(result), call.tool_call_id)
-                        messages.append(ModelRequest(parts=[part]))
+                            returned = await self._tool_return(call, result)
+                            part = returned[0]
+                            assert isinstance(part, ToolReturnPart)
+                        messages.append(ModelRequest(parts=returned))
                         await emit(to_event(part))
             return Output(output=to_jsonable_python(output), stop_reason=stop_reason if completed else "cancelled")
         finally:

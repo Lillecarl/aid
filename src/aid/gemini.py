@@ -32,16 +32,23 @@ class FunctionCall(_Wire):
     id: str | None = None
 
 
-class FunctionResponse(_Wire):
-    name: str
-    response: dict[str, JsonValue]
-    id: str | None = None
-
-
 class Blob(_Wire):
     mime_type: str
     data: str
     """Base64."""
+
+
+class FunctionResponsePart(_Wire):
+    inline_data: Blob
+
+
+class FunctionResponse(_Wire):
+    name: str
+    response: dict[str, JsonValue]
+    id: str | None = None
+    parts: list[FunctionResponsePart] | None = None
+    """The tool's images. Measured 2026-11-13 on gemini-3.1-flash-lite: an image beside the function response, as a
+    user part, gets an answer led by junk text ("plot्यूडthought", " Malthirteen"), 5 of 5; nested here, clean."""
 
 
 class Part(_Wire):

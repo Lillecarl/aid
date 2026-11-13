@@ -858,6 +858,7 @@ def google_contents(
     system: list[gemini.Part] = []
     turns: list[gemini.Content] = []
     ids: dict[str, str | None] = {}
+    responses: dict[str, gemini.FunctionResponse] = {}
 
     def add(role: str, part: gemini.Part) -> None:
         if turns and turns[-1].role == role:
@@ -867,6 +868,7 @@ def google_contents(
 
     def answer(part: ToolReturnPart | RetryPromptPart, response: dict[str, JsonValue]) -> gemini.Part:
         block = gemini.FunctionResponse(name=part.tool_name or "", response=response, id=ids.get(part.tool_call_id))
+        responses[part.tool_call_id] = block
         return gemini.Part(function_response=block)
 
     for message in messages:
@@ -900,7 +902,10 @@ def google_contents(
                     add("user", gemini.Part(text=str(part.content)))
                 case ImagePart():
                     blob = gemini.Blob(mime_type=part.media_type, data=encoded(images, part))
-                    add("user", gemini.Part(inline_data=blob))
+                    if part.tool_call_id is not None and (block := responses.get(part.tool_call_id)) is not None:
+                        block.parts = [*(block.parts or []), gemini.FunctionResponsePart(inline_data=blob)]
+                    else:
+                        add("user", gemini.Part(inline_data=blob))
                 case ToolReturnPart():
                     add("user", answer(part, {"output": part.model_response_str()}))
                 case RetryPromptPart() if part.tool_name:

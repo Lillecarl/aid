@@ -46,6 +46,7 @@ from shellous import ResultError, Runner, sh
 import pyrun
 from aid.agent import ModelRetry, RunContext, Tool, Toolset
 from aid.confine import inside
+from aid.images import ToolImage, checked, media_type
 from aid.protocol import (
     AidError,
     PermissionChoice,
@@ -753,8 +754,9 @@ async def ls(path: str = ".") -> str:
     return "\n".join(name + "/" if is_dir else name for name, is_dir in entries)
 
 
-async def read(path: str, offset: int = 1, limit: int = READ_LIMIT) -> str:
-    """Read a text file with line numbers, as it will be once your staged edits apply.
+async def read(path: str, offset: int = 1, limit: int = READ_LIMIT) -> str | ToolImage:
+    """Read a text file with line numbers, as it will be once your staged edits apply. A PNG, JPEG, GIF or WebP
+    image comes back as the image itself, where your model takes images.
 
     `path` is relative to your working directory. A `python` report's records read the same way: `3fa9c1.2/stdout`,
     `3fa9c1.2/stderr`, `3fa9c1/printed`. `offset` is the first line (1-based), `limit` how many."""
@@ -768,7 +770,12 @@ async def read(path: str, offset: int = 1, limit: int = READ_LIMIT) -> str:
         try:
             content = content.decode()
         except UnicodeDecodeError:
-            return f"{path} is binary, {len(content)} bytes"
+            if media_type(content) is None:
+                return f"{path} is binary, {len(content)} bytes"
+            try:
+                return ToolImage(content, f"{path}: {checked(content)}, {len(content)} bytes")
+            except AidError as error:
+                return f"{path} is an image the model cannot take: {error.message}"
     return numbered(content, max(offset, 1), limit) or f"{path} is empty"
 
 

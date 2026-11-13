@@ -6,6 +6,7 @@ import base64
 import binascii
 import hashlib
 import os
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -53,6 +54,15 @@ def checked(data: bytes) -> str:
     if (kind := media_type(data)) is None:
         raise AidError("bad_image", "the image is not PNG, JPEG, GIF or WebP")
     return kind
+
+
+@dataclass(frozen=True)
+class ToolImage:
+    """A tool's answer that is an image: the native loop stores `data` and sends it after `text`, or sends `text` alone
+    where the model takes no images."""
+
+    data: bytes
+    text: str
 
 
 def decoded(images: Sequence[str]) -> list[bytes]:
