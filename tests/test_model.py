@@ -30,6 +30,7 @@ from aid.model import (
     GoogleModel,
     ModelInfo,
     OpenAIChatModel,
+    OpenAIResponsesModel,
     Provider,
     RequestUsage,
     StreamBroken,
@@ -235,12 +236,23 @@ async def test_a_refused_request_goes_again(
     assert sent == (2 if replayed else 1)
 
 
-async def test_openai_stream_cancellation_closes_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("name", ["openai/local", "anthropic/claude-test", "google/gemini-test", "responses/gpt-test"])
+async def test_a_cancelled_stream_closes_its_transport(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    """Cancelling a turn mid-response closes the response body on every wire."""
+    first = {
+        "openai/local": event({"content": "partial"}),
+        "anthropic/claude-test": sse(
+            [{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": "partial"}}]
+        ),
+        "google/gemini-test": b'data: {"candidates": [{"content": {"parts": [{"text": "partial"}]}}]}\n\n',
+        "responses/gpt-test": sse([{"type": "response.output_text.delta", "output_index": 0, "delta": "partial"}]),
+    }[name]
+
     class WaitingStream(httpx2.AsyncByteStream):
         closed = False
 
         async def __aiter__(self):
-            yield event({"content": "partial"})
+            yield first
             await anyio.sleep_forever()
 
         async def aclose(self) -> None:
@@ -257,7 +269,7 @@ async def test_openai_stream_cancellation_closes_transport(monkeypatch: pytest.M
         )
 
     monkeypatch.setattr(wire, "client", make_client)
-    model = OpenAIChatModel("openai/local")
+    model = OpenAIResponsesModel(name) if name.startswith("responses/") else model_for(name, {"api_base": "x"})
     try:
         info = ModelInfo(settings={"api_key": "test-cancel", "api_base": "https://example.test/v1"})
         with anyio.fail_after(2):
