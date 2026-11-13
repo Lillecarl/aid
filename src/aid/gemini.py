@@ -6,6 +6,8 @@ API and base64 in its JSON: aid keeps that string as is.
 
 from __future__ import annotations
 
+import re
+from datetime import datetime
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
@@ -38,8 +40,16 @@ class Blob(_Wire):
     """Base64."""
 
 
+class FileData(_Wire):
+    """A file uploaded through the Files API (`upload_url`), by URI (#69)."""
+
+    mime_type: str
+    file_uri: str
+
+
 class FunctionResponsePart(_Wire):
-    inline_data: Blob
+    inline_data: Blob | None = None
+    file_data: FileData | None = None
 
 
 class FunctionResponse(_Wire):
@@ -54,6 +64,7 @@ class FunctionResponse(_Wire):
 class Part(_Wire):
     text: str | None = None
     inline_data: Blob | None = None
+    file_data: FileData | None = None
     thought: bool | None = None
     thought_signature: str | None = None
     function_call: FunctionCall | None = None
@@ -205,6 +216,28 @@ def refused_key(body: str) -> bool:
 
 def embed_url(base: str | None, model: str) -> str:
     return f"{(base or DEFAULT_BASE).rstrip('/')}/{API_VERSION}/models/{model}:batchEmbedContents"
+
+
+def upload_url(base: str | None) -> str:
+    """The Files API's resumable upload: a start request answers `x-goog-upload-url`, where the bytes go."""
+    return f"{(base or DEFAULT_BASE).rstrip('/')}/upload/{API_VERSION}/files"
+
+
+class StoredFile(_Wire):
+    name: str
+    uri: str
+    state: str | None = None
+    expiration_time: datetime | None = None
+    """Measured 2026-11-13: 48 h after the upload."""
+
+
+class Uploaded(_Wire):
+    file: StoredFile
+
+
+MISSING_FILE: Final = re.compile(r"access the File (\S+) or it may not exist")
+"""A request naming a deleted or expired file: 403 PERMISSION_DENIED, "You do not have permission to access the File
+<id> or it may not exist." (measured); the URI ends in `files/<id>`."""
 
 
 def stream_url(base: str | None, model: str) -> str:

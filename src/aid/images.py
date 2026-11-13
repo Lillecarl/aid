@@ -5,14 +5,14 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
-import json
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import anyio.to_thread
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from aid.messages import ImagePart
 from aid.protocol import AidError, ImageRef
@@ -24,7 +24,16 @@ if TYPE_CHECKING:
     from aid.messages import ModelMessage
 
 IMAGES_DIR: Final = "images"
-UPLOADS: Final = TypeAdapter(dict[str, str])
+
+
+class Upload(BaseModel):
+    """An image a provider holds (#69): its file id or URI, and when the provider deletes it (None: never)."""
+
+    id: str
+    expires: datetime | None = None
+
+
+UPLOADS: Final = TypeAdapter(dict[str, Upload])
 UPLOADS_DIR: Final = "uploads"
 """`images/uploads/<scope>.json`: sha256 → a provider's file id, per provider and key (`scope`)."""
 MAX_BYTES: Final = 5 * 1024 * 1024
@@ -128,24 +137,24 @@ class ImageStore:
     def _uploads_file(self, scope: str) -> Path:
         return self._dir / UPLOADS_DIR / f"{scope}.json"
 
-    def _uploads(self, scope: str) -> dict[str, str]:
+    def _uploads(self, scope: str) -> dict[str, Upload]:
         try:
             return UPLOADS.validate_json(self._uploads_file(scope).read_bytes())
         except FileNotFoundError, ValidationError:
             return {}
 
-    def _write_uploads(self, scope: str, ids: Mapping[str, str]) -> None:
+    def _write_uploads(self, scope: str, ids: Mapping[str, Upload]) -> None:
         path = self._uploads_file(scope)
         path.parent.mkdir(parents=True, exist_ok=True)
         partial = path.with_name(f".{path.name}.{os.getpid()}")
-        partial.write_text(json.dumps(dict(ids), sort_keys=True))
+        partial.write_bytes(UPLOADS.dump_json(dict(ids)))
         partial.replace(path)
 
-    async def uploads(self, scope: str) -> dict[str, str]:
+    async def uploads(self, scope: str) -> dict[str, Upload]:
         """The file ids `scope` holds for this store's images: an unreadable table is an empty one."""
         return await anyio.to_thread.run_sync(self._uploads, scope)
 
-    async def save_uploads(self, scope: str, ids: Mapping[str, str]) -> None:
+    async def save_uploads(self, scope: str, ids: Mapping[str, Upload]) -> None:
         await anyio.to_thread.run_sync(self._write_uploads, scope, ids)
 
     def _take(self, other: ImageStore, parts: Sequence[ImagePart]) -> None:

@@ -6,6 +6,7 @@ import base64
 import json
 import struct
 import zlib
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Final
 
 import httpx2
@@ -28,6 +29,7 @@ from aid.messages import (
 )
 from aid.model import (
     AnthropicModel,
+    GoogleModel,
     ModelInfo,
     Provider,
     StreamDelta,
@@ -38,6 +40,7 @@ from aid.model import (
 from aid.prices import ENV_PRICES
 from aid.protocol import AidError
 from tests.models import TestModel
+from tests.test_google_model import chunk
 from tests.test_model import serve_wire, sse
 from tests.test_native_backend import backend, stored
 
@@ -265,6 +268,65 @@ async def test_an_image_goes_as_bytes_where_files_are_refused(tmp_path: Path, mo
     await ask_twice(AnthropicModel("anthropic/claude-test"), ImageStore(tmp_path), server)
     assert [base64.b64decode(s["data"]) for s in server.sent] == [png(), png()]
     assert len(server.uploads) == 2
+
+
+class GeminiFiles:
+    """Gemini's Files API (resumable upload) and streamGenerateContent (#69): a deleted URI answers 403 as measured."""
+
+    def __init__(self, expires: datetime) -> None:
+        self.expires = expires
+        self.uploads: list[httpx2.Request] = []
+        self.sent: list[dict[str, dict[str, str]]] = []
+        self.deleted: set[str] = set()
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/upload/v1beta/files":
+            return httpx2.Response(200, headers={"x-goog-upload-url": "https://upload.example/session"})
+        if request.url.host == "upload.example":
+            self.uploads.append(request)
+            name = f"files/f{len(self.uploads)}"
+            stored = {
+                "name": name,
+                "uri": f"https://generativelanguage.googleapis.com/v1beta/{name}",
+                "state": "ACTIVE",
+                "expirationTime": self.expires.isoformat(),
+            }
+            return httpx2.Response(200, json={"file": stored})
+        image: dict[str, dict[str, str]] = json.loads(request.content)["contents"][0]["parts"][1]
+        self.sent.append(image)
+        if (uri := image.get("fileData", {}).get("fileUri", "")) in self.deleted:
+            message = f"You do not have permission to access the File {uri.rsplit('/', 1)[1]} or it may not exist."
+            return httpx2.Response(
+                403, json={"error": {"code": 403, "message": message, "status": "PERMISSION_DENIED"}}
+            )
+        body = chunk([{"text": "red"}], finish="STOP", usage={"promptTokenCount": 1, "candidatesTokenCount": 1})
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=body)
+
+
+async def ask_gemini(store: ImageStore, server: GeminiFiles, rounds: int = 2) -> None:
+    history: list[ModelMessage] = [ModelRequest([UserPromptPart("what colour?"), store.put(png())])]
+    model = GoogleModel("google/gemini-test")
+    try:
+        for _ in range(rounds):
+            await model.request(history, ModelInfo(settings={"api_key": "k", "max_retries": 0}, images=store))
+            server.deleted.add("https://generativelanguage.googleapis.com/v1beta/files/f1")
+    finally:
+        await model.aclose()
+
+
+async def test_gemini_sends_an_image_by_file_uri(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Uploaded once; a file Gemini no longer holds (403) is uploaded again and the request sent again."""
+    serve_wire(monkeypatch, server := GeminiFiles(datetime.now(UTC) + timedelta(hours=48)))
+    await ask_gemini(ImageStore(tmp_path), server)
+    assert [s["fileData"]["fileUri"].rsplit("/", 1)[1] for s in server.sent] == ["f1", "f1", "f2"]
+    assert (len(server.uploads), server.uploads[0].content) == (2, png())
+
+
+async def test_a_gemini_file_near_its_expiry_goes_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    serve_wire(monkeypatch, server := GeminiFiles(datetime.now(UTC) + timedelta(minutes=30)))
+    await ask_gemini(ImageStore(tmp_path), server, rounds=1)
+    await ask_gemini(ImageStore(tmp_path), server, rounds=1)
+    assert [s["fileData"]["fileUri"].rsplit("/", 1)[1] for s in server.sent] == ["f1", "f2"]
 
 
 async def test_another_messages_server_gets_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

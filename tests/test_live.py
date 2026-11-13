@@ -182,11 +182,12 @@ async def test_an_image_from_a_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def assert_by_file_id(root: Path, model: str) -> None:
-    """Anthropic's own route sends images by Files API id (#69): the session's id table names one."""
-    if model.startswith("anthropic/"):
+    """Anthropic's and Google's own routes send images by Files API id (#69): the session's id table names one."""
+    prefix = {"anthropic": "file_", "google": "https://generativelanguage.googleapis.com/"}.get(model.split("/")[0])
+    if prefix is not None:
         tables = list((root / IMAGES_DIR / UPLOADS_DIR).glob("*.json"))
         assert len(tables) == 1
-        assert any(file_id.startswith("file_") for file_id in UPLOADS.validate_json(tables[0].read_bytes()).values())
+        assert any(u.id.startswith(prefix) for u in UPLOADS.validate_json(tables[0].read_bytes()).values())
 
 
 async def emit_nothing(item: SessionEvent) -> None:

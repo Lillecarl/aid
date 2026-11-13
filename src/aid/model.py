@@ -3,11 +3,13 @@ own client (`aid.wire`, #65): no model SDK."""
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
 
 import anyio
@@ -16,7 +18,7 @@ import structlog
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from aid import anthropic_api, chat_api, gemini, wire
-from aid.images import NO_IMAGES, ImageStore, encoded
+from aid.images import NO_IMAGES, ImageStore, Upload, encoded
 from aid.messages import (
     ImagePart,
     ModelMessage,
@@ -34,7 +36,7 @@ from aid.protocol import AidError
 log = structlog.get_logger(__name__)
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Container, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Container, Mapping, Sequence
 
     from pydantic.json_schema import JsonSchemaValue
 
@@ -323,6 +325,58 @@ class ClientKey:
     base_url: str | None
     api_key: str
     max_retries: int
+
+
+UPLOAD_MARGIN: Final = timedelta(hours=1)
+"""An upload this close to its expiry goes again: Gemini deletes files 48 h after the upload."""
+
+
+async def held_files(
+    name: str,
+    info: ModelInfo,
+    scope: str,
+    messages: Sequence[ModelMessage],
+    upload: Callable[[ImagePart, bytes], Awaitable[Upload]],
+    refused: Callable[[wire.StatusError], bool] = lambda error: False,
+) -> Mapping[str, str]:
+    """The history's images by a provider's file id (#69), uploading those it does not hold. A failed upload leaves
+    that image to go as base64; a later request tries again."""
+    if info.images is None:
+        return NO_IMAGES
+    parts = {p.sha256: p for m in messages for p in m.parts if isinstance(p, ImagePart)}
+    if not parts:
+        return NO_IMAGES
+    held = await info.images.uploads(scope)
+    soon = datetime.now(UTC) + UPLOAD_MARGIN
+    missing = [
+        part
+        for sha, part in parts.items()
+        if sha not in held or ((expires := held[sha].expires) is not None and expires < soon)
+    ]
+    for part in missing:
+        held.pop(part.sha256, None)
+        try:
+            held[part.sha256] = await upload(part, await info.images.bytes_of(part))
+        except (wire.StatusError, httpx2.TransportError, ValidationError) as error:
+            if isinstance(error, wire.StatusError | httpx2.TransportError) and (
+                rejected_key(error) or (isinstance(error, wire.StatusError) and refused(error))
+            ):
+                raise refused_key(name, error) from error
+            log.warning("image_upload_failed", model=name, image=part.sha256, error=str(error)[:300])
+    if missing:
+        await info.images.save_uploads(scope, held)
+    return {sha: held[sha].id for sha in parts if sha in held}
+
+
+async def drop_files(info: ModelInfo, scope: str, files: Mapping[str, str], gone: Callable[[str], bool]) -> bool:
+    """Drop the ids a request named that the provider no longer holds: True when there were any, so the caller
+    uploads them again and resends."""
+    stale = {sha for sha, file_id in files.items() if gone(file_id)}
+    if not stale or info.images is None:
+        return False
+    held = await info.images.uploads(scope)
+    await info.images.save_uploads(scope, {sha: u for sha, u in held.items() if sha not in stale})
+    return True
 
 
 def upload_scope(key: ClientKey) -> str:
@@ -781,15 +835,15 @@ class AnthropicModel:
         return await open_model_stream(self.model_name, self._client(), url, body, headers, io_timeout, key.max_retries)
 
     async def _upload(
-        self, key: ClientKey, headers: Mapping[str, str], part: ImagePart, data: bytes, io_timeout: float
-    ) -> str:
+        self, key: ClientKey, headers: Mapping[str, str], io_timeout: float, part: ImagePart, data: bytes
+    ) -> Upload:
         files = {"file": (part.sha256, data, part.media_type)}
         response = await self._client().post(
             anthropic_api.files_url(key.base_url), headers=dict(headers), files=files, timeout=io_timeout
         )
         if not response.is_success:
             raise wire.StatusError(response.status_code, response.text[: wire.ERROR_BODY_LIMIT], str(response.url))
-        return anthropic_api.StoredFile.model_validate_json(response.content).id
+        return Upload(id=anthropic_api.StoredFile.model_validate_json(response.content).id)
 
     async def _files(
         self,
@@ -799,37 +853,14 @@ class AnthropicModel:
         headers: Mapping[str, str],
         io_timeout: float,
     ) -> Mapping[str, str]:
-        """The history's images by Files API id (#69), uploading those not yet held: Anthropic's own route only. A
-        failed upload leaves that image to go as base64; a later request tries again."""
-        if self._provider is not None or info.images is None:
+        if self._provider is not None:
             return NO_IMAGES
-        parts = {p.sha256: p for m in messages for p in m.parts if isinstance(p, ImagePart)}
-        if not parts:
-            return NO_IMAGES
-        scope = upload_scope(key)
-        held = await info.images.uploads(scope)
-        missing = [part for sha, part in parts.items() if sha not in held]
-        for part in missing:
-            try:
-                held[part.sha256] = await self._upload(key, headers, part, await info.images.bytes_of(part), io_timeout)
-            except (wire.StatusError, httpx2.TransportError, ValidationError) as error:
-                if isinstance(error, wire.StatusError | httpx2.TransportError) and rejected_key(error):
-                    raise refused_key(self.model_name, error) from error
-                log.warning("image_upload_failed", model=self.model_name, image=part.sha256, error=str(error)[:300])
-        if missing:
-            await info.images.save_uploads(scope, held)
-        return {sha: held[sha] for sha in parts if sha in held}
+        upload = functools.partial(self._upload, key, headers, io_timeout)
+        return await held_files(self.model_name, info, upload_scope(key), messages, upload)
 
     async def _forget(self, info: ModelInfo, key: ClientKey, error: wire.StatusError, files: Mapping[str, str]) -> bool:
-        """Drop the ids a request named that the provider no longer holds: True when there were any."""
         gone: set[str] = set(anthropic_api.MISSING_FILE.findall(error.body)) if error.status == 404 else set()
-        stale = {sha for sha, file_id in files.items() if file_id in gone}
-        if not stale or info.images is None:
-            return False
-        scope = upload_scope(key)
-        held = await info.images.uploads(scope)
-        await info.images.save_uploads(scope, {sha: i for sha, i in held.items() if sha not in stale})
-        return True
+        return await drop_files(info, upload_scope(key), files, gone.__contains__)
 
     async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
         key = self._key(info.settings)
@@ -930,7 +961,7 @@ def _signature(part: TextPart | ToolCallPart) -> str | None:
 
 
 def google_contents(
-    messages: Sequence[ModelMessage], images: Encoded = NO_IMAGES
+    messages: Sequence[ModelMessage], images: Encoded = NO_IMAGES, files: Mapping[str, str] = NO_IMAGES
 ) -> tuple[list[gemini.Part], list[gemini.Content]]:
     """Stored parts as the Gemini API's (system instruction parts, contents), merged by role as
     `anthropic_messages` does. A thought signature goes back on the part that carried it: Gemini 3 refuses a
@@ -981,11 +1012,16 @@ def google_contents(
                 case UserPromptPart():
                     add("user", gemini.Part(text=str(part.content)))
                 case ImagePart():
-                    blob = gemini.Blob(mime_type=part.media_type, data=encoded(images, part))
-                    if part.tool_call_id is not None and (block := responses.get(part.tool_call_id)) is not None:
-                        block.parts = [*(block.parts or []), gemini.FunctionResponsePart(inline_data=blob)]
+                    blob, held = None, None
+                    if part.sha256 in files:
+                        held = gemini.FileData(mime_type=part.media_type, file_uri=files[part.sha256])
                     else:
-                        add("user", gemini.Part(inline_data=blob))
+                        blob = gemini.Blob(mime_type=part.media_type, data=encoded(images, part))
+                    if part.tool_call_id is not None and (block := responses.get(part.tool_call_id)) is not None:
+                        nested = gemini.FunctionResponsePart(inline_data=blob, file_data=held)
+                        block.parts = [*(block.parts or []), nested]
+                    else:
+                        add("user", gemini.Part(inline_data=blob, file_data=held))
                 case ToolReturnPart():
                     add("user", answer(part, {"output": part.model_response_str()}))
                 case RetryPromptPart() if part.tool_name:
@@ -995,6 +1031,10 @@ def google_contents(
                 case _:
                     raise ValueError("response part in a model request")
     return system, turns
+
+
+def _gemini_refused(error: wire.StatusError) -> bool:
+    return gemini.refused_key(error.body)
 
 
 def google_tool(tool: Tool) -> gemini.FunctionDeclaration:
@@ -1031,7 +1071,12 @@ class GoogleModel:
             await http.aclose()
 
     def _request(
-        self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue], images: Encoded
+        self,
+        messages: list[ModelMessage],
+        info: ModelInfo,
+        settings: dict[str, JsonValue],
+        images: Encoded,
+        files: Mapping[str, str] = NO_IMAGES,
     ) -> bytes:
         try:
             chosen = gemini.Settings.model_validate(settings)
@@ -1045,7 +1090,7 @@ class GoogleModel:
                     "response_json_schema": TypeAdapter(info.output_type).json_schema(),
                 }
             )
-        system, contents = google_contents(messages, images)
+        system, contents = google_contents(messages, images, files)
         request = gemini.Request(
             contents=contents,
             system_instruction=gemini.Content(parts=system) if system else None,
@@ -1059,14 +1104,64 @@ class GoogleModel:
         )
         return request.body()
 
-    async def _open(self, key: ClientKey, body: bytes, io_timeout: float) -> httpx2.Response:
+    def _client(self) -> httpx2.AsyncClient:
         if self._http is None:
             self._http = wire.client(timeout=DEFAULT_TIMEOUT)
-        headers = {gemini.KEY_HEADER: key.api_key, **(self._provider.headers if self._provider else {})}
+        return self._http
+
+    def _headers(self, key: ClientKey) -> dict[str, str]:
+        return {gemini.KEY_HEADER: key.api_key, **(self._provider.headers if self._provider else {})}
+
+    async def _upload(self, key: ClientKey, io_timeout: float, part: ImagePart, data: bytes) -> Upload:
+        """The Files API's resumable upload, both steps in one go: start, then the bytes with `finalize`."""
+        http = self._client()
+        start = await http.post(
+            gemini.upload_url(key.base_url),
+            headers={
+                **self._headers(key),
+                "x-goog-upload-protocol": "resumable",
+                "x-goog-upload-command": "start",
+                "x-goog-upload-header-content-length": str(len(data)),
+                "x-goog-upload-header-content-type": part.media_type,
+            },
+            json={"file": {"display_name": part.sha256}},
+            timeout=io_timeout,
+        )
+        if not start.is_success or "x-goog-upload-url" not in start.headers:
+            raise wire.StatusError(start.status_code, start.text[: wire.ERROR_BODY_LIMIT], str(start.url))
+        done = await http.post(
+            start.headers["x-goog-upload-url"],
+            headers={"x-goog-upload-offset": "0", "x-goog-upload-command": "upload, finalize"},
+            content=data,
+            timeout=io_timeout,
+        )
+        if not done.is_success:
+            raise wire.StatusError(done.status_code, done.text[: wire.ERROR_BODY_LIMIT], str(done.url))
+        stored = gemini.Uploaded.model_validate_json(done.content).file
+        if stored.state not in (None, "ACTIVE"):
+            raise wire.StatusError(done.status_code, f"file {stored.name} is {stored.state}", str(done.url))
+        return Upload(id=stored.uri, expires=stored.expiration_time)
+
+    async def _files(
+        self, messages: Sequence[ModelMessage], info: ModelInfo, key: ClientKey, io_timeout: float
+    ) -> Mapping[str, str]:
+        """Google AI Studio's own route only: another server of the Gemini API may hold no files."""
+        if self._provider is not None:
+            return NO_IMAGES
+        upload = functools.partial(self._upload, key, io_timeout)
+        return await held_files(self.model_name, info, upload_scope(key), messages, upload, _gemini_refused)
+
+    async def _forget(self, info: ModelInfo, key: ClientKey, error: wire.StatusError, files: Mapping[str, str]) -> bool:
+        names: list[str] = gemini.MISSING_FILE.findall(error.body) if error.status == 403 else []
+        gone = {f"/files/{name}" for name in names}
+        return await drop_files(info, upload_scope(key), files, lambda uri: any(uri.endswith(g) for g in gone))
+
+    async def _open(self, key: ClientKey, body: bytes, io_timeout: float) -> httpx2.Response:
+        headers = self._headers(key)
         url = gemini.stream_url(key.base_url, self._model)
         return await open_model_stream(
             self.model_name,
-            self._http,
+            self._client(),
             url,
             body,
             headers,
@@ -1079,8 +1174,16 @@ class GoogleModel:
         key = self._key(info.settings)
         settings = _request_settings(info.settings, self._provider)
         timeout = _TIMEOUT.validate_python(settings.pop("timeout"))
-        body = self._request(messages, info, settings, await info.encoded(messages))
-        response = await self._open(key, body, timeout)
+        files = await self._files(messages, info, key, timeout)
+        body = self._request(messages, info, settings, await info.encoded(messages, files), files)
+        try:
+            response = await self._open(key, body, timeout)
+        except wire.StatusError as error:
+            if not await self._forget(info, key, error, files):
+                raise
+            files = await self._files(messages, info, key, timeout)
+            body = self._request(messages, info, settings, await info.encoded(messages, files), files)
+            response = await self._open(key, body, timeout)
         calls = 0
         events = wire.events(response)
         try:
