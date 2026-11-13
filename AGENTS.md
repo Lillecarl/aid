@@ -273,7 +273,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   sends; other engines `images_unsupported`. A fork copies its parent's images (`ImageStore.take`). `Prompt.images`
   (base64; `Session.run/stream(images=)`, `aid prompt --image`): the daemon checks them (`images.refs`,
   `MAX_PROMPT_BYTES` together) and records `PromptEntry.images` (`ImageRef`), the worker decodes them to the backend.
-  Not yet: models.dev `modalities.input` check, tool images, web.
+  A model models.dev lists without `image` in `modalities.input` → `images_unsupported` before any request; one it
+  does not describe is asked. Not yet: tool images, web.
 - `src/aid/wire.py` — aid's own model clients' HTTP (#65): `open_stream` (POST, 2xx or `StatusError` with the body),
   `events` (SSE data), `client` (tests patch it, called `timeout=` by keyword). No model SDK at runtime; each is a
   test dependency for differential tests (`…parse_as_…` in test_model.py and test_google_model.py). Protocol

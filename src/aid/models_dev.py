@@ -44,6 +44,10 @@ class _Cost(BaseModel):
     cache_write: float | None = None
 
 
+class _Modalities(BaseModel):
+    input: list[str] = Field(default_factory=list[str])
+
+
 class CatalogModel(BaseModel):
     """One model's entry, as far as aid reads it."""
 
@@ -55,6 +59,7 @@ class CatalogModel(BaseModel):
     cost: _Cost | None = None
     status: str | None = None
     """`deprecated` for a model the provider is retiring."""
+    modalities: _Modalities | None = None
 
     def entry(self) -> ModelEntry:
         return ModelEntry(
@@ -113,6 +118,15 @@ def window(catalog: ModelsDev | None, model: str) -> int | None:
     except ValidationError:
         return None
     return entry.limit.context if entry.limit else None
+
+
+def inputs(catalog: ModelsDev | None, model: str) -> list[str] | None:
+    """What `provider/model` takes as input (`text`, `image`, …), or None when the catalog does not say."""
+    try:
+        entry = CatalogModel.model_validate(raw_model(catalog, model))
+    except ValidationError:
+        return None
+    return entry.modalities.input if entry.modalities and entry.modalities.input else None
 
 
 def provider(catalog: ModelsDev | None, name: str) -> CatalogProvider | None:

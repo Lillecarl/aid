@@ -56,7 +56,7 @@ from aid.model import (
     split_name,
 )
 from aid.models_dev import catalog as models_catalog
-from aid.models_dev import window
+from aid.models_dev import inputs, window
 from aid.prices import CURRENCY, Price, lookup
 from aid.protocol import (
     AidError,
@@ -450,6 +450,7 @@ class NativeBackend:
         # A model object is its owner's to price; aid prices only the transports it builds from a name.
         self._looked_up = self._owned is None
         self._price: Price | None = None
+        self._inputs: list[str] | None = None
         self._turn: list[ModelMessage] | None = None
         self._in_flight: tuple[list[ToolCallPart], int] | None = None
         coding.compact = self.compact
@@ -500,6 +501,7 @@ class NativeBackend:
             return
         name = self._price_as or self._model.model_name
         self._price = lookup(catalog, name)
+        self._inputs = inputs(catalog, name)
         if self._max_context is None and (size := window(catalog, name)):
             self._desired_max = size // 2
 
@@ -525,6 +527,13 @@ class NativeBackend:
     async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
         if images and self._images is None:
             raise AidError("images_unsupported", "this session keeps no images")
+        if images:
+            await self._look_up()
+            if self._inputs is not None and "image" not in self._inputs:
+                name = self._price_as or self._model.model_name
+                raise AidError(
+                    "images_unsupported", f"{name} takes no images (models.dev input: {', '.join(self._inputs)})"
+                )
         parts = [await self._images.add(image) for image in images] if self._images else []
         self._coding.emit = emit
         token = CODING.set(self._coding)

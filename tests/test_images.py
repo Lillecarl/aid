@@ -26,6 +26,7 @@ from aid.messages import (
     UserPromptPart,
 )
 from aid.model import AnthropicModel, ModelInfo, StreamDelta, anthropic_messages, google_contents, wire_messages
+from aid.prices import ENV_PRICES
 from aid.protocol import AidError
 from tests.models import TestModel
 from tests.test_model import serve_wire, sse
@@ -34,6 +35,8 @@ from tests.test_native_backend import backend, stored
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator
     from pathlib import Path
+
+    from pydantic import JsonValue
 
     from aid.backends.base import Backend
     from aid.messages import ModelMessage
@@ -255,6 +258,39 @@ async def test_a_bad_image_fails_before_the_turn(tmp_path: Path) -> None:
         with pytest.raises(AidError) as refused:
             await session.prompt("what colour?", emit, [b"text"])
     assert (refused.value.code, model.seen) == ("bad_image", [])
+
+
+@pytest.mark.parametrize(("takes", "code"), [(["text"], "images_unsupported"), (["text", "image"], None), (None, None)])
+async def test_models_dev_input_decides_whether_a_model_sees_images(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, takes: list[str] | None, code: str | None
+) -> None:
+    """A model models.dev lists without `image` input is refused before any request; one it does not describe is
+    asked."""
+    entry: dict[str, JsonValue] = {"id": "local"}
+    if takes is not None:
+        entry["modalities"] = {"input": [*takes], "output": ["text"]}
+    catalog = tmp_path / "catalog.json"
+    catalog.write_text(json.dumps({"openai": {"models": {"local": entry}}}))
+    monkeypatch.setenv(ENV_PRICES, str(catalog))
+    seen: list[httpx2.Request] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        return httpx2.Response(400, json={"error": {"message": "stop here"}})
+
+    serve_wire(monkeypatch, handle)
+    agent = Agent(
+        "openai/local", model_settings={"api_key": "k", "api_base": "https://example.test/v1", "max_retries": 0}
+    )
+    async with backend(tmp_path, agent, images=ImageStore(tmp_path)) as session:
+        with pytest.raises(Exception) as refused:  # the asked model's 400 stops the turn
+            await session.prompt("what colour?", emit, [png()])
+    if code is None:
+        assert len(seen) == 1
+    else:
+        assert isinstance(refused.value, AidError)
+        assert (refused.value.code, seen) == (code, [])
+        assert "models.dev input: text" in refused.value.message
 
 
 @pytest.mark.parametrize("engine", [AcpBackend, ClaudeSdkBackend, ClaudeTtyBackend])
