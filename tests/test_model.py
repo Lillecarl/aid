@@ -5,11 +5,10 @@ from typing import TYPE_CHECKING, Any
 
 import anyio
 import httpx2
-import openai
 import pytest
 
 import aid.backends.native as native_backend
-from aid import anthropic_api, wire
+from aid import anthropic_api, chat_api, wire
 from aid.agent import Agent, Tool
 from aid.discovery import Catalog
 from aid.messages import (
@@ -53,7 +52,13 @@ if TYPE_CHECKING:
 
 def event(delta: dict[str, Any], *, usage: dict[str, Any] | None = None, finish: str | None = None) -> bytes:
     choice = {"index": 0, "delta": delta, "finish_reason": finish}
-    chunk: dict[str, Any] = {"id": "response", "model": "local", "choices": [choice]}
+    chunk: dict[str, Any] = {
+        "id": "response",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": "local",
+        "choices": [choice],
+    }
     if usage:
         chunk["usage"] = usage
     return f"data: {json.dumps(chunk)}\n\n".encode()
@@ -90,7 +95,7 @@ async def test_openai_transport_tool_loop_and_usage(tmp_path: Path, monkeypatch:
     def make_client(**kwargs: Any) -> httpx2.AsyncClient:
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setattr(wire, "client", make_client)
 
     async def add(a: int, b: int) -> int:
         return a + b
@@ -133,7 +138,7 @@ async def test_the_gauge_is_half_the_model_window(
     def make_client(**kwargs: Any) -> httpx2.AsyncClient:
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setattr(wire, "client", make_client)
     events: list[SessionEvent] = []
 
     async def emit(item: SessionEvent) -> None:
@@ -166,7 +171,7 @@ async def test_a_broken_stream_goes_again(tmp_path: Path, monkeypatch: pytest.Mo
     def make_client(**kwargs: Any) -> httpx2.AsyncClient:
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setattr(wire, "client", make_client)
     monkeypatch.setattr(native_backend, "STREAM_BACKOFF", 0)
     events: list[SessionEvent] = []
 
@@ -209,13 +214,13 @@ async def test_a_refused_request_goes_again(
     def make_client(**kwargs: Any) -> httpx2.AsyncClient:
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setattr(wire, "client", make_client)
     monkeypatch.setattr(native_backend, "STREAM_BACKOFF", 0)
 
     async def emit(item: SessionEvent) -> None:
         pass
 
-    # max_retries 0: the SDK's own retries would hide the first answer.
+    # max_retries 0: the client's own retries would hide the first answer.
     settings: dict[str, JsonValue] = {
         "api_key": "test-refused",
         "api_base": "https://example.test/v1",
@@ -225,7 +230,7 @@ async def test_a_refused_request_goes_again(
         if replayed:
             assert (await session.prompt("hello", emit)).output == "done"
         else:
-            with pytest.raises(openai.BadRequestError):
+            with pytest.raises(wire.StatusError):
                 await session.prompt("hello", emit)
     assert sent == (2 if replayed else 1)
 
@@ -251,7 +256,7 @@ async def test_openai_stream_cancellation_closes_transport(monkeypatch: pytest.M
             **kwargs,
         )
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setattr(wire, "client", make_client)
     model = OpenAIChatModel("openai/local")
     try:
         info = ModelInfo(settings={"api_key": "test-cancel", "api_base": "https://example.test/v1"})
@@ -290,7 +295,7 @@ async def test_backend_shutdown_closes_cached_clients(tmp_path: Path, monkeypatc
     def load_target(target: str) -> Agent:
         return Agent("openai/local", model_settings={"api_key": "test-shutdown", "api_base": "https://example.test/v1"})
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setattr(wire, "client", make_client)
     monkeypatch.setattr(native_backend, "_session_catalog", Catalog)
     monkeypatch.setattr(native_backend, "load_target", load_target)
 
@@ -573,9 +578,9 @@ async def test_model_names_pick_the_sdk_and_credentials_fail_by_name(monkeypatch
             await anext(model.stream(go, ModelInfo()))
         assert (caught.value.code, says in caught.value.message) == (code, True)
     custom = OpenAIChatModel("nowhere/model")
-    assert custom._client({"api_base": "https://example.test/v1", "api_key": "k"}) is not None  # pyright: ignore[reportPrivateUsage]
+    assert custom._key({"api_base": "https://example.test/v1", "api_key": "k"}) is not None  # pyright: ignore[reportPrivateUsage]
     local = OpenAIChatModel("ollama/llama")
-    assert local._client({}).api_key == "local"  # pyright: ignore[reportPrivateUsage]
+    assert local._key({}).api_key == "local"  # pyright: ignore[reportPrivateUsage]
     await custom.aclose()
     await local.aclose()
 
@@ -703,7 +708,7 @@ async def test_provider_defaults_go_under_the_session_settings(monkeypatch: pyte
     def make_client(**kwargs: Any) -> httpx2.AsyncClient:
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setattr(wire, "client", make_client)
     provider = Provider("https://p.test/v1", "P_KEY", defaults={"max_tokens": 64}, headers={"X-Title": "aid"})
     monkeypatch.setenv("P_KEY", "k")
     model = OpenAIChatModel("p/model", provider)
@@ -742,7 +747,7 @@ async def test_openai_compatible_stream_keeps_reasoning_and_cache_reads(monkeypa
             **kwargs,
         )
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setattr(wire, "client", make_client)
     monkeypatch.setenv("GROQ_API_KEY", "k")
     model = OpenAIChatModel("groq/llama")
     usages: list[RequestUsage] = []
@@ -776,7 +781,7 @@ async def test_a_refused_key_is_named_and_not_sent_again(
     def make_openai(**kwargs: Any) -> httpx2.AsyncClient:
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_openai)
+    monkeypatch.setattr(wire, "client", make_openai)
     serve_wire(monkeypatch, handle)
 
     async def emit(item: SessionEvent) -> None:
@@ -851,3 +856,70 @@ def test_anthropic_events_parse_as_the_sdk_parses_them() -> None:
                 assert ours.usage.output_tokens == theirs.usage.output_tokens
             case _:
                 assert isinstance(ours, anthropic_api.BlockStop)
+
+
+def test_chat_chunks_and_embeddings_parse_as_the_sdk_parses_them() -> None:
+    """Differential: aid's Chat Completions models against the OpenAI SDK's, on the same JSON (#65)."""
+    from openai.types import CreateEmbeddingResponse  # noqa: PLC0415 -- a test dependency only
+    from openai.types.chat import ChatCompletionChunk  # noqa: PLC0415
+
+    chunks = [
+        {"reasoning_content": "hm"},
+        {"content": "ok", "tool_calls": [{"index": 0, "id": "c1", "function": {"name": "add", "arguments": '{"a":'}}]},
+        {"tool_calls": [{"index": 0, "function": {"arguments": "1}"}}]},
+    ]
+    for delta in chunks:
+        data = event(delta, finish="tool_calls").decode().removeprefix("data: ").strip()
+        ours, theirs = chat_api.Chunk.model_validate_json(data), ChatCompletionChunk.model_validate_json(data)
+        assert ours.model == theirs.model
+        [choice], [expected] = ours.choices, theirs.choices
+        assert (choice.finish_reason, choice.delta.content) == (expected.finish_reason, expected.delta.content)
+        assert (choice.delta.model_extra or {}) == (expected.delta.model_extra or {})
+        calls = [
+            (c.index, c.id, c.function and (c.function.name, c.function.arguments))
+            for c in choice.delta.tool_calls or []
+        ]
+        expected_calls = [
+            (c.index, c.id, c.function and (c.function.name, c.function.arguments))
+            for c in expected.delta.tool_calls or []
+        ]
+        assert calls == expected_calls
+    usage = event(
+        {},
+        usage={
+            "prompt_tokens": 10,
+            "completion_tokens": 2,
+            "total_tokens": 12,
+            "prompt_tokens_details": {"cached_tokens": 6},
+        },
+    )
+    data = usage.decode().removeprefix("data: ").strip()
+    ours_usage, theirs_usage = (
+        chat_api.Chunk.model_validate_json(data).usage,
+        ChatCompletionChunk.model_validate_json(data).usage,
+    )
+    assert ours_usage is not None and theirs_usage is not None
+    assert ours_usage.prompt_tokens_details is not None and theirs_usage.prompt_tokens_details is not None
+    assert (ours_usage.prompt_tokens, ours_usage.completion_tokens, ours_usage.prompt_tokens_details.cached_tokens) == (
+        theirs_usage.prompt_tokens,
+        theirs_usage.completion_tokens,
+        theirs_usage.prompt_tokens_details.cached_tokens,
+    )
+    embedded = json.dumps(
+        {
+            "object": "list",
+            "model": "m",
+            "data": [{"object": "embedding", "index": 0, "embedding": [0.5, -1.0]}],
+            "usage": {"prompt_tokens": 3, "total_tokens": 3, "cost": 1e-7},
+        }
+    )
+    ours_embedded, theirs_embedded = (
+        chat_api.Embeddings.model_validate_json(embedded),
+        CreateEmbeddingResponse.model_validate_json(embedded),
+    )
+    assert [(e.index, e.embedding) for e in ours_embedded.data] == [
+        (e.index, e.embedding) for e in theirs_embedded.data
+    ]
+    assert ours_embedded.usage is not None
+    assert ours_embedded.usage.prompt_tokens == theirs_embedded.usage.prompt_tokens
+    assert (ours_embedded.usage.model_extra or {}).get("cost") == (theirs_embedded.usage.model_extra or {}).get("cost")

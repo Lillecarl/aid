@@ -82,7 +82,7 @@ async def test_generic_names_resolve_by_prefix(catalog: None, monkeypatch: pytes
             await anext(model.stream(go, ModelInfo()))
         assert (caught.value.code, says in caught.value.message) == (code, True)
     monkeypatch.setenv("ZEN_KEY", "k")
-    assert zen._client({}).base_url.host == "zen.test"  # pyright: ignore[reportPrivateUsage]
+    assert zen.host({}) == "zen.test"
     await zen.aclose()
 
 
@@ -102,7 +102,7 @@ async def test_a_plugin_provider_wins_its_prefix(
     monkeypatch.setenv("PLUGIN_KEY", "k")
     model = await resolve("zen/big-model", found.model_providers)
     assert isinstance(model, OpenAIChatModel)
-    assert model._client({}).base_url.host == "plugin.test"  # pyright: ignore[reportPrivateUsage]
+    assert model.host({}) == "plugin.test"
     await model.aclose()
 
 

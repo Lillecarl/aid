@@ -15,9 +15,9 @@ from aid.model import OpenAIChatModel, Provider, RequestUsage
 from aid.protocol import ModelEntry
 
 if TYPE_CHECKING:
-    from openai.types import CompletionUsage
-    from openai.types.shared_params import ResponseFormatJSONObject
     from pydantic.json_schema import JsonSchemaValue
+
+    from aid.chat_api import ResponseFormatJsonObject, Usage
 
 KEY_ENV: Final = "DEEPSEEK_API_KEY"
 PROVIDER: Final = Provider(
@@ -47,13 +47,13 @@ class DeepSeekChat(OpenAIChatModel):
     Structured output is JSON mode: DeepSeek refuses `json_schema` ("This response_format type is unavailable
     now", measured 2026-10-25 on deepseek-flash), and JSON mode wants the shape in the prompt."""
 
-    def response_format(self, schema: JsonSchemaValue) -> ResponseFormatJSONObject:
+    def response_format(self, schema: JsonSchemaValue) -> ResponseFormatJsonObject:
         return {"type": "json_object"}
 
     def schema_note(self, schema: JsonSchemaValue) -> str:
         return f"Answer with one JSON object, nothing else, valid against this JSON schema:\n{json.dumps(schema)}"
 
-    def usage(self, usage: CompletionUsage) -> RequestUsage:
+    def usage(self, usage: Usage) -> RequestUsage:
         counted = super().usage(usage)
         hits = (usage.model_extra or {}).get("prompt_cache_hit_tokens")
         if not counted.cache_read_tokens and isinstance(hits, int):

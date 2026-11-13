@@ -7,11 +7,10 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import httpx2
-import openai
 import pytest
 from pydantic import BaseModel, JsonValue
 
-from aid import embedding
+from aid import embedding, wire
 from aid.discovery import discover
 from aid.embedding import OpenAIEmbedder
 from aid.model import check_host
@@ -40,10 +39,10 @@ def answer(monkeypatch: pytest.MonkeyPatch, reply: Reply) -> list[httpx2.Request
         seen.append(request)
         return reply(Asked.model_validate_json(request.content))
 
-    def make() -> httpx2.AsyncClient:
-        return httpx2.AsyncClient(transport=httpx2.MockTransport(handle))
+    def make(timeout: float) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), timeout=timeout)
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make)
+    monkeypatch.setattr(wire, "client", make)
     return seen
 
 

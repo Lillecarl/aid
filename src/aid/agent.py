@@ -12,8 +12,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationEr
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from openai.types.chat import ChatCompletionFunctionToolParam
-
+    from aid.chat_api import FunctionTool
     from aid.model import Model
 
 
@@ -63,7 +62,7 @@ class Tool:
             fields[parameter.name] = (hints.get(parameter.name, Any), default)
         self.arguments = create_model(f"{self.name}Arguments", __config__=ConfigDict(extra="forbid"), **fields)
 
-    def definition(self) -> ChatCompletionFunctionToolParam:
+    def definition(self) -> FunctionTool:
         return {
             "type": "function",
             "function": {

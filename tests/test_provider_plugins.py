@@ -8,9 +8,9 @@ from typing import Any
 
 import httpx
 import httpx2
-import openai
 import pytest
 
+from aid import chat_api, wire
 from aid.anthropic_api import messages_url
 from aid.discovery import discover
 from aid.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, ThinkingPart, UserPromptPart
@@ -80,7 +80,7 @@ def capture(monkeypatch: pytest.MonkeyPatch, data: bytes) -> list[httpx2.Request
     def make(**kwargs: Any) -> httpx2.AsyncClient:
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make)
+    monkeypatch.setattr(wire, "client", make)
     return seen
 
 
@@ -148,8 +148,8 @@ async def test_opencode_routes_each_model_by_its_protocol(catalog: None, monkeyp
     assert isinstance(chat, OpenAIChatModel)
     assert isinstance(claude, AnthropicModel)
     assert isinstance(unknown, OpenAIChatModel)
-    assert chat._client({}).base_url.host == "opencode.ai"  # pyright: ignore[reportPrivateUsage]
-    assert str(chat._client({}).base_url) == f"{ZEN}/openai/v1/"  # pyright: ignore[reportPrivateUsage]
+    assert chat.host({}) == "opencode.ai"
+    assert chat_api.url(chat._key({}).base_url, "chat/completions") == f"{ZEN}/openai/v1/chat/completions"  # pyright: ignore[reportPrivateUsage]
     # aid posts to <base>/v1/messages, as Anthropic's SDK does: models.dev's URL plus /messages.
     assert messages_url(claude._key({}).base_url) == f"{ZEN}/anthropic/v1/messages"  # pyright: ignore[reportPrivateUsage]
     assert claude.model_name == "opencode-zen/claude-x"
@@ -171,10 +171,10 @@ async def test_opencode_go_is_its_own_gateway_with_its_own_key(catalog: None, mo
     assert isinstance(claude, AnthropicModel)
     assert (chat.model_name, claude.model_name) == ("opencode-go/go-chat", "opencode-go/claude-x")
     with pytest.raises(AidError) as caught:
-        chat._client({})  # pyright: ignore[reportPrivateUsage]
+        chat._key({})  # pyright: ignore[reportPrivateUsage]
     assert (caught.value.code, "OPENCODE_GO_API_KEY" in caught.value.message) == ("missing_credentials", True)
     monkeypatch.setenv("OPENCODE_GO_API_KEY", "go")
-    assert str(chat._client({}).base_url) == f"{ZEN}/go/openai/v1/"  # pyright: ignore[reportPrivateUsage]
+    assert chat_api.url(chat._key({}).base_url, "chat/completions") == f"{ZEN}/go/openai/v1/chat/completions"  # pyright: ignore[reportPrivateUsage]
     key = claude._key({})  # pyright: ignore[reportPrivateUsage]
     assert (messages_url(key.base_url), key.api_key) == (f"{ZEN}/go/anthropic/v1/messages", "go")
     for model in (chat, claude):

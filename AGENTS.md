@@ -265,12 +265,15 @@ on reusable decisions and current boundaries; put long investigations and dated 
   (`Transport.cache_reads_in_prompt`), never its class: wrappers hide classes.
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/wire.py` — aid's own model clients' HTTP (#65): `open_stream` (POST, 2xx or `StatusError` with the body),
-  `events` (SSE data), `client` (tests patch it). SDKs go one protocol at a time: Gemini and Anthropic done, OpenAI
-  next; each SDK stays a test dependency for differential tests (`test_chunks_parse_as_google_parses_them`,
-  `test_anthropic_events_parse_as_the_sdk_parses_them`). Protocol modules: `aid.gemini`, `aid.anthropic_api`.
+  `events` (SSE data), `client` (tests patch it, called `timeout=` by keyword). No model SDK at runtime; each is a
+  test dependency for differential tests (`…parse_as_…` in test_model.py and test_google_model.py). Protocol
+  modules: `aid.gemini`, `aid.anthropic_api`, `aid.chat_api` (Chat Completions + embeddings: request TypedDicts,
+  response models keep unknown fields as `model_extra`). `model.open_model_stream`: open + `max_retries` + naming,
+  shared by every client.
 - `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API over aid's own client, `aid.anthropic_api`: typed core, other
   settings pass through as body fields; native blocks, an `error` event overloaded/api/rate → `ModelUnavailable`,
-  `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions) and `GoogleModel`
+  `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions, `aid.chat_api`; an `error` event after a 200, as OpenRouter sends,
+  5xx/429/overload → `ModelUnavailable`, else `model_error`) and `GoogleModel`
   (Gemini `streamGenerateContent` over aid's own client, no SDK (#65): `aid.gemini` types the wire, settings are
   its field names in either spelling, unknown → `bad_model_settings`; `thought_signature` kept as the API's base64
   on the Text/ToolCall part that carried it, Gemini's call id as `google_id` beside aid's; prompt counts include
@@ -279,8 +282,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `OpenAIChatModel` (`request_settings`, `reasoning`, `usage`, `wire`), never branch in it. `OPENAI_COMPATIBLE`:
   prefixes models.dev gives no URL for, and local servers. `model_settings` (JSON): `ClientSettings`
   (`api_key`, `api_base`/`base_url`, `max_retries`; mistyped → `bad_model_settings`) build the client, the rest goes
-  into each request, cast once to the SDK's `…CreateParamsStreaming` (validating it would drop
-  `reasoning_content`). `model_for(name)`: the table alone, for direct use. A refused key (`rejected_key`: 401;
+  into each request as body fields (`extra_headers`/`extra_body` as the SDKs meant them). `model_for(name)`: the table alone, for direct use. A refused key (`rejected_key`: 401;
   Gemini 400 with `API_KEY_INVALID`/`API_KEY_EXPIRED`) → `bad_credentials`, never replayed (#64).
 - `src/aid/providers.py` — `resolve(name, catalog.model_providers)`, in `open_native`: an `aid.ModelProvider`
   plugin claiming the prefix (async `transport(model)`), else `anthropic/`, else `google/` (`GEMINI_API_KEY`;
@@ -478,8 +480,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   until `drop`. `add` = delete + insert (vec0 refuses a known rowid, OR REPLACE too); `nearest` k ≤ `K_LIMIT` 4096,
   brute force (0.1.9 has no ANN index). `ask` attaches such files, but reading a vec0 table there fails (no module).
 - `src/aid/embedding.py` — embedders for it: `Embedder` (`model_name`, `dimensions`, `embed(texts)` → `Embedded`
-  vectors/tokens/cost, `host`, `aclose`); `OpenAIEmbedder` = `/v1/embeddings` via the OpenAI SDK (`encoding_format`
-  float: the SDK's base64 default is not universal; `BATCH` texts a request; 5xx/429/no connection →
+  vectors/tokens/cost, `host`, `aclose`); `OpenAIEmbedder` = `/v1/embeddings` over aid's own client
+  (`encoding_format` float: base64 is not universal; `BATCH` texts a request; 5xx/429/no connection →
   `model_unavailable`; count, length or non-finite mismatch → `bad_embedding`). `providers.embedder(name, providers,
   dimensions=, settings=)`: plugin `ModelProvider.embedder` (default `no_embeddings`), else `OpenAIEmbedder` by an
   `OPENAI_COMPATIBLE` prefix or `api_base`. Runs in plugins/workers, never the daemon; private callers `check_host`.
@@ -553,7 +555,7 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   regenerate through the project's own commands, never by hand.
 - anyio only. ruff bans `asyncio` and `subprocess` (TID251). The asyncio seam lives inside the `acp` library.
 - Worker isolation is a process per session, forked from a forkserver that preloads only the transport
-  (`launcher.PRELOAD`, default `zmq.asyncio`). Everything else — aid itself, the model SDKs, `acp` — imports fresh
+  (`launcher.PRELOAD`, default `zmq.asyncio`). Everything else — aid itself, `acp` — imports fresh
   in each worker, so restarting a worker picks up new code. `NativeSpec.python_path` is prepended per worker,
   but a preloaded module and its dependencies win over it. `aid daemon --preload-module` shares more pages
   copy-on-write, `--no-preload` starts bare.

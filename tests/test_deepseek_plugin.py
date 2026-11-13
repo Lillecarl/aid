@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any
 
 import httpx2
-import openai
 import pytest
 from pydantic import BaseModel
 
+from aid import wire
 from aid.discovery import discover
 from aid.messages import ModelMessage, ModelRequest, SystemPromptPart, UserPromptPart
 from aid.model import ModelInfo, RequestUsage
@@ -37,7 +37,7 @@ async def test_deepseek_serves_its_prefix_with_its_limit_and_cache_hits(monkeypa
     def make_client(**kwargs: Any) -> httpx2.AsyncClient:
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setattr(wire, "client", make_client)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
     catalog = discover([PLUGINS], only=["deepseek"])
     model = await resolve("deepseek/deepseek-flash", catalog.model_providers)
@@ -73,7 +73,7 @@ async def test_deepseek_asks_structured_output_in_json_mode(monkeypatch: pytest.
     def make_client(**kwargs: Any) -> httpx2.AsyncClient:
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
-    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_client)
+    monkeypatch.setattr(wire, "client", make_client)
     monkeypatch.setenv("DEEPSEEK_API_KEY", "k")
     model = await resolve("deepseek/deepseek-flash", discover([PLUGINS], only=["deepseek"]).model_providers)
     asked: list[ModelMessage] = [ModelRequest(parts=[SystemPromptPart("judge"), UserPromptPart("go")])]

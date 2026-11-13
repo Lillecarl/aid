@@ -19,10 +19,8 @@ dependencies = [
   "libpymux",
   "mcp>=1.20",
   "numpy>=2.0",
-  # aid.model: the native backend's transports, built from pins in default.nix.
-  # The OpenAI and Anthropic clients' HTTP, and aid's own (aid.wire: Gemini, #65); aid.model catches its errors.
+  # aid.wire: the HTTP of aid's own model clients (#65; no model SDK); aid.model catches its errors.
   "httpx2",
-  "openai",
   "pydantic>=2.11",
   # aid.coding: agents edit through pyedit's library and run processes through pyrun (./pyrun).
   "pyedit",
@@ -53,8 +51,9 @@ dependencies = [
 [project.optional-dependencies]
 # playwright drives the web UI through real browsers in tests/test_browser.py; the browsers themselves come
 # from nixpkgs (PLAYWRIGHT_BROWSERS_PATH), never from a download.
-# anthropic, google-genai: those clients are aid's own (#65); tests parse the same stream with the SDKs to compare.
-test = ["anthropic", "google-genai", "playwright", "pytest", "pytest-timeout", "pytest-xdist", "trustme", "websockets"]
+# anthropic, google-genai, openai: the model clients are aid's own (#65); tests parse the same JSON with the SDKs
+# to compare.
+test = ["anthropic", "google-genai", "openai", "playwright", "pytest", "pytest-timeout", "pytest-xdist", "trustme", "websockets"]
 
 [project.scripts]
 aid = "aid.cli:main"

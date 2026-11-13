@@ -1,4 +1,5 @@
-"""Model transports, and streamed response assembly. No agent execution lives here. Gemini and Anthropic go over\naid's own client (`aid.wire`, #65); Chat Completions still over the OpenAI SDK."""
+"""Model transports, and streamed response assembly. No agent execution lives here. Every transport is aid's
+own client (`aid.wire`, #65): no model SDK."""
 
 from __future__ import annotations
 
@@ -10,12 +11,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast,
 
 import anyio
 import httpx2
-import openai
-from openai.types.chat import ChatCompletionAssistantMessageParam
-from openai.types.chat.completion_create_params import CompletionCreateParamsStreaming
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
-from aid import anthropic_api, gemini, wire
+from aid import anthropic_api, chat_api, gemini, wire
 from aid.messages import (
     ModelMessage,
     ModelResponse,
@@ -30,12 +28,8 @@ from aid.messages import (
 from aid.protocol import AidError
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
 
-    from openai.types import CompletionUsage
-    from openai.types.chat import ChatCompletionFunctionToolParam, ChatCompletionMessageParam
-    from openai.types.chat.chat_completion_chunk import ChoiceDelta
-    from openai.types.shared_params import ResponseFormatJSONObject, ResponseFormatJSONSchema
     from pydantic.json_schema import JsonSchemaValue
 
     from aid.agent import Tool
@@ -77,17 +71,13 @@ class ModelUnavailable(StreamBroken):
 
 
 TRANSIENT_STATUS: Final = frozenset({408, 409, 429})
-"""Statuses below 500 a request may go again after, as the SDKs' own retries decide."""
+"""Statuses below 500 a request may go again after: the ones OpenAI's and Anthropic's SDKs retry."""
 
 
 def unavailable(error: BaseException) -> bool:
     """A failure to send again later: no connection, a timeout, a 5xx, or a rate limit. Measured 2026-11: a vLLM
-    gateway answered 503 "no available server" for hours, past the SDK's two quick retries."""
+    gateway answered 503 "no available server" for hours, past two quick retries."""
     match error:
-        case openai.APIConnectionError():
-            return True
-        case openai.APIStatusError():
-            return error.status_code >= 500 or error.status_code in TRANSIENT_STATUS
         case wire.StatusError():
             return error.status >= 500 or error.status in TRANSIENT_STATUS
         case _:
@@ -99,8 +89,6 @@ def rejected_key(error: BaseException) -> bool:
     bogus key: OpenAI, Anthropic, DeepSeek, OpenCode and OpenRouter answer 401; an expired OpenCode key too. Gemini
     answers 400 with a reason (`gemini.refused_key`)."""
     match error:
-        case openai.AuthenticationError():
-            return True
         case wire.StatusError():
             return error.status == 401
         case _:
@@ -112,7 +100,7 @@ def refused_key(name: str, error: BaseException) -> AidError:
 
 
 BROKEN: Final = (httpx2.TransportError,)
-"""What a dropped stream raises: every client is httpx2. The SDKs raise it bare from a response body (openai 2.x, measured 2026-10-28: vLLM dropped 7 streams in 5 hours, 61 to 545 s in)."""
+"""What a dropped stream raises: every client is httpx2, and a response body raises it bare mid-stream (openai 2.x, measured 2026-10-28: vLLM dropped 7 streams in 5 hours, 61 to 545 s in)."""
 
 
 class Model(Protocol):
@@ -153,15 +141,9 @@ def model_label(model: object) -> str:
     return str(getattr(model, "model_name", type(model).__name__))
 
 
-class ReasoningAssistantParam(ChatCompletionAssistantMessageParam, total=False):
-    """An assistant message with its reasoning beside the content, as DeepSeek and others take it back."""
-
-    reasoning_content: str
-
-
-def wire_messages(messages: Sequence[ModelMessage], *, reasoning: bool = True) -> list[ChatCompletionMessageParam]:
+def wire_messages(messages: Sequence[ModelMessage], *, reasoning: bool = True) -> list[chat_api.Message]:
     """Stored parts as Chat Completions messages, keeping tool identities and, with `reasoning`, reasoning text."""
-    result: list[ChatCompletionMessageParam] = []
+    result: list[chat_api.Message] = []
     for message in messages:
         if isinstance(message, ModelResponse):
             text = "".join(p.content for p in message.parts if isinstance(p, TextPart))
@@ -171,7 +153,7 @@ def wire_messages(messages: Sequence[ModelMessage], *, reasoning: bool = True) -
                 # Providers refuse an assistant message with neither (DeepSeek: 400). A failed request could
                 # store one, and that stored history must still send.
                 continue
-            item: ReasoningAssistantParam = {"role": "assistant", "content": text or None}
+            item: chat_api.AssistantMessage = {"role": "assistant", "content": text or None}
             if calls:
                 item["tool_calls"] = [
                     {
@@ -233,7 +215,7 @@ def accumulate(response: ModelResponse, indexes: dict[int, int], delta: StreamDe
 @dataclass(frozen=True)
 class Provider:
     base_url: str | None
-    """None: the SDK's own default (api.openai.com)."""
+    """None: `chat_api.DEFAULT_BASE` (api.openai.com)."""
     key_env: str
     local: bool = False
     """An unauthenticated local server: a missing key is not an error."""
@@ -259,12 +241,12 @@ OPENAI_COMPATIBLE: Final[dict[str, Provider]] = {
     "vllm": Provider("http://localhost:8000/v1", "VLLM_API_KEY", local=True),
     "lmstudio": Provider("http://localhost:1234/v1", "LM_STUDIO_API_KEY", local=True),
 }
-"""`provider/model` prefixes served through the OpenAI SDK, for servers models.dev names no URL for and local ones.
+"""`provider/model` prefixes served over Chat Completions, for servers models.dev names no URL for and local ones.
 Others resolve through `aid.providers`."""
 
 
 class ClientSettings(BaseModel):
-    """The `model_settings` keys that configure the SDK client; every other key goes into each request."""
+    """The `model_settings` keys that configure the client; every other key goes into each request."""
 
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -329,9 +311,53 @@ def _request_settings(settings: Mapping[str, JsonValue], provider: Provider | No
     return kwargs
 
 
+_HEADERS: Final = TypeAdapter(dict[str, str])
+_BODY: Final = TypeAdapter(dict[str, JsonValue])
+RETRY_BACKOFF: Final = 0.5
+"""Seconds before a client retry (`max_retries`), doubling. The backend replays past them (`STREAM_RETRIES`)."""
+
+
+def _extra(name: str, settings: dict[str, JsonValue]) -> tuple[dict[str, str], dict[str, JsonValue]]:
+    """Pop the SDK-style `extra_headers` and `extra_body` from a request's settings."""
+    try:
+        return (
+            _HEADERS.validate_python(settings.pop("extra_headers", None) or {}),
+            _BODY.validate_python(settings.pop("extra_body", None) or {}),
+        )
+    except ValidationError as error:
+        raise AidError("bad_model_settings", f"{name}: extra_headers/extra_body: {error}") from error
+
+
+async def open_model_stream(
+    name: str,
+    http: httpx2.AsyncClient,
+    url: str,
+    body: bytes,
+    headers: Mapping[str, str],
+    io_timeout: float,
+    retries: int,
+    refused: Callable[[wire.StatusError], bool] = lambda error: False,
+) -> httpx2.Response:
+    """Open a model's stream: a refused key → `bad_credentials` (`refused` names a provider's own way to say it), a
+    failure to send again later → retried `retries` times, then `ModelUnavailable`; anything else propagates."""
+    for attempt in range(retries + 1):
+        try:
+            return await wire.open_stream(http, url, body, headers, io_timeout)
+        except (wire.StatusError, httpx2.TransportError) as error:
+            if rejected_key(error) or (isinstance(error, wire.StatusError) and refused(error)):
+                raise refused_key(name, error) from error
+            if not (isinstance(error, httpx2.TransportError) or unavailable(error)):
+                raise
+            if attempt == retries:
+                raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
+            await anyio.sleep(RETRY_BACKOFF * 2**attempt)
+    raise AssertionError("unreachable")
+
+
 class OpenAIChatModel:
-    """Chat Completions through the OpenAI SDK, for OpenAI and every provider that serves the same API. A provider
-    with quirks subclasses it and overrides `request_settings`, `reasoning` or `usage`."""
+    """Chat Completions over aid's own client (`aid.chat_api`, `aid.wire`; #65), for OpenAI and every provider that
+    serves the same API. A provider with quirks subclasses it and overrides `request_settings`, `reasoning` or
+    `usage`."""
 
     cache_reads_in_prompt: bool = True
 
@@ -340,9 +366,9 @@ class OpenAIChatModel:
         self.model_name = name
         prefix, self._model = split_name(name)
         self._provider = provider or OPENAI_COMPATIBLE.get(prefix)
-        self._clients: dict[ClientKey, openai.AsyncOpenAI] = {}
+        self._http: httpx2.AsyncClient | None = None
 
-    def _client(self, settings: Mapping[str, JsonValue]) -> openai.AsyncOpenAI:
+    def _key(self, settings: Mapping[str, JsonValue]) -> ClientKey:
         provider = self._provider
         if provider is None and client_settings(self.model_name, settings).base_url is None:
             raise AidError(
@@ -350,58 +376,48 @@ class OpenAIChatModel:
                 f"no provider {split_name(self.model_name)[0]!r}: use one of {', '.join(OPENAI_COMPATIBLE)}, "
                 "anthropic, or set api_base in model_settings",
             )
-        key = client_key(
+        return client_key(
             self.model_name,
             settings,
             provider.key_env if provider else None,
             provider.base_url if provider else None,
             local=provider is not None and provider.local,
         )
-        if (client := self._clients.get(key)) is None:
-            client = openai.AsyncOpenAI(
-                api_key=key.api_key,
-                base_url=key.base_url,
-                max_retries=key.max_retries,
-                default_headers=dict(self._provider.headers) if self._provider else None,
-                http_client=openai.DefaultAsyncHttpx2Client(),
-            )
-            self._clients[key] = client
-        return client
 
     def host(self, settings: Mapping[str, JsonValue]) -> str:
-        return self._client(settings).base_url.host
+        return httpx2.URL(chat_api.url(self._key(settings).base_url, "chat/completions")).host
 
     async def aclose(self) -> None:
-        clients, self._clients = list(self._clients.values()), {}
-        for client in clients:
-            await client.close()
+        http, self._http = self._http, None
+        if http is not None:
+            await http.aclose()
 
     def request_settings(self, settings: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
-        """Each request's keyword arguments from the session's settings, under the provider's defaults."""
+        """Each request's body fields from the session's settings, under the provider's defaults."""
         kwargs = _request_settings(settings, self._provider)
         if self._provider is None or self._provider.stream_usage:
             kwargs.setdefault("stream_options", {"include_usage": True})
         return kwargs
 
-    def reasoning(self, delta: ChoiceDelta) -> str | None:
+    def reasoning(self, delta: chat_api.Delta) -> str | None:
         """A streamed delta's reasoning text, beside the content: DeepSeek names it `reasoning_content`, OpenRouter
-        and vLLM `reasoning` (measured 2026-10-27, vLLM serving glm-5.3-flash). The SDK keeps the extra field."""
+        and vLLM `reasoning` (measured 2026-10-27, vLLM serving glm-5.3-flash)."""
         extra = delta.model_extra or {}
         for key in ("reasoning_content", "reasoning"):
             if isinstance(thought := extra.get(key), str) and thought:
                 return thought
         return None
 
-    def usage(self, usage: CompletionUsage) -> RequestUsage:
+    def usage(self, usage: chat_api.Usage) -> RequestUsage:
         return _openai_usage(usage)
 
     replays_reasoning: ClassVar[bool] = True
     """Reasoning text goes back beside the content (`reasoning_content`); False for a provider that refuses it."""
 
-    def wire(self, messages: Sequence[ModelMessage]) -> list[ChatCompletionMessageParam]:
+    def wire(self, messages: Sequence[ModelMessage]) -> list[chat_api.Message]:
         return wire_messages(messages, reasoning=self.replays_reasoning)
 
-    def response_format(self, schema: JsonSchemaValue) -> ResponseFormatJSONSchema | ResponseFormatJSONObject:
+    def response_format(self, schema: JsonSchemaValue) -> chat_api.ResponseFormat:
         """How a request asks for structured output: the schema itself, where the provider takes one."""
         return {"type": "json_schema", "json_schema": {"name": "output", "schema": schema}}
 
@@ -409,34 +425,49 @@ class OpenAIChatModel:
         """A system note stating the output schema, for a provider whose JSON mode takes no schema."""
         return None
 
-    async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
-        client = self._client(info.settings)
+    def _body(self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue]) -> bytes:
         wired = self.wire(messages)
-        # The settings are the session's JSON, under the SDK's keyword names; the SDK and the server check them.
-        request = cast(
-            CompletionCreateParamsStreaming,
-            {**self.request_settings(info.settings), "model": self._model, "messages": wired, "stream": True},
-        )
-        if info.tools:
-            request["tools"] = [tool.definition() for tool in info.tools]
         if info.output_type is not str:
             schema = TypeAdapter(info.output_type).json_schema()
-            request["response_format"] = self.response_format(schema)
+            settings["response_format"] = cast(JsonValue, self.response_format(schema))
             if (note := self.schema_note(schema)) is not None:
                 # After the leading instructions, so every request keeps the same cached prefix.
-                lead = next((i for i, w in enumerate(wired) if w.get("role") != "system"), len(wired))
+                lead = next((i for i, w in enumerate(wired) if w["role"] != "system"), len(wired))
                 wired.insert(lead, {"role": "system", "content": note})
-        try:
-            stream = await client.chat.completions.create(**request)
-        except Exception as error:
-            if unavailable(error):
-                raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
-            if rejected_key(error):
-                raise refused_key(self.model_name, error) from error
-            raise
+        body: dict[str, JsonValue] = {
+            **settings,
+            "model": self._model,
+            "messages": cast(JsonValue, wired),
+            "stream": True,
+        }
+        if info.tools:
+            body["tools"] = cast(JsonValue, [tool.definition() for tool in info.tools])
+        return json.dumps(body).encode()
+
+    async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
+        key = self._key(info.settings)
+        settings = self.request_settings(info.settings)
+        io_timeout = _TIMEOUT.validate_python(settings.pop("timeout"))
+        extra_headers, extra_body = _extra(self.model_name, settings)
+        settings.update(extra_body)
+        headers = {
+            "authorization": f"Bearer {key.api_key}",
+            **(self._provider.headers if self._provider else {}),
+            **extra_headers,
+        }
+        body = self._body(messages, info, settings)
+        if self._http is None:
+            self._http = wire.client(timeout=DEFAULT_TIMEOUT)
+        url = chat_api.url(key.base_url, "chat/completions")
+        response = await open_model_stream(self.model_name, self._http, url, body, headers, io_timeout, key.max_retries)
         ids: dict[int, str] = {}
         try:
-            async for chunk in stream:
+            async for data in wire.events(response):
+                if data == chat_api.DONE:
+                    break
+                chunk = chat_api.Chunk.model_validate_json(data)
+                if chunk.error is not None:
+                    raise _chunk_error(self.model_name, chunk.error)
                 if chunk.model:
                     yield StreamDelta(model_name=chunk.model)
                 if chunk.usage is not None:
@@ -465,13 +496,21 @@ class OpenAIChatModel:
             raise StreamBroken(repr(error)) from error
         finally:
             with anyio.CancelScope(shield=True):
-                await stream.close()
+                await response.aclose()
 
     async def request(self, messages: list[ModelMessage], info: ModelInfo) -> ModelResponse:
         return await collect(self, messages, info)
 
 
-def _openai_usage(usage: CompletionUsage) -> RequestUsage:
+def _chunk_error(name: str, error: chat_api.ChunkError) -> Exception:
+    """An error event after a 200: a 5xx/429 code or an overload sends again; anything else is the model's."""
+    code = error.code
+    if (isinstance(code, int) and (code >= 500 or code in TRANSIENT_STATUS)) or "overload" in (error.type or ""):
+        return ModelUnavailable(f"{code}: {error.message}")
+    return AidError("model_error", f"{name}: {code}: {error.message}")
+
+
+def _openai_usage(usage: chat_api.Usage) -> RequestUsage:
     """`input_tokens` includes cached tokens here, as Chat Completions counts them."""
     prompt = usage.prompt_tokens_details
     cached = (prompt.cached_tokens if prompt else None) or 0
@@ -566,17 +605,13 @@ def anthropic_messages(
     return system, turns
 
 
-def anthropic_tool(definition: ChatCompletionFunctionToolParam) -> anthropic_api.ToolDefinition:
+def anthropic_tool(definition: chat_api.FunctionTool) -> anthropic_api.ToolDefinition:
     function = definition["function"]
     return anthropic_api.ToolDefinition(
         name=function["name"],
         description=function.get("description", ""),
         input_schema=cast(JsonValue, function.get("parameters", {})),
     )
-
-
-_HEADERS: Final = TypeAdapter(dict[str, str])
-_BODY: Final = TypeAdapter(dict[str, JsonValue])
 
 
 class AnthropicModel:
@@ -620,7 +655,6 @@ class AnthropicModel:
                 **(config if isinstance(config, dict) else {}),
                 "format": {"type": "json_schema", "schema": TypeAdapter(info.output_type).json_schema()},
             }
-        settings.update(_BODY.validate_python(settings.pop("extra_body", None) or {}))
         try:
             return anthropic_api.Request.model_validate(
                 {
@@ -637,29 +671,16 @@ class AnthropicModel:
 
     async def _open(self, key: ClientKey, body: bytes, headers: dict[str, str], io_timeout: float) -> httpx2.Response:
         if self._http is None:
-            self._http = wire.client(DEFAULT_TIMEOUT)
+            self._http = wire.client(timeout=DEFAULT_TIMEOUT)
         url = anthropic_api.messages_url(key.base_url)
-        for attempt in range(key.max_retries + 1):
-            try:
-                return await wire.open_stream(self._http, url, body, headers, io_timeout)
-            except (wire.StatusError, httpx2.TransportError) as error:
-                if rejected_key(error):
-                    raise refused_key(self.model_name, error) from error
-                if not (isinstance(error, httpx2.TransportError) or unavailable(error)):
-                    raise
-                if attempt == key.max_retries:
-                    raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
-                await anyio.sleep(RETRY_BACKOFF * 2**attempt)
-        raise AssertionError("unreachable")
+        return await open_model_stream(self.model_name, self._http, url, body, headers, io_timeout, key.max_retries)
 
     async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
         key = self._key(info.settings)
         settings = _request_settings(info.settings)
         io_timeout = _TIMEOUT.validate_python(settings.pop("timeout"))
-        try:
-            extra_headers = _HEADERS.validate_python(settings.pop("extra_headers", None) or {})
-        except ValidationError as error:
-            raise AidError("bad_model_settings", f"{self.model_name}: extra_headers: {error}") from error
+        extra_headers, extra_body = _extra(self.model_name, settings)
+        settings.update(extra_body)
         headers = {
             anthropic_api.KEY_HEADER: key.api_key,
             "anthropic-version": anthropic_api.VERSION,
@@ -806,10 +827,6 @@ def google_tool(tool: Tool) -> gemini.FunctionDeclaration:
     )
 
 
-RETRY_BACKOFF: Final = 0.5
-"""Seconds before a client retry (`max_retries`), doubling. The backend replays past them (`STREAM_RETRIES`)."""
-
-
 class GoogleModel:
     """The Gemini API (`streamGenerateContent`) over aid's own client (`aid.gemini`, `aid.wire`; #65). Thought
     signatures replay on their parts; Gemini assigns call ids only sometimes, so aid makes its own and keeps
@@ -866,23 +883,19 @@ class GoogleModel:
 
     async def _open(self, key: ClientKey, body: bytes, io_timeout: float) -> httpx2.Response:
         if self._http is None:
-            self._http = wire.client(DEFAULT_TIMEOUT)
+            self._http = wire.client(timeout=DEFAULT_TIMEOUT)
         headers = {gemini.KEY_HEADER: key.api_key, **(self._provider.headers if self._provider else {})}
         url = gemini.stream_url(key.base_url, self._model)
-        for attempt in range(key.max_retries + 1):
-            try:
-                return await wire.open_stream(self._http, url, body, headers, io_timeout)
-            except (wire.StatusError, httpx2.TransportError) as error:
-                if isinstance(error, wire.StatusError) and gemini.refused_key(error.body):
-                    raise refused_key(self.model_name, error) from error
-                if rejected_key(error):
-                    raise refused_key(self.model_name, error) from error
-                if not (isinstance(error, httpx2.TransportError) or unavailable(error)):
-                    raise
-                if attempt == key.max_retries:
-                    raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
-                await anyio.sleep(RETRY_BACKOFF * 2**attempt)
-        raise AssertionError("unreachable")
+        return await open_model_stream(
+            self.model_name,
+            self._http,
+            url,
+            body,
+            headers,
+            io_timeout,
+            key.max_retries,
+            lambda error: gemini.refused_key(error.body),
+        )
 
     async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
         key = self._key(info.settings)

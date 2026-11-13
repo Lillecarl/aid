@@ -1,4 +1,4 @@
-"""Embedders: text to vectors for `aid.vectors`, through any server that answers OpenAI's `/v1/embeddings` (#60).
+"""Embedders: text to vectors for `aid.vectors`, through any server that answers OpenAI's `/v1/embeddings` (#60), over aid's own client (#65).
 
 `aid.providers.embedder` resolves a `provider/model` name as chat models resolve: a plugin claiming the prefix
 (`ModelProvider.embedder`), else a prefix of `aid.model.OPENAI_COMPATIBLE`. Embedders run where their caller
@@ -8,28 +8,29 @@ runs (a plugin, a worker), never in the daemon. A private caller checks `host()`
 
 from __future__ import annotations
 
+import json
 import math
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, Protocol
 
-import openai
+import httpx2
+from pydantic import ValidationError
 
+from aid import chat_api, wire
 from aid.model import (
     OPENAI_COMPATIBLE,
     ClientKey,
+    ModelUnavailable,
     Provider,
     client_key,
-    refused_key,
-    rejected_key,
+    open_model_stream,
     split_name,
-    unavailable,
 )
 from aid.protocol import AidError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from openai.types import CreateEmbeddingResponse
     from pydantic import JsonValue
 
 BATCH: Final = 128
@@ -58,7 +59,7 @@ class Embedder(Protocol):
 
 @dataclass
 class OpenAIEmbedder:
-    """`/v1/embeddings` through the OpenAI SDK."""
+    """`/v1/embeddings` over aid's own client (`aid.chat_api`, `aid.wire`; #65)."""
 
     model_name: str
     provider: Provider | None = None
@@ -66,13 +67,13 @@ class OpenAIEmbedder:
     dimensions: int | None = None
     settings: Mapping[str, JsonValue] = field(default_factory=dict[str, "JsonValue"])
     """`api_key`, `api_base`, `max_retries`, as a chat model's `model_settings`."""
-    _clients: dict[ClientKey, openai.AsyncOpenAI] = field(default_factory=dict[ClientKey, openai.AsyncOpenAI])
+    _http: httpx2.AsyncClient | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         if self.provider is None:
             self.provider = OPENAI_COMPATIBLE.get(split_name(self.model_name)[0])
 
-    def _client(self, settings: Mapping[str, JsonValue]) -> openai.AsyncOpenAI:
+    def _key(self, settings: Mapping[str, JsonValue]) -> ClientKey:
         provider = self.provider
         key = client_key(
             self.model_name,
@@ -83,50 +84,49 @@ class OpenAIEmbedder:
         )
         if key.base_url is None and provider is None:
             raise AidError("unknown_provider", f"no provider for {self.model_name}: set api_base")
-        if (client := self._clients.get(key)) is None:
-            client = openai.AsyncOpenAI(
-                api_key=key.api_key,
-                base_url=key.base_url,
-                max_retries=key.max_retries,
-                default_headers=dict(provider.headers) if provider else None,
-                http_client=openai.DefaultAsyncHttpx2Client(),
-            )
-            self._clients[key] = client
-        return client
+        return key
 
     def host(self, settings: Mapping[str, JsonValue]) -> str:
-        return self._client({**self.settings, **settings}).base_url.host
+        return httpx2.URL(chat_api.url(self._key({**self.settings, **settings}).base_url, "embeddings")).host
 
     async def embed(self, texts: Sequence[str]) -> Embedded:
         """One vector per text, in order. An unreachable or overloaded server raises `model_unavailable`."""
-        client = self._client(self.settings)
+        key = self._key(self.settings)
+        if self._http is None:
+            self._http = wire.client(timeout=TIMEOUT)
+        headers = {"authorization": f"Bearer {key.api_key}", **(self.provider.headers if self.provider else {})}
+        url = chat_api.url(key.base_url, "embeddings")
         model = split_name(self.model_name)[1]
         vectors: list[list[float]] = []
         tokens, cost = 0, None
         for start in range(0, len(texts), BATCH):
             batch = list(texts[start : start + BATCH])
+            asked: dict[str, JsonValue] = {"model": model, "input": [*batch], "encoding_format": "float"}
+            if self.dimensions is not None:
+                asked["dimensions"] = self.dimensions
             try:
-                response = await client.embeddings.create(
-                    model=model,
-                    input=batch,
-                    # The SDK's default asks for base64, which not every server answers.
-                    encoding_format="float",
-                    dimensions=self.dimensions if self.dimensions is not None else openai.omit,
-                    timeout=TIMEOUT,
+                response = await open_model_stream(
+                    self.model_name, self._http, url, json.dumps(asked).encode(), headers, TIMEOUT, key.max_retries
                 )
-            except openai.OpenAIError as error:
-                if unavailable(error):
-                    raise AidError("model_unavailable", f"{self.model_name}: {error}") from error
-                if rejected_key(error):
-                    raise refused_key(self.model_name, error) from error
+                try:
+                    body = await response.aread()
+                finally:
+                    await response.aclose()
+            except ModelUnavailable as error:
+                raise AidError("model_unavailable", f"{self.model_name}: {error}") from error
+            except wire.StatusError as error:
                 raise AidError("embedding_failed", f"{self.model_name}: {error}") from error
-            vectors.extend(self._vectors(response, len(batch)))
-            tokens += response.usage.prompt_tokens if response.usage else 0
-            if (spent := _cost(response)) is not None:
+            try:
+                answer = chat_api.Embeddings.model_validate_json(body)
+            except ValidationError as error:
+                raise AidError("bad_embedding", f"{self.model_name}: {error}") from error
+            vectors.extend(self._vectors(answer, len(batch)))
+            tokens += answer.usage.prompt_tokens if answer.usage else 0
+            if (spent := _cost(answer)) is not None:
                 cost = (cost or 0.0) + spent
         return Embedded(vectors, tokens, cost)
 
-    def _vectors(self, response: CreateEmbeddingResponse, count: int) -> list[list[float]]:
+    def _vectors(self, response: chat_api.Embeddings, count: int) -> list[list[float]]:
         found = sorted(response.data, key=lambda item: item.index)
         if [item.index for item in found] != list(range(count)):
             raise AidError("bad_embedding", f"{self.model_name} answered {len(found)} vectors for {count} texts")
@@ -138,12 +138,12 @@ class OpenAIEmbedder:
         return [item.embedding for item in found]
 
     async def aclose(self) -> None:
-        clients, self._clients = list(self._clients.values()), {}
-        for client in clients:
-            await client.close()
+        http, self._http = self._http, None
+        if http is not None:
+            await http.aclose()
 
 
-def _cost(response: CreateEmbeddingResponse) -> float | None:
+def _cost(response: chat_api.Embeddings) -> float | None:
     extra = response.usage.model_extra if response.usage else None
     value = (extra or {}).get("cost")
     return float(value) if isinstance(value, int | float) else None
