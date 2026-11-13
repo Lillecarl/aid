@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final
 
 from aid import models_dev
-from aid.embedding import Embedder, OpenAIEmbedder
+from aid.embedding import Embedder, GoogleEmbedder, OpenAIEmbedder
 from aid.model import OPENAI_COMPATIBLE, AnthropicModel, GoogleModel, OpenAIChatModel, Provider, split_name
 from aid.protocol import AidError
 
@@ -79,9 +79,11 @@ async def embedder(
     dimensions: int | None = None,
     settings: Mapping[str, JsonValue] | None = None,
 ) -> Embedder:
-    """The embedder for `name`: the plugin provider that claims its prefix, else an `OPENAI_COMPATIBLE` prefix, else
-    any prefix whose `settings` name an `api_base`. The caller closes it."""
+    """The embedder for `name`: the plugin provider that claims its prefix, else `google/` (the Gemini API), else an
+    `OPENAI_COMPATIBLE` prefix, else any prefix whose `settings` name an `api_base`. The caller closes it."""
     prefix, model = split_name(name)
     if (cls := providers.get(prefix)) is not None:
         return await cls().embedder(model, dimensions, settings or {})
+    if prefix == "google":
+        return GoogleEmbedder(name, dimensions, settings or {})
     return OpenAIEmbedder(name, dimensions=dimensions, settings=settings or {})

@@ -118,6 +118,20 @@ class Request(_Wire):
         return self.model_dump_json(exclude_none=True).encode()
 
 
+class EmbedContentRequest(_Wire):
+    model: str
+    """`models/<model>`."""
+    content: Content
+    output_dimensionality: int | None = None
+
+
+class BatchEmbedRequest(_Wire):
+    requests: list[EmbedContentRequest]
+
+    def body(self) -> bytes:
+        return self.model_dump_json(exclude_none=True).encode()
+
+
 class UsageMetadata(_Wire):
     prompt_token_count: int = 0
     cached_content_token_count: int = 0
@@ -135,6 +149,16 @@ class Response(_Wire):
     candidates: list[Candidate] = []
     usage_metadata: UsageMetadata | None = None
     model_version: str | None = None
+
+
+class ContentEmbedding(_Wire):
+    values: list[float]
+
+
+class BatchEmbedResponse(_Wire):
+    embeddings: list[ContentEmbedding] = []
+    usage_metadata: UsageMetadata | None = None
+    """Measured 2026-11-13: `gemini-embedding-2` sends it, `gemini-embedding-001` does not."""
 
 
 class ErrorInfo(_Wire):
@@ -170,6 +194,10 @@ def error_of(body: str) -> Error | None:
 def refused_key(body: str) -> bool:
     error = error_of(body)
     return error is not None and any(item.reason in KEY_REASONS for item in error.details)
+
+
+def embed_url(base: str | None, model: str) -> str:
+    return f"{(base or DEFAULT_BASE).rstrip('/')}/{API_VERSION}/models/{model}:batchEmbedContents"
 
 
 def stream_url(base: str | None, model: str) -> str:

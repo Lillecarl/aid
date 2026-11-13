@@ -365,6 +365,31 @@ def _extra(name: str, settings: dict[str, JsonValue]) -> tuple[dict[str, str], d
         raise AidError("bad_model_settings", f"{name}: extra_headers/extra_body: {error}") from error
 
 
+async def model_answer(
+    name: str,
+    http: httpx2.AsyncClient,
+    url: str,
+    body: bytes,
+    headers: Mapping[str, str],
+    io_timeout: float,
+    retries: int,
+    failed: str,
+    refused: Callable[[wire.StatusError], bool] = lambda error: False,
+) -> bytes:
+    """A whole answer that is not a stream (embeddings, reranking): an outage → `model_unavailable`, any other
+    refusal → `failed`, as `open_model_stream` sorts them."""
+    try:
+        response = await open_model_stream(name, http, url, body, headers, io_timeout, retries, refused)
+        try:
+            return await response.aread()
+        finally:
+            await response.aclose()
+    except ModelUnavailable as error:
+        raise AidError("model_unavailable", f"{name}: {error}") from error
+    except wire.StatusError as error:
+        raise AidError(failed, f"{name}: {error}") from error
+
+
 async def open_model_stream(
     name: str,
     http: httpx2.AsyncClient,

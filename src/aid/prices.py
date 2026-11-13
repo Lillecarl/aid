@@ -88,3 +88,12 @@ async def price_for(model: str) -> Price | None:
     """The model's price, or None when the catalog lacks it or cannot be had."""
     catalog = await models_dev.catalog()
     return None if catalog is None else lookup(catalog, model)
+
+
+async def input_cost(model: str, tokens: int, cost: float | None) -> float | None:
+    """A request that reads only (embeddings, reranking): the provider's own `cost`, else `tokens` at the input
+    price (OpenAI reports tokens, never a cost)."""
+    if cost is not None or not tokens:
+        return cost
+    price = await price_for(model)
+    return None if price is None else price.cost(tokens, 0, 0, 0)
