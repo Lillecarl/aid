@@ -168,6 +168,21 @@ async def test_an_attached_image_reaches_the_agent_and_shows(page: Page, session
         assert await shown.evaluate("(img) => img.decode().then(() => img.naturalWidth)") == 8
 
 
+async def test_an_image_a_tool_read_shows_in_its_card(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """`read` on an image file hands it to the model; the call's card shows it from the transcript (#66)."""
+    (tmp_path / "red.png").write_bytes(png())
+    await seed_session(session_daemon, tmp_path, "reader", "agents:coder", PermissionMode.ALLOW)
+    await open_session(page, "reader")
+    await send_chat(page, json.dumps([["read", {"path": "red.png"}]]))
+    await expect_chat_text(page, "red.png: image/png")
+    card = page.get_by_test_id("tool-box").last
+    await card.locator("summary").click()
+    shown = card.get_by_test_id("tool-images").locator("img").first
+    await shown.wait_for(timeout=TIMEOUT * 1000)
+    with anyio.fail_after(TIMEOUT):
+        assert await shown.evaluate("(img) => img.decode().then(() => img.naturalWidth)") == 8
+
+
 async def test_slash_menu_lists_commands(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
     await seed_session(session_daemon, tmp_path, "menu", "agents:echo")
     await open_session(page, "menu")

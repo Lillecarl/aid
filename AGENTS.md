@@ -279,7 +279,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   2026-11-13 on every route but OpenCode Go (key expired) (`test_an_image_from_a_tool`). Web: Chat shows
   `PromptEntry.images` from `GET /api/sessions/{name}/images/{sha}` (aid web reads `Paths.session_dir`, after the
   daemon answers for the session; immutable cache); the Image button or a paste attaches PNG/JPEG/GIF/WebP to the next
-  prompt. The CSP has no `data:`, so an unsent image shows by name. Tool images are not in the daemon transcript yet.
+  prompt. The CSP has no `data:`, so an unsent image shows by name. A tool's images reach the transcript as
+  `ToolCall.images` (`ImageRef`) on its completed event; its card in Chat shows them from the same route.
   Files APIs (#69, `model.held_files`/`drop_files`): Anthropic's and Google AI Studio's own routes (no `Provider`)
   upload each image once per `upload_scope` (base URL + key), keep sha256 → `Upload(id, expires)` in
   `images/uploads/<scope>.json` and send the id (Anthropic `FileSource`; Gemini `fileData`, a tool's in

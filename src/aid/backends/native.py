@@ -62,6 +62,7 @@ from aid.prices import CURRENCY, Price, lookup
 from aid.protocol import (
     AidError,
     Cost,
+    ImageRef,
     Output,
     SessionTool,
     Started,
@@ -332,7 +333,9 @@ def aid_toolset(catalog: Catalog) -> Toolset:
     return Toolset(tools)
 
 
-def to_event(part: ToolCallPart | ToolReturnPart | RetryPromptPart, kind: str | None = None) -> ToolCall:
+def to_event(
+    part: ToolCallPart | ToolReturnPart | RetryPromptPart, kind: str | None = None, images: Sequence[ImagePart] = ()
+) -> ToolCall:
     if isinstance(part, ToolCallPart):
         try:
             args = part.args_as_dict()
@@ -355,7 +358,12 @@ def to_event(part: ToolCallPart | ToolReturnPart | RetryPromptPart, kind: str | 
             paths=tool_paths(args),
         )
     if isinstance(part, ToolReturnPart):
-        return ToolCall(tool_call_id=part.tool_call_id, status="completed", output=clip(part.model_response_str()))
+        return ToolCall(
+            tool_call_id=part.tool_call_id,
+            status="completed",
+            output=clip(part.model_response_str()),
+            images=[ImageRef(media_type=image.media_type, sha256=image.sha256) for image in images],
+        )
     return ToolCall(tool_call_id=part.tool_call_id, status="failed", output=clip(part.model_response()))
 
 
@@ -753,7 +761,7 @@ class NativeBackend:
                             part = returned[0]
                             assert isinstance(part, ToolReturnPart)
                         messages.append(ModelRequest(parts=returned))
-                        await emit(to_event(part))
+                        await emit(to_event(part, images=[p for p in returned if isinstance(p, ImagePart)]))
             return Output(output=to_jsonable_python(output), stop_reason=stop_reason if completed else "cancelled")
         finally:
             self._scope = None

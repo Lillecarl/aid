@@ -766,6 +766,14 @@ class ToolDiff(_Message):
     new: str
 
 
+class ImageRef(_Message):
+    """An image a prompt carried or a tool returned. Its bytes are `<session dir>/images/<sha256>` once the session
+    took it."""
+
+    media_type: str
+    sha256: str
+
+
 class ToolCall(_Message):
     """A tool call starting, or an update to it: fields left empty keep what an earlier event of the call said."""
 
@@ -781,6 +789,8 @@ class ToolCall(_Message):
     diffs: list[ToolDiff] = Field(default_factory=list[ToolDiff])
     paths: list[str] = Field(default_factory=list[str])
     """Files the call touches, `path` or `path:line`."""
+    images: list[ImageRef] = Field(default_factory=list[ImageRef])
+    """Images the call returned to the model (native: `aid.images.ToolImage`)."""
 
 
 class StreamChunk(_Message):
@@ -992,13 +1002,6 @@ class Note(_Message):
     text: str
     by: str | None = None
     """The plugin that wrote it, stamped by the daemon; None for the operator."""
-
-
-class ImageRef(_Message):
-    """An image a prompt carried. Its bytes are `<session dir>/images/<sha256>` once the session took the turn."""
-
-    media_type: str
-    sha256: str
 
 
 class PromptEntry(_Message):

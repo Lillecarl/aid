@@ -1420,7 +1420,7 @@
     },
     "ImageRef": {
       "additionalProperties": false,
-      "description": "An image a prompt carried. Its bytes are `<session dir>/images/<sha256>` once the session took the turn.",
+      "description": "An image a prompt carried or a tool returned. Its bytes are `<session dir>/images/<sha256>` once the session\ntook it.",
       "properties": {
         "media_type": {
           "type": "string"
@@ -3773,6 +3773,12 @@
           },
           "type": "array"
         },
+        "images": {
+          "items": {
+            "$ref": "#/$defs/ImageRef"
+          },
+          "type": "array"
+        },
         "input": {
           "$ref": "#/$defs/JsonValue",
           "default": null
@@ -3857,7 +3863,8 @@
         "input",
         "output",
         "diffs",
-        "paths"
+        "paths",
+        "images"
       ],
       "title": "ToolCall",
       "type": "object"

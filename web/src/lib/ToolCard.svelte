@@ -5,18 +5,25 @@
 
   interface Props {
     tool: Tool;
+    /** Where an image of the session is served, by sha256. */
+    imageUrl: (sha: string) => string;
   }
 
   const STATUS_ICON: Record<string, string> = { pending: "○", in_progress: "◐", completed: "✓", failed: "✗" };
   const LINE_CLASS: Record<DiffLine["op"], string> = { " ": "", "-": "del", "+": "add", "…": "gap" };
 
-  let { tool }: Props = $props();
+  let { tool, imageUrl }: Props = $props();
   const status = $derived(tool.status ?? "pending");
   const hint = $derived(gist(tool.input) ?? tool.paths[0] ?? null);
   const shell = $derived(command(tool.input));
   const showInput = $derived(shell === null && hasInput(tool.input) && !tool.diffs.length);
   const hasDetails = $derived(
-    shell !== null || showInput || tool.output !== null || tool.diffs.length > 0 || tool.paths.length > 0,
+    shell !== null ||
+      showInput ||
+      tool.output !== null ||
+      tool.diffs.length > 0 ||
+      tool.paths.length > 0 ||
+      tool.images.length > 0,
   );
   // A file the call read, by its one path: anything else numbered (a search's hits) spans files.
   const listing = $derived(
@@ -64,6 +71,13 @@
         {:else}
           <pre class="output">{readable(tool.output)}</pre>
         {/if}
+      {/if}
+      {#if tool.images.length}
+        <div class="images" data-testid="tool-images">
+          {#each tool.images as sha (sha)}<a href={imageUrl(sha)} target="_blank" rel="noopener"
+              ><img src={imageUrl(sha)} alt="Returned by the tool" loading="lazy" /></a
+            >{/each}
+        </div>
       {/if}
     </div>
   {/if}
@@ -188,5 +202,16 @@
   }
   .l {
     display: block;
+  }
+  .images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.4rem;
+  }
+  .images img {
+    max-width: 16rem;
+    max-height: 16rem;
+    border-radius: 0.3rem;
+    border: 1px solid var(--line);
   }
 </style>

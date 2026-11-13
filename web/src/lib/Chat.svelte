@@ -763,7 +763,7 @@
         <Markdown text={row.text} />
       </details>
   {:else if row.tool}
-    <ToolCard tool={row.tool} />
+    <ToolCard tool={row.tool} {imageUrl} />
   {:else if row.permission}
     <PermissionCard session={name} request={row.permission.request} decision={row.permission.decision} />
   {:else}

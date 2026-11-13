@@ -38,7 +38,7 @@ from aid.model import (
     wire_messages,
 )
 from aid.prices import ENV_PRICES
-from aid.protocol import AidError
+from aid.protocol import AidError, ImageRef, ToolCall
 from tests.models import TestModel
 from tests.test_google_model import chunk
 from tests.test_model import serve_wire, sse
@@ -422,12 +422,18 @@ class Reading(Looking):
 
 @pytest.mark.parametrize("keeps", [True, False])
 async def test_read_hands_an_image_file_to_the_model(tmp_path: Path, keeps: bool) -> None:
-    """The image follows its tool answer in the same request, tied to the call; without a store the model gets
-    the note alone."""
+    """The image follows its tool answer in the same request, tied to the call, and the call's event names it for
+    the transcript; without a store the model gets the note alone."""
     (tmp_path / "pic.png").write_bytes(png((0, 0, 255)))
     model = Reading()
+    events: list[SessionEvent] = []
+
+    async def record(event: SessionEvent) -> None:
+        events.append(event)
+
     async with backend(tmp_path, Agent(model, tools=[read]), images=ImageStore(tmp_path) if keeps else None) as session:
-        await session.prompt("what colour is pic.png?", emit)
+        await session.prompt("what colour is pic.png?", record)
+    returned = [e for e in events if isinstance(e, ToolCall) and e.status == "completed"]
     messages, encoded = model.seen[1]
     answer = messages[-1].parts
     assert isinstance(answer[0], ToolReturnPart)
@@ -437,9 +443,11 @@ async def test_read_hands_an_image_file_to_the_model(tmp_path: Path, keeps: bool
         assert isinstance(image, ImagePart)
         assert (image.tool_call_id, base64.b64decode(encoded[image.sha256])) == ("c1", png((0, 0, 255)))
         assert image in (await stored(tmp_path))[-2].parts
+        assert [e.images for e in returned] == [[ImageRef(media_type="image/png", sha256=image.sha256)]]
     else:
         assert str(answer[0].content).endswith("; this model takes no images")
         assert (len(answer), encoded) == (1, {})
+        assert [e.images for e in returned] == [[]]
 
 
 @pytest.mark.parametrize("engine", [AcpBackend, ClaudeSdkBackend, ClaudeTtyBackend])
