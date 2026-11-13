@@ -12,6 +12,7 @@ isolated tab from its cookies. Tests seed their sessions on the shared session d
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -36,6 +37,7 @@ from tests.browser_harness import (
 )
 from tests.conftest import py_spec
 from tests.test_agents import AGENT_DIR
+from tests.test_images import png
 from tests.test_sandbox import needs_bwrap
 from tests.web_harness import ALLOWED, ASSETS, TIMEOUT, needs_dex
 
@@ -147,6 +149,23 @@ async def test_prompt_echo_roundtrip(page: Page, session_daemon: Paths, tmp_path
     await open_session(page, "echo")
     await send_chat(page, "hello browser")
     await expect_chat_text(page, "turn 1: echo hello browser")
+
+
+async def test_an_attached_image_reaches_the_agent_and_shows(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """The Image button attaches a file; the agent sees it (#66); the history row shows it through aid web's route."""
+    picture = tmp_path / "red.png"
+    picture.write_bytes(png())
+    await seed_session(session_daemon, tmp_path, "looker", "agents:seer")
+    await open_session(page, "looker")
+    await page.get_by_test_id("chat-attach").set_input_files(str(picture))
+    await page.get_by_test_id("chat-attached").get_by_text("red.png").wait_for(timeout=TIMEOUT * 1000)
+    await send_chat(page, "what is this?")
+    await expect_chat_text(page, f"image/png:{hashlib.sha256(png()).hexdigest()}")
+    shown = page.get_by_test_id("chat-images").locator("img").first
+    await shown.wait_for(timeout=TIMEOUT * 1000)
+    with anyio.fail_after(TIMEOUT):
+        # decode() rejects for a broken image: one the route or the CSP refused.
+        assert await shown.evaluate("(img) => img.decode().then(() => img.naturalWidth)") == 8
 
 
 async def test_slash_menu_lists_commands(page: Page, session_daemon: Paths, tmp_path: Path) -> None:

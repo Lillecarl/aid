@@ -50,6 +50,8 @@
     tool?: Tool;
     permission?: Permission;
     local?: boolean;
+    /** A prompt's images by sha256, served by aid web from the session's store. */
+    images?: string[];
   };
 
   const PAGE = 100;
@@ -160,7 +162,7 @@
     const row = (kind: Kind, text: string): Row => ({ key, seq, kind, text });
     switch (item.type) {
       case "prompt":
-        return [row("user", item.text)];
+        return [{ ...row("user", item.text), images: item.images.map((image) => image.sha256) }];
       case "message":
         return [row("message", `From ${item.sender ?? "a person"}: ${item.text}`)];
       case "text":
@@ -397,22 +399,52 @@
     await follow();
   }
 
+  function imageUrl(sha: string): string {
+    return `/api/sessions/${encodeURIComponent(name)}/images/${sha}`;
+  }
+
+  /** Images the next prompt carries: picked with the button or pasted into the prompt box (#66). */
+  let attached: File[] = $state([]);
+  const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+
+  function attach(files: Iterable<File>): void {
+    attached = [...attached, ...[...files].filter((file) => IMAGE_TYPES.includes(file.type))];
+  }
+
+  function pasted(event: ClipboardEvent): void {
+    const files = [...(event.clipboardData?.files ?? [])].filter((file) => IMAGE_TYPES.includes(file.type));
+    if (files.length === 0) return;
+    event.preventDefault();
+    attach(files);
+  }
+
+  async function base64(file: File): Promise<string> {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+    return btoa(binary);
+  }
+
   async function send(event?: SubmitEvent): Promise<void> {
     event?.preventDefault();
     const prompt = text.trim();
-    if (prompt === "" || busy) return;
-    text = "";
+    if ((prompt === "" && attached.length === 0) || busy) return;
     if (prompt.startsWith("/")) {
+      text = "";
       await slash(prompt);
       return;
     }
+    const files = attached;
+    text = "";
+    attached = [];
     busy = true;
     settling = true;
     if (hasNewer) await loadLatest();
-    rows.push({ key: `l${liveCount++}`, kind: "user", text: prompt });
+    const shown = files.length ? `${prompt}\n[${files.map((file) => file.name).join(", ")}]` : prompt;
+    rows.push({ key: `l${liveCount++}`, kind: "user", text: shown });
     await toBottom();
     try {
-      await api.prompt(name, prompt, apply);
+      await api.prompt(name, prompt, apply, await Promise.all(files.map(base64)));
     } catch (e) {
       rows.push({ key: `l${liveCount++}`, kind: "error", local: true, text: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -707,7 +739,13 @@
         aria-expanded={!folded.has(row.key)}
         title={folded.has(row.key) ? "Unfold" : "Fold to the first line"}
         onclick={() => toggleFold(row.key)}>{folded.has(row.key) ? "▸" : "▾"}</button
-      >{#if row.kind === "assistant"}<Markdown text={row.text} />{:else}{row.text}{/if}</div
+      >{#if row.kind === "assistant"}<Markdown text={row.text} />{:else}{row.text}{/if}{#if row.images?.length}<div
+          class="images"
+          data-testid="chat-images"
+          >{#each row.images as sha (sha)}<a href={imageUrl(sha)} target="_blank" rel="noopener"
+              ><img src={imageUrl(sha)} alt="Sent with the prompt" loading="lazy" /></a
+            >{/each}</div
+        >{/if}</div
     >
     {:else if row.kind === "thought"}
       <details class="thought" data-testid="chat-row" open={thinking === "live" && row.seq === undefined}>
@@ -791,9 +829,30 @@
       {/each}
     </div>
   {/if}
-  <textarea data-testid="chat-input" bind:value={text} onkeydown={keydown} rows="4" placeholder={touchOnly ? "Prompt" : "Prompt (Enter sends, Shift+Enter or Ctrl+J for a new line, /help for commands)"}></textarea>
+  {#if attached.length}
+    <div class="attached" data-testid="chat-attached">
+      {#each attached as file, i (i)}
+        <button type="button" title="Leave this image out" onclick={() => (attached = attached.filter((_, j) => j !== i))}
+          >{file.name} ✕</button
+        >
+      {/each}
+    </div>
+  {/if}
+  <textarea data-testid="chat-input" bind:value={text} onkeydown={keydown} onpaste={pasted} rows="4" placeholder={touchOnly ? "Prompt" : "Prompt (Enter sends, Shift+Enter or Ctrl+J for a new line, /help for commands)"}></textarea>
   <div class="buttons">
     <button type="submit" data-testid="chat-send" disabled={busy}>{busy ? "Working…" : "Send"}</button>
+    <label class="attach" title="Send images with the prompt: PNG, JPEG, GIF or WebP; pasting one works too"
+      >Image<input
+        type="file"
+        data-testid="chat-attach"
+        accept={IMAGE_TYPES.join(",")}
+        multiple
+        onchange={(e) => {
+          attach(e.currentTarget.files ?? []);
+          e.currentTarget.value = "";
+        }}
+      /></label
+    >
     {#if canDictate}
       <button
         type="button"
@@ -811,6 +870,25 @@
 </form>
 
 <style>
+  .images {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5em;
+    margin-top: 0.5em;
+  }
+  .images img {
+    max-width: 16em;
+    max-height: 12em;
+    border: 1px solid var(--muted);
+  }
+  .attached {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25em;
+  }
+  .attach input {
+    display: none;
+  }
   .move {
     font-size: 0.9em;
     border: 1px solid var(--line);
