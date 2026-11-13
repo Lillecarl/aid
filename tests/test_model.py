@@ -44,7 +44,7 @@ from aid.spec import NativeSpec
 from tests.test_native_backend import backend
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import AsyncGenerator, Callable, Sequence
     from pathlib import Path
 
     from pydantic import BaseModel, JsonValue
@@ -765,6 +765,35 @@ async def test_openai_compatible_stream_keeps_reasoning_and_cache_reads(monkeypa
     assert truncated
     assert response.parts == [ThinkingPart("hmm"), TextPart("ok")]
     assert (usages[0].input_tokens, usages[0].cache_read_tokens) == (10, 6)
+
+
+async def test_a_stream_closes_its_events_when_it_stops_early(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`[DONE]` ends the read before the body does: the events generator is closed then, not by the collector
+    (#67)."""
+    closed: list[bool] = []
+    events = wire.events
+
+    async def watched(response: httpx2.Response) -> AsyncGenerator[str]:
+        try:
+            async for data in events(response):
+                yield data
+        finally:
+            closed.append(True)
+
+    body = event({"content": "ok"}) + b"data: [DONE]\n\n" + event({"content": "after"})
+    serve_wire(
+        monkeypatch,
+        lambda request: httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=body),
+    )
+    monkeypatch.setattr(wire, "events", watched)
+    model = OpenAIChatModel("groq/llama")
+    try:
+        stream = model.stream([ModelRequest(parts=[UserPromptPart("go")])], ModelInfo(settings={"api_key": "k"}))
+        parts = [delta.part async for delta in stream if delta.part is not None]
+        assert closed == [True]
+    finally:
+        await model.aclose()
+    assert parts == [TextPart("ok")]
 
 
 @pytest.mark.parametrize("name", ["openai/local", "anthropic/claude-test"])

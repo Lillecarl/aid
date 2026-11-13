@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Final
 import httpx2
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Mapping
+    from collections.abc import AsyncGenerator, Mapping
 
 ERROR_BODY_LIMIT: Final = 64 * 1024
 """Bytes of a refusal's body kept for its message: enough for any error JSON, bounded against a runaway one."""
@@ -53,7 +53,7 @@ async def open_stream(
     raise StatusError(response.status_code, kept[:ERROR_BODY_LIMIT].decode(errors="replace"), url)
 
 
-async def events(response: httpx2.Response) -> AsyncIterator[str]:
+async def events(response: httpx2.Response) -> AsyncGenerator[str]:
     """Each server-sent event's data, its `data:` lines joined by newlines. Comments and other fields are skipped."""
     data: list[str] = []
     async for line in response.aiter_lines():

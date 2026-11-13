@@ -500,8 +500,9 @@ class OpenAIChatModel:
         url = chat_api.url(key.base_url, "chat/completions")
         response = await open_model_stream(self.model_name, self._http, url, body, headers, io_timeout, key.max_retries)
         ids: dict[int, str] = {}
+        events = wire.events(response)
         try:
-            async for data in wire.events(response):
+            async for data in events:
                 if data == chat_api.DONE:
                     break
                 chunk = chat_api.Chunk.model_validate_json(data)
@@ -535,6 +536,7 @@ class OpenAIChatModel:
             raise StreamBroken(repr(error)) from error
         finally:
             with anyio.CancelScope(shield=True):
+                await events.aclose()
                 await response.aclose()
 
     async def request(self, messages: list[ModelMessage], info: ModelInfo) -> ModelResponse:
@@ -747,8 +749,9 @@ class AnthropicModel:
         body = self._request(messages, info, settings, await info.encoded(messages)).body()
         response = await self._open(key, body, headers, io_timeout)
         arguments: dict[int, bool] = {}
+        events = wire.events(response)
         try:
-            async for data in wire.events(response):
+            async for data in events:
                 match anthropic_api.event(data):
                     case anthropic_api.MessageStart(message=message):
                         yield StreamDelta(model_name=message.model)
@@ -796,6 +799,7 @@ class AnthropicModel:
             raise StreamBroken(repr(error)) from error
         finally:
             with anyio.CancelScope(shield=True):
+                await events.aclose()
                 await response.aclose()
 
     async def request(self, messages: list[ModelMessage], info: ModelInfo) -> ModelResponse:
@@ -968,8 +972,9 @@ class GoogleModel:
         body = self._request(messages, info, settings, await info.encoded(messages))
         response = await self._open(key, body, timeout)
         calls = 0
+        events = wire.events(response)
         try:
-            async for data in wire.events(response):
+            async for data in events:
                 chunk = gemini.Response.model_validate_json(data)
                 if chunk.model_version:
                     yield StreamDelta(model_name=chunk.model_version)
@@ -1001,6 +1006,7 @@ class GoogleModel:
             raise StreamBroken(repr(error)) from error
         finally:
             with anyio.CancelScope(shield=True):
+                await events.aclose()
                 await response.aclose()
 
     async def request(self, messages: list[ModelMessage], info: ModelInfo) -> ModelResponse:
