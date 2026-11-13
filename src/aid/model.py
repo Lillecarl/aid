@@ -3,6 +3,7 @@ own client (`aid.wire`, #65): no model SDK."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
@@ -11,6 +12,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast,
 
 import anyio
 import httpx2
+import structlog
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from aid import anthropic_api, chat_api, gemini, wire
@@ -29,8 +31,10 @@ from aid.messages import (
 )
 from aid.protocol import AidError
 
+log = structlog.get_logger(__name__)
+
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+    from collections.abc import AsyncGenerator, Callable, Container, Mapping, Sequence
 
     from pydantic.json_schema import JsonSchemaValue
 
@@ -46,8 +50,8 @@ class ModelInfo:
     images: ImageStore | None = None
     """The bytes of the history's `ImagePart`s. None: a request carrying one fails `image_missing`."""
 
-    async def encoded(self, messages: Sequence[ModelMessage]) -> Encoded:
-        return NO_IMAGES if self.images is None else await self.images.encoded(messages)
+    async def encoded(self, messages: Sequence[ModelMessage], skip: Container[str] = ()) -> Encoded:
+        return NO_IMAGES if self.images is None else await self.images.encoded(messages, skip)
 
 
 @dataclass
@@ -319,6 +323,11 @@ class ClientKey:
     base_url: str | None
     api_key: str
     max_retries: int
+
+
+def upload_scope(key: ClientKey) -> str:
+    """Whose files an id names: a server and a key. Another key may be another workspace, which holds none of them."""
+    return hashlib.sha256(f"{key.base_url or ''}\0{key.api_key}".encode()).hexdigest()[:16]
 
 
 def client_settings(name: str, settings: Mapping[str, JsonValue]) -> ClientSettings:
@@ -605,7 +614,7 @@ ANTHROPIC_LEGACY_MAX_TOKENS: Final = 4096
 
 
 def anthropic_messages(
-    messages: Sequence[ModelMessage], images: Encoded = NO_IMAGES
+    messages: Sequence[ModelMessage], images: Encoded = NO_IMAGES, files: Mapping[str, str] = NO_IMAGES
 ) -> tuple[list[anthropic_api.TextBlock], list[anthropic_api.Message]]:
     """Stored parts as the Messages API's (system, messages). Leading system prompts become `system`; a later one
     stays in place as user text. Consecutive same-role parts share one message, so the tool results of one
@@ -653,7 +662,11 @@ def anthropic_messages(
                 case UserPromptPart():
                     add("user", anthropic_api.TextBlock(text=str(part.content)))
                 case ImagePart():
-                    source = anthropic_api.ImageSource(media_type=part.media_type, data=encoded(images, part))
+                    source = (
+                        anthropic_api.FileSource(file_id=files[part.sha256])
+                        if part.sha256 in files
+                        else anthropic_api.ImageSource(media_type=part.media_type, data=encoded(images, part))
+                    )
                     image = anthropic_api.ImageBlock(source=source)
                     if (answer := _tool_result(turns, part.tool_call_id)) is None:
                         add("user", image)
@@ -726,9 +739,14 @@ class AnthropicModel:
             await http.aclose()
 
     def _request(
-        self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue], images: Encoded
+        self,
+        messages: list[ModelMessage],
+        info: ModelInfo,
+        settings: dict[str, JsonValue],
+        images: Encoded,
+        files: Mapping[str, str] = NO_IMAGES,
     ) -> anthropic_api.Request:
-        system, wired = anthropic_messages(messages, images)
+        system, wired = anthropic_messages(messages, images, files)
         settings.setdefault(
             "max_tokens", ANTHROPIC_LEGACY_MAX_TOKENS if self._model.startswith("claude-3") else ANTHROPIC_MAX_TOKENS
         )
@@ -753,11 +771,65 @@ class AnthropicModel:
         except ValidationError as error:
             raise AidError("bad_model_settings", f"{self.model_name}: {error}") from error
 
-    async def _open(self, key: ClientKey, body: bytes, headers: dict[str, str], io_timeout: float) -> httpx2.Response:
+    def _client(self) -> httpx2.AsyncClient:
         if self._http is None:
             self._http = wire.client(timeout=DEFAULT_TIMEOUT)
+        return self._http
+
+    async def _open(self, key: ClientKey, body: bytes, headers: dict[str, str], io_timeout: float) -> httpx2.Response:
         url = anthropic_api.messages_url(key.base_url)
-        return await open_model_stream(self.model_name, self._http, url, body, headers, io_timeout, key.max_retries)
+        return await open_model_stream(self.model_name, self._client(), url, body, headers, io_timeout, key.max_retries)
+
+    async def _upload(
+        self, key: ClientKey, headers: Mapping[str, str], part: ImagePart, data: bytes, io_timeout: float
+    ) -> str:
+        files = {"file": (part.sha256, data, part.media_type)}
+        response = await self._client().post(
+            anthropic_api.files_url(key.base_url), headers=dict(headers), files=files, timeout=io_timeout
+        )
+        if not response.is_success:
+            raise wire.StatusError(response.status_code, response.text[: wire.ERROR_BODY_LIMIT], str(response.url))
+        return anthropic_api.StoredFile.model_validate_json(response.content).id
+
+    async def _files(
+        self,
+        messages: Sequence[ModelMessage],
+        info: ModelInfo,
+        key: ClientKey,
+        headers: Mapping[str, str],
+        io_timeout: float,
+    ) -> Mapping[str, str]:
+        """The history's images by Files API id (#69), uploading those not yet held: Anthropic's own route only. A
+        failed upload leaves that image to go as base64; a later request tries again."""
+        if self._provider is not None or info.images is None:
+            return NO_IMAGES
+        parts = {p.sha256: p for m in messages for p in m.parts if isinstance(p, ImagePart)}
+        if not parts:
+            return NO_IMAGES
+        scope = upload_scope(key)
+        held = await info.images.uploads(scope)
+        missing = [part for sha, part in parts.items() if sha not in held]
+        for part in missing:
+            try:
+                held[part.sha256] = await self._upload(key, headers, part, await info.images.bytes_of(part), io_timeout)
+            except (wire.StatusError, httpx2.TransportError, ValidationError) as error:
+                if isinstance(error, wire.StatusError | httpx2.TransportError) and rejected_key(error):
+                    raise refused_key(self.model_name, error) from error
+                log.warning("image_upload_failed", model=self.model_name, image=part.sha256, error=str(error)[:300])
+        if missing:
+            await info.images.save_uploads(scope, held)
+        return {sha: held[sha] for sha in parts if sha in held}
+
+    async def _forget(self, info: ModelInfo, key: ClientKey, error: wire.StatusError, files: Mapping[str, str]) -> bool:
+        """Drop the ids a request named that the provider no longer holds: True when there were any."""
+        gone: set[str] = set(anthropic_api.MISSING_FILE.findall(error.body)) if error.status == 404 else set()
+        stale = {sha for sha, file_id in files.items() if file_id in gone}
+        if not stale or info.images is None:
+            return False
+        scope = upload_scope(key)
+        held = await info.images.uploads(scope)
+        await info.images.save_uploads(scope, {sha: i for sha, i in held.items() if sha not in stale})
+        return True
 
     async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
         key = self._key(info.settings)
@@ -771,8 +843,16 @@ class AnthropicModel:
             **(self._provider.headers if self._provider else {}),
             **extra_headers,
         }
-        body = self._request(messages, info, settings, await info.encoded(messages)).body()
-        response = await self._open(key, body, headers, io_timeout)
+        files = await self._files(messages, info, key, headers, io_timeout)
+        body = self._request(messages, info, settings, await info.encoded(messages, files), files).body()
+        try:
+            response = await self._open(key, body, headers, io_timeout)
+        except wire.StatusError as error:
+            if not await self._forget(info, key, error, files):
+                raise
+            files = await self._files(messages, info, key, headers, io_timeout)
+            body = self._request(messages, info, settings, await info.encoded(messages, files), files).body()
+            response = await self._open(key, body, headers, io_timeout)
         arguments: dict[int, bool] = {}
         events = wire.events(response)
         try:

@@ -6,7 +6,7 @@ import base64
 import json
 import struct
 import zlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import httpx2
 import pytest
@@ -26,7 +26,15 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.model import AnthropicModel, ModelInfo, StreamDelta, anthropic_messages, google_contents, wire_messages
+from aid.model import (
+    AnthropicModel,
+    ModelInfo,
+    Provider,
+    StreamDelta,
+    anthropic_messages,
+    google_contents,
+    wire_messages,
+)
 from aid.prices import ENV_PRICES
 from aid.protocol import AidError
 from tests.models import TestModel
@@ -192,35 +200,78 @@ def test_gemini_sends_images_inline(history: tuple[list[ModelMessage], dict[str,
     assert "parts" not in second
 
 
-async def test_a_transport_reads_the_bytes_from_the_sessions_store(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    seen: list[httpx2.Request] = []
-    body = sse(
-        [
-            {
-                "type": "message_start",
-                "message": {"model": "claude-test", "usage": {"input_tokens": 1, "output_tokens": 0}},
-            },
-            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": "red"}},
-            {"type": "message_stop"},
-        ]
-    )
+ANSWER: Final = sse(
+    [
+        {
+            "type": "message_start",
+            "message": {"model": "claude-test", "usage": {"input_tokens": 1, "output_tokens": 0}},
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": "red"}},
+        {"type": "message_stop"},
+    ]
+)
 
-    def handle(request: httpx2.Request) -> httpx2.Response:
-        seen.append(request)
-        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=body)
 
-    serve_wire(monkeypatch, handle)
-    store = ImageStore(tmp_path)
+class FilesServer:
+    """Anthropic's Messages and Files APIs (#69): numbered uploads; a deleted id answers 404 as measured."""
+
+    def __init__(self, upload_status: int = 200) -> None:
+        self.upload_status = upload_status
+        self.uploads: list[httpx2.Request] = []
+        self.sent: list[dict[str, str]] = []
+        self.deleted: set[str] = set()
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/v1/files":
+            self.uploads.append(request)
+            if self.upload_status != 200:
+                return httpx2.Response(self.upload_status, json={"error": {"message": "no files here"}})
+            return httpx2.Response(200, json={"type": "file", "id": f"file_{len(self.uploads)}"})
+        source: dict[str, str] = json.loads(request.content)["messages"][0]["content"][1]["source"]
+        self.sent.append(source)
+        if (named := source.get("file_id")) in self.deleted:
+            error = {"type": "not_found_error", "message": f"File `{named}` not found."}
+            return httpx2.Response(404, json={"type": "error", "error": error})
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=ANSWER)
+
+
+async def ask_twice(model: AnthropicModel, store: ImageStore, server: FilesServer) -> None:
     history: list[ModelMessage] = [ModelRequest([UserPromptPart("what colour?"), store.put(png())])]
-    model = AnthropicModel("anthropic/claude-test")
     try:
-        await model.request(history, ModelInfo(settings={"api_key": "k"}, images=store))
+        await model.request(history, ModelInfo(settings={"api_key": "k", "max_retries": 0}, images=store))
+        server.deleted.add("file_1")
+        await model.request(history, ModelInfo(settings={"api_key": "k", "max_retries": 0}, images=store))
     finally:
         await model.aclose()
-    image = json.loads(seen[0].content)["messages"][0]["content"][1]
-    assert base64.b64decode(image["source"]["data"]) == png()
+
+
+async def test_anthropic_sends_an_image_by_file_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """One upload per image and key; a deleted file is uploaded again and the request sent again."""
+    serve_wire(monkeypatch, server := FilesServer())
+    await ask_twice(AnthropicModel("anthropic/claude-test"), ImageStore(tmp_path), server)
+    assert server.sent == [
+        {"type": "file", "file_id": "file_1"},
+        {"type": "file", "file_id": "file_1"},
+        {"type": "file", "file_id": "file_2"},
+    ]
+    assert len(server.uploads) == 2
+    assert server.uploads[0].headers["x-api-key"] == "k"
+    assert png() in server.uploads[0].content
+
+
+async def test_an_image_goes_as_bytes_where_files_are_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed upload costs nothing but the bytes: the request carries them, and the next one tries again."""
+    serve_wire(monkeypatch, server := FilesServer(upload_status=500))
+    await ask_twice(AnthropicModel("anthropic/claude-test"), ImageStore(tmp_path), server)
+    assert [base64.b64decode(s["data"]) for s in server.sent] == [png(), png()]
+    assert len(server.uploads) == 2
+
+
+async def test_another_messages_server_gets_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    serve_wire(monkeypatch, server := FilesServer())
+    model = AnthropicModel("zen/claude-test", Provider("https://zen.example/", "ZEN_KEY"))
+    await ask_twice(model, ImageStore(tmp_path), server)
+    assert (len(server.uploads), [s["type"] for s in server.sent]) == (0, ["base64", "base64"])
 
 
 class Looking(TestModel):

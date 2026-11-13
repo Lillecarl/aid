@@ -7,6 +7,7 @@ as body fields for the server to check, as the SDK's keyword arguments did. `ext
 
 from __future__ import annotations
 
+import re
 from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
@@ -33,9 +34,16 @@ class ImageSource(_Wire):
     data: str
 
 
+class FileSource(_Wire):
+    """An image uploaded through the Files API (`files_url`): sent by id, not resent as bytes."""
+
+    type: Literal["file"] = "file"
+    file_id: str
+
+
 class ImageBlock(_Wire):
     type: Literal["image"] = "image"
-    source: ImageSource
+    source: ImageSource | FileSource
 
 
 class ThinkingBlock(_Wire):
@@ -207,3 +215,17 @@ def error_of(body: str) -> ErrorDetail | None:
 
 def messages_url(base: str | None) -> str:
     return f"{(base or DEFAULT_BASE).rstrip('/')}/v1/messages"
+
+
+def files_url(base: str | None) -> str:
+    return f"{(base or DEFAULT_BASE).rstrip('/')}/v1/files"
+
+
+class StoredFile(_Wire):
+    """The Files API's answer to an upload. Measured 2026-11-13: no beta header needed; `expires_at` null."""
+
+    id: str
+
+
+MISSING_FILE: Final = re.compile(r"File `([^`]+)` not found")
+"""A request naming a deleted or unknown file id: 404 `not_found_error`, "File `file_…` not found." (measured)."""

@@ -277,6 +277,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   does not describe is asked. Tool images: a tool returns `ToolImage(data, text)` (`read` on an image file); the loop
   stores it after the ToolReturnPart, or sends the text alone with a note where the model takes none. Live-tested
   2026-11-13 on every route but OpenCode Go (key expired) (`test_an_image_from_a_tool`). Not yet: web.
+  Files APIs (#69): `AnthropicModel` on Anthropic's own route (no `Provider`) uploads each image once per
+  `upload_scope` (base URL + key), keeps sha256 → id in `images/uploads/<scope>.json`, sends `FileSource`; a failed
+  upload goes as base64 that request; a 404 "File `…` not found" drops those ids, uploads again, resends once. aid
+  never deletes uploaded files. Gemini and Chat Completions: base64 still.
 - `src/aid/wire.py` — aid's own model clients' HTTP (#65): `open_stream` (POST, 2xx or `StatusError` with the body),
   `events` (SSE data), `client` (tests patch it, called `timeout=` by keyword). No model SDK at runtime; each is a
   test dependency for differential tests (`…parse_as_…` in test_model.py and test_google_model.py). Protocol

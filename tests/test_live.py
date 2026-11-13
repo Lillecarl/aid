@@ -17,7 +17,7 @@ import pytest
 from aid.agent import Agent
 from aid.coding import read
 from aid.discovery import discover
-from aid.images import ImageStore
+from aid.images import IMAGES_DIR, UPLOADS, UPLOADS_DIR, ImageStore
 from aid.messages import ImagePart, ModelMessagesTypeAdapter, ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 from aid.model import ModelInfo
 from aid.prices import ENV_PRICES
@@ -149,6 +149,7 @@ async def test_an_image_in_the_prompt(tmp_path: Path, monkeypatch: pytest.Monkey
             [png((255, 0, 0), size=256)],
         )
     assert "red" in str(answer.output).lower()
+    assert_by_file_id(tmp_path, name)
     (usage,) = [item for item in events if isinstance(item, Usage)]
     if route.priced:
         assert usage.cost is not None
@@ -177,6 +178,15 @@ async def test_an_image_from_a_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert "green" in str(answer.output).lower()
     history = ModelMessagesTypeAdapter.validate_json((tmp_path / "history.json").read_bytes())
     assert any(isinstance(p, ImagePart) and p.tool_call_id for m in history for p in m.parts)
+    assert_by_file_id(tmp_path, name)
+
+
+def assert_by_file_id(root: Path, model: str) -> None:
+    """Anthropic's own route sends images by Files API id (#69): the session's id table names one."""
+    if model.startswith("anthropic/"):
+        tables = list((root / IMAGES_DIR / UPLOADS_DIR).glob("*.json"))
+        assert len(tables) == 1
+        assert any(file_id.startswith("file_") for file_id in UPLOADS.validate_json(tables[0].read_bytes()).values())
 
 
 async def emit_nothing(item: SessionEvent) -> None:

@@ -5,23 +5,28 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import json
 import os
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import anyio.to_thread
+from pydantic import TypeAdapter, ValidationError
 
 from aid.messages import ImagePart
 from aid.protocol import AidError, ImageRef
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Container, Mapping, Sequence
     from pathlib import Path
 
     from aid.messages import ModelMessage
 
 IMAGES_DIR: Final = "images"
+UPLOADS: Final = TypeAdapter(dict[str, str])
+UPLOADS_DIR: Final = "uploads"
+"""`images/uploads/<scope>.json`: sha256 → a provider's file id, per provider and key (`scope`)."""
 MAX_BYTES: Final = 5 * 1024 * 1024
 """Anthropic's limit per image, the lowest of the three APIs."""
 MAX_PROMPT_BYTES: Final = 20 * 1024 * 1024
@@ -112,10 +117,36 @@ class ImageStore:
     def _encoded(self, parts: Sequence[ImagePart]) -> Encoded:
         return {part.sha256: base64.b64encode(self.read(part)).decode() for part in parts}
 
-    async def encoded(self, messages: Sequence[ModelMessage]) -> Encoded:
-        """Every image of `messages` as base64 by sha256, read in a worker thread."""
-        parts = [p for m in messages for p in m.parts if isinstance(p, ImagePart)]
+    async def encoded(self, messages: Sequence[ModelMessage], skip: Container[str] = ()) -> Encoded:
+        """Every image of `messages` as base64 by sha256, read in a worker thread; `skip` names those sent by id."""
+        parts = [p for m in messages for p in m.parts if isinstance(p, ImagePart) and p.sha256 not in skip]
         return await anyio.to_thread.run_sync(self._encoded, parts) if parts else {}
+
+    async def bytes_of(self, part: ImagePart) -> bytes:
+        return await anyio.to_thread.run_sync(self.read, part)
+
+    def _uploads_file(self, scope: str) -> Path:
+        return self._dir / UPLOADS_DIR / f"{scope}.json"
+
+    def _uploads(self, scope: str) -> dict[str, str]:
+        try:
+            return UPLOADS.validate_json(self._uploads_file(scope).read_bytes())
+        except FileNotFoundError, ValidationError:
+            return {}
+
+    def _write_uploads(self, scope: str, ids: Mapping[str, str]) -> None:
+        path = self._uploads_file(scope)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        partial = path.with_name(f".{path.name}.{os.getpid()}")
+        partial.write_text(json.dumps(dict(ids), sort_keys=True))
+        partial.replace(path)
+
+    async def uploads(self, scope: str) -> dict[str, str]:
+        """The file ids `scope` holds for this store's images: an unreadable table is an empty one."""
+        return await anyio.to_thread.run_sync(self._uploads, scope)
+
+    async def save_uploads(self, scope: str, ids: Mapping[str, str]) -> None:
+        await anyio.to_thread.run_sync(self._write_uploads, scope, ids)
 
     def _take(self, other: ImageStore, parts: Sequence[ImagePart]) -> None:
         for part in parts:
