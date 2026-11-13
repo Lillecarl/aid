@@ -268,7 +268,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   UserPromptPart (or the ToolReturnPart) it goes with; `ImageStore` = `<session dir>/images/<sha256>`, PNG/JPEG/GIF/
   WebP by magic bytes, 5 MB cap (`bad_image`); `ModelInfo.images` → transports read base64 off the loop
   (`encoded`); no bytes → `image_missing`. Chat Completions: data URL in user content, a tool's image after the
-  last tool message; Anthropic: image block, a tool's inside its `tool_result`; Gemini: `inlineData`, a tool's in its
+  last tool message; Responses: `input_image`, a tool's inside its `function_call_output`; Anthropic: image block, a tool's inside its `tool_result`; Gemini: `inlineData`, a tool's in its
   `functionResponse.parts` (beside it as a user part: junk-led answers, measured). `Backend.prompt(text, emit, images)`: native stores and
   sends; other engines `images_unsupported`. A fork copies its parent's images (`ImageStore.take`). `Prompt.images`
   (base64; `Session.run/stream(images=)`, `aid prompt --image`): the daemon checks them (`images.refs`,
@@ -281,23 +281,30 @@ on reusable decisions and current boundaries; put long investigations and dated 
   daemon answers for the session; immutable cache); the Image button or a paste attaches PNG/JPEG/GIF/WebP to the next
   prompt. The CSP has no `data:`, so an unsent image shows by name. A tool's images reach the transcript as
   `ToolCall.images` (`ImageRef`) on its completed event; its card in Chat shows them from the same route.
-  Files APIs (#69, `model.held_files`/`drop_files`): Anthropic's and Google AI Studio's own routes (no `Provider`)
+  Files APIs (#69, `model.held_files`/`drop_files`): Anthropic's, Google AI Studio's and OpenAI's own routes (no
+  `Provider`; OpenAI: no `api_base` either)
   upload each image once per `upload_scope` (base URL + key), keep sha256 → `Upload(id, expires)` in
   `images/uploads/<scope>.json` and send the id (Anthropic `FileSource`; Gemini `fileData`, a tool's in
-  `functionResponse.parts`; Gemini's expire after 48 h, so one within `UPLOAD_MARGIN` goes again). A failed upload
+  `functionResponse.parts`; Gemini's expire after 48 h, so one within `UPLOAD_MARGIN` goes again; OpenAI
+  `input_image.file_id`, purpose `vision`, the file name's extension names the format: none → 400). A failed upload
   goes as base64 that request; a gone file (Anthropic 404 "File `…` not found", Gemini 403 "access the File … or it
-  may not exist") drops those ids, uploads again, resends once. aid never deletes uploaded files. Chat Completions:
-  base64 still.
+  may not exist", OpenAI 404 "Files [file-…] were not found") drops those ids, uploads again, resends once. aid never
+  deletes uploaded files. Chat Completions takes no image by id (only PDFs, measured): base64 always.
 - `src/aid/wire.py` — aid's own model clients' HTTP (#65): `open_stream` (POST, 2xx or `StatusError` with the body),
   `events` (SSE data), `client` (tests patch it, called `timeout=` by keyword). No model SDK at runtime; each is a
   test dependency for differential tests (`…parse_as_…` in test_model.py and test_google_model.py). Protocol
   modules: `aid.gemini`, `aid.anthropic_api`, `aid.chat_api` (Chat Completions + embeddings: request TypedDicts,
-  response models keep unknown fields as `model_extra`). `model.open_model_stream`: open + `max_retries` + naming,
+  response models keep unknown fields as `model_extra`), `aid.responses_api` (#70). `model.open_model_stream`: open + `max_retries` + naming,
   shared by every client.
 - `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API over aid's own client, `aid.anthropic_api`: typed core, other
   settings pass through as body fields; native blocks, an `error` event overloaded/api/rate → `ModelUnavailable`,
   `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions, `aid.chat_api`; an `error` event after a 200, as OpenRouter sends,
-  5xx/429/overload → `ModelUnavailable`, else `model_error`) and `GoogleModel`
+  5xx/429/overload → `ModelUnavailable`, else `model_error`), `OpenAIResponsesModel` (#70, OpenAI's Responses API:
+  `store: false`, reasoning replayed sealed as `ThinkingPart` extra `encrypted_content` (`ENCRYPTED`; not `signature`,
+  which other wires replay and `prune_history` strips) with an empty summary and no id, a sealed item nothing follows
+  dropped; tools `strict: false` (unset = strict, measured); defaults `include` encrypted reasoning and
+  `reasoning.summary: auto`, the session's `reasoning` merged over; `error`/`response.failed` codes in
+  `responses_api.TRANSIENT` → `ModelUnavailable`; measured facts in the module docstring) and `GoogleModel`
   (Gemini `streamGenerateContent` over aid's own client, no SDK (#65): `aid.gemini` types the wire, settings are
   its field names in either spelling, unknown → `bad_model_settings`; `thought_signature` kept as the API's base64
   on the Text/ToolCall part that carried it, Gemini's call id as `google_id` beside aid's; prompt counts include
@@ -306,14 +313,16 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `OpenAIChatModel` (`request_settings`, `reasoning`, `usage`, `wire`), never branch in it. `OPENAI_COMPATIBLE`:
   prefixes models.dev gives no URL for, and local servers. `model_settings` (JSON): `ClientSettings`
   (`api_key`, `api_base`/`base_url`, `max_retries`; mistyped → `bad_model_settings`) build the client, the rest goes
-  into each request as body fields (`extra_headers`/`extra_body` as the SDKs meant them). `model_for(name)`: the table alone, for direct use. A refused key (`rejected_key`: 401;
+  into each request as body fields (`extra_headers`/`extra_body` as the SDKs meant them). `model_for(name, settings)`: the table alone, for direct use.
+  `responses_route`: `openai/` (or a bare name) without an `api_base` is the Responses API; with one, Chat Completions
+  (another server speaking OpenAI's API, as litellm-style configs name it). A refused key (`rejected_key`: 401;
   Gemini 400 with `API_KEY_INVALID`/`API_KEY_EXPIRED`) → `bad_credentials`, never replayed (#64).
-- `src/aid/providers.py` — `resolve(name, catalog.model_providers)`, in `open_native`: an `aid.ModelProvider`
-  plugin claiming the prefix (async `transport(model)`), else `anthropic/`, else `google/` (`GEMINI_API_KEY`;
+- `src/aid/providers.py` — `resolve(name, catalog.model_providers, session, settings)`, in `open_native`: an
+  `aid.ModelProvider` plugin claiming the prefix (async `transport(model)`), else `anthropic/`, else `google/` (`GEMINI_API_KEY`;
   models.dev's id, so prices and lists need no mapping; `gemini/` stays the Chat Completions route, unpriced;
   measured 2026-10-24 on `gemini-3.1-flash-lite`, the cheapest a new key may use (2.5-flash-lite: 404 "no longer
   available to new users", still in models.dev's list): tool loop with signed calls replayed, thinking tokens
-  counted, no thought text even with `include_thoughts`), else
+  counted, no thought text even with `include_thoughts`), else `responses_route`, else
   `OPENAI_COMPATIBLE`, else a
   models.dev `@ai-sdk/openai-compatible` provider by its `api` and first `env`. `ModelProvider.catalog_id` names a
   plugin's models.dev id where its prefix differs: that id then resolves to an error naming the plugin's prefix, is

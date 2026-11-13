@@ -18,8 +18,16 @@ from aid.agent import Agent
 from aid.coding import read
 from aid.discovery import discover
 from aid.images import IMAGES_DIR, UPLOADS, UPLOADS_DIR, ImageStore
-from aid.messages import ImagePart, ModelMessagesTypeAdapter, ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
-from aid.model import ModelInfo
+from aid.messages import (
+    ImagePart,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    ThinkingPart,
+    ToolCallPart,
+    UserPromptPart,
+)
+from aid.model import ENCRYPTED, ModelInfo, OpenAIResponsesModel
 from aid.prices import ENV_PRICES
 from aid.protocol import AidError, Output, SessionEvent, Usage
 from aid.providers import catalog_model, embedder, reranker, resolve
@@ -116,6 +124,11 @@ async def test_a_tool_loop_over_two_turns(tmp_path: Path, monkeypatch: pytest.Mo
     history = ModelMessagesTypeAdapter.validate_json((tmp_path / "history.json").read_bytes())
     called = [p for m in history if isinstance(m, ModelResponse) for p in m.parts if isinstance(p, ToolCallPart)]
     assert len(called) >= 2
+    if isinstance(transport, OpenAIResponsesModel):
+        # The second turn went over sealed reasoning (#70).
+        assert any(
+            isinstance(p, ThinkingPart) and (p.model_extra or {}).get(ENCRYPTED) for m in history for p in m.parts
+        )
     usages = [item for item in events if isinstance(item, Usage)]
     assert len(usages) == 2
     for usage in usages:
@@ -158,8 +171,8 @@ async def test_an_image_in_the_prompt(tmp_path: Path, monkeypatch: pytest.Monkey
 
 @pytest.mark.parametrize("route", ROUTES, ids=[route.model for route in ROUTES])
 async def test_an_image_from_a_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route) -> None:
-    """The model sees the image `read` hands back (#66): inside the tool result (Anthropic), after the tool messages
-    (Chat Completions), as a user part beside the function responses (Gemini)."""
+    """The model sees the image `read` hands back (#66): inside the tool result (Anthropic, Responses), after the tool
+    messages (Chat Completions), inside the function response (Gemini)."""
     keyed(monkeypatch, route.key, route.source_key)
     monkeypatch.delenv(ENV_PRICES)
     providers = discover([PLUGINS], only=[route.plugin]).model_providers if route.plugin else {}
@@ -182,8 +195,11 @@ async def test_an_image_from_a_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
 
 def assert_by_file_id(root: Path, model: str) -> None:
-    """Anthropic's and Google's own routes send images by Files API id (#69): the session's id table names one."""
-    prefix = {"anthropic": "file_", "google": "https://generativelanguage.googleapis.com/"}.get(model.split("/")[0])
+    """Anthropic's, Google's and OpenAI's own routes send images by Files API id (#69, #70): the session's id table
+    names one."""
+    prefix = {"anthropic": "file_", "google": "https://generativelanguage.googleapis.com/", "openai": "file-"}.get(
+        model.split("/")[0]
+    )
     if prefix is not None:
         tables = list((root / IMAGES_DIR / UPLOADS_DIR).glob("*.json"))
         assert len(tables) == 1

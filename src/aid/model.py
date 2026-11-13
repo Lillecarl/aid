@@ -17,7 +17,7 @@ import httpx2
 import structlog
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
-from aid import anthropic_api, chat_api, gemini, wire
+from aid import anthropic_api, chat_api, gemini, responses_api, wire
 from aid.images import NO_IMAGES, ImageStore, Upload, encoded
 from aid.messages import (
     ImagePart,
@@ -660,6 +660,329 @@ async def collect(model: Model, messages: list[ModelMessage], info: ModelInfo) -
     return response
 
 
+OPENAI_KEY_ENV: Final = "OPENAI_API_KEY"
+ENCRYPTED: Final = "encrypted_content"
+"""The `ThinkingPart` field that holds a Responses API reasoning item's sealed content. Not `signature`: the other
+wires replay a signature as their own, and `prune_history` drops signatures of past turns."""
+
+
+def responses_route(name: str, settings: Mapping[str, JsonValue]) -> bool:
+    """`openai/` (or a bare name) on OpenAI itself goes over the Responses API. With an `api_base` it names another
+    server that speaks OpenAI's API, which means Chat Completions."""
+    return split_name(name)[0] == "openai" and client_settings(name, settings).base_url is None
+
+
+def _with_content(
+    content: str | list[responses_api.InputContent], block: responses_api.InputContent
+) -> list[responses_api.InputContent]:
+    if isinstance(content, list):
+        return [*content, block]
+    return [{"type": "input_text", "text": content}, block] if content else [block]
+
+
+def _response_items(message: ModelResponse) -> list[responses_api.Item]:
+    """A response's items in order: text joined into one assistant message per run, sealed reasoning kept only
+    before something it led to."""
+    items: list[responses_api.Item] = []
+    sealed: list[responses_api.Item] = []
+    text: list[str] = []
+    for part in message.parts:
+        if isinstance(part, ThinkingPart):
+            content = (part.model_extra or {}).get(ENCRYPTED)
+            if not isinstance(content, str) or not content:
+                continue
+        if not isinstance(part, TextPart) and (joined := "".join(text)):
+            items.append({"role": "assistant", "content": joined})
+            text.clear()
+        match part:
+            case TextPart():
+                items.extend(sealed)
+                sealed.clear()
+                text.append(part.content)
+            case ThinkingPart():
+                sealed.append(
+                    {"type": "reasoning", "summary": [], "encrypted_content": str((part.model_extra or {})[ENCRYPTED])}
+                )
+            case ToolCallPart():
+                items.extend(sealed)
+                sealed.clear()
+                items.append(
+                    {
+                        "type": "function_call",
+                        "call_id": part.tool_call_id,
+                        "name": part.tool_name,
+                        "arguments": part.args_as_json_str(),
+                    }
+                )
+            case _:
+                pass
+    if joined := "".join(text):
+        items.append({"role": "assistant", "content": joined})
+    return items
+
+
+def responses_input(
+    messages: Sequence[ModelMessage], images: Encoded = NO_IMAGES, files: Mapping[str, str] = NO_IMAGES
+) -> list[responses_api.Item]:
+    """Stored parts as Responses API input items. Reasoning replays sealed with an empty summary, so a past turn's
+    item stays byte-identical (the cache prefix); unsealed thinking (another API's) and a reasoning item nothing
+    follows are left out. A tool's image goes inside its `function_call_output` (measured)."""
+    result: list[responses_api.Item] = []
+    outputs: dict[str, responses_api.FunctionCallOutput] = {}
+
+    def image(part: ImagePart) -> responses_api.InputImage:
+        if (file_id := files.get(part.sha256)) is not None:
+            return {"type": "input_image", "detail": "auto", "file_id": file_id}
+        url = f"data:{part.media_type};base64,{encoded(images, part)}"
+        return {"type": "input_image", "detail": "auto", "image_url": url}
+
+    for message in messages:
+        if isinstance(message, ModelResponse):
+            result.extend(_response_items(message))
+            continue
+        prompt: responses_api.Message | None = None
+        for part in message.parts:
+            if not isinstance(part, ImagePart):
+                prompt = None
+            match part:
+                case ImagePart():
+                    block = image(part)
+                    if part.tool_call_id is not None and (output := outputs.get(part.tool_call_id)) is not None:
+                        output["output"] = _with_content(output["output"], block)
+                    elif prompt is not None:
+                        prompt["content"] = _with_content(prompt["content"], block)
+                    else:
+                        result.append(prompt := {"role": "user", "content": [block]})
+                case SystemPromptPart():
+                    result.append({"role": "system", "content": part.content})
+                case UserPromptPart():
+                    result.append(prompt := {"role": "user", "content": str(part.content)})
+                case ToolReturnPart():
+                    output = outputs[part.tool_call_id] = {
+                        "type": "function_call_output",
+                        "call_id": part.tool_call_id,
+                        "output": part.model_response_str(),
+                    }
+                    result.append(output)
+                case RetryPromptPart() if part.tool_name:
+                    result.append(
+                        {"type": "function_call_output", "call_id": part.tool_call_id, "output": part.model_response()}
+                    )
+                case RetryPromptPart():
+                    result.append({"role": "user", "content": part.model_response()})
+                case _:
+                    raise ValueError("response part in a model request")
+    return result
+
+
+def responses_tool(definition: chat_api.FunctionTool) -> responses_api.FunctionTool:
+    function = definition["function"]
+    return {
+        "type": "function",
+        "name": function["name"],
+        "description": function["description"],
+        "parameters": function["parameters"],
+        "strict": False,
+    }
+
+
+def _response_error(name: str, code: str | None, message: str) -> Exception:
+    if code in responses_api.TRANSIENT:
+        return ModelUnavailable(f"{code}: {message}")
+    return AidError("model_error", f"{name}: {code}: {message}")
+
+
+class OpenAIResponsesModel:
+    """OpenAI's Responses API over aid's own client (`aid.responses_api`, `aid.wire`; #70). Stateless: reasoning
+    replays sealed (`ENCRYPTED`), images go by Files API id on OpenAI's own server (#69)."""
+
+    cache_reads_in_prompt: bool = True
+
+    def __init__(self, name: str, provider: Provider | None = None) -> None:
+        """`provider`: another server of the Responses API, its base URL and key variable; None is OpenAI's."""
+        self.model_name = name
+        self._model = split_name(name)[1]
+        self._provider = provider
+        self._http: httpx2.AsyncClient | None = None
+
+    def _key(self, settings: Mapping[str, JsonValue]) -> ClientKey:
+        provider = self._provider
+        key_env = provider.key_env if provider else OPENAI_KEY_ENV
+        return client_key(
+            self.model_name,
+            settings,
+            key_env,
+            provider.base_url if provider else None,
+            local=provider is not None and provider.local,
+        )
+
+    def host(self, settings: Mapping[str, JsonValue]) -> str:
+        return httpx2.URL(responses_api.responses_url(self._key(settings).base_url)).host
+
+    async def aclose(self) -> None:
+        http, self._http = self._http, None
+        if http is not None:
+            await http.aclose()
+
+    def request_settings(self, settings: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+        """Stateless, sealed reasoning back, and its summary as thinking text; the session's settings win."""
+        kwargs = _request_settings(settings, self._provider)
+        kwargs.setdefault("store", False)
+        kwargs.setdefault("include", [responses_api.INCLUDE_REASONING])
+        reasoning = kwargs.get("reasoning")
+        if reasoning is None or isinstance(reasoning, dict):
+            kwargs["reasoning"] = {"summary": "auto", **(reasoning or {})}
+        return kwargs
+
+    def _body(
+        self,
+        messages: list[ModelMessage],
+        info: ModelInfo,
+        settings: dict[str, JsonValue],
+        images: Encoded,
+        files: Mapping[str, str] = NO_IMAGES,
+    ) -> bytes:
+        if info.output_type is not str:
+            text = settings.get("text")
+            schema = TypeAdapter(info.output_type).json_schema()
+            settings["text"] = {
+                **(text if isinstance(text, dict) else {}),
+                "format": {"type": "json_schema", "name": "output", "schema": schema, "strict": False},
+            }
+        body: dict[str, JsonValue] = {
+            **settings,
+            "model": self._model,
+            "input": cast(JsonValue, responses_input(messages, images, files)),
+            "stream": True,
+        }
+        if info.tools:
+            body["tools"] = cast(JsonValue, [responses_tool(tool.definition()) for tool in info.tools])
+        return json.dumps(body).encode()
+
+    def _client(self) -> httpx2.AsyncClient:
+        if self._http is None:
+            self._http = wire.client(timeout=DEFAULT_TIMEOUT)
+        return self._http
+
+    async def _upload(
+        self, key: ClientKey, headers: Mapping[str, str], io_timeout: float, part: ImagePart, data: bytes
+    ) -> Upload:
+        response = await self._client().post(
+            responses_api.files_url(key.base_url),
+            headers=dict(headers),
+            data={"purpose": responses_api.FILE_PURPOSE},
+            # The extension names the format: without one a request using the file is refused (400, measured).
+            files={"file": (f"{part.sha256}.{part.media_type.removeprefix('image/')}", data, part.media_type)},
+            timeout=io_timeout,
+        )
+        if not response.is_success:
+            raise wire.StatusError(response.status_code, response.text[: wire.ERROR_BODY_LIMIT], str(response.url))
+        return Upload(id=responses_api.StoredFile.model_validate_json(response.content).id)
+
+    async def _files(
+        self,
+        messages: Sequence[ModelMessage],
+        info: ModelInfo,
+        key: ClientKey,
+        headers: Mapping[str, str],
+        io_timeout: float,
+    ) -> Mapping[str, str]:
+        """OpenAI's own server only: another server of the API may hold no files."""
+        if self._provider is not None or key.base_url is not None:
+            return NO_IMAGES
+        upload = functools.partial(self._upload, key, headers, io_timeout)
+        return await held_files(self.model_name, info, upload_scope(key), messages, upload)
+
+    async def _forget(self, info: ModelInfo, key: ClientKey, error: wire.StatusError, files: Mapping[str, str]) -> bool:
+        gone = responses_api.missing_files(error.body) if error.status == 404 else set[str]()
+        return await drop_files(info, upload_scope(key), files, gone.__contains__)
+
+    async def _open(self, key: ClientKey, body: bytes, headers: dict[str, str], io_timeout: float) -> httpx2.Response:
+        url = responses_api.responses_url(key.base_url)
+        return await open_model_stream(self.model_name, self._client(), url, body, headers, io_timeout, key.max_retries)
+
+    async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
+        key = self._key(info.settings)
+        settings = self.request_settings(info.settings)
+        io_timeout = _TIMEOUT.validate_python(settings.pop("timeout"))
+        extra_headers, extra_body = _extra(self.model_name, settings)
+        settings.update(extra_body)
+        headers = {
+            "authorization": f"Bearer {key.api_key}",
+            **(self._provider.headers if self._provider else {}),
+            **extra_headers,
+        }
+        files = await self._files(messages, info, key, headers, io_timeout)
+        body = self._body(messages, info, settings, await info.encoded(messages, files), files)
+        try:
+            response = await self._open(key, body, headers, io_timeout)
+        except wire.StatusError as error:
+            if not await self._forget(info, key, error, files):
+                raise
+            files = await self._files(messages, info, key, headers, io_timeout)
+            body = self._body(messages, info, settings, await info.encoded(messages, files), files)
+            response = await self._open(key, body, headers, io_timeout)
+        arguments: dict[int, bool] = {}
+        events = wire.events(response)
+        try:
+            async for data in events:
+                match responses_api.event(data):
+                    case responses_api.ResponseEvent(type="response.created", response=state) if state.model:
+                        yield StreamDelta(model_name=state.model)
+                    case responses_api.ResponseEvent(type="response.failed", response=state):
+                        error = state.error or responses_api.Error()
+                        raise _response_error(self.model_name, error.code, error.message)
+                    case responses_api.ResponseEvent(type="response.completed" | "response.incomplete", response=state):
+                        if state.usage is not None:
+                            yield StreamDelta(usage=_responses_usage(state.usage))
+                        if state.incomplete_details and state.incomplete_details.reason == "max_output_tokens":
+                            yield StreamDelta(truncated=True)
+                    case responses_api.ItemEvent(type="response.output_item.added", output_index=index, item=item) if (
+                        item.type == "function_call"
+                    ):
+                        arguments[index] = False
+                        yield StreamDelta(index, ToolCallPart(item.name or "", "", item.call_id or ""))
+                    case responses_api.ItemEvent(type="response.output_item.done", output_index=index, item=item):
+                        if item.type == "reasoning" and item.encrypted_content:
+                            yield StreamDelta(index, ThinkingPart("", **{ENCRYPTED: item.encrypted_content}))
+                        elif item.type == "function_call" and arguments.get(index) is False:
+                            yield StreamDelta(index, ToolCallPart("", item.arguments or "{}", ""))
+                    case responses_api.TextDelta(output_index=index, delta=delta):
+                        yield StreamDelta(index, TextPart(delta))
+                    case responses_api.ArgumentsDelta(output_index=index, delta=delta) if delta:
+                        arguments[index] = True
+                        yield StreamDelta(index, ToolCallPart("", delta, ""))
+                    case responses_api.SummaryPartAdded(output_index=index, summary_index=summary) if summary > 0:
+                        yield StreamDelta(index, ThinkingPart("\n\n"))
+                    case responses_api.SummaryDelta(output_index=index, delta=delta):
+                        yield StreamDelta(index, ThinkingPart(delta))
+                    case responses_api.ErrorEvent(code=code, message=message):
+                        raise _response_error(self.model_name, code, message)
+                    case _:
+                        pass
+        except BROKEN as error:
+            raise StreamBroken(repr(error)) from error
+        finally:
+            with anyio.CancelScope(shield=True):
+                await events.aclose()
+                await response.aclose()
+
+    async def request(self, messages: list[ModelMessage], info: ModelInfo) -> ModelResponse:
+        return await collect(self, messages, info)
+
+
+def _responses_usage(usage: responses_api.Usage) -> RequestUsage:
+    """`input_tokens` includes cached tokens, as Chat Completions counts them; `output_tokens` includes reasoning."""
+    cached = usage.input_tokens_details.cached_tokens if usage.input_tokens_details else None
+    reasoning = usage.output_tokens_details.reasoning_tokens if usage.output_tokens_details else None
+    return RequestUsage(
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cache_read_tokens=cached or 0,
+        reasoning_tokens=reasoning,
+    )
+
+
 ANTHROPIC_KEY_ENV: Final = "ANTHROPIC_API_KEY"
 ANTHROPIC_MAX_TOKENS: Final = 32_000
 """`max_tokens` when the settings name none: the Messages API requires one. Every Claude 4 model allows it."""
@@ -1238,12 +1561,16 @@ def _google_usage(usage: gemini.UsageMetadata) -> RequestUsage:
     )
 
 
-def model_for(name: str) -> OpenAIChatModel | AnthropicModel | GoogleModel:
-    """The transport for a `provider/model` name."""
+def model_for(
+    name: str, settings: Mapping[str, JsonValue] | None = None
+) -> OpenAIChatModel | OpenAIResponsesModel | AnthropicModel | GoogleModel:
+    """The transport for a `provider/model` name and its settings."""
     match split_name(name)[0]:
         case "anthropic":
             return AnthropicModel(name)
         case "google":
             return GoogleModel(name)
+        case _ if responses_route(name, settings or {}):
+            return OpenAIResponsesModel(name)
         case _:
             return OpenAIChatModel(name)

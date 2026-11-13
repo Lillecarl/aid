@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import struct
 import zlib
@@ -31,6 +32,7 @@ from aid.model import (
     AnthropicModel,
     GoogleModel,
     ModelInfo,
+    OpenAIResponsesModel,
     Provider,
     StreamDelta,
     anthropic_messages,
@@ -268,6 +270,53 @@ async def test_an_image_goes_as_bytes_where_files_are_refused(tmp_path: Path, mo
     await ask_twice(AnthropicModel("anthropic/claude-test"), ImageStore(tmp_path), server)
     assert [base64.b64decode(s["data"]) for s in server.sent] == [png(), png()]
     assert len(server.uploads) == 2
+
+
+class OpenAIFiles:
+    """OpenAI's Responses and Files APIs (#70): numbered uploads; a deleted id answers 404 as measured."""
+
+    def __init__(self) -> None:
+        self.uploads: list[httpx2.Request] = []
+        self.sent: list[dict[str, str]] = []
+        self.deleted: set[str] = set()
+
+    def __call__(self, request: httpx2.Request) -> httpx2.Response:
+        if request.url.path == "/v1/files":
+            self.uploads.append(request)
+            return httpx2.Response(200, json={"object": "file", "id": f"file-{len(self.uploads)}"})
+        image: dict[str, str] = json.loads(request.content)["input"][0]["content"][1]
+        self.sent.append(image)
+        if (named := image.get("file_id")) in self.deleted:
+            error = {"message": f"Files [{named}] were not found", "type": "invalid_request_error"}
+            return httpx2.Response(404, json={"error": error})
+        done = {"type": "response.completed", "response": {"status": "completed"}}
+        return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=sse([done]))
+
+
+async def test_openai_sends_an_image_by_file_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The Responses API takes an image by file id where Chat Completions does not (#70): one upload, a deleted file
+    uploaded again and the request sent again."""
+    serve_wire(monkeypatch, server := OpenAIFiles())
+    store = ImageStore(tmp_path)
+    model = OpenAIResponsesModel("openai/gpt-test")
+    history: list[ModelMessage] = [ModelRequest([UserPromptPart("what colour?"), store.put(png())])]
+    info = ModelInfo(settings={"api_key": "k", "max_retries": 0}, images=store)
+    try:
+        await model.request(history, info)
+        server.deleted.add("file-1")
+        await model.request(history, info)
+    finally:
+        await model.aclose()
+    assert server.sent == [
+        {"type": "input_image", "detail": "auto", "file_id": "file-1"},
+        {"type": "input_image", "detail": "auto", "file_id": "file-1"},
+        {"type": "input_image", "detail": "auto", "file_id": "file-2"},
+    ]
+    assert len(server.uploads) == 2
+    assert server.uploads[0].headers["authorization"] == "Bearer k"
+    assert b'name="purpose"\r\n\r\nvision' in server.uploads[0].content and png() in server.uploads[0].content
+    # OpenAI takes an image's format from the file name's extension (measured: none → 400).
+    assert f'filename="{hashlib.sha256(png()).hexdigest()}.png"'.encode() in server.uploads[0].content
 
 
 class GeminiFiles:

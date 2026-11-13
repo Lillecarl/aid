@@ -5,6 +5,7 @@ agents. Its `name` is the prefix it claims, and it wins over the generic resolut
 
 - `anthropic/`: the Messages API (`AnthropicModel`);
 - `google/`: the Gemini API (`GoogleModel`), named as models.dev names it; `gemini/` is its Chat Completions route;
+- `openai/` without an `api_base`: the Responses API (`OpenAIResponsesModel`); with one, Chat Completions;
 - the prefixes in `aid.model.OPENAI_COMPATIBLE`: servers models.dev gives no URL for, and local ones;
 - every models.dev provider whose package is `@ai-sdk/openai-compatible`: its `api`, keyed by its first `env`.
 
@@ -19,7 +20,16 @@ from typing import TYPE_CHECKING, Final
 
 from aid import models_dev
 from aid.embedding import Embedder, GoogleEmbedder, OpenAIEmbedder
-from aid.model import OPENAI_COMPATIBLE, AnthropicModel, GoogleModel, OpenAIChatModel, Provider, split_name
+from aid.model import (
+    OPENAI_COMPATIBLE,
+    AnthropicModel,
+    GoogleModel,
+    OpenAIChatModel,
+    OpenAIResponsesModel,
+    Provider,
+    responses_route,
+    split_name,
+)
 from aid.protocol import AidError
 
 if TYPE_CHECKING:
@@ -55,9 +65,15 @@ def catalog_model(name: str, providers: Mapping[str, type[ModelProvider]]) -> st
     return f"{cls.catalog_name()}/{model}" if cls is not None else name
 
 
-async def resolve(name: str, providers: Mapping[str, type[ModelProvider]], session: str | None = None) -> Transport:
-    """The transport for `name`: the plugin provider that claims its prefix, else the generic resolution. A prefix
-    nobody knows still resolves; its first request fails unless the settings name an `api_base`."""
+async def resolve(
+    name: str,
+    providers: Mapping[str, type[ModelProvider]],
+    session: str | None = None,
+    settings: Mapping[str, JsonValue] | None = None,
+) -> Transport:
+    """The transport for `name` under the session's model `settings`: the plugin provider that claims its prefix, else
+    the generic resolution. A prefix nobody knows still resolves; its first request fails unless the settings name an
+    `api_base`."""
     prefix, model = split_name(name)
     if (cls := providers.get(prefix)) is not None:
         return await cls(session).transport(model)
@@ -67,6 +83,8 @@ async def resolve(name: str, providers: Mapping[str, type[ModelProvider]], sessi
         return AnthropicModel(name)
     if prefix == "google":
         return GoogleModel(name)
+    if responses_route(name, settings or {}):
+        return OpenAIResponsesModel(name)
     if prefix in OPENAI_COMPATIBLE:
         return OpenAIChatModel(name)
     provider = catalog_provider(await models_dev.catalog(), prefix)

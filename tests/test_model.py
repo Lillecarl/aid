@@ -564,7 +564,8 @@ def test_wire_skips_an_empty_assistant_message() -> None:
 async def test_model_names_pick_the_sdk_and_credentials_fail_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(model_for("anthropic/claude-x"), AnthropicModel)
     assert isinstance(model_for("groq/llama"), OpenAIChatModel)
-    assert isinstance(model_for("gpt-x"), OpenAIChatModel)
+    # A bare name is OpenAI's; on OpenAI's own server that is the Responses API (#70).
+    assert isinstance(model_for("gpt-x", {"api_base": "https://example.test/v1"}), OpenAIChatModel)
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     go: list[ModelMessage] = [ModelRequest(parts=[UserPromptPart("go")])]

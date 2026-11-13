@@ -438,7 +438,7 @@ class NativeBackend:
         self._price_as = price_as
         model = agent.model if transport is None else transport
         if isinstance(model, str):
-            model = self._owned = model_for(model)
+            model = self._owned = model_for(model, agent.model_settings)
         self._model: Model = model
         tools = self._tools = session_tools(agent, toolsets, offers)
         self._coding = coding
@@ -991,7 +991,9 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         sandbox=spec.sandbox,
     )
     transport = (
-        await resolve(agent.model, catalog.model_providers, state_dir.name) if isinstance(agent.model, str) else None
+        await resolve(agent.model, catalog.model_providers, state_dir.name, agent.model_settings)
+        if isinstance(agent.model, str)
+        else None
     )
     backend: NativeBackend | None = None
     try:
