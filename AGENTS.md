@@ -269,13 +269,15 @@ on reusable decisions and current boundaries; put long investigations and dated 
   (Gemini API over google-genai, imported on first use: +0.5 s per worker otherwise; aid's own httpx client, AFC
   off; `thought_signature` kept base64 on the Text/ToolCall part that carried it, Gemini's call id as `google_id`
   beside aid's; prompt counts include cache reads; `_UnionGenericAlias` warning filtered in pytest,
-  googleapis/python-genai#1640), each taking a
+  googleapis/python-genai#1640; the SDK sends on the stream's first iteration, so its errors map inside the loop), each
+  taking a
   `Provider` (base URL, key variable, default request settings, headers). A provider's quirks subclass
   `OpenAIChatModel` (`request_settings`, `reasoning`, `usage`, `wire`), never branch in it. `OPENAI_COMPATIBLE`:
   prefixes models.dev gives no URL for, and local servers. `model_settings` (JSON): `ClientSettings`
   (`api_key`, `api_base`/`base_url`, `max_retries`; mistyped → `bad_model_settings`) build the client, the rest goes
   into each request, cast once to the SDK's `…CreateParamsStreaming` (validating it would drop
-  `reasoning_content`). `model_for(name)`: the table alone, for direct use.
+  `reasoning_content`). `model_for(name)`: the table alone, for direct use. A refused key (`rejected_key`: 401;
+  Gemini 400 with `API_KEY_INVALID`/`API_KEY_EXPIRED`) → `bad_credentials`, never replayed (#64).
 - `src/aid/providers.py` — `resolve(name, catalog.model_providers)`, in `open_native`: an `aid.ModelProvider`
   plugin claiming the prefix (async `transport(model)`), else `anthropic/`, else `google/` (`GEMINI_API_KEY`;
   models.dev's id, so prices and lists need no mapping; `gemini/` stays the Chat Completions route, unpriced;
@@ -306,7 +308,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `x-opencode-session` (uuid5 of the aid session, `ModelProvider.session`), as Go asks of other agents; Go answers
   400 MissingSessionID without it. A list's `unsupported` marks are fetched with it: a plugin change shows after
   the day's cache. Measured 2026-10-24: Zen answers over both routes (Anthropic Messages with `x-api-key`, Chat
-  Completions), priced through models.dev's `opencode`; Go and OpenRouter inference unmeasured (no working key). A plugin
+  Completions), priced through models.dev's `opencode`. Live tests (#64, 2026-11-13): OpenRouter passes; Go answers
+  401 `api_key_expired` (key to renew). A plugin
   named like a bundled one in an earlier tier shadows it: the example agent is `examples/deepseek_agent`.
 - `NativeSpec.model` (`provider/model`) runs the agent on another model (`session_agent`); the agent's
   `model_settings` follow only within one provider, `NativeSpec.model_settings` go over them. `aid new-py --model`,

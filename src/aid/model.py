@@ -125,6 +125,44 @@ def unavailable(error: BaseException) -> bool:
             return isinstance(code, int) and (code >= 500 or code in TRANSIENT_STATUS)
 
 
+GOOGLE_KEY_REASONS: Final = frozenset({"API_KEY_INVALID", "API_KEY_EXPIRED"})
+"""Gemini's `ErrorInfo.reason` for a key it refuses: it answers 400 INVALID_ARGUMENT, not 401 (measured 2026-11-13)."""
+
+
+class _GoogleErrorInfo(BaseModel):
+    reason: str | None = None
+
+
+class _GoogleError(BaseModel):
+    details: list[_GoogleErrorInfo] = []
+
+
+class _GoogleErrorBody(BaseModel):
+    error: _GoogleError | None = None
+
+
+def rejected_key(error: BaseException) -> bool:
+    """The server refused the key: a person must replace it, so sending again cannot help. Measured 2026-11-13 with a
+    bogus key: OpenAI, Anthropic, DeepSeek, OpenCode and OpenRouter answer 401; an expired OpenCode key too."""
+    match error:
+        case openai.AuthenticationError() | anthropic.AuthenticationError():
+            return True
+        case _ if type(error).__module__.startswith("google.genai"):
+            if getattr(error, "code", None) == 401:
+                return True
+            try:
+                body = _GoogleErrorBody.model_validate(getattr(error, "details", None))
+            except ValidationError:
+                return False
+            return body.error is not None and any(item.reason in GOOGLE_KEY_REASONS for item in body.error.details)
+        case _:
+            return False
+
+
+def refused_key(name: str, error: BaseException) -> AidError:
+    return AidError("bad_credentials", f"{name}: the server refused the key: {error}")
+
+
 BROKEN: Final = (httpx.TransportError, httpx2.TransportError)
 """What a dropped stream raises: Gemini's client is httpx, the OpenAI and Anthropic clients httpx2. The SDKs raise
 it bare from a response body (openai 2.x, measured 2026-10-28: vLLM dropped 7 streams in 5 hours, 61 to 545 s in)."""
@@ -446,6 +484,8 @@ class OpenAIChatModel:
         except Exception as error:
             if unavailable(error):
                 raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
+            if rejected_key(error):
+                raise refused_key(self.model_name, error) from error
             raise
         ids: dict[int, str] = {}
         try:
@@ -653,6 +693,8 @@ class AnthropicModel:
         except Exception as error:
             if unavailable(error):
                 raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
+            if rejected_key(error):
+                raise refused_key(self.model_name, error) from error
             raise
         arguments: dict[int, bool] = {}
         try:
@@ -875,15 +917,11 @@ class GoogleModel:
             ours["system_instruction"] = {"parts": system}
         # The session's settings are Google's field names; the SDK's model checks them.
         config = GenerateContentConfig.model_validate({**settings, **ours})
-        try:
-            stream = await client.aio.models.generate_content_stream(  # pyright: ignore[reportUnknownMemberType] -- PIL, absent, in its contents union
-                model=self._model, contents=contents, config=config
-            )
-        except Exception as error:
-            if unavailable(error) or isinstance(error, BROKEN):
-                raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
-            raise
+        stream = await client.aio.models.generate_content_stream(  # pyright: ignore[reportUnknownMemberType] -- PIL, absent, in its contents union
+            model=self._model, contents=contents, config=config
+        )
         calls = 0
+        # The SDK sends the request on the first iteration, not at the call above: its refusals raise in the loop.
         try:
             async for chunk in stream:
                 if chunk.model_version:
@@ -917,6 +955,12 @@ class GoogleModel:
                             yield StreamDelta(0, TextPart(part.text or "", **extra))
         except BROKEN as error:
             raise StreamBroken(repr(error)) from error
+        except Exception as error:
+            if unavailable(error):
+                raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
+            if rejected_key(error):
+                raise refused_key(self.model_name, error) from error
+            raise
         finally:
             # Typed as an iterator; the SDK returns an async generator, which holds the response open.
             if isinstance(stream, collections.abc.AsyncGenerator):

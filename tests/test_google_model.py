@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Final
 
 import google.genai  # noqa: F401  # pyright: ignore[reportUnusedImport] -- before `serve` patches httpx: the SDK subclasses httpx.AsyncClient at import
 import httpx
@@ -26,7 +26,7 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.model import GoogleModel, ModelInfo, RequestUsage, google_contents, model_for
+from aid.model import GoogleModel, ModelInfo, ModelUnavailable, RequestUsage, google_contents, model_for
 from aid.prices import Price
 from aid.protocol import AidError, SessionEvent, Usage
 from aid.providers import resolve
@@ -34,6 +34,8 @@ from tests.test_native_backend import backend
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from pydantic import JsonValue
 
 
 SIGNATURE = base64.b64encode(b"signed").decode()
@@ -207,3 +209,53 @@ def test_cached_tokens_bill_once_inside_the_prompt() -> None:
     usage = RequestUsage(input_tokens=1_000_000, output_tokens=100_000, cache_read_tokens=600_000)
     cost = add_cost(None, price, usage, GoogleModel("google/gemini-test"))
     assert cost.amount == pytest.approx(0.4 + 0.06 + 1.0)
+
+
+REFUSED_KEY: Final[JsonValue] = {
+    "error": {
+        "code": 400,
+        "message": "API key not valid. Please pass a valid API key.",
+        "status": "INVALID_ARGUMENT",
+        "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "API_KEY_INVALID"}],
+    }
+}
+"""How Gemini refuses a key: 400 INVALID_ARGUMENT, the reason in its details (measured 2026-11-13)."""
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (400, REFUSED_KEY, "bad_credentials"),
+        (503, {"error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}}, "unavailable"),
+        (400, {"error": {"code": 400, "message": "bad field", "status": "INVALID_ARGUMENT"}}, "raised"),
+    ],
+)
+async def test_refusals_are_named_where_the_sdk_raises_them(
+    monkeypatch: pytest.MonkeyPatch, status: int, body: JsonValue, expected: str
+) -> None:
+    """The SDK sends on the first iteration, not when the stream is made: its errors raise inside the loop."""
+    real = httpx.AsyncClient
+
+    def client(**kwargs: Any) -> httpx.AsyncClient:
+        return real(transport=httpx.MockTransport(lambda request: httpx.Response(status, json=body)), **kwargs)
+
+    monkeypatch.setattr(model_module.httpx, "AsyncClient", client)
+    model = GoogleModel("google/gemini-test")
+    try:
+        with pytest.raises(Exception) as caught:
+            await anext(
+                model.stream(
+                    [ModelRequest(parts=[UserPromptPart("go")])],
+                    ModelInfo(settings={"api_key": "k", "max_retries": 0}),
+                )
+            )
+    finally:
+        await model.aclose()
+    match expected:
+        case "bad_credentials":
+            assert isinstance(caught.value, AidError)
+            assert caught.value.code == "bad_credentials"
+        case "unavailable":
+            assert isinstance(caught.value, ModelUnavailable)
+        case _:
+            assert type(caught.value).__module__ == "google.genai.errors"

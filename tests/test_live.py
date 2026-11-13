@@ -15,9 +15,10 @@ import pytest
 
 from aid.agent import Agent
 from aid.discovery import discover
-from aid.messages import ModelMessagesTypeAdapter, ModelResponse, ToolCallPart
+from aid.messages import ModelMessagesTypeAdapter, ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
+from aid.model import ModelInfo
 from aid.prices import ENV_PRICES
-from aid.protocol import Output, SessionEvent, Usage
+from aid.protocol import AidError, Output, SessionEvent, Usage
 from aid.providers import catalog_model, embedder, resolve
 from tests.test_native_backend import backend
 
@@ -111,6 +112,21 @@ async def test_a_tool_loop_over_two_turns(tmp_path: Path, monkeypatch: pytest.Mo
         if route.priced:
             assert usage.cost is not None
             assert 0 < usage.cost.amount < TURN_BOUND
+
+
+@pytest.mark.parametrize("route", ROUTES, ids=[route.model for route in ROUTES])
+async def test_a_refused_key_is_named(route: Route) -> None:
+    """Free: the server refuses before any model runs."""
+    providers = discover([PLUGINS], only=[route.plugin]).model_providers if route.plugin else {}
+    model = await resolve(route.model, providers, "live-test")
+    try:
+        with pytest.raises(AidError) as refused:
+            await anext(
+                model.stream([ModelRequest(parts=[UserPromptPart("hi")])], ModelInfo(settings={"api_key": "refused"}))
+            )
+    finally:
+        await model.aclose()
+    assert refused.value.code == "bad_credentials"
 
 
 async def test_the_openrouter_embedder(monkeypatch: pytest.MonkeyPatch) -> None:

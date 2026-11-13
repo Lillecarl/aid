@@ -784,3 +784,36 @@ async def test_openai_compatible_stream_keeps_reasoning_and_cache_reads(monkeypa
     assert truncated
     assert response.parts == [ThinkingPart("hmm"), TextPart("ok")]
     assert (usages[0].input_tokens, usages[0].cache_read_tokens) == (10, 6)
+
+
+@pytest.mark.parametrize("name", ["openai/local", "anthropic/claude-test"])
+async def test_a_refused_key_is_named_and_not_sent_again(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    """A 401 needs a person to replace the key: one request, then `bad_credentials`, never `model_unavailable`."""
+    sent: list[httpx2.Request] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        sent.append(request)
+        return httpx2.Response(401, json={"error": {"type": "authentication_error", "message": "invalid key"}})
+
+    def make_openai(**kwargs: Any) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
+
+    factory = anthropic.AsyncAnthropic
+
+    def make_anthropic(**kwargs: Any) -> anthropic.AsyncAnthropic:
+        return factory(http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handle)), **kwargs)
+
+    monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_openai)
+    monkeypatch.setattr(anthropic, "AsyncAnthropic", make_anthropic)
+
+    async def emit(item: SessionEvent) -> None:
+        pass
+
+    agent = Agent(name, model_settings={"api_key": "refused", "api_base": "https://example.test/v1"})
+    async with backend(tmp_path, agent) as session:
+        with pytest.raises(AidError) as raised:
+            await session.prompt("hello", emit)
+    assert raised.value.code == "bad_credentials"
+    assert len(sent) == 1

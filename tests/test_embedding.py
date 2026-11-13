@@ -69,6 +69,10 @@ def refused_model(_: Asked) -> httpx2.Response:
     return httpx2.Response(400, json={"error": {"message": "bad model"}})
 
 
+def refused_key(_: Asked) -> httpx2.Response:
+    return httpx2.Response(401, json={"error": {"message": "invalid key"}})
+
+
 def one_short(asked: Asked) -> httpx2.Response:
     return vectors(asked.model_copy(update={"input": asked.input[:-1]}))
 
@@ -127,6 +131,7 @@ async def test_a_provider_without_embeddings_refuses() -> None:
     [
         (busy, "model_unavailable"),
         (refused_model, "embedding_failed"),
+        (refused_key, "bad_credentials"),
         (one_short, "bad_embedding"),
         (too_long, "bad_embedding"),
     ],

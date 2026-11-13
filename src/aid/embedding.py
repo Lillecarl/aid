@@ -14,7 +14,16 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 import openai
 
-from aid.model import OPENAI_COMPATIBLE, ClientKey, Provider, client_key, split_name, unavailable
+from aid.model import (
+    OPENAI_COMPATIBLE,
+    ClientKey,
+    Provider,
+    client_key,
+    refused_key,
+    rejected_key,
+    split_name,
+    unavailable,
+)
 from aid.protocol import AidError
 
 if TYPE_CHECKING:
@@ -108,6 +117,8 @@ class OpenAIEmbedder:
             except openai.OpenAIError as error:
                 if unavailable(error):
                     raise AidError("model_unavailable", f"{self.model_name}: {error}") from error
+                if rejected_key(error):
+                    raise refused_key(self.model_name, error) from error
                 raise AidError("embedding_failed", f"{self.model_name}: {error}") from error
             vectors.extend(self._vectors(response, len(batch)))
             tokens += response.usage.prompt_tokens if response.usage else 0
