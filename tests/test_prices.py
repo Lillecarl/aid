@@ -4,7 +4,7 @@ import json
 import os
 from typing import TYPE_CHECKING, Any
 
-import httpx
+import httpx2
 import pytest
 
 from aid import models_dev
@@ -98,13 +98,13 @@ async def test_a_file_source_and_off(tmp_path: Path, monkeypatch: pytest.MonkeyP
 async def test_a_daily_fetch_that_fails_keeps_the_stale_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ENV_PRICES, "https://catalog.invalid/api.json")
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
-    served: list[httpx.Response] = [httpx.Response(200, json=CATALOG), httpx.Response(503)]
-    real = httpx.AsyncClient
+    served: list[httpx2.Response] = [httpx2.Response(200, json=CATALOG), httpx2.Response(503)]
+    real = httpx2.AsyncClient
 
-    def client(**kwargs: Any) -> httpx.AsyncClient:
-        return real(transport=httpx.MockTransport(lambda request: served.pop(0)), **kwargs)
+    def client(**kwargs: Any) -> httpx2.AsyncClient:
+        return real(transport=httpx2.MockTransport(lambda request: served.pop(0)), **kwargs)
 
-    monkeypatch.setattr(models_dev.httpx, "AsyncClient", client)
+    monkeypatch.setattr(models_dev.httpx2, "AsyncClient", client)
     assert await price_for("deepseek/deepseek-flash") is not None
     cached = models_dev.cache_file()
     assert json.loads(cached.read_text()) == CATALOG

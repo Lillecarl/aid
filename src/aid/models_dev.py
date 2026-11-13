@@ -15,7 +15,7 @@ from typing import Final
 
 import anyio
 import anyio.to_thread
-import httpx
+import httpx2
 import structlog
 from pydantic import BaseModel, Field, JsonValue, ValidationError
 
@@ -150,7 +150,7 @@ async def write_aside(target: Path, body: bytes) -> None:
 
 
 async def _fetch(url: str, target: Path) -> None:
-    async with httpx.AsyncClient(timeout=FETCH_TIMEOUT, follow_redirects=True) as client:
+    async with httpx2.AsyncClient(timeout=FETCH_TIMEOUT, follow_redirects=True) as client:
         response = await client.get(url)
         response.raise_for_status()
     body = response.content
@@ -168,7 +168,7 @@ async def catalog() -> ModelsDev | None:
         if stale(path):
             try:
                 await _fetch(source, path)
-            except (httpx.HTTPError, OSError, ValueError) as error:
+            except (httpx2.HTTPError, OSError, ValueError) as error:
                 log.warning("models_dev_fetch_failed", url=source, error=repr(error), cached=path.exists())
     else:
         path = Path(source)
