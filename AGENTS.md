@@ -265,9 +265,11 @@ on reusable decisions and current boundaries; put long investigations and dated 
   (`Transport.cache_reads_in_prompt`), never its class: wrappers hide classes.
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
 - `src/aid/wire.py` — aid's own model clients' HTTP (#65): `open_stream` (POST, 2xx or `StatusError` with the body),
-  `events` (SSE data), `client` (tests patch it). SDKs go one protocol at a time: Gemini done, then Anthropic, then
-  OpenAI; each SDK stays a test dependency for differential tests (`test_chunks_parse_as_google_parses_them`).
-- `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API, native blocks,
+  `events` (SSE data), `client` (tests patch it). SDKs go one protocol at a time: Gemini and Anthropic done, OpenAI
+  next; each SDK stays a test dependency for differential tests (`test_chunks_parse_as_google_parses_them`,
+  `test_anthropic_events_parse_as_the_sdk_parses_them`). Protocol modules: `aid.gemini`, `aid.anthropic_api`.
+- `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API over aid's own client, `aid.anthropic_api`: typed core, other
+  settings pass through as body fields; native blocks, an `error` event overloaded/api/rate → `ModelUnavailable`,
   `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions) and `GoogleModel`
   (Gemini `streamGenerateContent` over aid's own client, no SDK (#65): `aid.gemini` types the wire, settings are
   its field names in either spelling, unknown → `bad_model_settings`; `thought_signature` kept as the API's base64

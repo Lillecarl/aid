@@ -20,7 +20,6 @@ dependencies = [
   "mcp>=1.20",
   "numpy>=2.0",
   # aid.model: the native backend's transports, built from pins in default.nix.
-  "anthropic",
   # The OpenAI and Anthropic clients' HTTP, and aid's own (aid.wire: Gemini, #65); aid.model catches its errors.
   "httpx2",
   "openai",
@@ -54,8 +53,8 @@ dependencies = [
 [project.optional-dependencies]
 # playwright drives the web UI through real browsers in tests/test_browser.py; the browsers themselves come
 # from nixpkgs (PLAYWRIGHT_BROWSERS_PATH), never from a download.
-# google-genai: the Gemini client is aid's own (#65); tests parse the same stream with Google's types to compare.
-test = ["google-genai", "playwright", "pytest", "pytest-timeout", "pytest-xdist", "trustme", "websockets"]
+# anthropic, google-genai: those clients are aid's own (#65); tests parse the same stream with the SDKs to compare.
+test = ["anthropic", "google-genai", "playwright", "pytest", "pytest-timeout", "pytest-xdist", "trustme", "websockets"]
 
 [project.scripts]
 aid = "aid.cli:main"

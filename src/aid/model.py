@@ -1,4 +1,4 @@
-"""Model transports over the provider SDKs, and streamed response assembly. No agent execution lives here."""
+"""Model transports, and streamed response assembly. No agent execution lives here. Gemini and Anthropic go over\naid's own client (`aid.wire`, #65); Chat Completions still over the OpenAI SDK."""
 
 from __future__ import annotations
 
@@ -8,31 +8,14 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
 
-import anthropic
 import anyio
 import httpx2
 import openai
-from anthropic.types import (
-    InputJSONDelta,
-    RawContentBlockDeltaEvent,
-    RawContentBlockStartEvent,
-    RawContentBlockStopEvent,
-    RawMessageDeltaEvent,
-    RawMessageStartEvent,
-    RedactedThinkingBlock,
-    SignatureDelta,
-    TextBlock,
-    TextDelta,
-    ThinkingBlock,
-    ThinkingDelta,
-    ToolUseBlock,
-)
-from anthropic.types.message_create_params import MessageCreateParamsStreaming
 from openai.types.chat import ChatCompletionAssistantMessageParam
 from openai.types.chat.completion_create_params import CompletionCreateParamsStreaming
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
-from aid import gemini, wire
+from aid import anthropic_api, gemini, wire
 from aid.messages import (
     ModelMessage,
     ModelResponse,
@@ -49,8 +32,6 @@ from aid.protocol import AidError
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Mapping, Sequence
 
-    from anthropic.types import ContentBlockParam, MessageDeltaUsage, MessageParam, TextBlockParam, ToolParam
-    from anthropic.types import Usage as AnthropicUsage
     from openai.types import CompletionUsage
     from openai.types.chat import ChatCompletionFunctionToolParam, ChatCompletionMessageParam
     from openai.types.chat.chat_completion_chunk import ChoiceDelta
@@ -103,9 +84,9 @@ def unavailable(error: BaseException) -> bool:
     """A failure to send again later: no connection, a timeout, a 5xx, or a rate limit. Measured 2026-11: a vLLM
     gateway answered 503 "no available server" for hours, past the SDK's two quick retries."""
     match error:
-        case openai.APIConnectionError() | anthropic.APIConnectionError():
+        case openai.APIConnectionError():
             return True
-        case openai.APIStatusError() | anthropic.APIStatusError():
+        case openai.APIStatusError():
             return error.status_code >= 500 or error.status_code in TRANSIENT_STATUS
         case wire.StatusError():
             return error.status >= 500 or error.status in TRANSIENT_STATUS
@@ -118,7 +99,7 @@ def rejected_key(error: BaseException) -> bool:
     bogus key: OpenAI, Anthropic, DeepSeek, OpenCode and OpenRouter answer 401; an expired OpenCode key too. Gemini
     answers 400 with a reason (`gemini.refused_key`)."""
     match error:
-        case openai.AuthenticationError() | anthropic.AuthenticationError():
+        case openai.AuthenticationError():
             return True
         case wire.StatusError():
             return error.status == 401
@@ -518,29 +499,34 @@ ANTHROPIC_LEGACY_MAX_TOKENS: Final = 4096
 """The same for `claude-3*` models, whose limits start at 4096."""
 
 
-def anthropic_messages(messages: Sequence[ModelMessage]) -> tuple[list[TextBlockParam], list[MessageParam]]:
+def anthropic_messages(
+    messages: Sequence[ModelMessage],
+) -> tuple[list[anthropic_api.TextBlock], list[anthropic_api.Message]]:
     """Stored parts as the Messages API's (system, messages). Leading system prompts become `system`; a later one
     stays in place as user text. Consecutive same-role parts share one message, so the tool results of one
     response arrive together. Thinking replays only signed or redacted, as Anthropic produced it."""
-    system: list[TextBlockParam] = []
-    turns: list[tuple[Literal["user", "assistant"], list[ContentBlockParam]]] = []
+    system: list[anthropic_api.TextBlock] = []
+    turns: list[anthropic_api.Message] = []
 
-    def add(role: Literal["user", "assistant"], block: ContentBlockParam) -> None:
-        if turns and turns[-1][0] == role:
-            turns[-1][1].append(block)
+    def add(role: Literal["user", "assistant"], block: anthropic_api.Block) -> None:
+        if turns and turns[-1].role == role:
+            turns[-1].content.append(block)
         else:
-            turns.append((role, [block]))
+            turns.append(anthropic_api.Message(role=role, content=[block]))
 
     for message in messages:
         if isinstance(message, ModelResponse):
             for part in message.parts:
                 match part:
                     case ThinkingPart() if part.model_extra and "redacted_data" in part.model_extra:
-                        add("assistant", {"type": "redacted_thinking", "data": str(part.model_extra["redacted_data"])})
+                        add(
+                            "assistant",
+                            anthropic_api.RedactedThinkingBlock(data=str(part.model_extra["redacted_data"])),
+                        )
                     case ThinkingPart() if part.signature:
-                        add("assistant", {"type": "thinking", "thinking": part.content, "signature": part.signature})
+                        add("assistant", anthropic_api.ThinkingBlock(thinking=part.content, signature=part.signature))
                     case TextPart() if part.content:
-                        add("assistant", {"type": "text", "text": part.content})
+                        add("assistant", anthropic_api.TextBlock(text=part.content))
                     case ToolCallPart():
                         try:
                             arguments = part.args_as_dict()
@@ -548,12 +534,7 @@ def anthropic_messages(messages: Sequence[ModelMessage]) -> tuple[list[TextBlock
                             arguments = {}
                         add(
                             "assistant",
-                            {
-                                "type": "tool_use",
-                                "id": part.tool_call_id,
-                                "name": part.tool_name,
-                                "input": {**arguments},
-                            },
+                            anthropic_api.ToolUseBlock(id=part.tool_call_id, name=part.tool_name, input=arguments),
                         )
                     case _:
                         pass
@@ -561,45 +542,47 @@ def anthropic_messages(messages: Sequence[ModelMessage]) -> tuple[list[TextBlock
         for part in message.parts:
             match part:
                 case SystemPromptPart() if not turns:
-                    system.append({"type": "text", "text": part.content})
+                    system.append(anthropic_api.TextBlock(text=part.content))
                 case SystemPromptPart():
-                    add("user", {"type": "text", "text": part.content})
+                    add("user", anthropic_api.TextBlock(text=part.content))
                 case UserPromptPart():
-                    add("user", {"type": "text", "text": str(part.content)})
+                    add("user", anthropic_api.TextBlock(text=str(part.content)))
                 case ToolReturnPart():
                     add(
                         "user",
-                        {"type": "tool_result", "tool_use_id": part.tool_call_id, "content": part.model_response_str()},
+                        anthropic_api.ToolResultBlock(tool_use_id=part.tool_call_id, content=part.model_response_str()),
                     )
                 case RetryPromptPart() if part.tool_name:
                     add(
                         "user",
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": part.tool_call_id,
-                            "content": part.model_response(),
-                            "is_error": True,
-                        },
+                        anthropic_api.ToolResultBlock(
+                            tool_use_id=part.tool_call_id, content=part.model_response(), is_error=True
+                        ),
                     )
                 case RetryPromptPart():
-                    add("user", {"type": "text", "text": part.model_response()})
+                    add("user", anthropic_api.TextBlock(text=part.model_response()))
                 case _:
                     raise ValueError("response part in a model request")
-    return system, [{"role": role, "content": blocks} for role, blocks in turns]
+    return system, turns
 
 
-def anthropic_tool(definition: ChatCompletionFunctionToolParam) -> ToolParam:
+def anthropic_tool(definition: ChatCompletionFunctionToolParam) -> anthropic_api.ToolDefinition:
     function = definition["function"]
-    return {
-        "name": function["name"],
-        "description": function.get("description", ""),
-        "input_schema": function.get("parameters", {}),
-    }
+    return anthropic_api.ToolDefinition(
+        name=function["name"],
+        description=function.get("description", ""),
+        input_schema=cast(JsonValue, function.get("parameters", {})),
+    )
+
+
+_HEADERS: Final = TypeAdapter(dict[str, str])
+_BODY: Final = TypeAdapter(dict[str, JsonValue])
 
 
 class AnthropicModel:
-    """The Messages API through the Anthropic SDK: signed thinking replayed, beta headers and caching passed
-    through. `cache_control` defaults to automatic caching of the longest prefix."""
+    """The Messages API over aid's own client (`aid.anthropic_api`, `aid.wire`; #65): signed thinking replayed,
+    beta headers (`extra_headers`) and caching passed through. `cache_control` defaults to automatic caching of the
+    longest prefix."""
 
     cache_reads_in_prompt: bool = False
 
@@ -608,115 +591,140 @@ class AnthropicModel:
         self.model_name = name
         self._model = split_name(name)[1]
         self._provider = provider
-        self._clients: dict[ClientKey, anthropic.AsyncAnthropic] = {}
+        self._http: httpx2.AsyncClient | None = None
 
-    def _client(self, settings: Mapping[str, JsonValue]) -> anthropic.AsyncAnthropic:
+    def _key(self, settings: Mapping[str, JsonValue]) -> ClientKey:
         provider = self._provider
         key_env = provider.key_env if provider else ANTHROPIC_KEY_ENV
-        key = client_key(self.model_name, settings, key_env, provider.base_url if provider else None)
-        if (client := self._clients.get(key)) is None:
-            client = anthropic.AsyncAnthropic(
-                api_key=key.api_key,
-                base_url=key.base_url,
-                max_retries=key.max_retries,
-                default_headers=dict(self._provider.headers) if self._provider else None,
-            )
-            self._clients[key] = client
-        return client
+        return client_key(self.model_name, settings, key_env, provider.base_url if provider else None)
 
     def host(self, settings: Mapping[str, JsonValue]) -> str:
-        return self._client(settings).base_url.host
+        return httpx2.URL(anthropic_api.messages_url(self._key(settings).base_url)).host
 
     async def aclose(self) -> None:
-        clients, self._clients = list(self._clients.values()), {}
-        for client in clients:
-            await client.close()
+        http, self._http = self._http, None
+        if http is not None:
+            await http.aclose()
 
-    async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
-        client = self._client(info.settings)
-        system, wire = anthropic_messages(messages)
-        # The settings are the session's JSON, under the SDK's keyword names; the SDK and the server check them.
-        request = cast(
-            MessageCreateParamsStreaming,
-            {**_request_settings(info.settings), "model": self._model, "messages": wire, "stream": True},
-        )
-        request.setdefault(
+    def _request(
+        self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue]
+    ) -> anthropic_api.Request:
+        system, wired = anthropic_messages(messages)
+        settings.setdefault(
             "max_tokens", ANTHROPIC_LEGACY_MAX_TOKENS if self._model.startswith("claude-3") else ANTHROPIC_MAX_TOKENS
         )
-        request.setdefault("cache_control", {"type": "ephemeral"})
-        if info.tools:
-            request["tools"] = [anthropic_tool(tool.definition()) for tool in info.tools]
+        settings.setdefault("cache_control", {"type": "ephemeral"})
         if info.output_type is not str:
-            schema = TypeAdapter(info.output_type).json_schema()
-            request["output_config"] = {
-                **request.get("output_config", {}),
-                "format": {"type": "json_schema", "schema": schema},
+            config = settings.get("output_config")
+            settings["output_config"] = {
+                **(config if isinstance(config, dict) else {}),
+                "format": {"type": "json_schema", "schema": TypeAdapter(info.output_type).json_schema()},
             }
-        if system:
-            request["system"] = system
+        settings.update(_BODY.validate_python(settings.pop("extra_body", None) or {}))
         try:
-            stream = await client.messages.create(**request)
-        except Exception as error:
-            if unavailable(error):
-                raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
-            if rejected_key(error):
-                raise refused_key(self.model_name, error) from error
-            raise
+            return anthropic_api.Request.model_validate(
+                {
+                    **settings,
+                    "model": self._model,
+                    "messages": wired,
+                    "stream": True,
+                    "system": system or None,
+                    "tools": [anthropic_tool(tool.definition()) for tool in info.tools] or None,
+                }
+            )
+        except ValidationError as error:
+            raise AidError("bad_model_settings", f"{self.model_name}: {error}") from error
+
+    async def _open(self, key: ClientKey, body: bytes, headers: dict[str, str], io_timeout: float) -> httpx2.Response:
+        if self._http is None:
+            self._http = wire.client(DEFAULT_TIMEOUT)
+        url = anthropic_api.messages_url(key.base_url)
+        for attempt in range(key.max_retries + 1):
+            try:
+                return await wire.open_stream(self._http, url, body, headers, io_timeout)
+            except (wire.StatusError, httpx2.TransportError) as error:
+                if rejected_key(error):
+                    raise refused_key(self.model_name, error) from error
+                if not (isinstance(error, httpx2.TransportError) or unavailable(error)):
+                    raise
+                if attempt == key.max_retries:
+                    raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
+                await anyio.sleep(RETRY_BACKOFF * 2**attempt)
+        raise AssertionError("unreachable")
+
+    async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
+        key = self._key(info.settings)
+        settings = _request_settings(info.settings)
+        io_timeout = _TIMEOUT.validate_python(settings.pop("timeout"))
+        try:
+            extra_headers = _HEADERS.validate_python(settings.pop("extra_headers", None) or {})
+        except ValidationError as error:
+            raise AidError("bad_model_settings", f"{self.model_name}: extra_headers: {error}") from error
+        headers = {
+            anthropic_api.KEY_HEADER: key.api_key,
+            "anthropic-version": anthropic_api.VERSION,
+            **(self._provider.headers if self._provider else {}),
+            **extra_headers,
+        }
+        body = self._request(messages, info, settings).body()
+        response = await self._open(key, body, headers, io_timeout)
         arguments: dict[int, bool] = {}
         try:
-            async for event in stream:
-                match event:
-                    case RawMessageStartEvent():
-                        yield StreamDelta(model_name=event.message.model)
-                        yield StreamDelta(usage=_anthropic_usage(event.message.usage))
-                    case RawMessageDeltaEvent():
-                        yield StreamDelta(usage=_anthropic_usage(event.usage))
-                        if event.delta.stop_reason == "max_tokens":
+            async for data in wire.events(response):
+                match anthropic_api.event(data):
+                    case anthropic_api.MessageStart(message=message):
+                        yield StreamDelta(model_name=message.model)
+                        yield StreamDelta(usage=_anthropic_usage(message.usage))
+                    case anthropic_api.MessageDeltaEvent(delta=delta, usage=usage):
+                        yield StreamDelta(usage=_anthropic_usage(usage))
+                        if delta.stop_reason == "max_tokens":
                             yield StreamDelta(truncated=True)
-                    case RawContentBlockStartEvent():
-                        index, block = event.index, event.content_block
+                    case anthropic_api.BlockStart(index=index, content_block=block):
                         match block:
-                            case TextBlock():
+                            case anthropic_api.TextBlock():
                                 yield StreamDelta(index, TextPart(block.text))
-                            case ThinkingBlock():
+                            case anthropic_api.ThinkingBlock():
                                 yield StreamDelta(index, ThinkingPart(block.thinking, signature=block.signature))
-                            case RedactedThinkingBlock():
+                            case anthropic_api.RedactedThinkingBlock():
                                 yield StreamDelta(index, ThinkingPart("", redacted_data=block.data))
-                            case ToolUseBlock():
+                            case anthropic_api.ToolUseBlock():
                                 arguments[index] = False
                                 yield StreamDelta(index, ToolCallPart(block.name, "", block.id))
                             case _:
                                 pass
-                    case RawContentBlockDeltaEvent():
-                        index, delta = event.index, event.delta
+                    case anthropic_api.BlockDelta(index=index, delta=delta):
                         match delta:
-                            case TextDelta():
+                            case anthropic_api.TextDelta():
                                 yield StreamDelta(index, TextPart(delta.text))
-                            case ThinkingDelta():
+                            case anthropic_api.ThinkingDelta():
                                 yield StreamDelta(index, ThinkingPart(delta.thinking))
-                            case SignatureDelta():
+                            case anthropic_api.SignatureDelta():
                                 yield StreamDelta(index, ThinkingPart("", signature=delta.signature))
-                            case InputJSONDelta() if delta.partial_json:
+                            case anthropic_api.InputJsonDelta() if delta.partial_json:
                                 arguments[index] = True
                                 yield StreamDelta(index, ToolCallPart("", delta.partial_json, ""))
                             case _:
                                 pass
-                    case RawContentBlockStopEvent() if arguments.get(event.index) is False:
+                    case anthropic_api.BlockStop(index=index) if arguments.get(index) is False:
                         # A tool without arguments streams no JSON at all.
-                        yield StreamDelta(event.index, ToolCallPart("", "{}", ""))
+                        yield StreamDelta(index, ToolCallPart("", "{}", ""))
+                    case anthropic_api.ErrorEvent(error=error):
+                        if error.type in anthropic_api.OVERLOADED:
+                            raise ModelUnavailable(f"{error.type}: {error.message}")
+                        raise AidError("model_error", f"{self.model_name}: {error.type}: {error.message}")
                     case _:
                         pass
         except BROKEN as error:
             raise StreamBroken(repr(error)) from error
         finally:
             with anyio.CancelScope(shield=True):
-                await stream.close()
+                await response.aclose()
 
     async def request(self, messages: list[ModelMessage], info: ModelInfo) -> ModelResponse:
         return await collect(self, messages, info)
 
 
-def _anthropic_usage(usage: AnthropicUsage | MessageDeltaUsage) -> RequestUsage:
+def _anthropic_usage(usage: anthropic_api.Usage) -> RequestUsage:
     """Anthropic's `input_tokens` excludes cache reads and writes; aid keeps that split."""
     return RequestUsage(
         input_tokens=usage.input_tokens or 0,

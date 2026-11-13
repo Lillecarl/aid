@@ -11,6 +11,7 @@ import httpx2
 import openai
 import pytest
 
+from aid.anthropic_api import messages_url
 from aid.discovery import discover
 from aid.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, ThinkingPart, UserPromptPart
 from aid.model import AnthropicModel, ModelInfo, OpenAIChatModel
@@ -149,8 +150,8 @@ async def test_opencode_routes_each_model_by_its_protocol(catalog: None, monkeyp
     assert isinstance(unknown, OpenAIChatModel)
     assert chat._client({}).base_url.host == "opencode.ai"  # pyright: ignore[reportPrivateUsage]
     assert str(chat._client({}).base_url) == f"{ZEN}/openai/v1/"  # pyright: ignore[reportPrivateUsage]
-    # Anthropic's SDK posts to <base>/v1/messages: models.dev's URL plus /messages.
-    assert str(claude._client({}).base_url).rstrip("/") == f"{ZEN}/anthropic"  # pyright: ignore[reportPrivateUsage]
+    # aid posts to <base>/v1/messages, as Anthropic's SDK does: models.dev's URL plus /messages.
+    assert messages_url(claude._key({}).base_url) == f"{ZEN}/anthropic/v1/messages"  # pyright: ignore[reportPrivateUsage]
     assert claude.model_name == "opencode-zen/claude-x"
     for unsupported in ("gpt-x", "gemini-x", "free-x"):
         with pytest.raises(AidError) as caught:
@@ -174,8 +175,8 @@ async def test_opencode_go_is_its_own_gateway_with_its_own_key(catalog: None, mo
     assert (caught.value.code, "OPENCODE_GO_API_KEY" in caught.value.message) == ("missing_credentials", True)
     monkeypatch.setenv("OPENCODE_GO_API_KEY", "go")
     assert str(chat._client({}).base_url) == f"{ZEN}/go/openai/v1/"  # pyright: ignore[reportPrivateUsage]
-    assert str(claude._client({}).base_url).rstrip("/") == f"{ZEN}/go/anthropic"  # pyright: ignore[reportPrivateUsage]
-    assert claude._client({}).api_key == "go"  # pyright: ignore[reportPrivateUsage]
+    key = claude._key({})  # pyright: ignore[reportPrivateUsage]
+    assert (messages_url(key.base_url), key.api_key) == (f"{ZEN}/go/anthropic/v1/messages", "go")
     for model in (chat, claude):
         await model.aclose()
 

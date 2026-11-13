@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
-import anthropic
 import anyio
 import httpx2
 import openai
 import pytest
 
 import aid.backends.native as native_backend
+from aid import anthropic_api, wire
 from aid.agent import Agent, Tool
 from aid.discovery import Catalog
 from aid.messages import (
@@ -45,9 +45,10 @@ from aid.spec import NativeSpec
 from tests.test_native_backend import backend
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
     from pathlib import Path
 
-    from pydantic import JsonValue
+    from pydantic import BaseModel, JsonValue
 
 
 def event(delta: dict[str, Any], *, usage: dict[str, Any] | None = None, finish: str | None = None) -> bytes:
@@ -368,9 +369,9 @@ def test_signed_thinking_and_tool_identity_survive_anthropic_translation() -> No
             ]
         )
     ]
-    system, wire = anthropic_messages(messages)
+    system, wired = anthropic_messages(messages)
     assert system == []
-    assert wire[0]["content"] == [
+    assert dumped(wired[0].content) == [
         {"type": "thinking", "thinking": "thought", "signature": "signed"},
         {"type": "text", "text": "answer"},
         {"type": "tool_use", "id": "c1", "name": "read", "input": {"path": "a"}},
@@ -447,22 +448,7 @@ async def test_anthropic_stream_preserves_cache_usage_and_separate_signed_blocks
         ]
     )
     body = "".join(f"event: {item['type']}\ndata: {json.dumps(item)}\n\n" for item in events).encode()
-    factory = anthropic.AsyncAnthropic
-    clients: list[anthropic.AsyncAnthropic] = []
-
-    def make_client(**kwargs: Any) -> anthropic.AsyncAnthropic:
-        client = factory(
-            http_client=httpx2.AsyncClient(
-                transport=httpx2.MockTransport(
-                    lambda request: httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=body)
-                )
-            ),
-            **kwargs,
-        )
-        clients.append(client)
-        return client
-
-    monkeypatch.setattr(anthropic, "AsyncAnthropic", make_client)
+    serve_wire(monkeypatch, lambda request: httpx2.Response(200, content=body))
     response = ModelResponse(parts=[])
     indexes: dict[int, int] = {}
     usages: list[RequestUsage] = []
@@ -484,17 +470,14 @@ async def test_anthropic_stream_preserves_cache_usage_and_separate_signed_blocks
         ]
         assert (usages[0].input_tokens, usages[0].cache_read_tokens, usages[0].cache_write_tokens) == (5, 7, 3)
         assert usages[-1].output_tokens == 6
-        _, wire = anthropic_messages([response])
-        assert wire[0]["content"] == [
+        _, wired = anthropic_messages([response])
+        assert dumped(wired[0].content) == [
             {"type": "thinking", "thinking": "first", "signature": "sig1"},
             {"type": "thinking", "thinking": "second", "signature": "sig2"},
             {"type": "redacted_thinking", "data": "opaque"},
         ]
-        await model.aclose()
-        assert clients and all(client.is_closed() for client in clients)
     finally:
-        for client in clients:
-            await client.close()
+        await model.aclose()
 
 
 @pytest.mark.parametrize("failure", [False, True])
@@ -531,22 +514,7 @@ async def test_anthropic_stream_closes_clients_on_cancellation_and_failure(
             self.closed = True
 
     source = InterruptedStream()
-    factory = anthropic.AsyncAnthropic
-    clients: list[anthropic.AsyncAnthropic] = []
-
-    def make_client(**kwargs: Any) -> anthropic.AsyncAnthropic:
-        client = factory(
-            http_client=httpx2.AsyncClient(
-                transport=httpx2.MockTransport(
-                    lambda request: httpx2.Response(200, headers={"content-type": "text/event-stream"}, stream=source)
-                )
-            ),
-            **kwargs,
-        )
-        clients.append(client)
-        return client
-
-    monkeypatch.setattr(anthropic, "AsyncAnthropic", make_client)
+    serve_wire(monkeypatch, lambda request: httpx2.Response(200, stream=source))
 
     model = AnthropicModel("anthropic/claude-test")
 
@@ -573,11 +541,8 @@ async def test_anthropic_stream_closes_clients_on_cancellation_and_failure(
             else:
                 await consume()
         assert source.closed
-        await model.aclose()
-        assert clients and all(client.is_closed() for client in clients)
     finally:
-        for client in clients:
-            await client.close()
+        await model.aclose()
 
 
 def test_wire_skips_an_empty_assistant_message() -> None:
@@ -588,7 +553,7 @@ def test_wire_skips_an_empty_assistant_message() -> None:
         ModelRequest(parts=[UserPromptPart("again")]),
     ]
     assert [item["role"] for item in wire_messages(messages)] == ["user", "user"]
-    assert [item["role"] for item in anthropic_messages(messages)[1]] == ["user"]
+    assert [item.role for item in anthropic_messages(messages)[1]] == ["user"]
 
 
 async def test_model_names_pick_the_sdk_and_credentials_fail_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -629,6 +594,19 @@ async def test_a_mistyped_client_setting_fails_before_the_sdk(
     assert model.model_name in caught.value.message
 
 
+def serve_wire(monkeypatch: pytest.MonkeyPatch, handle: Callable[[httpx2.Request], httpx2.Response]) -> None:
+    """aid's own clients (`aid.wire`) talk to `handle` instead of the server."""
+
+    def client(timeout: float) -> httpx2.AsyncClient:
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), timeout=timeout)
+
+    monkeypatch.setattr(wire, "client", client)
+
+
+def dumped(blocks: Sequence[BaseModel]) -> list[dict[str, Any]]:
+    return [block.model_dump(exclude_none=True) for block in blocks]
+
+
 def sse(items: list[dict[str, Any]]) -> bytes:
     return "".join(f"event: {item['type']}\ndata: {json.dumps(item)}\n\n" for item in items).encode()
 
@@ -662,16 +640,12 @@ async def test_anthropic_request_is_native_and_passes_headers(monkeypatch: pytes
             {"type": "message_stop"},
         ]
     )
-    factory = anthropic.AsyncAnthropic
 
     def handle(request: httpx2.Request) -> httpx2.Response:
         seen.append(request)
         return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=body)
 
-    def make_client(**kwargs: Any) -> anthropic.AsyncAnthropic:
-        return factory(http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handle)), **kwargs)
-
-    monkeypatch.setattr(anthropic, "AsyncAnthropic", make_client)
+    serve_wire(monkeypatch, handle)
 
     async def now() -> str:
         return "noon"
@@ -698,7 +672,9 @@ async def test_anthropic_request_is_native_and_passes_headers(monkeypatch: pytes
         await model.aclose()
     assert response.parts == [ToolCallPart("now", "{}", "t9")]
     request = seen[0]
-    assert request.headers["anthropic-beta"] == "b1"
+    assert str(request.url) == "https://example.test/v1/messages"
+    assert (request.headers["anthropic-beta"], request.headers["x-api-key"]) == ("b1", "k")
+    assert request.headers["anthropic-version"] == "2023-06-01"
     sent = json.loads(request.content)
     assert sent["system"] == [{"type": "text", "text": "be brief"}]
     assert sent["cache_control"] == {"type": "ephemeral"}
@@ -800,13 +776,8 @@ async def test_a_refused_key_is_named_and_not_sent_again(
     def make_openai(**kwargs: Any) -> httpx2.AsyncClient:
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
-    factory = anthropic.AsyncAnthropic
-
-    def make_anthropic(**kwargs: Any) -> anthropic.AsyncAnthropic:
-        return factory(http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handle)), **kwargs)
-
     monkeypatch.setattr(openai, "DefaultAsyncHttpx2Client", make_openai)
-    monkeypatch.setattr(anthropic, "AsyncAnthropic", make_anthropic)
+    serve_wire(monkeypatch, handle)
 
     async def emit(item: SessionEvent) -> None:
         pass
@@ -817,3 +788,66 @@ async def test_a_refused_key_is_named_and_not_sent_again(
             await session.prompt("hello", emit)
     assert raised.value.code == "bad_credentials"
     assert len(sent) == 1
+
+
+def test_anthropic_events_parse_as_the_sdk_parses_them() -> None:
+    """Differential: aid's event models against the Anthropic SDK's, on the same event JSON (#65)."""
+    from anthropic.types import RawMessageStreamEvent  # noqa: PLC0415 -- a test dependency only
+    from pydantic import TypeAdapter  # noqa: PLC0415
+
+    theirs_adapter = TypeAdapter[RawMessageStreamEvent](RawMessageStreamEvent)
+    items: list[dict[str, Any]] = [
+        {
+            "type": "message_start",
+            "message": {
+                "id": "m1",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "claude-test",
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 5, "output_tokens": 0, "cache_read_input_tokens": 7},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "thinking", "thinking": "", "signature": ""},
+        },
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "hm"}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "s"}},
+        {
+            "type": "content_block_start",
+            "index": 1,
+            "content_block": {"type": "tool_use", "id": "t", "name": "n", "input": {}},
+        },
+        {"type": "content_block_delta", "index": 1, "delta": {"type": "input_json_delta", "partial_json": '{"a":'}},
+        {"type": "content_block_stop", "index": 1},
+        {"type": "message_delta", "delta": {"stop_reason": "max_tokens"}, "usage": {"output_tokens": 6}},
+    ]
+    for item in items:
+        data = json.dumps(item)
+        ours, theirs = anthropic_api.event(data), theirs_adapter.validate_json(data)
+        assert ours.type == theirs.type
+        match ours:
+            case anthropic_api.MessageStart():
+                assert theirs.type == "message_start"
+                assert ours.message.model == theirs.message.model
+                assert ours.message.usage.model_dump() == {
+                    key: getattr(theirs.message.usage, key) for key in ours.message.usage.model_dump()
+                }
+            case anthropic_api.BlockStart():
+                assert theirs.type == "content_block_start"
+                assert ours.content_block.model_dump(exclude={"type"}) == theirs.content_block.model_dump(
+                    include=set(ours.content_block.model_dump(exclude={"type"}))
+                )
+            case anthropic_api.BlockDelta():
+                assert theirs.type == "content_block_delta"
+                assert ours.delta.model_dump() == theirs.delta.model_dump(include=set(ours.delta.model_dump()))
+            case anthropic_api.MessageDeltaEvent():
+                assert theirs.type == "message_delta"
+                assert ours.delta.stop_reason == theirs.delta.stop_reason
+                assert ours.usage.output_tokens == theirs.usage.output_tokens
+            case _:
+                assert isinstance(ours, anthropic_api.BlockStop)
