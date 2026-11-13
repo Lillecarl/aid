@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from typing import TYPE_CHECKING
 
 import anyio
+import anyio.to_thread
 import pytest
 import zmq
 import zmq.asyncio
 from pydantic import ValidationError
 
 import aid
+from aid.cli import main
 from aid.daemon import Daemon
+from aid.paths import ENV_RUNTIME_DIR, ENV_STATE_DIR
 from aid.protocol import (
     AidError,
     Cost,
@@ -20,12 +24,14 @@ from aid.protocol import (
     GetLive,
     GetSpec,
     GetStatus,
+    ImageRef,
     Lifecycle,
     OpenWork,
     Output,
     PermissionDecider,
     PermissionDecision,
     PermissionRequest,
+    PromptEntry,
     Started,
     TextDelta,
     ToolMode,
@@ -39,6 +45,7 @@ from aid.spec import AgentSpecAdapter, PermissionMode
 from tests.agents import Review
 from tests.conftest import acp_spec, py_spec
 from tests.fake_acp_agent import AGENT_NAME, AGENT_VERSION, CHUNKS, RESOLVED_MODEL
+from tests.test_images import png
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -326,6 +333,42 @@ async def test_native_typed_output(daemon: Paths, tmp_path: Path) -> None:
             session = await client.create("review", py_spec(tmp_path, "agents:reviewer"))
             result = await session.run("review this", output_type=Review)
     assert result.output == Review(verdict="approve", score=7)
+
+
+async def test_a_prompt_carries_images_to_a_native_session(daemon: Paths, tmp_path: Path) -> None:
+    """#66: client → daemon (checks, records refs) → worker → the session's store and the model's request."""
+    image = png()
+    sha = hashlib.sha256(image).hexdigest()
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            session = await client.create("seer", py_spec(tmp_path, "agents:seer"))
+            with pytest.raises(AidError) as refused:
+                await session.run("see", images=[b"not an image"])
+            result = await session.run("see", images=[image])
+            entries = [e.item for e in (await session.history()).entries]
+    assert refused.value.code == "bad_image"
+    assert result.output == f"image/png:{sha}"
+    prompts = [item for item in entries if isinstance(item, PromptEntry)]
+    assert [p.images for p in prompts] == [[ImageRef(media_type="image/png", sha256=sha)]]
+    assert (daemon.state_dir / "sessions" / "seer" / "images" / sha).read_bytes() == image
+
+
+async def test_aid_prompt_sends_image_files(
+    daemon: Paths, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    picture = tmp_path / "red.png"
+    picture.write_bytes(png())
+    monkeypatch.setenv(ENV_RUNTIME_DIR, str(daemon.runtime_dir))
+    monkeypatch.setenv(ENV_STATE_DIR, str(daemon.state_dir))
+    with anyio.fail_after(TIMEOUT):
+        async with aid.connect(daemon) as client:
+            await client.create("seer", py_spec(tmp_path, "agents:seer"))
+        await anyio.to_thread.run_sync(main, ["prompt", "seer", "see", "--image", str(picture)])
+        with pytest.raises(SystemExit) as missing:
+            await anyio.to_thread.run_sync(main, ["prompt", "seer", "see", "--image", str(tmp_path / "gone.png")])
+    # The daemon logs to the same stdout in this process.
+    assert f"image/png:{hashlib.sha256(png()).hexdigest()}" in capsys.readouterr().out.splitlines()
+    assert str(missing.value) == f"aid: bad_image: cannot read {tmp_path / 'gone.png'}: No such file or directory"
 
 
 async def test_native_env_and_cwd(daemon: Paths, tmp_path: Path) -> None:

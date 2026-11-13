@@ -330,6 +330,13 @@ def _parser() -> argparse.ArgumentParser:
     prompt = sub.add_parser("prompt", help="send a prompt and stream the answer")
     prompt.add_argument("name")
     prompt.add_argument("text", help="prompt text, or - to read stdin")
+    prompt.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        type=Path,
+        help="a PNG, JPEG, GIF or WebP file the prompt carries; repeatable (native sessions)",
+    )
     prompt.add_argument("-v", "--verbose", action="store_true", help="tool calls on stderr as they start and end")
 
     message = sub.add_parser("message", help="leave a message for a session, which wakes it")
@@ -783,7 +790,11 @@ async def _client_command(args: argparse.Namespace) -> None:
                 text = sys.stdin.read() if args.text == "-" else args.text
                 titles: dict[str, str] = {}
                 written = after_tool = False
-                async for event in client.session(args.name).stream(text):
+                try:
+                    images = [await anyio.Path(path).read_bytes() for path in args.image]
+                except OSError as error:
+                    raise AidError("bad_image", f"cannot read {error.filename}: {error.strerror}") from None
+                async for event in client.session(args.name).stream(text, images):
                     if isinstance(event, TextDelta):
                         # Each model response streams its own text: without a break they run together.
                         if written and after_tool:

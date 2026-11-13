@@ -7,6 +7,7 @@ async with aid.connect() as client:
 
 from __future__ import annotations
 
+import base64
 import contextlib
 import math
 import os
@@ -495,20 +496,23 @@ class Session:
         self._client = client
         self.name = name
 
-    async def stream(self, text: str) -> AsyncIterator[SessionEvent]:
-        """Yield the prompt's events. The last one is an `Output`."""
-        async for item in self._client._events(Prompt(session=self.name, text=text)):  # pyright: ignore[reportPrivateUsage] -- Session is Client's own facade
+    async def stream(self, text: str, images: Sequence[bytes] = ()) -> AsyncIterator[SessionEvent]:
+        """Yield the prompt's events. The last one is an `Output`. `images`: PNG, JPEG, GIF or WebP (#66)."""
+        request = Prompt(session=self.name, text=text, images=[base64.b64encode(image).decode() for image in images])
+        async for item in self._client._events(request):  # pyright: ignore[reportPrivateUsage] -- Session is Client's own facade
             if not isinstance(item, Done):
                 yield item
 
     @overload
-    async def run(self, text: str) -> RunResult[JsonValue]: ...
+    async def run(self, text: str, *, images: Sequence[bytes] = ()) -> RunResult[JsonValue]: ...
     @overload
-    async def run[T](self, text: str, output_type: type[T]) -> RunResult[T]: ...
-    async def run[T](self, text: str, output_type: type[T] | None = None) -> RunResult[T] | RunResult[JsonValue]:
+    async def run[T](self, text: str, output_type: type[T], *, images: Sequence[bytes] = ()) -> RunResult[T]: ...
+    async def run[T](
+        self, text: str, output_type: type[T] | None = None, *, images: Sequence[bytes] = ()
+    ) -> RunResult[T] | RunResult[JsonValue]:
         chunks: list[str] = []
         output: Output | None = None
-        async for event in self.stream(text):
+        async for event in self.stream(text, images):
             match event:
                 case TextDelta():
                     chunks.append(event.text)

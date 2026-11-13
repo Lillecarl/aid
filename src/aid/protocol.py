@@ -77,6 +77,8 @@ class Prompt(_Request):
     op: Literal["prompt"] = "prompt"
     session: str
     text: str
+    images: list[str] = []
+    """Each image's bytes in base64 (#66): PNG, JPEG, GIF or WebP. Native sessions take them, others refuse."""
 
 
 class Cancel(_Request):
@@ -733,7 +735,7 @@ def history_line(item: HistoryItem) -> str | None:
     usage, lifecycle) is skipped: a supervisor judges the work, not the plumbing. Callers clip."""
     match item:
         case PromptEntry():
-            return f"> {item.text}"
+            return f"> {item.text}" + (f" [images: {len(item.images)}]" if item.images else "")
         case MessageEntry():
             return f"[message from {item.sender or 'a person'}] {item.text}"
         case TextDelta():
@@ -992,9 +994,17 @@ class Note(_Message):
     """The plugin that wrote it, stamped by the daemon; None for the operator."""
 
 
+class ImageRef(_Message):
+    """An image a prompt carried. Its bytes are `<session dir>/images/<sha256>` once the session took the turn."""
+
+    media_type: str
+    sha256: str
+
+
 class PromptEntry(_Message):
     type: Literal["prompt"] = "prompt"
     text: str
+    images: list[ImageRef] = []
 
 
 class TurnError(_Message):

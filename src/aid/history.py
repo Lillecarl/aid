@@ -23,7 +23,7 @@ from aid.protocol import HistoryEntry, HistoryPage, PromptEntry, TextDelta, Thou
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
-    from aid.protocol import HistoryItem, MessageEntry, SessionEvent
+    from aid.protocol import HistoryItem, ImageRef, MessageEntry, SessionEvent
 
 log = structlog.get_logger(__name__)
 
@@ -152,8 +152,8 @@ class Recorder:
         await self.flush()
         await self._history.append(event, self._turn)
 
-    async def prompt(self, text: str) -> None:
-        await self._history.append(PromptEntry(text=text), self._turn)
+    async def prompt(self, text: str, images: list[ImageRef] | None = None) -> None:
+        await self._history.append(PromptEntry(text=text, images=images or []), self._turn)
 
     async def message(self, message: MessageEntry) -> None:
         await self._history.append(message, self._turn)

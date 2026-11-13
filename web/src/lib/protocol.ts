@@ -853,8 +853,19 @@ export interface HistoryEntry {
  * via the `definition` "PromptEntry".
  */
 export interface PromptEntry {
+  images: ImageRef[];
   text: string;
   type: "prompt";
+}
+/**
+ * An image a prompt carried. Its bytes are `<session dir>/images/<sha256>` once the session took the turn.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "ImageRef".
+ */
+export interface ImageRef {
+  media_type: string;
+  sha256: string;
 }
 /**
  * A message another session, or a person, sent to this one.
@@ -1028,6 +1039,7 @@ export interface ProviderModels {
  */
 export interface Prompt {
   id?: string;
+  images?: string[];
   op: "prompt";
   session: string;
   text: string;

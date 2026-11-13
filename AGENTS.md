@@ -270,8 +270,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
   (`encoded`); no bytes → `image_missing`. Chat Completions: data URL in user content, a tool's image after the
   last tool message; Anthropic: image block, a tool's inside its `tool_result`; Gemini: `inlineData` (a tool's as a
   user part beside the function responses: unmeasured). `Backend.prompt(text, emit, images)`: native stores and
-  sends; other engines `images_unsupported`. A fork copies its parent's images (`ImageStore.take`). Not yet: the
-  worker/protocol (`Prompt.images`), CLI, models.dev `modalities.input` check, tool images, web.
+  sends; other engines `images_unsupported`. A fork copies its parent's images (`ImageStore.take`). `Prompt.images`
+  (base64; `Session.run/stream(images=)`, `aid prompt --image`): the daemon checks them (`images.refs`,
+  `MAX_PROMPT_BYTES` together) and records `PromptEntry.images` (`ImageRef`), the worker decodes them to the backend.
+  Not yet: models.dev `modalities.input` check, tool images, web.
 - `src/aid/wire.py` — aid's own model clients' HTTP (#65): `open_stream` (POST, 2xx or `StatusError` with the body),
   `events` (SSE data), `client` (tests patch it, called `timeout=` by keyword). No model SDK at runtime; each is a
   test dependency for differential tests (`…parse_as_…` in test_model.py and test_google_model.py). Protocol

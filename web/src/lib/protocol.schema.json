@@ -1418,6 +1418,24 @@
     "HookMatch": {
       "type": "string"
     },
+    "ImageRef": {
+      "additionalProperties": false,
+      "description": "An image a prompt carried. Its bytes are `<session dir>/images/<sha256>` once the session took the turn.",
+      "properties": {
+        "media_type": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "sha256"
+      ],
+      "title": "ImageRef",
+      "type": "object"
+    },
     "JsonValue": {},
     "Lifecycle": {
       "additionalProperties": false,
@@ -2665,6 +2683,13 @@
         "id": {
           "type": "string"
         },
+        "images": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "op": {
           "const": "prompt",
           "default": "prompt",
@@ -2688,6 +2713,13 @@
     "PromptEntry": {
       "additionalProperties": false,
       "properties": {
+        "images": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ImageRef"
+          },
+          "type": "array"
+        },
         "text": {
           "type": "string"
         },
@@ -2699,7 +2731,8 @@
       },
       "required": [
         "type",
-        "text"
+        "text",
+        "images"
       ],
       "title": "PromptEntry",
       "type": "object"

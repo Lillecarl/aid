@@ -30,6 +30,7 @@ from aid.backends.base import (
     ToolPolicyBackend,
     WatchBackend,
 )
+from aid.images import decoded
 from aid.protocol import (
     Activity,
     AidError,
@@ -332,7 +333,7 @@ class _Worker:
             await self.send(Event(id=request.id, event=event))
 
         try:
-            output = await self._backend.prompt(request.text, emit)
+            output = await self._backend.prompt(request.text, emit, decoded(request.images))
         except Exception as error:
             log.exception("prompt_failed", id=request.id)
             await self._report_tools()

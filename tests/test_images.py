@@ -15,7 +15,7 @@ from aid.agent import Agent
 from aid.backends.acp import AcpBackend
 from aid.backends.claude_sdk import ClaudeSdkBackend
 from aid.backends.claude_tty import ClaudeTtyBackend
-from aid.images import MAX_BYTES, ImageStore
+from aid.images import MAX_BYTES, MAX_PROMPT_BYTES, ImageStore, decoded, refs
 from aid.messages import (
     ImagePart,
     ModelRequest,
@@ -80,6 +80,28 @@ def test_the_store_refuses_what_no_model_takes(tmp_path: Path, data: bytes) -> N
         ImageStore(tmp_path).put(data)
     assert refused.value.code == "bad_image"
     assert not (tmp_path / "images").exists()
+
+
+def test_a_prompts_images_arrive_as_base64() -> None:
+    sent = base64.b64encode(png()).decode()
+    assert decoded([sent]) == [png()]
+    (ref,) = refs([sent])
+    assert ref.media_type == "image/png"
+
+
+@pytest.mark.parametrize(
+    "images",
+    [
+        ["not base64!"],
+        [base64.b64encode(b"text").decode()],
+        [base64.b64encode(b"\x89PNG\r\n\x1a\n" + bytes(MAX_BYTES - 8)).decode()] * (MAX_PROMPT_BYTES // MAX_BYTES + 1),
+    ],
+    ids=["not-base64", "not-an-image", "too-much"],
+)
+def test_a_prompts_images_are_checked(images: list[str]) -> None:
+    with pytest.raises(AidError) as refused:
+        decoded(images)
+    assert refused.value.code == "bad_image"
 
 
 def test_a_missing_or_changed_image_is_named(tmp_path: Path) -> None:
