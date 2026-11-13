@@ -493,11 +493,19 @@ on reusable decisions and current boundaries; put long investigations and dated 
   vectors/tokens/cost, `host`, `aclose`); `OpenAIEmbedder` = `/v1/embeddings` over aid's own client
   (`encoding_format` float: base64 is not universal; `BATCH` texts a request; 5xx/429/no connection →
   `model_unavailable`; count, length or non-finite mismatch → `bad_embedding`). `providers.embedder(name, providers,
-  dimensions=, settings=)`: plugin `ModelProvider.embedder` (default `no_embeddings`), else `OpenAIEmbedder` by an
-  `OPENAI_COMPATIBLE` prefix or `api_base`. Runs in plugins/workers, never the daemon; private callers `check_host`.
-  OpenRouter serves it (`usage.cost` read). Current pick (vLLM hosts have no memory to spare):
-  `openrouter/qwen/qwen3-embedding-8b`, $0.01/M tokens, 40k context, `dimensions` honoured (1024 measured, default
-  4096). No consumer yet (#28).
+  dimensions=, settings=)`: plugin `ModelProvider.embedder` (default `no_embeddings`), else `google/` →
+  `GoogleEmbedder` (Gemini `batchEmbedContents`, `GOOGLE_BATCH` 100, `outputDimensionality`; #68), else
+  `OpenAIEmbedder` by an `OPENAI_COMPATIBLE` prefix or `api_base`. Runs in plugins/workers, never the daemon; private
+  callers `check_host`. Cost: the provider's (OpenRouter `usage.cost`), else tokens × models.dev input price
+  (`prices.input_cost`: OpenAI); `gemini-embedding-001` reports no tokens → None. Live-tested 2026-11-13 (#68):
+  OpenRouter, `openai/text-embedding-3-small`, `google/gemini-embedding-2` and `-001`. Current pick (vLLM hosts have
+  no memory to spare): `openrouter/qwen/qwen3-embedding-8b`, $0.01/M tokens, 40k context, `dimensions` honoured (1024
+  measured, default 4096). No consumer yet (#28).
+- `src/aid/rerank.py` — rerankers (#68): `Reranker.rerank(query, documents, top_n)` → `Reranked` (`Ranked(index,
+  score)` best first, tokens, cost). `RerankClient` = `POST <base>/rerank` (Cohere's shape, as OpenRouter serves Voyage
+  AI and Cohere); index/count/finite checks → `bad_rerank`. `providers.reranker(name, providers, settings=)`: plugin
+  `ModelProvider.reranker` only (default `no_reranker`); OpenRouter's. `model.model_answer`: a whole (non-stream)
+  answer with the stream's error sorting, shared with the embedders.
 - `src/aid/removals.py` — `remove`'s plans: paths, globs (`glob.translate`, hidden included), regexes (searched),
   excludes and filters (kind, age, git tracked/ignored from two `git ls-files`) → every entry that goes, before
   anyone is asked. A matched directory goes whole (rmtree at execution, whatever it then holds); one holding a kept

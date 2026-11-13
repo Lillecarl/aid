@@ -6,6 +6,7 @@ Off unless `AID_LIVE_TESTS=1`; a route without its key skips. They spend money: 
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +21,7 @@ from aid.messages import ModelMessagesTypeAdapter, ModelRequest, ModelResponse, 
 from aid.model import ModelInfo
 from aid.prices import ENV_PRICES
 from aid.protocol import AidError, Output, SessionEvent, Usage
-from aid.providers import catalog_model, embedder, resolve
+from aid.providers import catalog_model, embedder, reranker, resolve
 from tests.test_images import png
 from tests.test_native_backend import backend
 
@@ -168,15 +169,56 @@ async def test_a_refused_key_is_named(route: Route) -> None:
     assert refused.value.code == "bad_credentials"
 
 
-async def test_the_openrouter_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
-    keyed(monkeypatch, "OPENROUTER_API_KEY")
-    providers = discover([PLUGINS], only=["openrouter"]).model_providers
-    found = await embedder("openrouter/qwen/qwen3-embedding-8b", providers, dimensions=256)
+EMBEDDERS: Final = [
+    Route("openrouter/qwen/qwen3-embedding-8b", "OPENROUTER_API_KEY", plugin="openrouter"),
+    Route("openai/text-embedding-3-small", "OPENAI_API_KEY"),
+    Route("google/gemini-embedding-2", "GEMINI_API_KEY"),
+    # Reports no tokens (measured 2026-11-13), so nothing prices it.
+    Route("google/gemini-embedding-001", "GEMINI_API_KEY", priced=False),
+]
+TEXTS: Final = ["a fetchurl hash mismatch", "the hash of a fixed-output derivation changed", "a recipe for pancakes"]
+
+
+def cosine(a: list[float], b: list[float]) -> float:
+    return sum(x * y for x, y in zip(a, b, strict=True)) / math.sqrt(sum(x * x for x in a) * sum(y * y for y in b))
+
+
+@pytest.mark.parametrize("route", EMBEDDERS, ids=[route.model for route in EMBEDDERS])
+async def test_an_embedder(monkeypatch: pytest.MonkeyPatch, route: Route) -> None:
+    """Vectors of the asked length, nearer for the two texts about one thing (#60, #68)."""
+    keyed(monkeypatch, route.key)
+    monkeypatch.delenv(ENV_PRICES)
+    providers = discover([PLUGINS], only=[route.plugin]).model_providers if route.plugin else {}
+    found = await embedder(route.model, providers, dimensions=256)
     try:
-        result = await found.embed(["a fetchurl hash mismatch", "the hash of a fixed-output derivation changed"])
+        result = await found.embed(TEXTS)
     finally:
         await found.aclose()
-    assert [len(vector) for vector in result.vectors] == [256, 256]
-    assert result.tokens > 0
+    hash_a, hash_b, pancakes = result.vectors
+    assert [len(vector) for vector in result.vectors] == [256] * 3
+    assert cosine(hash_a, hash_b) > cosine(hash_a, pancakes)
+    if route.priced:
+        assert result.tokens > 0
+        assert result.cost is not None
+        assert 0 < result.cost < TURN_BOUND
+    else:
+        assert result.cost is None
+
+
+RERANKERS: Final = ["openrouter/voyageai/rerank-2.5-lite", "openrouter/cohere/rerank-v3.5"]
+
+
+@pytest.mark.parametrize("name", RERANKERS)
+async def test_a_reranker(monkeypatch: pytest.MonkeyPatch, name: str) -> None:
+    keyed(monkeypatch, "OPENROUTER_API_KEY")
+    found = await reranker(name, discover([PLUGINS], only=["openrouter"]).model_providers)
+    try:
+        result = await found.rerank("why did my nix build fail with a hash mismatch?", TEXTS)
+        best = await found.rerank("pancakes", TEXTS, top_n=1)
+    finally:
+        await found.aclose()
+    assert sorted(r.index for r in result.ranked) == [0, 1, 2]
+    assert result.ranked[-1].index == 2
+    assert [r.index for r in best.ranked] == [2]
     assert result.cost is not None
-    assert result.cost < TURN_BOUND
+    assert 0 < result.cost < TURN_BOUND

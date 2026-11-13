@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
     from aid.agents import ModelProvider
     from aid.model import Transport
+    from aid.rerank import Reranker
 
 OPENAI_COMPATIBLE_PACKAGE: Final = "@ai-sdk/openai-compatible"
 """models.dev's package for a provider that serves Chat Completions."""
@@ -87,3 +88,14 @@ async def embedder(
     if prefix == "google":
         return GoogleEmbedder(name, dimensions, settings or {})
     return OpenAIEmbedder(name, dimensions=dimensions, settings=settings or {})
+
+
+async def reranker(
+    name: str, providers: Mapping[str, type[ModelProvider]], *, settings: Mapping[str, JsonValue] | None = None
+) -> Reranker:
+    """The reranker for `name`: the plugin provider that claims its prefix; nothing else serves one. The caller
+    closes it."""
+    prefix, model = split_name(name)
+    if (cls := providers.get(prefix)) is None:
+        raise AidError("no_reranker", f"no provider serves rerankers under {prefix}/")
+    return await cls().reranker(model, settings or {})

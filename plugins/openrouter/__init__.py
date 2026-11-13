@@ -16,6 +16,7 @@ import aid
 from aid.embedding import OpenAIEmbedder
 from aid.model import OpenAIChatModel, Provider
 from aid.protocol import AidError, ModelCost, ModelEntry
+from aid.rerank import RerankClient
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -113,6 +114,10 @@ class OpenRouter(aid.ModelProvider):
     async def embedder(self, model: str, dimensions: int | None, settings: Mapping[str, JsonValue]) -> OpenAIEmbedder:
         """OpenRouter's `/embeddings`; its usage carries the cost."""
         return OpenAIEmbedder(f"{self.name}/{model}", PROVIDER, dimensions, settings)
+
+    async def reranker(self, model: str, settings: Mapping[str, JsonValue]) -> RerankClient:
+        """OpenRouter's `/rerank` (Voyage AI, Cohere); its usage carries the cost."""
+        return RerankClient(f"{self.name}/{model}", PROVIDER, settings)
 
     async def fetch_models(self) -> list[ModelEntry]:
         async with httpx.AsyncClient(timeout=FETCH_TIMEOUT) as client:
