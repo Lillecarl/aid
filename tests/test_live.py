@@ -15,11 +15,13 @@ import pytest
 
 from aid.agent import Agent
 from aid.discovery import discover
+from aid.images import ImageStore
 from aid.messages import ModelMessagesTypeAdapter, ModelRequest, ModelResponse, ToolCallPart, UserPromptPart
 from aid.model import ModelInfo
 from aid.prices import ENV_PRICES
 from aid.protocol import AidError, Output, SessionEvent, Usage
 from aid.providers import catalog_model, embedder, resolve
+from tests.test_images import png
 from tests.test_native_backend import backend
 
 if TYPE_CHECKING:
@@ -49,6 +51,8 @@ class Route:
     settings: Mapping[str, JsonValue] | None = None
     source_key: str | None = None
     """Where the key lives when not under `key` (`CLAUDE_API_KEY` in .privrc)."""
+    vision: str | None = None
+    """The model the image test runs on, where `model` takes text only (models.dev's `modalities.input`)."""
 
 
 ROUTES: Final = [
@@ -59,7 +63,12 @@ ROUTES: Final = [
     Route("opencode-zen/deepseek-v4.1-flash", "OPENCODE_API_KEY", plugin="opencode"),
     Route("opencode-zen/claude-haiku-5-5", "OPENCODE_API_KEY", plugin="opencode"),
     Route("opencode-go/deepseek-v4.1-flash", "OPENCODE_GO_API_KEY", plugin="opencode"),
-    Route("openrouter/deepseek/deepseek-v4-flash", "OPENROUTER_API_KEY", plugin="openrouter"),
+    Route(
+        "openrouter/deepseek/deepseek-v4-flash",
+        "OPENROUTER_API_KEY",
+        plugin="openrouter",
+        vision="openrouter/openai/gpt-5-nano",
+    ),
 ]
 
 INSTRUCTIONS: Final = "You are a test. Do all arithmetic with the add tool, never in your head. Answer with the number."
@@ -112,6 +121,36 @@ async def test_a_tool_loop_over_two_turns(tmp_path: Path, monkeypatch: pytest.Mo
         if route.priced:
             assert usage.cost is not None
             assert 0 < usage.cost.amount < TURN_BOUND
+
+
+@pytest.mark.parametrize("route", ROUTES, ids=[route.model for route in ROUTES])
+async def test_an_image_in_the_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route) -> None:
+    """The model sees the image the prompt carries (#66). The prompt names the choices: asked "what colour", DeepSeek
+    V4 answered "white" for a red square in about one of twenty runs (2026-11-13); named, 28 of 28 read it."""
+    keyed(monkeypatch, route.key, route.source_key)
+    monkeypatch.delenv(ENV_PRICES)
+    providers = discover([PLUGINS], only=[route.plugin]).model_providers if route.plugin else {}
+    name = route.vision or route.model
+    events: list[SessionEvent] = []
+
+    async def emit(item: SessionEvent) -> None:
+        events.append(item)
+
+    agent = Agent(name, "You are a test.", model_settings=dict(route.settings or {}))
+    transport = await resolve(name, providers, tmp_path.name)
+    async with backend(
+        tmp_path, agent, transport=transport, price_as=catalog_model(name, providers), images=ImageStore(tmp_path)
+    ) as session:
+        answer = await session.prompt(
+            "The image is one solid colour. Is it red, green or blue? Answer with one word.",
+            emit,
+            [png((255, 0, 0), size=256)],
+        )
+    assert "red" in str(answer.output).lower()
+    (usage,) = [item for item in events if isinstance(item, Usage)]
+    if route.priced:
+        assert usage.cost is not None
+        assert 0 < usage.cost.amount < TURN_BOUND
 
 
 @pytest.mark.parametrize("route", ROUTES, ids=[route.model for route in ROUTES])

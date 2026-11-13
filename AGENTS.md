@@ -264,6 +264,14 @@ on reusable decisions and current boundaries; put long investigations and dated 
   refuses a late acquire whose release overtook it (separate connections). Pricing asks the transport
   (`Transport.cache_reads_in_prompt`), never its class: wrappers hide classes.
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
+- `src/aid/images.py` — images in native requests (#66): `ImagePart(media_type, sha256, tool_call_id)` follows the
+  UserPromptPart (or the ToolReturnPart) it goes with; `ImageStore` = `<session dir>/images/<sha256>`, PNG/JPEG/GIF/
+  WebP by magic bytes, 5 MB cap (`bad_image`); `ModelInfo.images` → transports read base64 off the loop
+  (`encoded`); no bytes → `image_missing`. Chat Completions: data URL in user content, a tool's image after the
+  last tool message; Anthropic: image block, a tool's inside its `tool_result`; Gemini: `inlineData` (a tool's as a
+  user part beside the function responses: unmeasured). `Backend.prompt(text, emit, images)`: native stores and
+  sends; other engines `images_unsupported`. A fork copies its parent's images (`ImageStore.take`). Not yet: the
+  worker/protocol (`Prompt.images`), CLI, models.dev `modalities.input` check, tool images, web.
 - `src/aid/wire.py` — aid's own model clients' HTTP (#65): `open_stream` (POST, 2xx or `StatusError` with the body),
   `events` (SSE data), `client` (tests patch it, called `timeout=` by keyword). No model SDK at runtime; each is a
   test dependency for differential tests (`…parse_as_…` in test_model.py and test_google_model.py). Protocol

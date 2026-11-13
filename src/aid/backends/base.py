@@ -3,7 +3,11 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
+from aid.protocol import AidError
+
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from pydantic import JsonValue
 
     from aid.protocol import (
@@ -34,9 +38,17 @@ class Backend(Protocol):
         """What the backend knows about its agent once open; the worker sends it in Hello."""
         ...
 
-    async def prompt(self, text: str, emit: Emit) -> Output: ...
+    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
+        """`images`: PNG, JPEG, GIF or WebP files that go with `text` (#66). An engine that cannot send them
+        refuses any (`refuse_images`)."""
+        ...
 
     async def cancel(self) -> None: ...
+
+
+def refuse_images(engine: str, images: Sequence[bytes]) -> None:
+    if images:
+        raise AidError("images_unsupported", f"{engine} sessions take no images yet")
 
 
 @runtime_checkable

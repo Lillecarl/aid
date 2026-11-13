@@ -11,16 +11,33 @@ from typing import TYPE_CHECKING
 import httpx2
 import pytest
 
+from aid.agent import Agent
+from aid.backends.acp import AcpBackend
+from aid.backends.claude_sdk import ClaudeSdkBackend
+from aid.backends.claude_tty import ClaudeTtyBackend
 from aid.images import MAX_BYTES, ImageStore
-from aid.messages import ImagePart, ModelRequest, ModelResponse, ToolCallPart, ToolReturnPart, UserPromptPart
-from aid.model import AnthropicModel, ModelInfo, anthropic_messages, google_contents, wire_messages
+from aid.messages import (
+    ImagePart,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
+from aid.model import AnthropicModel, ModelInfo, StreamDelta, anthropic_messages, google_contents, wire_messages
 from aid.protocol import AidError
+from tests.models import TestModel
 from tests.test_model import serve_wire, sse
+from tests.test_native_backend import backend, stored
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
     from pathlib import Path
 
+    from aid.backends.base import Backend
     from aid.messages import ModelMessage
+    from aid.protocol import SessionEvent
 
 
 def png(rgb: tuple[int, int, int] = (255, 0, 0), size: int = 8) -> bytes:
@@ -74,6 +91,14 @@ def test_a_missing_or_changed_image_is_named(tmp_path: Path) -> None:
     with pytest.raises(AidError) as missing:
         store.read(ImagePart("image/png", "0" * 64))
     assert (changed.value.code, missing.value.code) == ("image_missing", "image_missing")
+
+
+async def test_a_fork_takes_its_parents_images(tmp_path: Path) -> None:
+    parent = ImageStore(tmp_path / "parent")
+    part = parent.put(png(), tool_call_id="c1")
+    fork = ImageStore(tmp_path / "fork")
+    await fork.take(parent, [ModelRequest([UserPromptPart("see"), part])])
+    assert fork.read(part) == png()
 
 
 async def test_a_request_without_the_image_bytes_fails_by_name() -> None:
@@ -168,3 +193,51 @@ async def test_a_transport_reads_the_bytes_from_the_sessions_store(
         await model.aclose()
     image = json.loads(seen[0].content)["messages"][0]["content"][1]
     assert base64.b64decode(image["source"]["data"]) == png()
+
+
+class Looking(TestModel):
+    """Keeps what each request carried: its messages and their images' bytes."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.seen: list[tuple[list[ModelMessage], dict[str, str]]] = []
+
+    async def stream(self, messages: list[ModelMessage], info: ModelInfo) -> AsyncGenerator[StreamDelta]:
+        self.seen.append((messages, dict(await info.encoded(messages))))
+        yield StreamDelta(0, TextPart("red"))
+
+
+async def emit(event: SessionEvent) -> None:
+    pass
+
+
+async def test_a_native_prompt_sends_its_images_and_keeps_them(tmp_path: Path) -> None:
+    model = Looking()
+    store = ImageStore(tmp_path)
+    async with backend(tmp_path, Agent(model), images=store) as session:
+        assert (await session.prompt("what colour?", emit, [png()])).output == "red"
+    ((messages, encoded),) = model.seen
+    prompt = messages[-1].parts
+    assert [p.part_kind for p in prompt[:2]] == ["user-prompt", "image"]
+    image = prompt[1]
+    assert isinstance(image, ImagePart)
+    assert base64.b64decode(encoded[image.sha256]) == png()
+    kept = await stored(tmp_path)
+    assert image in kept[0].parts
+    assert store.read(image) == png()
+
+
+async def test_a_bad_image_fails_before_the_turn(tmp_path: Path) -> None:
+    model = Looking()
+    async with backend(tmp_path, Agent(model), images=ImageStore(tmp_path)) as session:
+        with pytest.raises(AidError) as refused:
+            await session.prompt("what colour?", emit, [b"text"])
+    assert (refused.value.code, model.seen) == ("bad_image", [])
+
+
+@pytest.mark.parametrize("engine", [AcpBackend, ClaudeSdkBackend, ClaudeTtyBackend])
+async def test_other_engines_refuse_images(engine: type[Backend]) -> None:
+    session = object.__new__(engine)
+    with pytest.raises(AidError) as refused:
+        await session.prompt("see", emit, [png()])
+    assert refused.value.code == "images_unsupported"

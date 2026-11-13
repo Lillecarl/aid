@@ -79,6 +79,17 @@ class ImageStore:
         parts = [p for m in messages for p in m.parts if isinstance(p, ImagePart)]
         return await anyio.to_thread.run_sync(self._encoded, parts) if parts else {}
 
+    def _take(self, other: ImageStore, parts: Sequence[ImagePart]) -> None:
+        for part in parts:
+            if not (self._dir / part.sha256).exists():
+                self.put(other.read(part), part.tool_call_id)
+
+    async def take(self, other: ImageStore, messages: Sequence[ModelMessage]) -> None:
+        """Copy the images of `messages` from `other`: a seeded history (a fork) names its parent's."""
+        parts = [p for m in messages for p in m.parts if isinstance(p, ImagePart)]
+        if parts:
+            await anyio.to_thread.run_sync(self._take, other, parts)
+
     async def add(self, data: bytes, tool_call_id: str | None = None) -> ImagePart:
         return await anyio.to_thread.run_sync(self.put, data, tool_call_id)
 

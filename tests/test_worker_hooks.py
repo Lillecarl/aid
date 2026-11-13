@@ -9,6 +9,7 @@ from aid.protocol import Done, Hook, decode_reply, encode
 from aid.worker import _Worker  # pyright: ignore[reportPrivateUsage] -- the worker's serve loop is the unit under test
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
     from pydantic import JsonValue
@@ -27,7 +28,7 @@ class _HookBackend:
     def started(self) -> Started:
         raise AssertionError("unreachable")
 
-    async def prompt(self, text: str, emit: Emit) -> Output:
+    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
         raise AssertionError("unreachable")
 
     async def cancel(self) -> None:
@@ -44,7 +45,7 @@ class _PlainBackend:
     def started(self) -> Started:
         raise AssertionError("unreachable")
 
-    async def prompt(self, text: str, emit: Emit) -> Output:
+    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
         raise AssertionError("unreachable")
 
     async def cancel(self) -> None:

@@ -60,6 +60,7 @@ from libpymux import Server
 from pydantic import JsonValue
 
 from aid import hook as hook_command
+from aid.backends.base import refuse_images
 from aid.backends.permissions import PermissionWaits
 from aid.env import agent_environment
 from aid.mcp import MCP_CONFIG_FILE, claude_config, claude_rules, session_servers, write_private
@@ -95,7 +96,7 @@ from aid.transcript import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Sequence
 
     from libpymux import Pane
 
@@ -577,7 +578,8 @@ class ClaudeTtyBackend:
     async def _find_transcript(self) -> Path | None:
         return await anyio.to_thread.run_sync(find_transcript, self._transcripts, self._session_id)
 
-    async def prompt(self, text: str, emit: Emit) -> Output:
+    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
+        refuse_images("claude-tty", images)
         if self._record is None:
             raise RuntimeError("the transcript is not being followed")
         claim = _Claim(emit)

@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
     from pathlib import Path
 
+    from aid.images import ImageStore
     from aid.model import Transport
 
 
@@ -65,6 +66,7 @@ async def backend(
     receive: Callable[[], Awaitable[list[MessageEntry]]] | None = None,
     transport: Transport | None = None,
     price_as: str | None = None,
+    images: ImageStore | None = None,
 ) -> AsyncGenerator[NativeBackend]:
     coding = Coding(
         cwd=directory,
@@ -87,6 +89,7 @@ async def backend(
         receive=receive,
         transport=transport,
         price_as=price_as,
+        images=images,
     )
     try:
         yield session

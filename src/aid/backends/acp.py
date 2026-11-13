@@ -41,6 +41,7 @@ from acp.schema import (
 )
 from pydantic import BaseModel, Field, ValidationError
 
+from aid.backends.base import refuse_images
 from aid.backends.permissions import PermissionWaits
 from aid.env import agent_environment
 from aid.mcp import session_servers, to_acp
@@ -66,7 +67,7 @@ from aid.protocol import (
 from aid.spec import PermissionMode
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator
+    from collections.abc import AsyncGenerator, Sequence
 
     from acp.client.connection import ClientSideConnection
     from acp.connection import StreamEvent
@@ -349,7 +350,8 @@ class AcpBackend:
                 if self._events is not None and (session_event := to_event(update)) is not None:
                     self._events.send_nowait(session_event)
 
-    async def prompt(self, text: str, emit: Emit) -> Output:
+    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
+        refuse_images("ACP", images)
         send, receive = anyio.create_memory_object_stream[SessionEvent](math.inf)
         chunks: list[str] = []
 

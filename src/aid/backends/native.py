@@ -26,8 +26,10 @@ from aid.backends.permissions import PermissionWaits
 from aid.catalog import session_catalog
 from aid.client import connect
 from aid.coding import CODING, OUTPUTS_DIR, Coding, Verdict, asking_names, coding_tools
+from aid.images import ImageStore
 from aid.instructions import compose, environment
 from aid.messages import (
+    ImagePart,
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
@@ -76,7 +78,7 @@ from aid.supervision import supervisor_tools
 from aid.tools import tool_paths
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncGenerator, Awaitable, Callable
+    from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 
     from pydantic import JsonValue
 
@@ -409,6 +411,7 @@ class NativeBackend:
         price_as: str | None = None,
         fresh_turns: bool = False,
         offers: Callable[[str], bool] | None = None,
+        images: ImageStore | None = None,
     ) -> None:
         """`transport`: the agent's model, resolved from its name (`aid.providers.resolve`); the backend owns and
         prices it. Without one, a name resolves through `model_for` alone. `price_as`: the name models.dev prices it
@@ -416,6 +419,7 @@ class NativeBackend:
         the model's window from models.dev. `offers`: the session's tool ceiling; a tool it refuses is never offered."""
         self._agent = agent
         self._history_file = history_file
+        self._images = images
         self._history = history
         self._fresh_turns = fresh_turns
         self._toolsets = toolsets
@@ -518,17 +522,20 @@ class NativeBackend:
     ) -> bool:
         return self._coding.waits.answer(request_id, option_id, plugin, text, supervisor)
 
-    async def prompt(self, text: str, emit: Emit) -> Output:
+    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
+        if images and self._images is None:
+            raise AidError("images_unsupported", "this session keeps no images")
+        parts = [await self._images.add(image) for image in images] if self._images else []
         self._coding.emit = emit
         token = CODING.set(self._coding)
         try:
-            return await self._prompt(text, emit)
+            return await self._prompt(text, emit, parts)
         finally:
             CODING.reset(token)
             self._coding.waits.cancel_all()
             self._coding.emit = None
 
-    async def _prompt(self, text: str, emit: Emit) -> Output:
+    async def _prompt(self, text: str, emit: Emit, images: Sequence[ImagePart]) -> Output:
         if self._fresh_turns:
             # Only the instructions before the first prompt stay: the same cached prefix for every turn.
             lead = next(
@@ -548,7 +555,13 @@ class NativeBackend:
             preserve_signed_thinking=self._preserve_signed_thinking(),
         )
         messages.append(
-            ModelRequest(parts=[UserPromptPart(text), turn_metadata(used, self._desired_max, str(self._coding.cwd))])
+            ModelRequest(
+                parts=[
+                    UserPromptPart(text),
+                    *images,
+                    turn_metadata(used, self._desired_max, str(self._coding.cwd)),
+                ]
+            )
         )
         usage = Usage(requests=0, models=[])
         completed = False
@@ -581,7 +594,9 @@ class NativeBackend:
                     usage_observed = False
                     price = await self._request_price()
                     truncated = False
-                    info = ModelInfo(list(self._tools.values()), self._agent.output_type, self._agent.model_settings)
+                    info = ModelInfo(
+                        list(self._tools.values()), self._agent.output_type, self._agent.model_settings, self._images
+                    )
                     wire = prune_history(
                         [*self._history, *messages[:-1]],
                         max(0, len(self._history) - self._open_tail),
@@ -839,7 +854,7 @@ class NativeBackend:
                 parts=[UserPromptPart(content=f"Summarize this conversation for upcoming work: {instructions}")]
             ),
         ]
-        response = await model.request(request, ModelInfo(settings=self._agent.model_settings))
+        response = await model.request(request, ModelInfo(settings=self._agent.model_settings, images=self._images))
         digest = "\n".join(part.content for part in response.parts if isinstance(part, TextPart)).strip()
         if not digest:
             raise AidError("empty_digest", "the summarizer returned no text")
@@ -914,11 +929,14 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         context = environment(spec.cwd, state_dir.name, runs_programs=runs_programs, moves=moves)
         return "\n\n".join(filter(None, [agent.instructions, composed, context]))
 
+    images = ImageStore(Path(state_dir))
     open_tail = 0
     if not history and spec.seed_history is not None:
         seed = await anyio.Path(spec.seed_history).read_bytes()
         history = ModelMessagesTypeAdapter.validate_json(seed)
         open_tail = open_turn(history)
+        if spec.parent is not None:
+            await images.take(ImageStore(Path(state_dir.parent / spec.parent)), history)
         await _write_atomic(history_file, seed)
     elif not history:
         composed = await anyio.to_thread.run_sync(refresh_instructions)
@@ -976,6 +994,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             price_as=catalog_model(agent.model, catalog.model_providers) if isinstance(agent.model, str) else None,
             fresh_turns=spec.fresh_turns or (definition is not None and definition.fresh_turns),
             offers=spec.offers,
+            images=images,
         )
         yield backend
     finally:
