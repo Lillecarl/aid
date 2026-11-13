@@ -888,6 +888,31 @@ def test_anthropic_events_parse_as_the_sdk_parses_them() -> None:
                 assert isinstance(ours, anthropic_api.BlockStop)
 
 
+def test_anthropic_output_schema_matches_the_sdk() -> None:
+    """Differential: structured output's schema as the SDK's `transform_schema` makes it. Without closed objects the
+    API answers 400 (measured 2026-11-13)."""
+    from typing import Literal  # noqa: PLC0415
+
+    from anthropic import transform_schema  # noqa: PLC0415 -- a test dependency only
+    from pydantic import BaseModel, Field, TypeAdapter  # noqa: PLC0415
+
+    class Finding(BaseModel):
+        """One finding."""
+
+        line: int = Field(ge=1)
+        kind: Literal["bug", "style"]
+        note: str | None = Field(default=None, max_length=80)
+
+    class Report(BaseModel):
+        findings: list[Finding] = Field(min_length=1)
+        when: str = Field(json_schema_extra={"format": "date"})
+        tags: list[str] = Field(min_length=3)
+        verdict: Literal["approve"] | Literal["reject"]
+
+    schema = TypeAdapter(Report).json_schema()
+    assert anthropic_api.output_schema(schema) == transform_schema(schema)
+
+
 def test_chat_chunks_and_embeddings_parse_as_the_sdk_parses_them() -> None:
     """Differential: aid's Chat Completions models against the OpenAI SDK's, on the same JSON (#65)."""
     from openai.types import CreateEmbeddingResponse  # noqa: PLC0415 -- a test dependency only

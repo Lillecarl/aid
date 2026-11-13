@@ -298,7 +298,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   shared by every client.
 - `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API over aid's own client, `aid.anthropic_api`: typed core, other
   settings pass through as body fields; native blocks, an `error` event overloaded/api/rate → `ModelUnavailable`,
-  `extra_headers` carry betas, automatic caching on), `OpenAIChatModel` (Chat Completions, `aid.chat_api`; an `error` event after a 200, as OpenRouter sends,
+  `extra_headers` carry betas, automatic caching on; structured output's schema through `anthropic_api.output_schema`,
+  the SDK's `transform_schema`: an open object is a 400, #71), `OpenAIChatModel` (Chat Completions, `aid.chat_api`; an `error` event after a 200, as OpenRouter sends,
   5xx/429/overload → `ModelUnavailable`, else `model_error`), `OpenAIResponsesModel` (#70, OpenAI's Responses API:
   `store: false`, reasoning replayed sealed as `ThinkingPart` extra `encrypted_content` (`ENCRYPTED`; not `signature`,
   which other wires replay and `prune_history` strips) with an empty summary and no id, a sealed item nothing follows

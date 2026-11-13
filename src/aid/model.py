@@ -1132,7 +1132,10 @@ class AnthropicModel:
             config = settings.get("output_config")
             settings["output_config"] = {
                 **(config if isinstance(config, dict) else {}),
-                "format": {"type": "json_schema", "schema": TypeAdapter(info.output_type).json_schema()},
+                "format": {
+                    "type": "json_schema",
+                    "schema": anthropic_api.output_schema(TypeAdapter(info.output_type).json_schema()),
+                },
             }
         try:
             return anthropic_api.Request.model_validate(

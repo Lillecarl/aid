@@ -10,9 +10,10 @@ import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 import pytest
+from pydantic import BaseModel
 
 from aid.agent import Agent
 from aid.coding import read
@@ -192,6 +193,24 @@ async def test_an_image_from_a_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     history = ModelMessagesTypeAdapter.validate_json((tmp_path / "history.json").read_bytes())
     assert any(isinstance(p, ImagePart) and p.tool_call_id for m in history for p in m.parts)
     assert_by_file_id(tmp_path, name)
+
+
+class Verdict(BaseModel):
+    colour: Literal["red", "green", "blue"]
+    sure: bool
+
+
+@pytest.mark.parametrize("route", ROUTES, ids=[route.model for route in ROUTES])
+async def test_a_structured_answer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route) -> None:
+    """An agent with an `output_type` gets an answer of that shape: each wire's schema setting reaches the server."""
+    keyed(monkeypatch, route.key, route.source_key)
+    monkeypatch.delenv(ENV_PRICES)
+    providers = discover([PLUGINS], only=[route.plugin]).model_providers if route.plugin else {}
+    agent = Agent(route.model, "You are a test.", output_type=Verdict, model_settings=dict(route.settings or {}))
+    transport = await resolve(route.model, providers, tmp_path.name)
+    async with backend(tmp_path, agent, transport=transport, price_as=catalog_model(route.model, providers)) as session:
+        answer = await session.prompt("The sky on a clear day: which colour, and are you sure?", emit_nothing)
+    assert Verdict.model_validate(answer.output) == Verdict(colour="blue", sure=True)
 
 
 def assert_by_file_id(root: Path, model: str) -> None:

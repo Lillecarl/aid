@@ -229,3 +229,62 @@ class StoredFile(_Wire):
 
 MISSING_FILE: Final = re.compile(r"File `([^`]+)` not found")
 """A request naming a deleted or unknown file id: 404 `not_found_error`, "File `file_…` not found." (measured)."""
+
+
+STRING_FORMATS: Final = frozenset(
+    {"date-time", "time", "date", "duration", "email", "hostname", "uri", "ipv4", "ipv6", "uuid"}
+)
+
+
+def output_schema(schema: JsonValue) -> JsonValue:
+    """A JSON schema as structured output takes it, as the SDK's `transform_schema` makes it: every object closed
+    (`additionalProperties: false`, else 400, measured 2026-11-13), `oneOf` as `anyOf`, and keywords the API does not
+    take (numeric bounds, string lengths, other formats, …) moved into the description, where the model may still
+    follow them. A schema with no type is left as it is."""
+    if not isinstance(schema, dict):
+        return schema
+    rest = dict(schema)
+    out: dict[str, JsonValue] = {}
+    if isinstance(defs := rest.pop("$defs", None), dict):
+        out["$defs"] = {name: output_schema(sub) for name, sub in defs.items()}
+    if (ref := rest.pop("$ref", None)) is not None:
+        out["$ref"] = ref
+        return out
+    kind = rest.pop("type", None)
+    variants = rest.pop("anyOf", None) or rest.pop("oneOf", None)
+    every = rest.pop("allOf", None)
+    if isinstance(variants, list):
+        out["anyOf"] = [output_schema(v) for v in variants]
+    elif isinstance(every, list):
+        out["allOf"] = [output_schema(v) for v in every]
+    elif kind is None:
+        return {**schema, **out}
+    else:
+        out["type"] = kind
+    for key in ("enum", "description", "title"):
+        if (value := rest.pop(key, None)) is not None:
+            out[key] = value
+    match kind:
+        case "object":
+            properties = rest.pop("properties", None)
+            out["properties"] = (
+                {key: output_schema(sub) for key, sub in properties.items()} if isinstance(properties, dict) else {}
+            )
+            rest.pop("additionalProperties", None)
+            out["additionalProperties"] = False
+            if (required := rest.pop("required", None)) is not None:
+                out["required"] = required
+        case "string" if rest.get("format") in STRING_FORMATS:
+            out["format"] = rest.pop("format")
+        case "array":
+            if (items := rest.pop("items", None)) is not None:
+                out["items"] = output_schema(items)
+            if rest.get("minItems") in (0, 1):
+                out["minItems"] = rest.pop("minItems")
+        case _:
+            pass
+    if rest:
+        note = "{" + ", ".join(f"{key}: {value}" for key, value in rest.items()) + "}"
+        description = out.get("description")
+        out["description"] = f"{description}\n\n{note}" if isinstance(description, str) else note
+    return out
