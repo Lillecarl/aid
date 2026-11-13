@@ -14,7 +14,9 @@ import httpx2
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from aid import anthropic_api, chat_api, gemini, wire
+from aid.images import NO_IMAGES, ImageStore, encoded
 from aid.messages import (
+    ImagePart,
     ModelMessage,
     ModelResponse,
     RetryPromptPart,
@@ -33,6 +35,7 @@ if TYPE_CHECKING:
     from pydantic.json_schema import JsonSchemaValue
 
     from aid.agent import Tool
+    from aid.images import Encoded
 
 
 @dataclass
@@ -40,6 +43,11 @@ class ModelInfo:
     tools: Sequence[Tool] = ()
     output_type: Any = str
     settings: Mapping[str, JsonValue] = field(default_factory=dict[str, JsonValue])
+    images: ImageStore | None = None
+    """The bytes of the history's `ImagePart`s. None: a request carrying one fails `image_missing`."""
+
+    async def encoded(self, messages: Sequence[ModelMessage]) -> Encoded:
+        return NO_IMAGES if self.images is None else await self.images.encoded(messages)
 
 
 @dataclass
@@ -141,7 +149,9 @@ def model_label(model: object) -> str:
     return str(getattr(model, "model_name", type(model).__name__))
 
 
-def wire_messages(messages: Sequence[ModelMessage], *, reasoning: bool = True) -> list[chat_api.Message]:
+def wire_messages(
+    messages: Sequence[ModelMessage], *, reasoning: bool = True, images: Encoded = NO_IMAGES
+) -> list[chat_api.Message]:
     """Stored parts as Chat Completions messages, keeping tool identities and, with `reasoning`, reasoning text."""
     result: list[chat_api.Message] = []
     for message in messages:
@@ -167,12 +177,36 @@ def wire_messages(messages: Sequence[ModelMessage], *, reasoning: bool = True) -
                 item["reasoning_content"] = "".join(p.content for p in thoughts)
             result.append(item)
         else:
+            # A tool message takes text only: a call's image goes in a user message after the request's last tool
+            # message, since a user message between them would part the answers from their calls.
+            held: list[chat_api.TextContent | chat_api.ImageContent] = []
+            prompt: chat_api.UserMessage | None = None
             for part in message.parts:
+                if held and not isinstance(part, ToolReturnPart | RetryPromptPart | ImagePart):
+                    result.append({"role": "user", "content": list(held)})
+                    held.clear()
+                if not isinstance(part, ImagePart):
+                    prompt = None
                 match part:
+                    case ImagePart():
+                        url = f"data:{part.media_type};base64,{encoded(images, part)}"
+                        block: chat_api.ImageContent = {"type": "image_url", "image_url": {"url": url}}
+                        if part.tool_call_id is not None:
+                            held.append(block)
+                        elif prompt is not None:
+                            content = prompt["content"]
+                            if isinstance(content, str):
+                                blocks: list[chat_api.TextContent | chat_api.ImageContent] = [
+                                    {"type": "text", "text": content}
+                                ]
+                                prompt["content"] = content = blocks
+                            content.append(block)
+                        else:
+                            result.append(prompt := {"role": "user", "content": [block]})
                     case SystemPromptPart():
                         result.append({"role": "system", "content": part.content})
                     case UserPromptPart():
-                        result.append({"role": "user", "content": str(part.content)})
+                        result.append(prompt := {"role": "user", "content": str(part.content)})
                     case ToolReturnPart():
                         result.append(
                             {"role": "tool", "tool_call_id": part.tool_call_id, "content": part.model_response_str()}
@@ -186,6 +220,9 @@ def wire_messages(messages: Sequence[ModelMessage], *, reasoning: bool = True) -
                             result.append({"role": "user", "content": part.model_response()})
                     case _:
                         raise ValueError("response part in a model request")
+            if held:
+                tail: chat_api.UserMessage = {"role": "user", "content": held}
+                result.append(tail)
     return result
 
 
@@ -414,8 +451,8 @@ class OpenAIChatModel:
     replays_reasoning: ClassVar[bool] = True
     """Reasoning text goes back beside the content (`reasoning_content`); False for a provider that refuses it."""
 
-    def wire(self, messages: Sequence[ModelMessage]) -> list[chat_api.Message]:
-        return wire_messages(messages, reasoning=self.replays_reasoning)
+    def wire(self, messages: Sequence[ModelMessage], images: Encoded = NO_IMAGES) -> list[chat_api.Message]:
+        return wire_messages(messages, reasoning=self.replays_reasoning, images=images)
 
     def response_format(self, schema: JsonSchemaValue) -> chat_api.ResponseFormat:
         """How a request asks for structured output: the schema itself, where the provider takes one."""
@@ -425,8 +462,10 @@ class OpenAIChatModel:
         """A system note stating the output schema, for a provider whose JSON mode takes no schema."""
         return None
 
-    def _body(self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue]) -> bytes:
-        wired = self.wire(messages)
+    def _body(
+        self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue], images: Encoded
+    ) -> bytes:
+        wired = self.wire(messages, images)
         if info.output_type is not str:
             schema = TypeAdapter(info.output_type).json_schema()
             settings["response_format"] = cast(JsonValue, self.response_format(schema))
@@ -455,7 +494,7 @@ class OpenAIChatModel:
             **(self._provider.headers if self._provider else {}),
             **extra_headers,
         }
-        body = self._body(messages, info, settings)
+        body = self._body(messages, info, settings, await info.encoded(messages))
         if self._http is None:
             self._http = wire.client(timeout=DEFAULT_TIMEOUT)
         url = chat_api.url(key.base_url, "chat/completions")
@@ -539,7 +578,7 @@ ANTHROPIC_LEGACY_MAX_TOKENS: Final = 4096
 
 
 def anthropic_messages(
-    messages: Sequence[ModelMessage],
+    messages: Sequence[ModelMessage], images: Encoded = NO_IMAGES
 ) -> tuple[list[anthropic_api.TextBlock], list[anthropic_api.Message]]:
     """Stored parts as the Messages API's (system, messages). Leading system prompts become `system`; a later one
     stays in place as user text. Consecutive same-role parts share one message, so the tool results of one
@@ -586,6 +625,15 @@ def anthropic_messages(
                     add("user", anthropic_api.TextBlock(text=part.content))
                 case UserPromptPart():
                     add("user", anthropic_api.TextBlock(text=str(part.content)))
+                case ImagePart():
+                    source = anthropic_api.ImageSource(media_type=part.media_type, data=encoded(images, part))
+                    image = anthropic_api.ImageBlock(source=source)
+                    if (answer := _tool_result(turns, part.tool_call_id)) is None:
+                        add("user", image)
+                    else:
+                        if isinstance(answer.content, str):
+                            answer.content = [anthropic_api.TextBlock(text=answer.content)]
+                        answer.content.append(image)
                 case ToolReturnPart():
                     add(
                         "user",
@@ -603,6 +651,15 @@ def anthropic_messages(
                 case _:
                     raise ValueError("response part in a model request")
     return system, turns
+
+
+def _tool_result(turns: list[anthropic_api.Message], call: str | None) -> anthropic_api.ToolResultBlock | None:
+    """The answer to `call` in the last user turn, where its image goes: a tool result may hold images."""
+    if call is None or not turns or turns[-1].role != "user":
+        return None
+    return next(
+        (b for b in turns[-1].content if isinstance(b, anthropic_api.ToolResultBlock) and b.tool_use_id == call), None
+    )
 
 
 def anthropic_tool(definition: chat_api.FunctionTool) -> anthropic_api.ToolDefinition:
@@ -642,9 +699,9 @@ class AnthropicModel:
             await http.aclose()
 
     def _request(
-        self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue]
+        self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue], images: Encoded
     ) -> anthropic_api.Request:
-        system, wired = anthropic_messages(messages)
+        system, wired = anthropic_messages(messages, images)
         settings.setdefault(
             "max_tokens", ANTHROPIC_LEGACY_MAX_TOKENS if self._model.startswith("claude-3") else ANTHROPIC_MAX_TOKENS
         )
@@ -687,7 +744,7 @@ class AnthropicModel:
             **(self._provider.headers if self._provider else {}),
             **extra_headers,
         }
-        body = self._request(messages, info, settings).body()
+        body = self._request(messages, info, settings, await info.encoded(messages)).body()
         response = await self._open(key, body, headers, io_timeout)
         arguments: dict[int, bool] = {}
         try:
@@ -763,7 +820,9 @@ def _signature(part: TextPart | ToolCallPart) -> str | None:
     return signature if isinstance(signature, str) else None
 
 
-def google_contents(messages: Sequence[ModelMessage]) -> tuple[list[gemini.Part], list[gemini.Content]]:
+def google_contents(
+    messages: Sequence[ModelMessage], images: Encoded = NO_IMAGES
+) -> tuple[list[gemini.Part], list[gemini.Content]]:
     """Stored parts as the Gemini API's (system instruction parts, contents), merged by role as
     `anthropic_messages` does. A thought signature goes back on the part that carried it: Gemini 3 refuses a
     function call without its own. Thinking replays only signed."""
@@ -810,6 +869,9 @@ def google_contents(messages: Sequence[ModelMessage]) -> tuple[list[gemini.Part]
                     add("user", gemini.Part(text=part.content))
                 case UserPromptPart():
                     add("user", gemini.Part(text=str(part.content)))
+                case ImagePart():
+                    blob = gemini.Blob(mime_type=part.media_type, data=encoded(images, part))
+                    add("user", gemini.Part(inline_data=blob))
                 case ToolReturnPart():
                     add("user", answer(part, {"output": part.model_response_str()}))
                 case RetryPromptPart() if part.tool_name:
@@ -854,7 +916,9 @@ class GoogleModel:
         if http is not None:
             await http.aclose()
 
-    def _request(self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue]) -> bytes:
+    def _request(
+        self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue], images: Encoded
+    ) -> bytes:
         try:
             chosen = gemini.Settings.model_validate(settings)
         except ValidationError as error:
@@ -867,7 +931,7 @@ class GoogleModel:
                     "response_json_schema": TypeAdapter(info.output_type).json_schema(),
                 }
             )
-        system, contents = google_contents(messages)
+        system, contents = google_contents(messages, images)
         request = gemini.Request(
             contents=contents,
             system_instruction=gemini.Content(parts=system) if system else None,
@@ -901,7 +965,8 @@ class GoogleModel:
         key = self._key(info.settings)
         settings = _request_settings(info.settings, self._provider)
         timeout = _TIMEOUT.validate_python(settings.pop("timeout"))
-        response = await self._open(key, self._request(messages, info, settings), timeout)
+        body = self._request(messages, info, settings, await info.encoded(messages))
+        response = await self._open(key, body, timeout)
         calls = 0
         try:
             async for data in wire.events(response):

@@ -38,8 +38,15 @@ class FunctionResponse(_Wire):
     id: str | None = None
 
 
+class Blob(_Wire):
+    mime_type: str
+    data: str
+    """Base64."""
+
+
 class Part(_Wire):
     text: str | None = None
+    inline_data: Blob | None = None
     thought: bool | None = None
     thought_signature: str | None = None
     function_call: FunctionCall | None = None

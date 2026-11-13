@@ -103,8 +103,28 @@ class RetryPromptPart(_Record):
         return str(self.content)
 
 
+class ImagePart(_Record):
+    """An image in a request, its bytes in the session's `aid.images.ImageStore` by `sha256`. It follows the
+    UserPromptPart it goes with, or, with `tool_call_id`, that call's ToolReturnPart."""
+
+    media_type: str
+    sha256: str
+    tool_call_id: str | None = None
+    part_kind: Literal["image"] = "image"
+
+    def __init__(self, media_type: str, sha256: str, tool_call_id: str | None = None, **kwargs: JsonValue) -> None:
+        super().__init__(media_type=media_type, sha256=sha256, tool_call_id=tool_call_id, **kwargs)
+
+
 type Part = Annotated[
-    SystemPromptPart | UserPromptPart | TextPart | ThinkingPart | ToolCallPart | ToolReturnPart | RetryPromptPart,
+    SystemPromptPart
+    | UserPromptPart
+    | ImagePart
+    | TextPart
+    | ThinkingPart
+    | ToolCallPart
+    | ToolReturnPart
+    | RetryPromptPart,
     Field(discriminator="part_kind"),
 ]
 
