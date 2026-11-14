@@ -8,7 +8,7 @@ import httpx2
 import pytest
 
 import aid.backends.native as native_backend
-from aid import anthropic_api, chat_api, wire
+from aid import anthropic_api
 from aid.agent import Agent, Tool
 from aid.discovery import Catalog
 from aid.messages import (
@@ -31,17 +31,17 @@ from aid.model import (
     ModelInfo,
     OpenAIChatModel,
     OpenAIResponsesModel,
-    Provider,
     RequestUsage,
-    StreamBroken,
     accumulate,
     anthropic_messages,
     model_for,
     wire_messages,
 )
-from aid.prices import ENV_PRICES
 from aid.protocol import AidError, SessionEvent, Usage
 from aid.spec import NativeSpec
+from aid_models import chat_api, wire
+from aid_models.prices import ENV_PRICES
+from aid_models.transport import Provider, StreamBroken
 from tests.test_native_backend import backend
 
 if TYPE_CHECKING:
@@ -613,7 +613,7 @@ async def test_a_mistyped_client_setting_fails_before_the_sdk(
 
 
 def serve_wire(monkeypatch: pytest.MonkeyPatch, handle: Callable[[httpx2.Request], httpx2.Response]) -> None:
-    """aid's own clients (`aid.wire`) talk to `handle` instead of the server."""
+    """aid's own clients (`aid_models.wire`) talk to `handle` instead of the server."""
 
     def client(timeout: float) -> httpx2.AsyncClient:
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), timeout=timeout)

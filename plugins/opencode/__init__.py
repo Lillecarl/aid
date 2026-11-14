@@ -17,9 +17,10 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 import aid
-from aid import models_dev
-from aid.model import AnthropicModel, OpenAIChatModel, Provider
+from aid.model import AnthropicModel, OpenAIChatModel
 from aid.protocol import ModelEntry
+from aid_models import models_dev
+from aid_models.transport import Provider
 
 if TYPE_CHECKING:
     from aid.model import Transport

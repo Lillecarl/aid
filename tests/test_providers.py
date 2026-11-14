@@ -13,12 +13,13 @@ from aid.agent import Agent
 from aid.backends.native import session_agent
 from aid.discovery import discover
 from aid.messages import ModelMessage, ModelRequest, UserPromptPart
-from aid.model import AnthropicModel, ModelInfo, OpenAIChatModel, Provider
+from aid.model import AnthropicModel, ModelInfo, OpenAIChatModel
 from aid.model_lists import providers
-from aid.models_dev import ENV_SOURCE
 from aid.protocol import AidError, ProviderInfo
 from aid.providers import catalog_model, catalog_provider, claimed, resolve
 from aid.spec import NativeSpec
+from aid_models.models_dev import ENV_SOURCE
+from aid_models.transport import Provider
 
 if TYPE_CHECKING:
     from pathlib import Path

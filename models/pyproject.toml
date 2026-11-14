@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aid-models"
+version = "0.1.0"
+description = "aid's own model clients as a library: provider names and keys, embeddings, reranking, prices. No model SDK."
+requires-python = ">=3.14"
+dependencies = ["anyio>=4.10", "httpx2", "pydantic>=2.11", "structlog>=24.4"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aid_models"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+anyio_mode = "auto"

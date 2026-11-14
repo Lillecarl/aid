@@ -44,21 +44,7 @@ from aid.messages import (
     UserPromptPart,
 )
 from aid.messaging import ARRIVED, arrived
-from aid.model import (
-    Hosted,
-    Model,
-    ModelInfo,
-    RequestUsage,
-    StreamBroken,
-    Transport,
-    accumulate,
-    check_host,
-    model_for,
-    split_name,
-)
-from aid.models_dev import catalog as models_catalog
-from aid.models_dev import inputs, window
-from aid.prices import CURRENCY, Price, lookup
+from aid.model import Model, ModelInfo, RequestUsage, Transport, accumulate, model_for
 from aid.protocol import (
     AidError,
     AttachmentRef,
@@ -78,6 +64,10 @@ from aid.removals import PLANS_FILE
 from aid.slots import Slotted, limited_hosts
 from aid.supervision import supervisor_tools
 from aid.tools import tool_paths
+from aid_models.models_dev import catalog as models_catalog
+from aid_models.models_dev import inputs, window
+from aid_models.prices import CURRENCY, Price, lookup
+from aid_models.transport import Hosted, StreamBroken, check_host, split_name
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence

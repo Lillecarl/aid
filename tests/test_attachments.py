@@ -44,16 +44,16 @@ from aid.model import (
     GoogleModel,
     ModelInfo,
     OpenAIResponsesModel,
-    Provider,
     StreamDelta,
     anthropic_messages,
     google_contents,
     responses_input,
     wire_messages,
 )
-from aid.prices import ENV_PRICES
 from aid.protocol import AidError, AttachmentRef, Prompt, PromptEntry, ToolCall
 from aid.spec import PermissionMode
+from aid_models.prices import ENV_PRICES
+from aid_models.transport import Provider
 from tests.models import TestModel
 from tests.test_google_model import chunk
 from tests.test_model import serve_wire, sse

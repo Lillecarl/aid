@@ -3,7 +3,7 @@
 The wire is Cohere's `/rerank` as OpenRouter serves it for Voyage AI and Cohere models (measured 2026-11-13:
 `results[{index, relevance_score, document}]`, `usage{total_tokens, cost}`). `aid.providers.reranker` resolves a
 `provider/model` name through the plugin claiming its prefix (`ModelProvider.reranker`). Rerankers run where their
-caller runs, never in the daemon; a private caller checks `host()` first (`aid.model.check_host`).
+caller runs, never in the daemon; a private caller checks `host()` first (`aid_models.transport.check_host`).
 """
 
 from __future__ import annotations
@@ -16,14 +16,14 @@ from typing import TYPE_CHECKING, Final, Protocol
 import httpx2
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
-from aid import chat_api, prices, wire
-from aid.model import client_key, model_answer, split_name
-from aid.protocol import AidError
+from aid_models import chat_api, prices, wire
+from aid_models.errors import AidError
+from aid_models.transport import client_key, model_answer, split_name
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-    from aid.model import ClientKey, Provider
+    from aid_models.transport import ClientKey, Provider
 
 TIMEOUT: Final = 120.0
 

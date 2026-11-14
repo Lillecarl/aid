@@ -79,7 +79,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
 ## Layout
 
 - `src/aid/spec.py` — `AcpSpec` / `NativeSpec` / `ClaudeTtySpec` / `ClaudeSdkSpec`: what a session runs.
-- `src/aid/protocol.py` — pydantic messages on the zmq sockets; `AidError`.
+- `src/aid/protocol.py` — pydantic messages on the zmq sockets; `AidError`, `ModelCost`, `ModelEntry` (re-exported
+  from `aid_models`: same classes).
 - `src/aid/daemon.py` — ROUTER for clients (`control.sock`), ROUTER for workers (`workers.sock`), session state.
 - `src/aid/launcher.py` — `Launcher` protocol; `ForkserverLauncher`.
 - `src/aid/worker.py` — worker entry `main(endpoint, server_key, public_key, secret_key, spec_json, state_dir)`;
@@ -298,23 +299,23 @@ on reusable decisions and current boundaries; put long investigations and dated 
   that request; a gone file (Anthropic 404 "File `…` not found", Gemini 403 "access the File … or it may not exist",
   OpenAI 404 "Files [file-…] were not found") drops those ids, uploads again, resends once. aid never deletes uploaded
   files. Chat Completions: base64 always (images by id: refused; aid sends no PDF by id there).
-- `src/aid/wire.py` — aid's own model clients' HTTP (#65): `open_stream` (POST, 2xx or `StatusError` with the body),
+- `models/src/aid_models/wire.py` — aid's own model clients' HTTP (#65): `open_stream` (POST, 2xx or `StatusError` with the body),
   `events` (SSE data), `client` (tests patch it, called `timeout=` by keyword). No model SDK at runtime; each is a
   test dependency for differential tests (`…parse_as_…` in test_model.py and test_google_model.py). Protocol
-  modules: `aid.gemini`, `aid.anthropic_api`, `aid.chat_api` (Chat Completions + embeddings: request TypedDicts,
-  response models keep unknown fields as `model_extra`), `aid.responses_api` (#70). `model.open_model_stream`: open + `max_retries` + naming,
+  modules: `aid_models.gemini`, `aid.anthropic_api`, `aid_models.chat_api` (Chat Completions + embeddings: request TypedDicts,
+  response models keep unknown fields as `model_extra`), `aid.responses_api` (#70). `aid_models.transport.open_model_stream`: open + `max_retries` + naming,
   shared by every client.
 - `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API over aid's own client, `aid.anthropic_api`: typed core, other
   settings pass through as body fields; native blocks, an `error` event overloaded/api/rate → `ModelUnavailable`,
   `extra_headers` carry betas, automatic caching on; structured output's schema through `anthropic_api.output_schema`,
-  the SDK's `transform_schema`: an open object is a 400, #71), `OpenAIChatModel` (Chat Completions, `aid.chat_api`; an `error` event after a 200, as OpenRouter sends,
+  the SDK's `transform_schema`: an open object is a 400, #71), `OpenAIChatModel` (Chat Completions, `aid_models.chat_api`; an `error` event after a 200, as OpenRouter sends,
   5xx/429/overload → `ModelUnavailable`, else `model_error`), `OpenAIResponsesModel` (#70, OpenAI's Responses API:
   `store: false`, reasoning replayed sealed as `ThinkingPart` extra `encrypted_content` (`ENCRYPTED`; not `signature`,
   which other wires replay and `prune_history` strips) with an empty summary and no id, a sealed item nothing follows
   dropped; tools `strict: false` (unset = strict, measured); defaults `include` encrypted reasoning and
   `reasoning.summary: auto`, the session's `reasoning` merged over; `error`/`response.failed` codes in
   `responses_api.TRANSIENT` → `ModelUnavailable`; measured facts in the module docstring) and `GoogleModel`
-  (Gemini `streamGenerateContent` over aid's own client, no SDK (#65): `aid.gemini` types the wire, settings are
+  (Gemini `streamGenerateContent` over aid's own client, no SDK (#65): `aid_models.gemini` types the wire, settings are
   its field names in either spelling, unknown → `bad_model_settings`; `thought_signature` kept as the API's base64
   on the Text/ToolCall part that carried it, Gemini's call id as `google_id` beside aid's; prompt counts include
   cache reads), each taking a
@@ -337,7 +338,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   plugin's models.dev id where its prefix differs: that id then resolves to an error naming the plugin's prefix, is
   left out of listings, and prices and backfills the plugin's models (`catalog_model`, `price_as`). Providers are
   stateless and built per use in workers; the transport is the backend's to close and price.
-- `src/aid/models_dev.py` — models.dev's catalog (`~/.cache/aid/models.dev.json`, refetched daily, stale kept on
+- `models/src/aid_models/models_dev.py` — models.dev's catalog (`~/.cache/aid/models.dev.json`, refetched daily, stale kept on
   failure; `AID_MODEL_PRICES` = URL, file or `off`, tests set `off`), typed per provider and model. `prices.py`
   prices from it: the native backend prices each request of a model it resolved from a name (context tiers
   included) into `Usage.cost`, a per-turn amount that summaries add; `session_cost` stays the agent's own total.
@@ -521,7 +522,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   required on `add`: vec0 refuses NULL) recorded in `vector_tables`; another model or shape → `vector_table_changed`
   until `drop`. `add` = delete + insert (vec0 refuses a known rowid, OR REPLACE too); `nearest` k ≤ `K_LIMIT` 4096,
   brute force (0.1.9 has no ANN index). `ask` attaches such files, but reading a vec0 table there fails (no module).
-- `src/aid/embedding.py` — embedders for it: `Embedder` (`model_name`, `dimensions`, `embed(texts)` → `Embedded`
+- `models/src/aid_models/embedding.py` — embedders for it: `Embedder` (`model_name`, `dimensions`, `embed(texts)` → `Embedded`
   vectors/tokens/cost, `host`, `aclose`); `OpenAIEmbedder` = `/v1/embeddings` over aid's own client
   (`encoding_format` float: base64 is not universal; `BATCH` texts a request; 5xx/429/no connection →
   `model_unavailable`; count, length or non-finite mismatch → `bad_embedding`). `providers.embedder(name, providers,
@@ -533,7 +534,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   OpenRouter, `openai/text-embedding-3-small`, `google/gemini-embedding-2` and `-001`. Current pick (vLLM hosts have
   no memory to spare): `openrouter/qwen/qwen3-embedding-8b`, $0.01/M tokens, 40k context, `dimensions` honoured (1024
   measured, default 4096). No consumer yet (#28).
-- `src/aid/rerank.py` — rerankers (#68): `Reranker.rerank(query, documents, top_n)` → `Reranked` (`Ranked(index,
+- `models/src/aid_models/rerank.py` — rerankers (#68): `Reranker.rerank(query, documents, top_n)` → `Reranked` (`Ranked(index,
   score)` best first, tokens, cost). `RerankClient` = `POST <base>/rerank` (Cohere's shape, as OpenRouter serves Voyage
   AI and Cohere); index/count/finite checks → `bad_rerank`. `providers.reranker(name, providers, settings=)`: plugin
   `ModelProvider.reranker` only (default `no_reranker`); OpenRouter's. `model.model_answer`: a whole (non-stream)
@@ -567,6 +568,11 @@ on reusable decisions and current boundaries; put long investigations and dated 
   extractable; contract in `pyrun/README.md`. Kills by the PYRUN_SCOPE/PYRUN_ID env marks found in /proc (no
   subreaper, no process-wide state). Check: `cd pyrun && ruff check src tests && pyright && python -m pytest`;
   sandbox: `nix build --file . pyrun-tests`.
+- `models/` — `aid-models` (`aid_models`): the model clients as a library: `transport` (provider prefixes, keys,
+  `model_answer`/`open_model_stream`, `check_host`), `wire`, `chat_api`, `gemini`, `embedding`, `rerank`, `prices`,
+  `models_dev`, `errors.AidError`. Never imports aid; aid and pyedit (its index) depend on it. Chat transports stay
+  in `aid.model`. `models/default.nix` for aid's set, `models/package.nix` for a nixpkgs package set. Its tests
+  live in `tests/` (test_embedding, test_rerank, test_prices).
 - `default.nix` — a pyproject.nix set from pyterm's builders (`mkPythonSet`, `mkProject`, its `overlay`);
   `aid/default.nix` — the aid project in it; `nix/` — NixOS and home-manager modules.
 

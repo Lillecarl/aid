@@ -1,4 +1,4 @@
-"""Model prices from models.dev's catalog (`aid.models_dev`), for turns whose engine reports no cost (native). With
+"""Model prices from models.dev's catalog (`aid_models.models_dev`), for turns whose engine reports no cost (native). With
 no catalog at all the cost is unknown, never zero."""
 
 from __future__ import annotations
@@ -8,8 +8,8 @@ from typing import Final
 
 from pydantic import BaseModel, Field, ValidationError
 
-from aid import models_dev
-from aid.models_dev import ENV_SOURCE as ENV_PRICES
+from aid_models import models_dev
+from aid_models.models_dev import ENV_SOURCE as ENV_PRICES
 
 __all__ = ["CURRENCY", "ENV_PRICES", "PER", "Price", "lookup", "price_for"]
 

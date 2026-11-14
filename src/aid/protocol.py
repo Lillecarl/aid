@@ -19,6 +19,11 @@ from pydantic_core import to_jsonable_python
 from aid.plugins import Grant, PluginSpec
 from aid.spec import AgentKind, AgentSpec, PermissionMode, Sandbox, TagKey, TagValue
 
+# Re-exported: aid's protocol carries them, and every `except AidError` in aid catches the library's.
+from aid_models.errors import AidError as AidError
+from aid_models.models_dev import ModelCost as ModelCost
+from aid_models.models_dev import ModelEntry
+
 PROTOCOL_VERSION = 1
 NOTE_LIMIT: Final = 20_000
 """Characters in one `Note`: a progress line, not a transcript."""
@@ -27,13 +32,6 @@ FIND_LIMIT: Final = 1000
 WORK_TTL: Final = 120.0
 """Seconds an open work turn lasts without a `WorkOutput` for it."""
 WORK_OUTPUT_LIMIT: Final = 65536
-
-
-class AidError(Exception):
-    def __init__(self, code: str, message: str) -> None:
-        super().__init__(f"{code}: {message}")
-        self.code = code
-        self.message = message
 
 
 def _request_id() -> str:
@@ -613,44 +611,11 @@ class ProviderInfo(_Message):
     module: str
 
 
-class ModelCost(_Message):
-    """USD per million tokens. A missing cache price bills those tokens as plain input."""
-
-    input: float
-    output: float
-    cache_read: float | None = None
-    cache_write: float | None = None
-
-
-class ModelEntry(_Message):
-    """One model a provider serves, as its own list says, with models.dev filling what that list leaves out. None
-    is unknown."""
-
-    id: str
-    """The name after the provider's prefix: `deepseek-flash` in `deepseek/deepseek-flash`."""
-    name: str | None = None
-    context: int | None = None
-    """Tokens the model reads at most."""
-    output: int | None = None
-    """Tokens the model writes at most in one response."""
-    reasoning: bool | None = None
-    tools: bool | None = None
-    cost: ModelCost | None = None
-    unsupported: str | None = None
-    """Why aid cannot run it (a protocol it has no transport for); None runs."""
-
-    def backfill(self, other: ModelEntry | None) -> ModelEntry:
-        """This entry with `other`'s values where this one has None."""
-        if other is None:
-            return self
-        return ModelEntry.model_validate({**other.model_dump(exclude_none=True), **self.model_dump(exclude_none=True)})
-
-
 class ProviderModels(_Message):
     name: str
     """The `provider/` prefix."""
     source: Literal["plugin", "builtin", "catalog"]
-    """Who serves it: an `aid.ModelProvider` plugin, aid itself (anthropic and `aid.model.OPENAI_COMPATIBLE`), or a
+    """Who serves it: an `aid.ModelProvider` plugin, aid itself (anthropic and `aid_models.transport.OPENAI_COMPATIBLE`), or a
     models.dev entry that speaks Chat Completions."""
     description: str = ""
     key_env: str | None = None
@@ -868,7 +833,7 @@ class Usage(_Message):
     """The agent's own running total for its session, not this turn's share: ACP's `usage_update` cost is
     cumulative. It restarts with the agent's session."""
     cost: Cost | None = None
-    """This turn's own cost, where aid prices the tokens itself (native, from models.dev: `aid.prices`).
+    """This turn's own cost, where aid prices the tokens itself (native, from models.dev: `aid_models.prices`).
     Turns add up; None is unknown, not free."""
 
 

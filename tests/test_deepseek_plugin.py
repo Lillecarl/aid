@@ -10,11 +10,11 @@ import httpx2
 import pytest
 from pydantic import BaseModel
 
-from aid import wire
 from aid.discovery import discover
 from aid.messages import ModelMessage, ModelRequest, SystemPromptPart, UserPromptPart
 from aid.model import ModelInfo, RequestUsage
 from aid.providers import resolve
+from aid_models import wire
 from tests.test_model import event
 
 PLUGINS = Path(__file__).parent.parent / "plugins"

@@ -12,8 +12,8 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationEr
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from aid.chat_api import FunctionTool
     from aid.model import Model
+    from aid_models.chat_api import FunctionTool
 
 
 class ModelRetry(Exception):

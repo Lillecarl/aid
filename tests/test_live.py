@@ -29,9 +29,9 @@ from aid.messages import (
     UserPromptPart,
 )
 from aid.model import ENCRYPTED, ModelInfo, OpenAIResponsesModel
-from aid.prices import ENV_PRICES
 from aid.protocol import AidError, Output, SessionEvent, Usage
 from aid.providers import catalog_model, embedder, reranker, resolve
+from aid_models.prices import ENV_PRICES
 from tests.test_attachments import pdf, png
 from tests.test_native_backend import backend
 

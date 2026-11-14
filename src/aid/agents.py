@@ -32,10 +32,10 @@ if TYPE_CHECKING:
     from pydantic import JsonValue
 
     from aid.agent import Agent
-    from aid.embedding import Embedder
     from aid.model import Transport
     from aid.protocol import ModelEntry
-    from aid.rerank import Reranker
+    from aid_models.embedding import Embedder
+    from aid_models.rerank import Reranker
 
 
 class AgentDefinition(ABC):
@@ -149,9 +149,9 @@ class ModelProvider(ABC):
         return []
 
     async def embedder(self, model: str, dimensions: int | None, settings: Mapping[str, JsonValue]) -> Embedder:
-        """The embedder for `model`, the name after the prefix (`aid.embedding`). Unless overridden: none."""
+        """The embedder for `model`, the name after the prefix (`aid_models.embedding`). Unless overridden: none."""
         raise AidError("no_embeddings", f"{self.provider_name()}/ serves no embeddings")
 
     async def reranker(self, model: str, settings: Mapping[str, JsonValue]) -> Reranker:
-        """The reranker for `model`, the name after the prefix (`aid.rerank`). Unless overridden: none."""
+        """The reranker for `model`, the name after the prefix (`aid_models.rerank`). Unless overridden: none."""
         raise AidError("no_reranker", f"{self.provider_name()}/ serves no rerankers")

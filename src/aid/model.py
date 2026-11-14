@@ -1,23 +1,22 @@
 """Model transports, and streamed response assembly. No agent execution lives here. Every transport is aid's
-own client (`aid.wire`, #65): no model SDK."""
+own client (`aid_models.wire`, #65): no model SDK."""
 
 from __future__ import annotations
 
 import functools
 import hashlib
 import json
-import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Protocol, cast
 
 import anyio
 import httpx2
 import structlog
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from aid import anthropic_api, chat_api, gemini, responses_api, wire
+from aid import anthropic_api, responses_api
 from aid.attachments import NO_ATTACHMENTS, AttachmentStore, Upload, encoded, file_name, kind_of
 from aid.messages import (
     AttachmentPart,
@@ -32,6 +31,23 @@ from aid.messages import (
     UserPromptPart,
 )
 from aid.protocol import AidError
+from aid_models import chat_api, gemini, wire
+from aid_models.transport import (
+    CLIENT_SETTINGS,
+    GOOGLE_KEY_ENV,
+    OPENAI_COMPATIBLE,
+    TRANSIENT_STATUS,
+    ClientKey,
+    ModelUnavailable,
+    Provider,
+    StreamBroken,
+    client_key,
+    client_settings,
+    open_model_stream,
+    refused_key,
+    rejected_key,
+    split_name,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -76,43 +92,6 @@ class StreamDelta:
     """The provider stopped the response at its output token limit."""
 
 
-class StreamBroken(Exception):
-    """The connection failed after the response began. No tool call of it ran, so the request may go again."""
-
-
-class ModelUnavailable(StreamBroken):
-    """The server refused the request or was out of reach before it answered: nothing of it ran."""
-
-
-TRANSIENT_STATUS: Final = frozenset({408, 409, 429})
-"""Statuses below 500 a request may go again after: the ones OpenAI's and Anthropic's SDKs retry."""
-
-
-def unavailable(error: BaseException) -> bool:
-    """A failure to send again later: no connection, a timeout, a 5xx, or a rate limit. Measured 2026-11: a vLLM
-    gateway answered 503 "no available server" for hours, past two quick retries."""
-    match error:
-        case wire.StatusError():
-            return error.status >= 500 or error.status in TRANSIENT_STATUS
-        case _:
-            return False
-
-
-def rejected_key(error: BaseException) -> bool:
-    """The server refused the key: a person must replace it, so sending again cannot help. Measured 2026-11-13 with a
-    bogus key: OpenAI, Anthropic, DeepSeek, OpenCode and OpenRouter answer 401; an expired OpenCode key too. Gemini
-    answers 400 with a reason (`gemini.refused_key`)."""
-    match error:
-        case wire.StatusError():
-            return error.status == 401
-        case _:
-            return False
-
-
-def refused_key(name: str, error: BaseException) -> AidError:
-    return AidError("bad_credentials", f"{name}: the server refused the key: {error}")
-
-
 BROKEN: Final = (httpx2.TransportError,)
 """What a dropped stream raises: every client is httpx2, and a response body raises it bare mid-stream (openai 2.x, measured 2026-10-28: vLLM dropped 7 streams in 5 hours, 61 to 545 s in)."""
 
@@ -132,27 +111,6 @@ class Transport(Model, Protocol):
     Messages API): pricing subtracts them once."""
 
     async def aclose(self) -> None: ...
-
-
-@runtime_checkable
-class Hosted(Protocol):
-    """A model that says where its requests go: what a private session (`NativeSpec.private`) needs to run on it."""
-
-    def host(self, settings: Mapping[str, JsonValue]) -> str:
-        """The host name of the base URL this model's client uses with `settings`."""
-        ...
-
-
-def check_host(model: object, settings: Mapping[str, JsonValue], hosts: Sequence[str]) -> None:
-    """Refuse a model whose requests go to a host not in `hosts`, or that cannot say where they go."""
-    if not isinstance(model, Hosted):
-        raise AidError("private_host", f"{model_label(model)} cannot say which host it sends to")
-    if (host := model.host(settings)) not in hosts:
-        raise AidError("private_host", f"{model_label(model)} sends to {host!r}, which is not one of {list(hosts)}")
-
-
-def model_label(model: object) -> str:
-    return str(getattr(model, "model_name", type(model).__name__))
 
 
 def wire_messages(
@@ -257,76 +215,8 @@ def accumulate(response: ModelResponse, indexes: dict[int, int], delta: StreamDe
         raise ValueError("stream changes the type of an existing response part")
 
 
-@dataclass(frozen=True)
-class Provider:
-    base_url: str | None
-    """None: `chat_api.DEFAULT_BASE` (api.openai.com)."""
-    key_env: str
-    local: bool = False
-    """An unauthenticated local server: a missing key is not an error."""
-    defaults: Mapping[str, JsonValue] = field(default_factory=dict[str, JsonValue])
-    """Request settings the session's `model_settings` override."""
-    headers: Mapping[str, str] = field(default_factory=dict[str, str])
-    """Sent with every request of the client."""
-    stream_usage: bool = True
-    """The server takes `stream_options.include_usage` (Gemini's refuses it)."""
-
-
-OPENAI_COMPATIBLE: Final[dict[str, Provider]] = {
-    "openai": Provider(None, "OPENAI_API_KEY"),
-    "groq": Provider("https://api.groq.com/openai/v1", "GROQ_API_KEY"),
-    "gemini": Provider(
-        "https://generativelanguage.googleapis.com/v1beta/openai/", "GEMINI_API_KEY", stream_usage=False
-    ),
-    "mistral": Provider("https://api.mistral.ai/v1", "MISTRAL_API_KEY"),
-    "xai": Provider("https://api.x.ai/v1", "XAI_API_KEY"),
-    "together": Provider("https://api.together.xyz/v1", "TOGETHERAI_API_KEY"),
-    "fireworks": Provider("https://api.fireworks.ai/inference/v1", "FIREWORKS_API_KEY"),
-    "ollama": Provider("http://localhost:11434/v1", "OLLAMA_API_KEY", local=True),
-    "vllm": Provider("http://localhost:8000/v1", "VLLM_API_KEY", local=True),
-    "lmstudio": Provider("http://localhost:1234/v1", "LM_STUDIO_API_KEY", local=True),
-}
-"""`provider/model` prefixes served over Chat Completions, for servers models.dev names no URL for and local ones.
-Others resolve through `aid.providers`."""
-
-
-class ClientSettings(BaseModel):
-    """The `model_settings` keys that configure the client; every other key goes into each request."""
-
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-    api_key: str | None = None
-    base_url: str | None = Field(None, validation_alias=AliasChoices("api_base", "base_url"))
-    max_retries: int = Field(0, validation_alias=AliasChoices("max_retries", "num_retries"))
-
-
-def _setting_names(model: type[BaseModel]) -> frozenset[str]:
-    names: set[str] = set()
-    for name, info in model.model_fields.items():
-        alias = info.validation_alias
-        if isinstance(alias, AliasChoices):
-            names.update(c for c in alias.choices if isinstance(c, str))
-        else:
-            names.add(name)
-    return frozenset(names)
-
-
-CLIENT_SETTINGS: Final = _setting_names(ClientSettings)
 DEFAULT_TIMEOUT: Final = 600
 _TIMEOUT: Final = TypeAdapter(float)
-
-
-def split_name(name: str) -> tuple[str, str]:
-    """`provider/model` → (provider, model); a bare name is OpenAI's."""
-    provider, _, model = name.partition("/")
-    return (provider, model) if model else ("openai", provider)
-
-
-@dataclass(frozen=True)
-class ClientKey:
-    base_url: str | None
-    api_key: str
-    max_retries: int
 
 
 UPLOAD_MARGIN: Final = timedelta(hours=1)
@@ -386,26 +276,6 @@ def upload_scope(key: ClientKey) -> str:
     return hashlib.sha256(f"{key.base_url or ''}\0{key.api_key}".encode()).hexdigest()[:16]
 
 
-def client_settings(name: str, settings: Mapping[str, JsonValue]) -> ClientSettings:
-    try:
-        return ClientSettings.model_validate(settings)
-    except ValidationError as e:
-        raise AidError("bad_model_settings", f"{name}: {e}") from e
-
-
-def client_key(
-    name: str, settings: Mapping[str, JsonValue], key_env: str | None, base_url: str | None, *, local: bool = False
-) -> ClientKey:
-    """The client's settings over the provider's: `key_env` and `base_url` apply where the settings name none."""
-    client = client_settings(name, settings)
-    api_key = client.api_key or (os.environ.get(key_env) if key_env else None)
-    if not api_key:
-        if not local:
-            raise AidError("missing_credentials", f"{name}: set {key_env or 'api_key in model_settings'}")
-        api_key = "local"
-    return ClientKey(client.base_url or base_url, api_key, client.max_retries)
-
-
 def _request_settings(settings: Mapping[str, JsonValue], provider: Provider | None = None) -> dict[str, JsonValue]:
     kwargs: dict[str, JsonValue] = {**(provider.defaults if provider else {})}
     kwargs.update((key, value) for key, value in settings.items() if key not in CLIENT_SETTINGS)
@@ -415,8 +285,6 @@ def _request_settings(settings: Mapping[str, JsonValue], provider: Provider | No
 
 _HEADERS: Final = TypeAdapter(dict[str, str])
 _BODY: Final = TypeAdapter(dict[str, JsonValue])
-RETRY_BACKOFF: Final = 0.5
-"""Seconds before a client retry (`max_retries`), doubling. The backend replays past them (`STREAM_RETRIES`)."""
 
 
 def _extra(name: str, settings: dict[str, JsonValue]) -> tuple[dict[str, str], dict[str, JsonValue]]:
@@ -430,59 +298,8 @@ def _extra(name: str, settings: dict[str, JsonValue]) -> tuple[dict[str, str], d
         raise AidError("bad_model_settings", f"{name}: extra_headers/extra_body: {error}") from error
 
 
-async def model_answer(
-    name: str,
-    http: httpx2.AsyncClient,
-    url: str,
-    body: bytes,
-    headers: Mapping[str, str],
-    io_timeout: float,
-    retries: int,
-    failed: str,
-    refused: Callable[[wire.StatusError], bool] = lambda error: False,
-) -> bytes:
-    """A whole answer that is not a stream (embeddings, reranking): an outage → `model_unavailable`, any other
-    refusal → `failed`, as `open_model_stream` sorts them."""
-    try:
-        response = await open_model_stream(name, http, url, body, headers, io_timeout, retries, refused)
-        try:
-            return await response.aread()
-        finally:
-            await response.aclose()
-    except ModelUnavailable as error:
-        raise AidError("model_unavailable", f"{name}: {error}") from error
-    except wire.StatusError as error:
-        raise AidError(failed, f"{name}: {error}") from error
-
-
-async def open_model_stream(
-    name: str,
-    http: httpx2.AsyncClient,
-    url: str,
-    body: bytes,
-    headers: Mapping[str, str],
-    io_timeout: float,
-    retries: int,
-    refused: Callable[[wire.StatusError], bool] = lambda error: False,
-) -> httpx2.Response:
-    """Open a model's stream: a refused key → `bad_credentials` (`refused` names a provider's own way to say it), a
-    failure to send again later → retried `retries` times, then `ModelUnavailable`; anything else propagates."""
-    for attempt in range(retries + 1):
-        try:
-            return await wire.open_stream(http, url, body, headers, io_timeout)
-        except (wire.StatusError, httpx2.TransportError) as error:
-            if rejected_key(error) or (isinstance(error, wire.StatusError) and refused(error)):
-                raise refused_key(name, error) from error
-            if not (isinstance(error, httpx2.TransportError) or unavailable(error)):
-                raise
-            if attempt == retries:
-                raise ModelUnavailable(f"{type(error).__name__}: {error}") from error
-            await anyio.sleep(RETRY_BACKOFF * 2**attempt)
-    raise AssertionError("unreachable")
-
-
 class OpenAIChatModel:
-    """Chat Completions over aid's own client (`aid.chat_api`, `aid.wire`; #65), for OpenAI and every provider that
+    """Chat Completions over aid's own client (`aid_models.chat_api`, `aid_models.wire`; #65), for OpenAI and every provider that
     serves the same API. A provider with quirks subclasses it and overrides `request_settings`, `reasoning` or
     `usage`."""
 
@@ -801,7 +618,7 @@ def _response_error(name: str, code: str | None, message: str) -> Exception:
 
 
 class OpenAIResponsesModel:
-    """OpenAI's Responses API over aid's own client (`aid.responses_api`, `aid.wire`; #70). Stateless: reasoning
+    """OpenAI's Responses API over aid's own client (`aid.responses_api`, `aid_models.wire`; #70). Stateless: reasoning
     replays sealed (`ENCRYPTED`), attachments go by Files API id on OpenAI's own server (#69)."""
 
     cache_reads_in_prompt: bool = True
@@ -1108,7 +925,7 @@ def anthropic_tool(definition: chat_api.FunctionTool) -> anthropic_api.ToolDefin
 
 
 class AnthropicModel:
-    """The Messages API over aid's own client (`aid.anthropic_api`, `aid.wire`; #65): signed thinking replayed,
+    """The Messages API over aid's own client (`aid.anthropic_api`, `aid_models.wire`; #65): signed thinking replayed,
     beta headers (`extra_headers`) and caching passed through. `cache_control` defaults to automatic caching of the
     longest prefix."""
 
@@ -1297,9 +1114,6 @@ def _anthropic_usage(usage: anthropic_api.Usage) -> RequestUsage:
     )
 
 
-GOOGLE_KEY_ENV: Final = "GEMINI_API_KEY"
-
-
 def _signature(part: TextPart | ToolCallPart) -> str | None:
     signature = (part.model_extra or {}).get("thought_signature")
     return signature if isinstance(signature, str) else None
@@ -1389,7 +1203,7 @@ def google_tool(tool: Tool) -> gemini.FunctionDeclaration:
 
 
 class GoogleModel:
-    """The Gemini API (`streamGenerateContent`) over aid's own client (`aid.gemini`, `aid.wire`; #65). Thought
+    """The Gemini API (`streamGenerateContent`) over aid's own client (`aid_models.gemini`, `aid_models.wire`; #65). Thought
     signatures replay on their parts; Gemini assigns call ids only sometimes, so aid makes its own and keeps
     Gemini's beside them."""
 

@@ -17,11 +17,48 @@ import anyio
 import anyio.to_thread
 import httpx2
 import structlog
-from pydantic import BaseModel, Field, JsonValue, ValidationError
-
-from aid.protocol import ModelCost, ModelEntry
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 log = structlog.get_logger(__name__)
+
+
+class _Message(BaseModel):
+    # as aid.protocol's: both models are on its wire, and the page's generated types (aid.schema) read them
+    model_config = ConfigDict(extra="forbid", frozen=True, json_schema_serialization_defaults_required=True)
+
+
+class ModelCost(_Message):
+    """USD per million tokens. A missing cache price bills those tokens as plain input."""
+
+    input: float
+    output: float
+    cache_read: float | None = None
+    cache_write: float | None = None
+
+
+class ModelEntry(_Message):
+    """One model a provider serves, as its own list says, with models.dev filling what that list leaves out. None
+    is unknown."""
+
+    id: str
+    """The name after the provider's prefix: `deepseek-flash` in `deepseek/deepseek-flash`."""
+    name: str | None = None
+    context: int | None = None
+    """Tokens the model reads at most."""
+    output: int | None = None
+    """Tokens the model writes at most in one response."""
+    reasoning: bool | None = None
+    tools: bool | None = None
+    cost: ModelCost | None = None
+    unsupported: str | None = None
+    """Why aid cannot run it (a protocol it has no transport for); None runs."""
+
+    def backfill(self, other: ModelEntry | None) -> ModelEntry:
+        """This entry with `other`'s values where this one has None."""
+        if other is None:
+            return self
+        return ModelEntry.model_validate({**other.model_dump(exclude_none=True), **self.model_dump(exclude_none=True)})
+
 
 ENV_SOURCE: Final = "AID_MODEL_PRICES"
 CATALOG_URL: Final = "https://models.dev/api.json"

@@ -10,12 +10,12 @@ import httpx2
 import pytest
 from pydantic import BaseModel, JsonValue
 
-from aid import embedding, prices, wire
 from aid.discovery import discover
-from aid.embedding import GoogleEmbedder, OpenAIEmbedder
-from aid.model import check_host
 from aid.protocol import AidError
 from aid.providers import embedder
+from aid_models import embedding, prices, wire
+from aid_models.embedding import GoogleEmbedder, OpenAIEmbedder
+from aid_models.transport import check_host
 
 if TYPE_CHECKING:
     from collections.abc import Callable

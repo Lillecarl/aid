@@ -17,7 +17,7 @@ from typing import Final, Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
-from aid.chat_api import DEFAULT_BASE
+from aid_models.chat_api import DEFAULT_BASE
 
 INCLUDE_REASONING: Final = "reasoning.encrypted_content"
 TRANSIENT: Final = frozenset({"server_error", "rate_limit_exceeded", "server_is_overloaded", "slow_down"})

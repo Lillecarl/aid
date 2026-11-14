@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING, Any
 import httpx2
 import pytest
 
-from aid import models_dev
 from aid.backends.native import add_cost
 from aid.model import AnthropicModel, OpenAIChatModel, RequestUsage
-from aid.prices import ENV_PRICES, Price, lookup, price_for
 from aid.protocol import Cost, HistoryEntry, Usage
 from aid.summary import summarize
+from aid_models import models_dev
+from aid_models.prices import ENV_PRICES, Price, lookup, price_for
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -104,7 +104,7 @@ async def test_a_daily_fetch_that_fails_keeps_the_stale_copy(tmp_path: Path, mon
     def client(**kwargs: Any) -> httpx2.AsyncClient:
         return real(transport=httpx2.MockTransport(lambda request: served.pop(0)), **kwargs)
 
-    monkeypatch.setattr(models_dev.httpx2, "AsyncClient", client)
+    monkeypatch.setattr(httpx2, "AsyncClient", client)
     assert await price_for("deepseek/deepseek-flash") is not None
     cached = models_dev.cache_file()
     assert json.loads(cached.read_text()) == CATALOG

@@ -13,10 +13,11 @@ import httpx
 from pydantic import BaseModel, Field, JsonValue
 
 import aid
-from aid.embedding import OpenAIEmbedder
-from aid.model import OpenAIChatModel, Provider
+from aid.model import OpenAIChatModel
 from aid.protocol import AidError, ModelCost, ModelEntry
-from aid.rerank import RerankClient
+from aid_models.embedding import OpenAIEmbedder
+from aid_models.rerank import RerankClient
+from aid_models.transport import Provider
 
 if TYPE_CHECKING:
     from collections.abc import Mapping

@@ -11,13 +11,14 @@ import httpx
 from pydantic import BaseModel, Field
 
 import aid
-from aid.model import OpenAIChatModel, Provider, RequestUsage
+from aid.model import OpenAIChatModel, RequestUsage
 from aid.protocol import ModelEntry
+from aid_models.transport import Provider
 
 if TYPE_CHECKING:
     from pydantic.json_schema import JsonSchemaValue
 
-    from aid.chat_api import ResponseFormatJsonObject, Usage
+    from aid_models.chat_api import ResponseFormatJsonObject, Usage
 
 KEY_ENV: Final = "DEEPSEEK_API_KEY"
 PROVIDER: Final = Provider(

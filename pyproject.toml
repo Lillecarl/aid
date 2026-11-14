@@ -25,6 +25,8 @@ dependencies = [
   # aid.coding: agents edit through pyedit's library and run processes through pyrun (./pyrun).
   "pyedit",
   "pyrun",
+  # aid.model and the plugins stand on its clients (models/: aid_models).
+  "aid-models",
   # aid.coding: background tasks run through shellous, in the worker.
   "shellous",
   # aid.coding: the xonsh mode of the python tool runs `python -m xonsh`.
@@ -82,7 +84,7 @@ filterwarnings = [
 [tool.pyright]
 pythonVersion = "3.14"
 typeCheckingMode = "strict"
-include = ["src", "tests", "plugins"]
+include = ["src", "tests", "plugins", "models/src"]
 # The Ghidra helper runs on pyghidra's own Python (nix/reverse-tools.nix), whose Java packages no checker here sees.
 exclude = ["tests/vivarium", "plugins/reverse/ghidra_helper.py"]
 
@@ -114,4 +116,4 @@ runtime-evaluated-base-classes = ["pydantic.BaseModel", "aid.protocol._Message",
 runtime-evaluated-decorators = ["aid.tools.mcptool"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["aid", "pyrun"]
+known-first-party = ["aid", "aid_models", "pyrun"]

@@ -12,8 +12,8 @@ import pytest
 import aid
 from aid import model_lists
 from aid.model_lists import ENV_LISTS, collect, providers
-from aid.models_dev import ENV_SOURCE
 from aid.protocol import ModelCost, ModelEntry
+from aid_models.models_dev import ENV_SOURCE
 
 if TYPE_CHECKING:
     from pathlib import Path

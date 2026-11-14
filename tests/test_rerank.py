@@ -10,10 +10,10 @@ import httpx2
 import pytest
 
 from aid.discovery import discover
-from aid.model import check_host
 from aid.protocol import AidError
 from aid.providers import reranker
-from aid.rerank import Ranked, Reranked
+from aid_models.rerank import Ranked, Reranked
+from aid_models.transport import check_host
 from tests.test_embedding import serve
 
 if TYPE_CHECKING:
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
     from pydantic import JsonValue
 
-    from aid.rerank import Reranker
+    from aid_models.rerank import Reranker
 
 PLUGINS = Path(__file__).parent.parent / "plugins"
 

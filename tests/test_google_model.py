@@ -9,8 +9,6 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx2
 import pytest
 
-from aid import gemini, wire
-from aid import model as model_module
 from aid.agent import Agent
 from aid.backends.native import add_cost
 from aid.messages import (
@@ -26,10 +24,12 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.model import GoogleModel, ModelInfo, ModelUnavailable, RequestUsage, google_contents, model_for
-from aid.prices import Price
+from aid.model import GoogleModel, ModelInfo, RequestUsage, google_contents, model_for
 from aid.protocol import AidError, SessionEvent, Usage
 from aid.providers import resolve
+from aid_models import gemini, transport, wire
+from aid_models.prices import Price
+from aid_models.transport import ModelUnavailable
 from tests.test_native_backend import backend
 
 if TYPE_CHECKING:
@@ -272,7 +272,7 @@ async def test_max_retries_sends_again_before_the_backend_does(monkeypatch: pyte
         return httpx2.Response(200, content=chunk([{"text": "ok"}]))
 
     mock(monkeypatch, handle)
-    monkeypatch.setattr(model_module, "RETRY_BACKOFF", 0)
+    monkeypatch.setattr(transport, "RETRY_BACKOFF", 0)
     model = GoogleModel("google/gemini-test")
     try:
         response = await model.request(

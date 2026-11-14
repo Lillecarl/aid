@@ -2,9 +2,9 @@
 `/v1/embeddings`, and the Gemini API's `batchEmbedContents` (#68).
 
 `aid.providers.embedder` resolves a `provider/model` name as chat models resolve: a plugin claiming the prefix
-(`ModelProvider.embedder`), else `google/`, else a prefix of `aid.model.OPENAI_COMPATIBLE`. Embedders run where their caller
+(`ModelProvider.embedder`), else `google/`, else a prefix of `aid_models.transport.OPENAI_COMPATIBLE`. Embedders run where their caller
 runs (a plugin, a worker), never in the daemon. A private caller checks `host()` against its hosts first
-(`aid.model.check_host`), as a private session does for its chat model.
+(`aid_models.transport.check_host`), as a private session does for its chat model.
 """
 
 from __future__ import annotations
@@ -17,8 +17,9 @@ from typing import TYPE_CHECKING, Final, Protocol
 import httpx2
 from pydantic import ValidationError
 
-from aid import chat_api, gemini, prices, wire
-from aid.model import (
+from aid_models import chat_api, gemini, prices, wire
+from aid_models.errors import AidError
+from aid_models.transport import (
     GOOGLE_KEY_ENV,
     OPENAI_COMPATIBLE,
     ClientKey,
@@ -27,7 +28,6 @@ from aid.model import (
     model_answer,
     split_name,
 )
-from aid.protocol import AidError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence
@@ -63,7 +63,7 @@ class Embedder(Protocol):
 
 @dataclass
 class OpenAIEmbedder:
-    """`/v1/embeddings` over aid's own client (`aid.chat_api`, `aid.wire`; #65)."""
+    """`/v1/embeddings` over aid's own client (`aid_models.chat_api`, `aid_models.wire`; #65)."""
 
     model_name: str
     provider: Provider | None = None
@@ -133,7 +133,7 @@ class OpenAIEmbedder:
 
 @dataclass
 class GoogleEmbedder:
-    """The Gemini API's `batchEmbedContents` over aid's own client (`aid.gemini`; #68)."""
+    """The Gemini API's `batchEmbedContents` over aid's own client (`aid_models.gemini`; #68)."""
 
     model_name: str
     dimensions: int | None = None

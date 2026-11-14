@@ -6,7 +6,7 @@ agents. Its `name` is the prefix it claims, and it wins over the generic resolut
 - `anthropic/`: the Messages API (`AnthropicModel`);
 - `google/`: the Gemini API (`GoogleModel`), named as models.dev names it; `gemini/` is its Chat Completions route;
 - `openai/` without an `api_base`: the Responses API (`OpenAIResponsesModel`); with one, Chat Completions;
-- the prefixes in `aid.model.OPENAI_COMPATIBLE`: servers models.dev gives no URL for, and local ones;
+- the prefixes in `aid_models.transport.OPENAI_COMPATIBLE`: servers models.dev gives no URL for, and local ones;
 - every models.dev provider whose package is `@ai-sdk/openai-compatible`: its `api`, keyed by its first `env`.
 
 Lifecycle: a provider is built per use and keeps no state. The transport it returns owns its clients, and
@@ -18,19 +18,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
-from aid import models_dev
-from aid.embedding import Embedder, GoogleEmbedder, OpenAIEmbedder
-from aid.model import (
-    OPENAI_COMPATIBLE,
-    AnthropicModel,
-    GoogleModel,
-    OpenAIChatModel,
-    OpenAIResponsesModel,
-    Provider,
-    responses_route,
-    split_name,
-)
+from aid.model import AnthropicModel, GoogleModel, OpenAIChatModel, OpenAIResponsesModel, responses_route
 from aid.protocol import AidError
+from aid_models import models_dev
+from aid_models.embedding import Embedder, GoogleEmbedder, OpenAIEmbedder
+from aid_models.transport import OPENAI_COMPATIBLE, Provider, split_name
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -39,7 +31,7 @@ if TYPE_CHECKING:
 
     from aid.agents import ModelProvider
     from aid.model import Transport
-    from aid.rerank import Reranker
+    from aid_models.rerank import Reranker
 
 OPENAI_COMPATIBLE_PACKAGE: Final = "@ai-sdk/openai-compatible"
 """models.dev's package for a provider that serves Chat Completions."""

@@ -17,10 +17,10 @@ from aid.launcher import ForkserverLauncher
 from aid.model_lists import ENV_LISTS
 from aid.paths import Paths
 from aid.plugins import ENV_PLUGINS_DIST, ENV_PLUGINS_PATH
-from aid.prices import ENV_PRICES
 from aid.spec import AcpSpec, ClaudeTtySpec, NativeSpec, PermissionMode
 from aid.speech import load as load_speech
 from aid.web.highlight import ENV_GRAMMARS, Grammars
+from aid_models.prices import ENV_PRICES
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Generator, Iterator

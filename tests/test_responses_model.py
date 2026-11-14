@@ -24,7 +24,6 @@ from aid.messages import (
 from aid.model import (
     ENCRYPTED,
     ModelInfo,
-    ModelUnavailable,
     OpenAIChatModel,
     OpenAIResponsesModel,
     RequestUsage,
@@ -35,6 +34,7 @@ from aid.model import (
 )
 from aid.protocol import AidError
 from aid.providers import resolve
+from aid_models.transport import ModelUnavailable
 from tests.test_model import serve_wire, sse
 
 if TYPE_CHECKING:
