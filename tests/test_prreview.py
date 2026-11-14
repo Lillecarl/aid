@@ -20,7 +20,8 @@ from aid.protocol import GetLive, GetSpec, LiveChunk, Note, QueryResult
 from aid.spec import AgentSpecAdapter, NativeSpec
 from plugins.prreview import PrReviewConfig, angle_spec, holder_spec, judge_spec
 from plugins.prreview.picking import Source, pick_order
-from plugins.prreview.store import PRREVIEW_FILE, SCHEMA, PrStore
+from plugins.prreview.review import Pr, Review
+from plugins.prreview.store import PRREVIEW_FILE, SCHEMA, Decision, PrStore
 from tests.conftest import TESTS
 from tests.models import HOST
 from tests.test_campaign_units import GIT_ENV
@@ -277,10 +278,13 @@ async def test_a_pr_ci_says_rebuilds_too_much_is_skipped_unbuilt(
     assert not (found / "nix.log").exists()
 
 
+DECISION_COLUMNS = "    decision TEXT,\n    decided_by TEXT,\n    decided_at REAL,\n    note TEXT,\n"
+
+
 async def test_a_version_1_database_gains_the_step_column(tmp_path: Path) -> None:
     file = tmp_path / PRREVIEW_FILE
     db = apsw.Connection(str(file))
-    db.execute(SCHEMA.replace("    step TEXT,\n", ""))
+    db.execute(SCHEMA.replace("    step TEXT,\n", "").replace(DECISION_COLUMNS, ""))
     db.execute("PRAGMA user_version = 1")
     db.close()
     store = await PrStore.open(file)
@@ -288,6 +292,39 @@ async def test_a_version_1_database_gains_the_step_column(tmp_path: Path) -> Non
     db = apsw.Connection(str(file))
     assert "step" in [str(row[1]) for row in db.execute("PRAGMA table_info(prs)")]
     db.close()
+
+
+async def test_a_version_2_database_gains_the_decision_columns(tmp_path: Path) -> None:
+    file = tmp_path / PRREVIEW_FILE
+    db = apsw.Connection(str(file))
+    db.execute(SCHEMA.replace(DECISION_COLUMNS, ""))
+    db.execute("PRAGMA user_version = 2")
+    db.close()
+    store = await PrStore.open(file)
+    await store.aclose()
+    db = apsw.Connection(str(file))
+    columns = [str(row[1]) for row in db.execute("PRAGMA table_info(reviews)")]
+    db.close()
+    assert columns[-4:] == ["decision", "decided_by", "decided_at", "note"]
+
+
+async def test_a_decision_lands_on_the_latest_reviewed_head(tmp_path: Path) -> None:
+    store = await PrStore.open(tmp_path / PRREVIEW_FILE)
+    try:
+        await store.create("r", "{}")
+        for head in ("old", "new"):
+            pr = Pr(number=7, head=head, base="master", title="t", body="", author="a", url="u")
+            await store.started("r", pr)
+            await store.review("r", 7, head, Review(event="COMMENT", body=head), "r.7.judge")
+        assert await store.pending("r") == 2
+        assert await store.decide("r", 7, None, Decision.APPROVED, "carl", "good") == "new"
+        assert await store.decide("r", 7, "old", Decision.REJECTED, "carl", None) == "old"
+        assert await store.pending("r") == 0
+        with pytest.raises(aid.AidError) as missing:
+            await store.decide("r", 8, None, Decision.APPROVED, "carl", None)
+        assert missing.value.code == "not_found"
+    finally:
+        await store.aclose()
 
 
 def related_pr(found: Path, number: int, state: str, updated: str, path: str) -> None:

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Final
 import anyio
 from pydantic import BaseModel
 
+from aid.protocol import AidError
 from aid.sql import Database
 
 if TYPE_CHECKING:
@@ -25,8 +26,12 @@ if TYPE_CHECKING:
     from .review import Build, Pr, Review
 
 PRREVIEW_FILE: Final = "prreview.db"
-SCHEMA_VERSION: Final = 2
-MIGRATIONS: Final = {1: "ALTER TABLE prs ADD COLUMN step TEXT"}
+SCHEMA_VERSION: Final = 3
+MIGRATIONS: Final = {
+    1: "ALTER TABLE prs ADD COLUMN step TEXT",
+    2: "ALTER TABLE reviews ADD COLUMN decision TEXT; ALTER TABLE reviews ADD COLUMN decided_by TEXT;"
+    " ALTER TABLE reviews ADD COLUMN decided_at REAL; ALTER TABLE reviews ADD COLUMN note TEXT",
+}
 SCHEMA: Final = """
 CREATE TABLE IF NOT EXISTS runs (
     name TEXT PRIMARY KEY,
@@ -102,6 +107,10 @@ CREATE TABLE IF NOT EXISTS reviews (
     comments TEXT NOT NULL,
     session TEXT NOT NULL,
     at REAL NOT NULL,
+    decision TEXT,
+    decided_by TEXT,
+    decided_at REAL,
+    note TEXT,
     PRIMARY KEY (run, number, head),
     FOREIGN KEY (run, number, head) REFERENCES prs (run, number, head)
 ) WITHOUT ROWID;
@@ -128,6 +137,13 @@ class PrState(StrEnum):
 
 
 ENDED: Final = frozenset({PrState.REVIEWED, PrState.DUPLICATE, PrState.SKIPPED, PrState.FAILED})
+
+
+class Decision(StrEnum):
+    """A person's verdict on a recorded review: approved ones are the ones fit to post."""
+
+    APPROVED = "approved"
+    REJECTED = "rejected"
 
 
 @dataclass(frozen=True)
@@ -353,6 +369,40 @@ class PrStore:
 
     async def reviewed(self, run: str, number: int, head: str) -> bool:
         return await self.event(run, number, head) is not None
+
+    async def decide(
+        self, run: str, number: int, head: str | None, decision: Decision, by: str, note: str | None
+    ) -> str:
+        """`decision` on PR `number`'s review in `run`: at `head`, or at its latest reviewed head. The head it
+        decided; not_found when there is no review there."""
+
+        def write(db: apsw.Connection) -> str:
+            sql = "SELECT head FROM reviews WHERE run = ? AND number = ?"
+            params: tuple[str | int, ...] = (run, number)
+            if head is not None:
+                sql, params = f"{sql} AND head = ?", (*params, head)
+            row = db.execute(f"{sql} ORDER BY at DESC LIMIT 1", params).fetchone()
+            if row is None:
+                at = "" if head is None else f" at {head}"
+                raise AidError("not_found", f"run {run!r} recorded no review of #{number}{at}")
+            found = str(row[0])
+            db.execute(
+                "UPDATE reviews SET decision = ?, decided_by = ?, decided_at = ?, note = ?"
+                " WHERE run = ? AND number = ? AND head = ?",
+                (decision, by, time.time(), note, run, number, found),
+            )
+            return found
+
+        return await self._db.run(write)
+
+    async def pending(self, run: str) -> int:
+        """Reviews in `run` that no person has decided on."""
+
+        def count(db: apsw.Connection) -> int:
+            row = db.execute("SELECT count(*) FROM reviews WHERE run = ? AND decision IS NULL", (run,)).fetchone()
+            return 0 if row is None else int(str(row[0]))
+
+        return await self._db.run(count)
 
     async def event(self, run: str, number: int, head: str) -> str | None:
         """The recorded review's event, None before one is recorded."""

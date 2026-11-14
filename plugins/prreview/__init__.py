@@ -57,7 +57,7 @@ from .review import (
     rebuilds,
     skill_hints,
 )
-from .store import ENDED, PRREVIEW_FILE, DuplicateCheck, PrState, PrStore, RunState
+from .store import ENDED, PRREVIEW_FILE, Decision, DuplicateCheck, PrState, PrStore, RunState
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -202,8 +202,23 @@ class PrReviewConfig(BaseModel):
         return Pacing(self.attempts, self.backoff, self.outage_backoff, self.outage_max)
 
 
+def holder_name_of(run: str, number: int) -> str:
+    return f"{run}.{number}"
+
+
 def holder_name(config: PrReviewConfig, number: int) -> str:
-    return f"{config.name}.{number}"
+    return holder_name_of(config.name, number)
+
+
+class _Decide(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run: str
+    number: int
+    head: str | None = None
+    """None: the PR's latest reviewed head."""
+    by: str
+    note: str | None = None
 
 
 def session_name(config: PrReviewConfig, number: int, role: str) -> str:
@@ -360,6 +375,8 @@ class PrReviews(aid.Plugin):
                 await self.store.set_state(name, RunState.RUNNING)
                 self._launch(PrReviewConfig.model_validate_json(run.config))
                 return await self._status(name)
+            case "approve" | "reject":
+                return await self._decide(Decision.APPROVED if method == "approve" else Decision.REJECTED, args)
             case "query":
                 sql = args.get("sql")
                 if not isinstance(sql, str) or not sql.strip():
@@ -390,6 +407,17 @@ class PrReviews(aid.Plugin):
         more = " …" if cut else ""
         await self._note(f"{judging.run}.{pr.number}", f"Review: {review.event}\n\n{body}{more}{comments}")
         return "Recorded the review. Nothing is posted."
+
+    async def _decide(self, decision: Decision, args: dict[str, JsonValue]) -> JsonValue:
+        """A person's verdict on a recorded review: nothing is posted either way."""
+        try:
+            asked = _Decide.model_validate(args)
+        except ValidationError as error:
+            raise AidError("bad_args", str(error)) from None
+        head = await self.store.decide(asked.run, asked.number, asked.head, decision, asked.by, asked.note)
+        said = f": {asked.note}" if asked.note else ""
+        await self._note(holder_name_of(asked.run, asked.number), f"Review {decision.value} by {asked.by}{said}")
+        return {"run": asked.run, "number": asked.number, "head": head, "decision": decision.value}
 
     async def _note(self, session: str, text: str) -> None:
         """A note is a view of what the database holds: one that fails is logged, never fails the PR."""
@@ -424,6 +452,7 @@ class PrReviews(aid.Plugin):
                     "error": run.error,
                     "running": run.name in running,
                     "prs": counts,
+                    "pending": await self.store.pending(run.name),
                     "current": current,
                 }
             )

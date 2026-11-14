@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import re
@@ -461,6 +462,12 @@ def _parser() -> argparse.ArgumentParser:
     prreview_sub.add_parser("status", help="runs and their PR counts, as JSON").add_argument("name", nargs="?")
     prreview_sub.add_parser("pause", help="stop a run now; its PR is reviewed again on resume").add_argument("name")
     prreview_sub.add_parser("resume", help="run a paused run again").add_argument("name")
+    for verb, said in (("approve", "fit to post"), ("reject", "not fit to post")):
+        decide = prreview_sub.add_parser(verb, help=f"mark a recorded review {said}; nothing is posted")
+        decide.add_argument("run")
+        decide.add_argument("number", type=int, help="the PR")
+        decide.add_argument("--head", help="the reviewed head; default the PR's latest reviewed one")
+        decide.add_argument("--note", help="why, kept with the decision")
     prreview_query = prreview_sub.add_parser("query", help="one read-only SQL statement over the reviews")
     prreview_query.add_argument("sql", help="tables: runs, prs, builds, angle_reviews, reviews")
     prreview_query.add_argument("--table", action="store_true", help="tab-separated columns and rows instead of JSON")
@@ -887,6 +894,17 @@ async def _client_command(args: argparse.Namespace) -> None:
                 print(json.dumps(await client.call_plugin("prreview", "start", config=config)))
             case "prreview" if args.prreview_command in {"status", "pause", "resume"}:
                 print(json.dumps(await client.call_plugin("prreview", args.prreview_command, name=args.name)))
+            case "prreview" if args.prreview_command in {"approve", "reject"}:
+                decided = await client.call_plugin(
+                    "prreview",
+                    args.prreview_command,
+                    run=args.run,
+                    number=args.number,
+                    head=args.head,
+                    by=getpass.getuser(),
+                    note=args.note,
+                )
+                print(json.dumps(decided))
             case "supervision" | "findings" | "investigation" | "prreview":
                 if args.command == "supervision":
                     answer = await client.call_plugin("supervision", "query", sql=args.sql, session=args.session)
