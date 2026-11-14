@@ -72,7 +72,7 @@ def pynix_review(fixtures: Path, args: list[str]) -> int:
     built = out / "built"
     built.mkdir()
     (built / "built.json").write_text(json.dumps(report))
-    link = "https://example.test/#" + "x" * 300
+    link = "https://example.test/#(" + "x" * 300 + ")"
     (built / "built.md").write_text(
         f"### pynix-review build\n\n[Graph]({link})\n\n| result | derivations |\n| --- | --- |\n"
         f"| built | {report['built']} |\n| failed | {report['failed']} |\n"

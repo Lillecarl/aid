@@ -279,7 +279,7 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
     assert [text.split("\n")[0] for _, text in holder_notes] == [
         f"Reviewing {link} by someone at {head[:12]}.",
         "Built: 1 of 2 changed derivations built, 1 failed (0 on an unchanged input), 0 out of budget, in 4 s"
-        " ([graph](https://example.test/#" + "x" * 300 + "))",
+        " ([graph](https://example.test/#(" + "x" * 300 + ")))",
         "Review: COMMENT",
         "Reviewed: COMMENT",
     ]

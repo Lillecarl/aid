@@ -113,7 +113,8 @@ def test_a_long_diff_is_cut_and_says_so() -> None:
 
 
 def test_the_build_report_reaches_reviewers_without_its_graph_link() -> None:
-    comment = f"Changed: 3. [Graph](https://g.test/#{'d' * 500}) and [the log](https://l.test/1).\n" + "y" * 2000
+    dot = f"label=%22failed%200%20(0%20on%20an%20unchanged%20input)%22{'d' * 500}"
+    comment = f"Changed: 3. [Graph](https://g.test/#{dot}) and [the log](https://l.test/1).\n" + "y" * 2000
     prompt = angle_prompt(PR, "", comment, None, Limits(diff=1000, builds=1000))
     assert "Changed: 3. Graph and [the log](https://l.test/1)." in prompt
     assert "d" * 200 not in prompt
