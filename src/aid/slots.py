@@ -130,6 +130,7 @@ class Slotted:
     def __init__(self, model: Model, host: str) -> None:
         self.model_name = model.model_name
         self.cache_reads_in_prompt: bool = getattr(model, "cache_reads_in_prompt", False)
+        self.pdfs_as_images: bool = getattr(model, "pdfs_as_images", False)
         self._model = model
         self._host = host
 

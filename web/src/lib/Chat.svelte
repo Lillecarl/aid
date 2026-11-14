@@ -3,6 +3,7 @@
   import { SvelteSet } from "svelte/reactivity";
   import * as api from "./api";
   import type {
+    AttachmentRef,
     DirectoryRequest,
     HistoryEntry,
     HistoryItem,
@@ -12,6 +13,7 @@
     PermissionRequest,
     SessionEvent,
   } from "./api";
+  import Attachments from "./Attachments.svelte";
   import { Dictation } from "./dictation";
   import { editLine } from "./lineedit";
   import Markdown from "./Markdown.svelte";
@@ -50,8 +52,8 @@
     tool?: Tool;
     permission?: Permission;
     local?: boolean;
-    /** A prompt's attachments by sha256, served by aid web from the session's store. */
-    attachments?: string[];
+    /** A prompt's attachments, served by aid web from the session's store by sha256. */
+    attachments?: AttachmentRef[];
   };
 
   const PAGE = 100;
@@ -162,7 +164,7 @@
     const row = (kind: Kind, text: string): Row => ({ key, seq, kind, text });
     switch (item.type) {
       case "prompt":
-        return [{ ...row("user", item.text), attachments: item.attachments.map((image) => image.sha256) }];
+        return [{ ...row("user", item.text), attachments: item.attachments }];
       case "message":
         return [row("message", `From ${item.sender ?? "a person"}: ${item.text}`)];
       case "text":
@@ -403,16 +405,16 @@
     return `/api/sessions/${encodeURIComponent(name)}/attachments/${sha}`;
   }
 
-  /** Images the next prompt carries: picked with the button or pasted into the prompt box (#66). */
+  /** What the next prompt carries: picked with the button or pasted into the prompt box (#66, #72). */
   let attached: File[] = $state([]);
-  const IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+  const ATTACHMENT_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "application/pdf"];
 
   function attach(files: Iterable<File>): void {
-    attached = [...attached, ...[...files].filter((file) => IMAGE_TYPES.includes(file.type))];
+    attached = [...attached, ...[...files].filter((file) => ATTACHMENT_TYPES.includes(file.type))];
   }
 
   function pasted(event: ClipboardEvent): void {
-    const files = [...(event.clipboardData?.files ?? [])].filter((file) => IMAGE_TYPES.includes(file.type));
+    const files = [...(event.clipboardData?.files ?? [])].filter((file) => ATTACHMENT_TYPES.includes(file.type));
     if (files.length === 0) return;
     event.preventDefault();
     attach(files);
@@ -739,13 +741,12 @@
         aria-expanded={!folded.has(row.key)}
         title={folded.has(row.key) ? "Unfold" : "Fold to the first line"}
         onclick={() => toggleFold(row.key)}>{folded.has(row.key) ? "▸" : "▾"}</button
-      >{#if row.kind === "assistant"}<Markdown text={row.text} />{:else}{row.text}{/if}{#if row.attachments?.length}<div
-          class="attachments"
-          data-testid="chat-attachments"
-          >{#each row.attachments as sha (sha)}<a href={attachmentUrl(sha)} target="_blank" rel="noopener"
-              ><img src={attachmentUrl(sha)} alt="Sent with the prompt" loading="lazy" /></a
-            >{/each}</div
-        >{/if}</div
+      >{#if row.kind === "assistant"}<Markdown text={row.text} />{:else}{row.text}{/if}{#if row.attachments?.length}<Attachments
+          attachments={row.attachments}
+          url={attachmentUrl}
+          origin="Sent with the prompt"
+          testid="chat-attachments"
+        />{/if}</div
     >
     {:else if row.kind === "thought"}
       <details class="thought" data-testid="chat-row" open={thinking === "live" && row.seq === undefined}>
@@ -832,7 +833,7 @@
   {#if attached.length}
     <div class="attached" data-testid="chat-attached">
       {#each attached as file, i (i)}
-        <button type="button" title="Leave this image out" onclick={() => (attached = attached.filter((_, j) => j !== i))}
+        <button type="button" title="Leave this attachment out" onclick={() => (attached = attached.filter((_, j) => j !== i))}
           >{file.name} ✕</button
         >
       {/each}
@@ -841,11 +842,11 @@
   <textarea data-testid="chat-input" bind:value={text} onkeydown={keydown} onpaste={pasted} rows="4" placeholder={touchOnly ? "Prompt" : "Prompt (Enter sends, Shift+Enter or Ctrl+J for a new line, /help for commands)"}></textarea>
   <div class="buttons">
     <button type="submit" data-testid="chat-send" disabled={busy}>{busy ? "Working…" : "Send"}</button>
-    <label class="attach" title="Send attachments with the prompt: PNG, JPEG, GIF or WebP; pasting one works too"
-      >Image<input
+    <label class="attach" title="Send attachments with the prompt: PNG, JPEG, GIF, WebP or PDF; pasting one works too"
+      >Attach<input
         type="file"
         data-testid="chat-attach"
-        accept={IMAGE_TYPES.join(",")}
+        accept={ATTACHMENT_TYPES.join(",")}
         multiple
         onchange={(e) => {
           attach(e.currentTarget.files ?? []);
@@ -870,17 +871,6 @@
 </form>
 
 <style>
-  .attachments {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5em;
-    margin-top: 0.5em;
-  }
-  .attachments img {
-    max-width: 16em;
-    max-height: 12em;
-    border: 1px solid var(--muted);
-  }
   .attached {
     display: flex;
     flex-wrap: wrap;

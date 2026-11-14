@@ -54,6 +54,22 @@ class ImageContent(TypedDict):
     image_url: ImageURL
 
 
+class FileData(TypedDict):
+    filename: str
+    file_data: str
+    """A `data:` URL."""
+
+
+class FileContent(TypedDict):
+    """A PDF (#72). OpenAI and OpenRouter take it (measured); other servers' models.dev entries decide."""
+
+    type: Literal["file"]
+    file: FileData
+
+
+type UserContent = TextContent | ImageContent | FileContent
+
+
 class SystemMessage(TypedDict):
     role: Literal["system"]
     content: str
@@ -61,7 +77,7 @@ class SystemMessage(TypedDict):
 
 class UserMessage(TypedDict):
     role: Literal["user"]
-    content: str | list[TextContent | ImageContent]
+    content: str | list[UserContent]
 
 
 class AssistantMessage(TypedDict):

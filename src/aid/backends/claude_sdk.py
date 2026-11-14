@@ -21,7 +21,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from aid.backends.acp import choose_permission
-from aid.backends.base import refuse_images
+from aid.backends.base import refuse_attachments
 from aid.backends.permissions import PermissionWaits
 from aid.env import agent_environment
 from aid.mcp import MCP_CONFIG_FILE, claude_config, claude_rules, session_servers, write_private
@@ -189,7 +189,7 @@ class ClaudeSdkBackend:
         self._spec = self._spec.model_copy(update=update)
 
     async def prompt(self, text: str, emit: Emit, attachments: Sequence[bytes] = ()) -> Output:
-        refuse_images("claude-sdk", attachments)
+        refuse_attachments("claude-sdk", attachments)
         payload = json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n"
         argv = sdk_argv(self._spec, resume=self._started.agent_session, mcp_config=self._mcp_config)
         env = agent_environment(self._spec.env, inherit=self._spec.inherit_env)

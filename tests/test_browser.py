@@ -37,7 +37,7 @@ from tests.browser_harness import (
 )
 from tests.conftest import py_spec
 from tests.test_agents import AGENT_DIR
-from tests.test_attachments import png
+from tests.test_attachments import pdf, png
 from tests.test_sandbox import needs_bwrap
 from tests.web_harness import ALLOWED, ASSETS, TIMEOUT, needs_dex
 
@@ -166,6 +166,26 @@ async def test_an_attached_image_reaches_the_agent_and_shows(page: Page, session
     with anyio.fail_after(TIMEOUT):
         # decode() rejects for a broken image: one the route or the CSP refused.
         assert await shown.evaluate("(img) => img.decode().then(() => img.naturalWidth)") == 8
+
+
+async def test_an_attached_pdf_reaches_the_agent_and_links(page: Page, session_daemon: Paths, tmp_path: Path) -> None:
+    """Attach takes a PDF (#72); the agent gets it, and the history row links it, served as a PDF."""
+    document = tmp_path / "doc.pdf"
+    document.write_bytes(pdf())
+    await seed_session(session_daemon, tmp_path, "pdfs", "agents:seer")
+    await open_session(page, "pdfs")
+    await page.get_by_test_id("chat-attach").set_input_files(str(document))
+    await page.get_by_test_id("chat-attached").get_by_text("doc.pdf").wait_for(timeout=TIMEOUT * 1000)
+    await send_chat(page, "read this")
+    sha = hashlib.sha256(pdf()).hexdigest()
+    await expect_chat_text(page, f"application/pdf:{sha}")
+    link = page.get_by_test_id("chat-attachments").locator("a").filter(has=page.get_by_test_id("attachment-document"))
+    await link.wait_for(timeout=TIMEOUT * 1000)
+    href: str = await link.evaluate("(a) => a.href")
+    assert href.endswith(f"/attachments/{sha}")
+    response = await page.request.get(href)
+    assert (response.status, response.headers["content-type"]) == (200, "application/pdf")
+    assert await response.body() == pdf()
 
 
 async def test_an_image_a_tool_read_shows_in_its_card(page: Page, session_daemon: Paths, tmp_path: Path) -> None:

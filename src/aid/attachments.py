@@ -1,4 +1,5 @@
-"""Images a session sends to its model (#66): content-addressed files in the session dir, named by `AttachmentPart`."""
+"""What a session sends its model beside text (#66, #72): images and PDFs, content-addressed files in the session dir,
+named by `AttachmentPart`."""
 
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import os
 from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 import anyio.to_thread
 from pydantic import BaseModel, TypeAdapter, ValidationError
@@ -29,7 +30,7 @@ LEGACY_DIR: Final = "images"
 
 
 class Upload(BaseModel):
-    """An image a provider holds (#69): its file id or URI, and when the provider deletes it (None: never)."""
+    """An attachment a provider holds (#69): its file id or URI, and when the provider deletes it (None: never)."""
 
     id: str
     expires: datetime | None = None
@@ -40,21 +41,36 @@ UPLOADS_DIR: Final = "uploads"
 """`attachments/uploads/<scope>.json`: sha256 → a provider's file id, per provider and key (`scope`)."""
 MAX_BYTES: Final = 5 * 1024 * 1024
 """Anthropic's limit per image, the lowest of the three APIs."""
+MAX_PDF_BYTES: Final = 20 * 1024 * 1024
+"""Per PDF: Gemini's inline request limit, the lowest. Anthropic takes 32 MB a request (base64 included) and 100 pages."""
 MAX_PROMPT_BYTES: Final = 20 * 1024 * 1024
-"""One prompt's attachments together: what one protocol message may carry. Each request resends every image of the
-history, so this does not keep a request under a provider's size limit."""
+"""One prompt's attachments together: what one protocol message may carry. Each request resends every attachment of
+the history (where no Files API holds it), so this does not keep a request under a provider's size limit."""
+
+type Kind = Literal["image", "pdf"]
+"""What models.dev's `modalities.input` calls an attachment's kind."""
 
 SIGNATURES: Final = (
     (b"\x89PNG\r\n\x1a\n", "image/png"),
     (b"\xff\xd8\xff", "image/jpeg"),
     (b"GIF87a", "image/gif"),
     (b"GIF89a", "image/gif"),
+    (b"%PDF-", "application/pdf"),
 )
 """The formats every API aid speaks takes. WebP's RIFF header needs its own check (`media_type`)."""
 
+EXTENSIONS: Final = {
+    "image/png": "png",
+    "image/jpeg": "jpg",
+    "image/gif": "gif",
+    "image/webp": "webp",
+    "application/pdf": "pdf",
+}
+"""A file name's extension per media type: OpenAI takes the format from it (an upload without one: 400, measured)."""
+
 
 def media_type(data: bytes) -> str | None:
-    """The image format by its magic bytes, None for anything else."""
+    """The format by its magic bytes, None for anything no model takes."""
     for magic, kind in SIGNATURES:
         if data.startswith(magic):
             return kind
@@ -63,19 +79,28 @@ def media_type(data: bytes) -> str | None:
     return None
 
 
+def kind_of(media_type: str) -> Kind:
+    return "pdf" if media_type == "application/pdf" else "image"
+
+
+def file_name(part: AttachmentPart) -> str:
+    return f"{part.sha256}.{EXTENSIONS.get(part.media_type, 'bin')}"
+
+
 def checked(data: bytes) -> str:
-    """The image's media type, or `bad_attachment` for what no model takes."""
-    if len(data) > MAX_BYTES:
-        raise AidError("bad_attachment", f"the image is {len(data)} bytes, over the limit of {MAX_BYTES}")
-    if (kind := media_type(data)) is None:
-        raise AidError("bad_attachment", "the image is not PNG, JPEG, GIF or WebP")
-    return kind
+    """The attachment's media type, or `bad_attachment` for what no model takes."""
+    if (found := media_type(data)) is None:
+        raise AidError("bad_attachment", "the attachment is not PNG, JPEG, GIF, WebP or PDF")
+    limit = MAX_PDF_BYTES if kind_of(found) == "pdf" else MAX_BYTES
+    if len(data) > limit:
+        raise AidError("bad_attachment", f"the {kind_of(found)} is {len(data)} bytes, over the limit of {limit}")
+    return found
 
 
 @dataclass(frozen=True)
 class ToolAttachment:
-    """A tool's answer that is an image: the native loop stores `data` and sends it after `text`, or sends `text` alone
-    where the model takes no attachments."""
+    """A tool's answer that is an image or a PDF: the native loop stores `data` and sends it after `text`, or sends
+    `text` alone where the model takes no such attachment."""
 
     data: bytes
     text: str
@@ -88,7 +113,7 @@ def decoded(attachments: Sequence[str]) -> list[bytes]:
     try:
         data = [base64.b64decode(image, validate=True) for image in attachments]
     except binascii.Error as error:
-        raise AidError("bad_attachment", f"an image is not base64: {error}") from None
+        raise AidError("bad_attachment", f"an attachment is not base64: {error}") from None
     for one in data:
         checked(one)
     return data
@@ -127,9 +152,9 @@ class AttachmentStore:
         try:
             data = self._path(part.sha256).read_bytes()
         except FileNotFoundError:
-            raise AidError("attachment_missing", f"image {part.sha256} is not in {self._dir}") from None
+            raise AidError("attachment_missing", f"attachment {part.sha256} is not in {self._dir}") from None
         if hashlib.sha256(data).hexdigest() != part.sha256:
-            raise AidError("attachment_missing", f"image {part.sha256} in {self._dir} does not match its name")
+            raise AidError("attachment_missing", f"attachment {part.sha256} in {self._dir} does not match its name")
         return data
 
     def _encoded(self, parts: Sequence[AttachmentPart]) -> Encoded:
@@ -194,4 +219,4 @@ def encoded(attachments: Encoded, part: AttachmentPart) -> str:
     try:
         return attachments[part.sha256]
     except KeyError:
-        raise AidError("attachment_missing", f"image {part.sha256} has no bytes for this request") from None
+        raise AidError("attachment_missing", f"attachment {part.sha256} has no bytes for this request") from None

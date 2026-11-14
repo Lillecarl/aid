@@ -6,7 +6,7 @@ Measured 2026-11-13 on gpt-5-nano, gpt-4o-mini and gpt-4.1-mini:
 - a function tool without `strict` is strict (the echo says `strict: true`), so aid sends `strict: false`;
 - a reasoning item replays with or without its `id`, and a call without its reasoning item is accepted;
 - `include: ["reasoning.encrypted_content"]` and `reasoning.summary` are accepted by models that do not reason;
-- `function_call_output.output` takes `input_image` parts, by data URL or by file id;
+- `function_call_output.output` takes `input_image` parts and (2026-11-14) `input_file` PDFs, inline or by file id;
 - `input_tokens` counts cached tokens inside it (`input_tokens_details.cached_tokens`).
 """
 
@@ -38,7 +38,16 @@ class InputImage(TypedDict):
     """An upload through the Files API (`files_url`)."""
 
 
-type InputContent = InputText | InputImage
+class InputFile(TypedDict):
+    """A PDF (#72), inline (`file_data`, a `data:` URL, with `filename`) or by `file_id`."""
+
+    type: Literal["input_file"]
+    filename: NotRequired[str]
+    file_data: NotRequired[str]
+    file_id: NotRequired[str]
+
+
+type InputContent = InputText | InputImage | InputFile
 
 
 class Message(TypedDict):
@@ -198,8 +207,10 @@ def files_url(base: str | None) -> str:
     return f"{(base or DEFAULT_BASE).rstrip('/')}/files"
 
 
-FILE_PURPOSE: Final = "vision"
+IMAGE_PURPOSE: Final = "vision"
 """Measured 2026-11-13: `vision` and `user_data` uploads both work as `input_image.file_id`."""
+PDF_PURPOSE: Final = "user_data"
+"""Measured 2026-11-14: a `user_data` PDF works as `input_file.file_id`, in a message and in a tool's output."""
 
 
 class StoredFile(_Read):

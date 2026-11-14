@@ -39,14 +39,14 @@ class Backend(Protocol):
         ...
 
     async def prompt(self, text: str, emit: Emit, attachments: Sequence[bytes] = ()) -> Output:
-        """`attachments`: PNG, JPEG, GIF or WebP files that go with `text` (#66). An engine that cannot send them
-        refuses any (`refuse_images`)."""
+        """`attachments`: PNG, JPEG, GIF, WebP or PDF files that go with `text` (#66, #72). An engine that cannot send them
+        refuses any (`refuse_attachments`)."""
         ...
 
     async def cancel(self) -> None: ...
 
 
-def refuse_images(engine: str, attachments: Sequence[bytes]) -> None:
+def refuse_attachments(engine: str, attachments: Sequence[bytes]) -> None:
     if attachments:
         raise AidError("attachments_unsupported", f"{engine} sessions take no attachments yet")
 

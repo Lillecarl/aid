@@ -41,7 +41,7 @@ from acp.schema import (
 )
 from pydantic import BaseModel, Field, ValidationError
 
-from aid.backends.base import refuse_images
+from aid.backends.base import refuse_attachments
 from aid.backends.permissions import PermissionWaits
 from aid.env import agent_environment
 from aid.mcp import session_servers, to_acp
@@ -351,7 +351,7 @@ class AcpBackend:
                     self._events.send_nowait(session_event)
 
     async def prompt(self, text: str, emit: Emit, attachments: Sequence[bytes] = ()) -> Output:
-        refuse_images("ACP", attachments)
+        refuse_attachments("ACP", attachments)
         send, receive = anyio.create_memory_object_stream[SessionEvent](math.inf)
         chunks: list[str] = []
 

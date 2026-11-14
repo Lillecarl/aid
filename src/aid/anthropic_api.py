@@ -28,7 +28,7 @@ class TextBlock(_Wire):
     text: str
 
 
-class ImageSource(_Wire):
+class Base64Source(_Wire):
     type: Literal["base64"] = "base64"
     media_type: str
     data: str
@@ -43,7 +43,14 @@ class FileSource(_Wire):
 
 class ImageBlock(_Wire):
     type: Literal["image"] = "image"
-    source: ImageSource | FileSource
+    source: Base64Source | FileSource
+
+
+class DocumentBlock(_Wire):
+    """A PDF (#72): inline, by file id, and inside a `tool_result` all work (measured 2026-11-14)."""
+
+    type: Literal["document"] = "document"
+    source: Base64Source | FileSource
 
 
 class ThinkingBlock(_Wire):
@@ -67,12 +74,12 @@ class ToolUseBlock(_Wire):
 class ToolResultBlock(_Wire):
     type: Literal["tool_result"] = "tool_result"
     tool_use_id: str
-    content: str | list[TextBlock | ImageBlock]
+    content: str | list[TextBlock | ImageBlock | DocumentBlock]
     is_error: bool | None = None
 
 
 type Block = Annotated[
-    TextBlock | ImageBlock | ThinkingBlock | RedactedThinkingBlock | ToolUseBlock | ToolResultBlock,
+    TextBlock | ImageBlock | DocumentBlock | ThinkingBlock | RedactedThinkingBlock | ToolUseBlock | ToolResultBlock,
     Field(discriminator="type"),
 ]
 

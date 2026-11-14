@@ -18,7 +18,7 @@ import structlog
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from aid import anthropic_api, chat_api, gemini, responses_api, wire
-from aid.attachments import NO_ATTACHMENTS, AttachmentStore, Upload, encoded
+from aid.attachments import NO_ATTACHMENTS, AttachmentStore, Upload, encoded, file_name, kind_of
 from aid.messages import (
     AttachmentPart,
     ModelMessage,
@@ -183,9 +183,9 @@ def wire_messages(
                 item["reasoning_content"] = "".join(p.content for p in thoughts)
             result.append(item)
         else:
-            # A tool message takes text only: a call's image goes in a user message after the request's last tool
+            # A tool message takes text only: a call's attachment goes in a user message after the request's last tool
             # message, since a user message between them would part the answers from their calls.
-            held: list[chat_api.TextContent | chat_api.ImageContent] = []
+            held: list[chat_api.UserContent] = []
             prompt: chat_api.UserMessage | None = None
             for part in message.parts:
                 if held and not isinstance(part, ToolReturnPart | RetryPromptPart | AttachmentPart):
@@ -196,15 +196,17 @@ def wire_messages(
                 match part:
                     case AttachmentPart():
                         url = f"data:{part.media_type};base64,{encoded(attachments, part)}"
-                        block: chat_api.ImageContent = {"type": "image_url", "image_url": {"url": url}}
+                        block: chat_api.UserContent = (
+                            {"type": "file", "file": {"filename": file_name(part), "file_data": url}}
+                            if kind_of(part.media_type) == "pdf"
+                            else {"type": "image_url", "image_url": {"url": url}}
+                        )
                         if part.tool_call_id is not None:
                             held.append(block)
                         elif prompt is not None:
                             content = prompt["content"]
                             if isinstance(content, str):
-                                blocks: list[chat_api.TextContent | chat_api.ImageContent] = [
-                                    {"type": "text", "text": content}
-                                ]
+                                blocks: list[chat_api.UserContent] = [{"type": "text", "text": content}]
                                 prompt["content"] = content = blocks
                             content.append(block)
                         else:
@@ -362,7 +364,7 @@ async def held_files(
                 rejected_key(error) or (isinstance(error, wire.StatusError) and refused(error))
             ):
                 raise refused_key(name, error) from error
-            log.warning("image_upload_failed", model=name, image=part.sha256, error=str(error)[:300])
+            log.warning("attachment_upload_failed", model=name, attachment=part.sha256, error=str(error)[:300])
     if missing:
         await info.attachments.save_uploads(scope, held)
     return {sha: held[sha].id for sha in parts if sha in held}
@@ -726,12 +728,18 @@ def responses_input(
 ) -> list[responses_api.Item]:
     """Stored parts as Responses API input items. Reasoning replays sealed with an empty summary, so a past turn's
     item stays byte-identical (the cache prefix); unsealed thinking (another API's) and a reasoning item nothing
-    follows are left out. A tool's image goes inside its `function_call_output` (measured)."""
+    follows are left out. A tool's attachment goes inside its `function_call_output` (measured)."""
     result: list[responses_api.Item] = []
     outputs: dict[str, responses_api.FunctionCallOutput] = {}
 
-    def image(part: AttachmentPart) -> responses_api.InputImage:
-        if (file_id := files.get(part.sha256)) is not None:
+    def image(part: AttachmentPart) -> responses_api.InputImage | responses_api.InputFile:
+        file_id = files.get(part.sha256)
+        if kind_of(part.media_type) == "pdf":
+            if file_id is not None:
+                return {"type": "input_file", "file_id": file_id}
+            url = f"data:{part.media_type};base64,{encoded(attachments, part)}"
+            return {"type": "input_file", "filename": file_name(part), "file_data": url}
+        if file_id is not None:
             return {"type": "input_image", "detail": "auto", "file_id": file_id}
         url = f"data:{part.media_type};base64,{encoded(attachments, part)}"
         return {"type": "input_image", "detail": "auto", "image_url": url}
@@ -797,6 +805,9 @@ class OpenAIResponsesModel:
     replays sealed (`ENCRYPTED`), attachments go by Files API id on OpenAI's own server (#69)."""
 
     cache_reads_in_prompt: bool = True
+    pdfs_as_images: bool = True
+    """OpenAI reads a PDF on every model that reads images (its docs; measured on gpt-5-nano, which models.dev lists
+    without `pdf`)."""
 
     def __init__(self, name: str, provider: Provider | None = None) -> None:
         """`provider`: another server of the Responses API, its base URL and key variable; None is OpenAI's."""
@@ -870,9 +881,13 @@ class OpenAIResponsesModel:
         response = await self._client().post(
             responses_api.files_url(key.base_url),
             headers=dict(headers),
-            data={"purpose": responses_api.FILE_PURPOSE},
+            data={
+                "purpose": responses_api.PDF_PURPOSE
+                if kind_of(part.media_type) == "pdf"
+                else responses_api.IMAGE_PURPOSE
+            },
             # The extension names the format: without one a request using the file is refused (400, measured).
-            files={"file": (f"{part.sha256}.{part.media_type.removeprefix('image/')}", data, part.media_type)},
+            files={"file": (file_name(part), data, part.media_type)},
             timeout=io_timeout,
         )
         if not response.is_success:
@@ -1042,15 +1057,19 @@ def anthropic_messages(
                     source = (
                         anthropic_api.FileSource(file_id=files[part.sha256])
                         if part.sha256 in files
-                        else anthropic_api.ImageSource(media_type=part.media_type, data=encoded(attachments, part))
+                        else anthropic_api.Base64Source(media_type=part.media_type, data=encoded(attachments, part))
                     )
-                    image = anthropic_api.ImageBlock(source=source)
+                    block = (
+                        anthropic_api.DocumentBlock(source=source)
+                        if kind_of(part.media_type) == "pdf"
+                        else anthropic_api.ImageBlock(source=source)
+                    )
                     if (answer := _tool_result(turns, part.tool_call_id)) is None:
-                        add("user", image)
+                        add("user", block)
                     else:
                         if isinstance(answer.content, str):
                             answer.content = [anthropic_api.TextBlock(text=answer.content)]
-                        answer.content.append(image)
+                        answer.content.append(block)
                 case ToolReturnPart():
                     add(
                         "user",
@@ -1163,7 +1182,7 @@ class AnthropicModel:
     async def _upload(
         self, key: ClientKey, headers: Mapping[str, str], io_timeout: float, part: AttachmentPart, data: bytes
     ) -> Upload:
-        files = {"file": (part.sha256, data, part.media_type)}
+        files = {"file": (file_name(part), data, part.media_type)}
         response = await self._client().post(
             anthropic_api.files_url(key.base_url), headers=dict(headers), files=files, timeout=io_timeout
         )

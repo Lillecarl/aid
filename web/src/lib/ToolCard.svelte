@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Attachments from "./Attachments.svelte";
   import Code from "./Code.svelte";
   import InputView from "./InputView.svelte";
   import { command, type DiffLine, diffLines, gist, hasInput, numbered, readable, type Tool } from "./tools";
@@ -73,11 +74,7 @@
         {/if}
       {/if}
       {#if tool.attachments.length}
-        <div class="attachments" data-testid="tool-attachments">
-          {#each tool.attachments as sha (sha)}<a href={attachmentUrl(sha)} target="_blank" rel="noopener"
-              ><img src={attachmentUrl(sha)} alt="Returned by the tool" loading="lazy" /></a
-            >{/each}
-        </div>
+        <Attachments attachments={tool.attachments} url={attachmentUrl} origin="Returned by the tool" testid="tool-attachments" />
       {/if}
     </div>
   {/if}
@@ -202,16 +199,5 @@
   }
   .l {
     display: block;
-  }
-  .attachments {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.4rem;
-  }
-  .attachments img {
-    max-width: 16rem;
-    max-height: 16rem;
-    border-radius: 0.3rem;
-    border: 1px solid var(--line);
   }
 </style>

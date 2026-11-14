@@ -78,7 +78,7 @@ class Prompt(_Request):
     session: str
     text: str
     attachments: list[str] = Field(default=[], validation_alias=AliasChoices("attachments", "images"))
-    """Each attachment's bytes in base64 (#66, #72): PNG, JPEG, GIF or WebP. Native sessions take them, others refuse.
+    """Each attachment's bytes in base64 (#66, #72): PNG, JPEG, GIF, WebP or PDF. Native sessions take them, others refuse.
     `images` is the older name, still read."""
 
 

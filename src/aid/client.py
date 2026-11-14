@@ -497,7 +497,7 @@ class Session:
         self.name = name
 
     async def stream(self, text: str, attachments: Sequence[bytes] = ()) -> AsyncIterator[SessionEvent]:
-        """Yield the prompt's events. The last one is an `Output`. `attachments`: PNG, JPEG, GIF or WebP (#66)."""
+        """Yield the prompt's events. The last one is an `Output`. `attachments`: PNG, JPEG, GIF, WebP or PDF (#66, #72)."""
         request = Prompt(
             session=self.name, text=text, attachments=[base64.b64encode(image).decode() for image in attachments]
         )

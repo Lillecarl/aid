@@ -22,7 +22,7 @@ from pydantic_core import to_jsonable_python
 
 from aid import sandbox
 from aid.agent import Agent, ModelRetry, Tool, Toolset
-from aid.attachments import AttachmentStore, ToolAttachment
+from aid.attachments import AttachmentStore, Kind, ToolAttachment, checked, kind_of
 from aid.backends.permissions import PermissionWaits
 from aid.catalog import session_catalog
 from aid.client import connect
@@ -430,7 +430,7 @@ class NativeBackend:
         the model's window from models.dev. `offers`: the session's tool ceiling; a tool it refuses is never offered."""
         self._agent = agent
         self._history_file = history_file
-        self._images = attachments
+        self._attachments = attachments
         self._history = history
         self._fresh_turns = fresh_turns
         self._toolsets = toolsets
@@ -520,20 +520,23 @@ class NativeBackend:
         await self._look_up()
         return self._price
 
-    async def _takes_attachments(self) -> bool:
-        """False only where models.dev lists the model's input without `image`: an undescribed model is asked."""
+    async def _takes(self, kind: Kind) -> bool:
+        """False only where models.dev lists the model's input without `kind`: an undescribed model is asked. A
+        transport that reads PDFs wherever its models read images (`pdfs_as_images`) takes them on an image model."""
         await self._look_up()
-        return self._inputs is None or "image" in self._inputs
+        if self._inputs is None or kind in self._inputs:
+            return True
+        return kind == "pdf" and "image" in self._inputs and getattr(self._model, "pdfs_as_images", False)
 
     async def _tool_return(self, call: ToolCallPart, result: object) -> list[Part]:
         if not isinstance(result, ToolAttachment):
             return [ToolReturnPart(call.tool_name, to_jsonable_python(result), call.tool_call_id)]
-        if self._images is None or not await self._takes_attachments():
-            return [
-                ToolReturnPart(call.tool_name, f"{result.text}; this model takes no attachments", call.tool_call_id)
-            ]
-        image = await self._images.add(result.data, call.tool_call_id)
-        return [ToolReturnPart(call.tool_name, result.text, call.tool_call_id), image]
+        kind = kind_of(checked(result.data))
+        if self._attachments is None or not await self._takes(kind):
+            note = f"{result.text}; this model takes no {'PDFs' if kind == 'pdf' else 'images'}"
+            return [ToolReturnPart(call.tool_name, note, call.tool_call_id)]
+        attachment = await self._attachments.add(result.data, call.tool_call_id)
+        return [ToolReturnPart(call.tool_name, result.text, call.tool_call_id), attachment]
 
     def _preserve_signed_thinking(self) -> bool:
         """Anthropic rejects a signed block whose signature the wire dropped, so keep them whole. Gemini's signed
@@ -551,13 +554,15 @@ class NativeBackend:
         return self._coding.waits.answer(request_id, option_id, plugin, text, supervisor)
 
     async def prompt(self, text: str, emit: Emit, attachments: Sequence[bytes] = ()) -> Output:
-        if attachments and self._images is None:
+        if attachments and self._attachments is None:
             raise AidError("attachments_unsupported", "this session keeps no attachments")
-        if attachments and not await self._takes_attachments():
-            name = self._price_as or self._model.model_name
-            listed = ", ".join(self._inputs or [])
-            raise AidError("attachments_unsupported", f"{name} takes no attachments (models.dev input: {listed})")
-        parts = [await self._images.add(image) for image in attachments] if self._images else []
+        kinds: dict[Kind, None] = dict.fromkeys(kind_of(checked(attachment)) for attachment in attachments)
+        for kind in kinds:
+            if not await self._takes(kind):
+                name = self._price_as or self._model.model_name
+                listed = ", ".join(self._inputs or [])
+                raise AidError("attachments_unsupported", f"{name} takes no {kind} (models.dev input: {listed})")
+        parts = [await self._attachments.add(image) for image in attachments] if self._attachments else []
         self._coding.emit = emit
         token = CODING.set(self._coding)
         try:
@@ -627,7 +632,10 @@ class NativeBackend:
                     price = await self._request_price()
                     truncated = False
                     info = ModelInfo(
-                        list(self._tools.values()), self._agent.output_type, self._agent.model_settings, self._images
+                        list(self._tools.values()),
+                        self._agent.output_type,
+                        self._agent.model_settings,
+                        self._attachments,
                     )
                     wire = prune_history(
                         [*self._history, *messages[:-1]],
@@ -890,7 +898,7 @@ class NativeBackend:
             ),
         ]
         response = await model.request(
-            request, ModelInfo(settings=self._agent.model_settings, attachments=self._images)
+            request, ModelInfo(settings=self._agent.model_settings, attachments=self._attachments)
         )
         digest = "\n".join(part.content for part in response.parts if isinstance(part, TextPart)).strip()
         if not digest:

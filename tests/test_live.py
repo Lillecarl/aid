@@ -32,7 +32,7 @@ from aid.model import ENCRYPTED, ModelInfo, OpenAIResponsesModel
 from aid.prices import ENV_PRICES
 from aid.protocol import AidError, Output, SessionEvent, Usage
 from aid.providers import catalog_model, embedder, reranker, resolve
-from tests.test_attachments import png
+from tests.test_attachments import pdf, png
 from tests.test_native_backend import backend
 
 if TYPE_CHECKING:
@@ -64,14 +64,16 @@ class Route:
     """Where the key lives when not under `key` (`CLAUDE_API_KEY` in .privrc)."""
     vision: str | None = None
     """The model the image test runs on, where `model` takes text only (models.dev's `modalities.input`)."""
+    reads_pdf: bool = True
+    """models.dev lists PDF input for the vision model (OpenAI: any image model): else aid refuses before sending."""
 
 
 ROUTES: Final = [
     Route("openai/gpt-5-nano", "OPENAI_API_KEY"),
     Route("anthropic/claude-haiku-5-5", "ANTHROPIC_API_KEY", source_key="CLAUDE_API_KEY"),
     Route("google/gemini-3.1-flash-lite", "GEMINI_API_KEY"),
-    Route("deepseek/deepseek-flash", "DEEPSEEK_API_KEY", plugin="deepseek"),
-    Route("opencode-zen/deepseek-v4.1-flash", "OPENCODE_API_KEY", plugin="opencode"),
+    Route("deepseek/deepseek-flash", "DEEPSEEK_API_KEY", plugin="deepseek", reads_pdf=False),
+    Route("opencode-zen/deepseek-v4.1-flash", "OPENCODE_API_KEY", plugin="opencode", reads_pdf=False),
     Route("opencode-zen/claude-haiku-5-5", "OPENCODE_API_KEY", plugin="opencode"),
     Route("opencode-go/deepseek-v4.1-flash", "OPENCODE_GO_API_KEY", plugin="opencode"),
     Route(
@@ -200,6 +202,47 @@ async def test_an_image_from_a_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert "green" in str(answer.output).lower()
     history = ModelMessagesTypeAdapter.validate_json((tmp_path / "history.json").read_bytes())
     assert any(isinstance(p, AttachmentPart) and p.tool_call_id for m in history for p in m.parts)
+    assert_by_file_id(tmp_path, name)
+
+
+@pytest.mark.parametrize("route", ROUTES, ids=[route.model for route in ROUTES])
+@pytest.mark.parametrize("source", ["prompt", "tool"])
+async def test_a_pdf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Route, source: str) -> None:
+    """The model reads a word only the PDF holds (#72), sent with the prompt or read by a tool; by file id on Anthropic's,
+    Google's and OpenAI's own routes. A model models.dev lists without PDF input is refused before any request."""
+    keyed(monkeypatch, route.key, route.source_key)
+    monkeypatch.delenv(ENV_PRICES)
+    providers = discover([PLUGINS], only=[route.plugin]).model_providers if route.plugin else {}
+    name = route.vision or route.model
+    (tmp_path / "doc.pdf").write_bytes(pdf())
+    tools = [read] if source == "tool" else []
+    agent = Agent(name, "You are a test.", tools=tools, model_settings=dict(route.settings or {}))
+    transport = await resolve(name, providers, tmp_path.name)
+    ask = "What is the secret word in the document? Answer with the word only."
+    async with backend(
+        tmp_path,
+        agent,
+        transport=transport,
+        price_as=catalog_model(name, providers),
+        attachments=AttachmentStore(tmp_path),
+    ) as session:
+        if source == "tool":
+            answer = await session.prompt(f"Read doc.pdf with the read tool. {ask}", emit_nothing)
+        elif not route.reads_pdf:
+            with pytest.raises(AidError) as refused:
+                await session.prompt(ask, emit_nothing, [pdf()])
+            assert refused.value.code == "attachments_unsupported"
+            return
+        else:
+            answer = await session.prompt(ask, emit_nothing, [pdf()])
+    history = ModelMessagesTypeAdapter.validate_json((tmp_path / "history.json").read_bytes())
+    held = [p for m in history for p in m.parts if isinstance(p, AttachmentPart)]
+    if not route.reads_pdf:
+        # The tool's PDF never entered the history: the model got the note instead.
+        assert held == []
+        return
+    assert "pineapple" in str(answer.output).lower()
+    assert [p.media_type for p in held] == ["application/pdf"]
     assert_by_file_id(tmp_path, name)
 
 

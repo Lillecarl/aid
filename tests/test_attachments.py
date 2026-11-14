@@ -14,11 +14,21 @@ import httpx2
 import pytest
 
 from aid.agent import Agent
-from aid.attachments import MAX_BYTES, MAX_PROMPT_BYTES, AttachmentStore, decoded, refs
+from aid.attachments import (
+    MAX_BYTES,
+    MAX_PDF_BYTES,
+    MAX_PROMPT_BYTES,
+    AttachmentStore,
+    ToolAttachment,
+    decoded,
+    file_name,
+    refs,
+)
 from aid.backends.acp import AcpBackend
 from aid.backends.claude_sdk import ClaudeSdkBackend
 from aid.backends.claude_tty import ClaudeTtyBackend
-from aid.coding import read
+from aid.backends.permissions import PermissionWaits
+from aid.coding import CODING, Coding, read
 from aid.messages import (
     AttachmentPart,
     ModelMessagesTypeAdapter,
@@ -38,10 +48,12 @@ from aid.model import (
     StreamDelta,
     anthropic_messages,
     google_contents,
+    responses_input,
     wire_messages,
 )
 from aid.prices import ENV_PRICES
 from aid.protocol import AidError, AttachmentRef, Prompt, PromptEntry, ToolCall
+from aid.spec import PermissionMode
 from tests.models import TestModel
 from tests.test_google_model import chunk
 from tests.test_model import serve_wire, sse
@@ -69,6 +81,41 @@ def png(rgb: tuple[int, int, int] = (255, 0, 0), size: int = 8) -> bytes:
     return (
         b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(row * size)) + chunk(b"IEND", b"")
     )
+
+
+def pdf(text: str = "The secret word is PINEAPPLE.") -> bytes:
+    """A one-page PDF with `text` in Helvetica: what the PDF probes and live tests read (#72)."""
+    stream = f"BT /F1 24 Tf 72 700 Td ({text}) Tj ET".encode()
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R"
+        b" /Resources << /Font << /F1 5 0 R >> >> >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    ]
+    out = b"%PDF-1.4\n"
+    offsets: list[int] = []
+    for number, body in enumerate(objects, 1):
+        offsets.append(len(out))
+        out += f"{number} 0 obj\n".encode() + body + b"\nendobj\n"
+    xref = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n0000000000 65535 f \n".encode()
+    out += b"".join(f"{offset:010d} 00000 n \n".encode() for offset in offsets)
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode()
+    return out
+
+
+def test_a_pdf_is_an_attachment_with_its_own_limit(tmp_path: Path) -> None:
+    """A PDF goes up to `MAX_PDF_BYTES`, past the image limit; anything else stays refused."""
+    store = AttachmentStore(tmp_path)
+    assert store.put(pdf()).media_type == "application/pdf"
+    big = b"%PDF-1.4\n" + bytes(MAX_BYTES)
+    assert store.put(big).media_type == "application/pdf"
+    with pytest.raises(AidError) as refused:
+        store.put(b"%PDF-1.4\n" + bytes(MAX_PDF_BYTES))
+    assert refused.value.code == "bad_attachment" and "pdf" in refused.value.message
+    assert file_name(store.put(pdf())).endswith(".pdf")
 
 
 def test_the_store_keeps_an_image_once_by_its_hash(tmp_path: Path) -> None:
@@ -230,6 +277,65 @@ def test_gemini_sends_images_inline(history: tuple[list[ModelMessage], dict[str,
     first, second = (p["functionResponse"] for p in sent[2]["parts"])
     assert first["parts"] == [{"inlineData": {"mimeType": "image/png", "data": blue}}]
     assert "parts" not in second
+
+
+@pytest.fixture
+def documents(tmp_path: Path) -> tuple[list[ModelMessage], dict[str, str]]:
+    """A prompt with a PDF, then a tool whose answer carries one."""
+    store = AttachmentStore(tmp_path)
+    sent, read_back = store.put(pdf()), store.put(pdf("Another page."), tool_call_id="c1")
+    messages: list[ModelMessage] = [
+        ModelRequest([UserPromptPart("the secret word?"), sent]),
+        ModelResponse([ToolCallPart("read", "{}", "c1")]),
+        ModelRequest([ToolReturnPart("read", "doc.pdf", "c1"), read_back]),
+    ]
+    return messages, {p.sha256: base64.b64encode(store.read(p)).decode() for p in (sent, read_back)}
+
+
+def test_each_wire_sends_a_pdf_as_its_api_names_it(documents: tuple[list[ModelMessage], dict[str, str]]) -> None:
+    """Measured shapes (#72): Chat Completions a `file` part (a tool's after the tool messages), Anthropic a `document`
+    block (a tool's inside its result), Gemini the media type as it is, Responses an `input_file`."""
+    messages, encoded = documents
+    (first, data), (second, tool_data) = encoded.items()
+    url, tool_url = f"data:application/pdf;base64,{data}", f"data:application/pdf;base64,{tool_data}"
+    chat = wire_messages(messages, attachments=encoded)
+    assert chat[0] == {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "the secret word?"},
+            {"type": "file", "file": {"filename": f"{first}.pdf", "file_data": url}},
+        ],
+    }
+    assert chat[-1] == {
+        "role": "user",
+        "content": [{"type": "file", "file": {"filename": f"{second}.pdf", "file_data": tool_url}}],
+    }
+    _, wired = anthropic_messages(messages, encoded)
+    sent = [m.model_dump(exclude_none=True) for m in wired]
+    assert sent[0]["content"][1] == {
+        "type": "document",
+        "source": {"type": "base64", "media_type": "application/pdf", "data": data},
+    }
+    assert sent[2]["content"][0]["content"][1]["type"] == "document"
+    _, contents = google_contents(messages, encoded)
+    google = [json.loads(c.model_dump_json(exclude_none=True)) for c in contents]
+    assert google[0]["parts"][1] == {"inlineData": {"mimeType": "application/pdf", "data": data}}
+    assert google[2]["parts"][0]["functionResponse"]["parts"] == [
+        {"inlineData": {"mimeType": "application/pdf", "data": tool_data}}
+    ]
+    items = responses_input(messages, encoded, {second: "file-9"})
+    assert items[0] == {
+        "role": "user",
+        "content": [
+            {"type": "input_text", "text": "the secret word?"},
+            {"type": "input_file", "filename": f"{first}.pdf", "file_data": url},
+        ],
+    }
+    assert items[-1] == {
+        "type": "function_call_output",
+        "call_id": "c1",
+        "output": [{"type": "input_text", "text": "doc.pdf"}, {"type": "input_file", "file_id": "file-9"}],
+    }
 
 
 ANSWER: Final = sse(
@@ -487,6 +593,68 @@ async def test_models_dev_input_decides_whether_a_model_sees_images(
         assert "models.dev input: text" in refused.value.message
 
 
+@pytest.mark.parametrize(
+    ("name", "settings", "takes", "refused"),
+    [
+        ("openai/local", {"api_base": "https://example.test/v1"}, ["text", "image"], True),
+        ("openai/local", {"api_base": "https://example.test/v1"}, ["text", "image", "pdf"], False),
+        # OpenAI reads PDFs on its image models; models.dev does not list them (gpt-5-nano, measured).
+        ("openai/local", {}, ["text", "image"], False),
+        ("openai/local", {}, ["text"], True),
+    ],
+)
+async def test_models_dev_decides_whether_a_model_reads_pdfs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    settings: dict[str, JsonValue],
+    takes: list[str],
+    refused: bool,
+) -> None:
+    catalog = tmp_path / "catalog.json"
+    entry = {"id": "local", "modalities": {"input": takes, "output": ["text"]}}
+    catalog.write_text(json.dumps({"openai": {"models": {"local": entry}}}))
+    monkeypatch.setenv(ENV_PRICES, str(catalog))
+    seen: list[httpx2.Request] = []
+
+    def handle(request: httpx2.Request) -> httpx2.Response:
+        if not request.url.path.endswith("/files"):  # OpenAI's own route uploads first
+            seen.append(request)
+        return httpx2.Response(400, json={"error": {"message": "stop here"}})
+
+    serve_wire(monkeypatch, handle)
+    agent = Agent(name, model_settings={"api_key": "k", "max_retries": 0, **settings})
+    async with backend(tmp_path, agent, attachments=AttachmentStore(tmp_path)) as session:
+        with pytest.raises(Exception) as failed:  # the asked model's 400 stops the turn
+            await session.prompt("the secret word?", emit, [pdf()])
+    if refused:
+        assert isinstance(failed.value, AidError)
+        assert (failed.value.code, seen) == ("attachments_unsupported", [])
+        assert "takes no pdf" in failed.value.message
+    else:
+        assert len(seen) == 1
+
+
+async def test_read_hands_a_pdf_to_the_model(tmp_path: Path) -> None:
+    """A PDF can be plain ASCII, so `read` checks the bytes before it decodes them as text."""
+    (tmp_path / "doc.pdf").write_bytes(pdf())
+    coding = Coding(
+        cwd=tmp_path,
+        store=tmp_path / "runs",
+        outputs=tmp_path / "outputs",
+        mode=PermissionMode.DENY,
+        timeout=10,
+        waits=PermissionWaits(),
+    )
+    token = CODING.set(coding)
+    try:
+        result = await read("doc.pdf")
+    finally:
+        CODING.reset(token)
+    assert isinstance(result, ToolAttachment) and result.data == pdf()
+    assert result.text == f"doc.pdf: application/pdf, {len(pdf())} bytes"
+
+
 class Reading(Looking):
     """Reads `pic.png` first, then answers."""
 
@@ -525,7 +693,7 @@ async def test_read_hands_an_image_file_to_the_model(tmp_path: Path, keeps: bool
         assert image in (await stored(tmp_path))[-2].parts
         assert [e.attachments for e in returned] == [[AttachmentRef(media_type="image/png", sha256=image.sha256)]]
     else:
-        assert str(answer[0].content).endswith("; this model takes no attachments")
+        assert str(answer[0].content).endswith("; this model takes no images")
         assert (len(answer), encoded) == (1, {})
         assert [e.attachments for e in returned] == [[]]
 

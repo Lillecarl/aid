@@ -756,7 +756,7 @@ async def ls(path: str = ".") -> str:
 
 async def read(path: str, offset: int = 1, limit: int = READ_LIMIT) -> str | ToolAttachment:
     """Read a text file with line numbers, as it will be once your staged edits apply. A PNG, JPEG, GIF or WebP
-    image comes back as the image itself, where your model takes attachments.
+    image or a PDF comes back as the file itself, where your model takes it.
 
     `path` is relative to your working directory. A `python` report's records read the same way: `3fa9c1.2/stdout`,
     `3fa9c1.2/stderr`, `3fa9c1/printed`. `offset` is the first line (1-based), `limit` how many."""
@@ -766,16 +766,19 @@ async def read(path: str, offset: int = 1, limit: int = READ_LIMIT) -> str | Too
         content = await coding.edit(lambda s: s.read(target))
     else:
         content = await anyio.Path(target).read_bytes()
+    if isinstance(content, str) and content.startswith("%PDF-"):
+        # The staged view decodes what it can, and a PDF can be plain ASCII: it decoded losslessly, so this is exact.
+        content = content.encode()
     if isinstance(content, bytes):
-        try:
-            content = content.decode()
-        except UnicodeDecodeError:
-            if media_type(content) is None:
-                return f"{path} is binary, {len(content)} bytes"
+        if media_type(content) is not None:
             try:
                 return ToolAttachment(content, f"{path}: {checked(content)}, {len(content)} bytes")
             except AidError as error:
-                return f"{path} is an image the model cannot take: {error.message}"
+                return f"{path} is a file the model cannot take: {error.message}"
+        try:
+            content = content.decode()
+        except UnicodeDecodeError:
+            return f"{path} is binary, {len(content)} bytes"
     return numbered(content, max(offset, 1), limit) or f"{path} is empty"
 
 

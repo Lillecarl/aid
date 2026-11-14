@@ -337,7 +337,7 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         type=Path,
-        help="a PNG, JPEG, GIF or WebP file the prompt carries; repeatable (native sessions)",
+        help="a PNG, JPEG, GIF, WebP or PDF file the prompt carries; repeatable (native sessions)",
     )
     prompt.add_argument("-v", "--verbose", action="store_true", help="tool calls on stderr as they start and end")
 
