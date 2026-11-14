@@ -469,7 +469,7 @@ def _parser() -> argparse.ArgumentParser:
         decide.add_argument("--head", help="the reviewed head; default the PR's latest reviewed one")
         decide.add_argument("--note", help="why, kept with the decision")
     prreview_query = prreview_sub.add_parser("query", help="one read-only SQL statement over the reviews")
-    prreview_query.add_argument("sql", help="tables: runs, prs, builds, angle_reviews, reviews")
+    prreview_query.add_argument("sql", help="tables: runs, prs, build_reports, angle_reviews, reviews")
     prreview_query.add_argument("--table", action="store_true", help="tab-separated columns and rows instead of JSON")
 
     for command in ("start", "cancel", "stop", "delete"):

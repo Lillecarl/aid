@@ -207,36 +207,45 @@ on reusable decisions and current boundaries; put long investigations and dated 
   findings of `review_severities` (default medium and worse) in batches of `review_batch`; the findings database is the record (`pending_sql`, read-only `ask` on
   `findings.db`): a finding with an `ai` verdict is reviewed, so a resume keeps no state; `attempts` turns each.
 - `plugins/prreview/` — nixpkgs PR review, bundled, `autostart` (read, prompt, manage, private); plan
-  `docs/pr-review.md`. `aid prreview start|status|pause|resume|query` (operator only). `PrReviewConfig` (name, model,
-  optional `hosts` → private, `query` = `gh search prs` filters, default open + green checks + `10.rebuild-linux:
-  1-10`, `sources` (`picking.py`, pure: sort/order/weight per search, `search_limit` 100 each; a source by weight,
-  then one of its first `HEAD_START` unreviewed hits; reviewed last), `max_prs`, `max_builds`, `angles` name → instructions, `angles_at_once` 2, `commands` = gh/git/nix argv
-  prefixes, tests point them at `tests/prreview_fakes.py`). One PR at a time (`_one`), across runs: `commands.py`
+  `docs/pr-review.md`. `aid prreview start|status|pause|resume|query|approve|reject` (operator only; approve/reject
+  RUN PR [--head] [--note] → `reviews.decision`/`decided_by`/`decided_at`/`note`, default latest reviewed head;
+  `status` `pending` = undecided). `PrReviewConfig` (name, model,
+  optional `hosts` → private, `query` = `gh search prs` filters, default open + green checks + not draft,
+  `sources` (`picking.py`, pure: sort/order/weight per search, `search_limit` 100 each; a source by weight,
+  then one of its first `HEAD_START` unreviewed hits; reviewed last), `max_prs`, `max_derivations` 1000, `wall`
+  3600, `kill_after` 5400, `reference`, `builds_limit`, `angles` name → instructions, `angles_at_once` 2, `commands` =
+  gh/git/pynix_review argv prefixes, tests point them at `tests/prreview_fakes.py`; `RETIRED` keys and
+  `commands.nix` dropped before validation, as stored configs revalidate at start). One PR at a time (`_one`),
+  across runs: `commands.py`
   fetches `refs/pull/N/head` `--depth 1` into the plugin's bare repo (head moved → skipped), detached worktree
   `worktrees/<run>`; `gh` finds the head's `PR` workflow run and its `comparison` artifact, `review.rebuilds` reads
-  `rebuildsByPlatform.x86_64-linux` (missing or over `max_builds` → skipped, nothing built). Duplicates
+  `rebuildsByPlatform.x86_64-linux` (missing → skipped; the list also feeds `search_terms`). Duplicates
   (`duplicates.py`, pure; before any build): `search_terms` (title's `pkg:` + rebuilds, `TERMS`), open and merged in
   `merged_days` PRs by title, kept if they touch one of its files (`max_candidates`); with any, a `.duplicates`
   session (read tools) answers a JSON block, refused → asked again; `beaten_by`: merged duplicate wins, else the
   model's winner, "equal" → latest `updatedAt`. Beaten → `duplicate` (`duplicate_of`), unbuilt; every check in
-  `duplicate_checks`. Each attribute `nix
-  build --file WORKTREE --arg config NIXPKGS_CONFIG --arg overlays '[ ]'` (`nixpkgs_config`, default unfree allowed: CI lists unfree rebuilds), timeout recorded as an outcome. Sessions
+  `duplicate_checks`. Builds (`_build`, only when CI lists rebuilds): `pynix-review pr N --out TMP --wall
+  --kill-after --max-derivations [--reference]`, `GITHUB_TOKEN` from the daemon env else `gh auth token`; stdout
+  JSON (`_PynixReview`), `skipped` → PR skipped, `pr.head` ≠ picked head → `head_moved` → skipped; `built/built.json`
+  + `built.md` → `BuildReport` → `build_reports`. Prompts' `<builds>` = `built.md` via `review.for_reviewers` (drops
+  links ≥200 chars: the graph's carries the DOT), clipped `builds_limit` (`Limits`); `build_summary` for notes. Outputs
+  stay (pynixd collects). Sessions
   `<run>.<number>.<angle|judge|duplicates>`, parent the PR's holder `<run>.<number>` (`holder_spec`), whose parent
   is root `<run>` (both instructions, `tools=[]`, never prompted, stopped once made; the root keeps chat plugins
   off). Notes (#57, `AppendNote`, failures logged only): the holder gets start, builds, the review, the end; the root
   one line per PR's end. A PR's end hides its holder (#59), reason `PR <state>: why`; a failed one stays. Work turns (#61): the root
-  per search + review, each step as live text; the holder per PR, with `git fetch --progress` and `nix build
-  --print-build-logs` streamed (`commands.streamed`, `SAY_EVERY`). A search with nothing to review notes the
+  per search + review, each step as live text; the holder per PR, with `git fetch --progress` and pynix-review's
+  stderr streamed (`commands.streamed`, `SAY_EVERY`; `env` replaces the environment whole). A search with nothing to review notes the
   root once per idle stretch ("No pull request left to review …"): no session works while it waits. `fresh_turns`, `instruction_providers=["skills"]` with `AID_SKILLS_ONLY` = `review-skills/` (not
   `skills/`: the skills plugin lists that to every session), `review.skill_hints` names a diff's guides in the
   prompt, ceiling `READ_TOOLS` (+ `skill`), the judge's plus `submit_review`
   (`@aid.mcptool`, so offered everywhere past a ceiling: the plugin takes it only from the judge of the PR under
   review, `_judging`). Comments checked against `review.diff_lines` (hunk counts, not prefixes: a removed `-- `
   line reads `--- `); refused → the model's retry. No review after a judge turn → again, prompt whole plus
-  `NO_REVIEW`, `attempts`. `store.py` (`prreview.db`, migrations): runs, prs (`step`: what the PR under review does now, `status` `current`), builds, angle_reviews (answer, last `Usage`),
-  reviews, each keyed by (run, number, head); an interrupted PR redoes all but its stored angles. The `finally`
-  (shielded) stops the PR's sessions (kept: their transcripts are the record; their cwd, the worktree, is gone),
-  deletes its outputs (`nix store delete`, one call) and worktree, then `git gc --prune=now`.
+  `NO_REVIEW`, `attempts`. `store.py` (`prreview.db`, schema 3, `MIGRATIONS`; `SCHEMA` runs after them): runs, prs (`step`: what the PR under review does now, `status` `current`), build_reports, angle_reviews (answer, last `Usage`),
+  reviews (+ decision columns), each keyed by (run, number, head); `builds` only holds pre-pynix-review rows. An
+  interrupted PR redoes all but its stored angles. The `finally` (shielded) stops the PR's sessions (kept: their
+  transcripts are the record; their cwd, the worktree, is gone), deletes the worktree, then `git gc --prune=now`.
 - `plugins/reverse/` — reverse-engineering investigations, bundled, `autostart` (read, prompt, manage, supervise,
   private); plan `docs/reverse-engineering.md`. `aid investigation start|status|query` (operator only):
   `InvestigationConfig` (name, workspace, goal, model, `machines` name → SSH destination, `private` hosts, supervise)
