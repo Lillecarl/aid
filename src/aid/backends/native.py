@@ -22,14 +22,14 @@ from pydantic_core import to_jsonable_python
 
 from aid import sandbox
 from aid.agent import Agent, ModelRetry, Tool, Toolset
+from aid.attachments import AttachmentStore, ToolAttachment
 from aid.backends.permissions import PermissionWaits
 from aid.catalog import session_catalog
 from aid.client import connect
 from aid.coding import CODING, OUTPUTS_DIR, Coding, Verdict, asking_names, coding_tools
-from aid.images import ImageStore, ToolImage
 from aid.instructions import compose, environment
 from aid.messages import (
-    ImagePart,
+    AttachmentPart,
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
@@ -61,8 +61,8 @@ from aid.models_dev import inputs, window
 from aid.prices import CURRENCY, Price, lookup
 from aid.protocol import (
     AidError,
+    AttachmentRef,
     Cost,
-    ImageRef,
     Output,
     SessionTool,
     Started,
@@ -334,7 +334,9 @@ def aid_toolset(catalog: Catalog) -> Toolset:
 
 
 def to_event(
-    part: ToolCallPart | ToolReturnPart | RetryPromptPart, kind: str | None = None, images: Sequence[ImagePart] = ()
+    part: ToolCallPart | ToolReturnPart | RetryPromptPart,
+    kind: str | None = None,
+    attachments: Sequence[AttachmentPart] = (),
 ) -> ToolCall:
     if isinstance(part, ToolCallPart):
         try:
@@ -362,7 +364,7 @@ def to_event(
             tool_call_id=part.tool_call_id,
             status="completed",
             output=clip(part.model_response_str()),
-            images=[ImageRef(media_type=image.media_type, sha256=image.sha256) for image in images],
+            attachments=[AttachmentRef(media_type=image.media_type, sha256=image.sha256) for image in attachments],
         )
     return ToolCall(tool_call_id=part.tool_call_id, status="failed", output=clip(part.model_response()))
 
@@ -420,7 +422,7 @@ class NativeBackend:
         price_as: str | None = None,
         fresh_turns: bool = False,
         offers: Callable[[str], bool] | None = None,
-        images: ImageStore | None = None,
+        attachments: AttachmentStore | None = None,
     ) -> None:
         """`transport`: the agent's model, resolved from its name (`aid.providers.resolve`); the backend owns and
         prices it. Without one, a name resolves through `model_for` alone. `price_as`: the name models.dev prices it
@@ -428,7 +430,7 @@ class NativeBackend:
         the model's window from models.dev. `offers`: the session's tool ceiling; a tool it refuses is never offered."""
         self._agent = agent
         self._history_file = history_file
-        self._images = images
+        self._images = attachments
         self._history = history
         self._fresh_turns = fresh_turns
         self._toolsets = toolsets
@@ -518,16 +520,18 @@ class NativeBackend:
         await self._look_up()
         return self._price
 
-    async def _takes_images(self) -> bool:
+    async def _takes_attachments(self) -> bool:
         """False only where models.dev lists the model's input without `image`: an undescribed model is asked."""
         await self._look_up()
         return self._inputs is None or "image" in self._inputs
 
     async def _tool_return(self, call: ToolCallPart, result: object) -> list[Part]:
-        if not isinstance(result, ToolImage):
+        if not isinstance(result, ToolAttachment):
             return [ToolReturnPart(call.tool_name, to_jsonable_python(result), call.tool_call_id)]
-        if self._images is None or not await self._takes_images():
-            return [ToolReturnPart(call.tool_name, f"{result.text}; this model takes no images", call.tool_call_id)]
+        if self._images is None or not await self._takes_attachments():
+            return [
+                ToolReturnPart(call.tool_name, f"{result.text}; this model takes no attachments", call.tool_call_id)
+            ]
         image = await self._images.add(result.data, call.tool_call_id)
         return [ToolReturnPart(call.tool_name, result.text, call.tool_call_id), image]
 
@@ -546,14 +550,14 @@ class NativeBackend:
     ) -> bool:
         return self._coding.waits.answer(request_id, option_id, plugin, text, supervisor)
 
-    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
-        if images and self._images is None:
-            raise AidError("images_unsupported", "this session keeps no images")
-        if images and not await self._takes_images():
+    async def prompt(self, text: str, emit: Emit, attachments: Sequence[bytes] = ()) -> Output:
+        if attachments and self._images is None:
+            raise AidError("attachments_unsupported", "this session keeps no attachments")
+        if attachments and not await self._takes_attachments():
             name = self._price_as or self._model.model_name
             listed = ", ".join(self._inputs or [])
-            raise AidError("images_unsupported", f"{name} takes no images (models.dev input: {listed})")
-        parts = [await self._images.add(image) for image in images] if self._images else []
+            raise AidError("attachments_unsupported", f"{name} takes no attachments (models.dev input: {listed})")
+        parts = [await self._images.add(image) for image in attachments] if self._images else []
         self._coding.emit = emit
         token = CODING.set(self._coding)
         try:
@@ -563,7 +567,7 @@ class NativeBackend:
             self._coding.waits.cancel_all()
             self._coding.emit = None
 
-    async def _prompt(self, text: str, emit: Emit, images: Sequence[ImagePart]) -> Output:
+    async def _prompt(self, text: str, emit: Emit, attachments: Sequence[AttachmentPart]) -> Output:
         if self._fresh_turns:
             # Only the instructions before the first prompt stay: the same cached prefix for every turn.
             lead = next(
@@ -586,7 +590,7 @@ class NativeBackend:
             ModelRequest(
                 parts=[
                     UserPromptPart(text),
-                    *images,
+                    *attachments,
                     turn_metadata(used, self._desired_max, str(self._coding.cwd)),
                 ]
             )
@@ -761,7 +765,7 @@ class NativeBackend:
                             part = returned[0]
                             assert isinstance(part, ToolReturnPart)
                         messages.append(ModelRequest(parts=returned))
-                        await emit(to_event(part, images=[p for p in returned if isinstance(p, ImagePart)]))
+                        await emit(to_event(part, attachments=[p for p in returned if isinstance(p, AttachmentPart)]))
             return Output(output=to_jsonable_python(output), stop_reason=stop_reason if completed else "cancelled")
         finally:
             self._scope = None
@@ -885,7 +889,9 @@ class NativeBackend:
                 parts=[UserPromptPart(content=f"Summarize this conversation for upcoming work: {instructions}")]
             ),
         ]
-        response = await model.request(request, ModelInfo(settings=self._agent.model_settings, images=self._images))
+        response = await model.request(
+            request, ModelInfo(settings=self._agent.model_settings, attachments=self._images)
+        )
         digest = "\n".join(part.content for part in response.parts if isinstance(part, TextPart)).strip()
         if not digest:
             raise AidError("empty_digest", "the summarizer returned no text")
@@ -960,14 +966,14 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
         context = environment(spec.cwd, state_dir.name, runs_programs=runs_programs, moves=moves)
         return "\n\n".join(filter(None, [agent.instructions, composed, context]))
 
-    images = ImageStore(Path(state_dir))
+    attachments = AttachmentStore(Path(state_dir))
     open_tail = 0
     if not history and spec.seed_history is not None:
         seed = await anyio.Path(spec.seed_history).read_bytes()
         history = ModelMessagesTypeAdapter.validate_json(seed)
         open_tail = open_turn(history)
         if spec.parent is not None:
-            await images.take(ImageStore(Path(state_dir.parent / spec.parent)), history)
+            await attachments.take(AttachmentStore(Path(state_dir.parent / spec.parent)), history)
         await _write_atomic(history_file, seed)
     elif not history:
         composed = await anyio.to_thread.run_sync(refresh_instructions)
@@ -1027,7 +1033,7 @@ async def open_native(spec: NativeSpec, state_dir: anyio.Path) -> AsyncGenerator
             price_as=catalog_model(agent.model, catalog.model_providers) if isinstance(agent.model, str) else None,
             fresh_turns=spec.fresh_turns or (definition is not None and definition.fresh_turns),
             offers=spec.offers,
-            images=images,
+            attachments=attachments,
         )
         yield backend
     finally:

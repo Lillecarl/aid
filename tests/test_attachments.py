@@ -14,13 +14,14 @@ import httpx2
 import pytest
 
 from aid.agent import Agent
+from aid.attachments import MAX_BYTES, MAX_PROMPT_BYTES, AttachmentStore, decoded, refs
 from aid.backends.acp import AcpBackend
 from aid.backends.claude_sdk import ClaudeSdkBackend
 from aid.backends.claude_tty import ClaudeTtyBackend
 from aid.coding import read
-from aid.images import MAX_BYTES, MAX_PROMPT_BYTES, ImageStore, decoded, refs
 from aid.messages import (
-    ImagePart,
+    AttachmentPart,
+    ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
     TextPart,
@@ -40,7 +41,7 @@ from aid.model import (
     wire_messages,
 )
 from aid.prices import ENV_PRICES
-from aid.protocol import AidError, ImageRef, ToolCall
+from aid.protocol import AidError, AttachmentRef, Prompt, PromptEntry, ToolCall
 from tests.models import TestModel
 from tests.test_google_model import chunk
 from tests.test_model import serve_wire, sse
@@ -71,11 +72,11 @@ def png(rgb: tuple[int, int, int] = (255, 0, 0), size: int = 8) -> bytes:
 
 
 def test_the_store_keeps_an_image_once_by_its_hash(tmp_path: Path) -> None:
-    store = ImageStore(tmp_path)
+    store = AttachmentStore(tmp_path)
     first = store.put(png())
     assert store.put(png()) == first
     assert (first.media_type, first.tool_call_id) == ("image/png", None)
-    assert [p.name for p in (tmp_path / "images").iterdir()] == [first.sha256]
+    assert [p.name for p in (tmp_path / "attachments").iterdir()] == [first.sha256]
     assert store.read(first) == png()
 
 
@@ -88,15 +89,41 @@ def test_the_store_keeps_an_image_once_by_its_hash(tmp_path: Path) -> None:
     ],
 )
 def test_the_store_names_each_format(tmp_path: Path, data: bytes, kind: str) -> None:
-    assert ImageStore(tmp_path).put(data).media_type == kind
+    assert AttachmentStore(tmp_path).put(data).media_type == kind
 
 
 @pytest.mark.parametrize("data", [b"not an image", b"\x89PNG\r\n\x1a\n" + bytes(MAX_BYTES)])
 def test_the_store_refuses_what_no_model_takes(tmp_path: Path, data: bytes) -> None:
     with pytest.raises(AidError) as refused:
-        ImageStore(tmp_path).put(data)
-    assert refused.value.code == "bad_image"
-    assert not (tmp_path / "images").exists()
+        AttachmentStore(tmp_path).put(data)
+    assert refused.value.code == "bad_attachment"
+    assert not (tmp_path / "attachments").exists()
+
+
+async def test_a_session_from_before_the_rename_still_loads(tmp_path: Path) -> None:
+    """#72 renamed images to attachments; what older sessions stored still reads: the history's `image` parts (kept as
+    stored, so the resent prefix keeps its bytes), the transcript's `images`, the `images/` dir and its upload table."""
+    data = png()
+    sha = hashlib.sha256(data).hexdigest()
+    (tmp_path / "images" / "uploads").mkdir(parents=True)
+    (tmp_path / "images" / sha).write_bytes(data)
+    (tmp_path / "images" / "uploads" / "scope.json").write_text(json.dumps({sha: {"id": "file_old"}}))
+    stored_part = {"media_type": "image/png", "sha256": sha, "tool_call_id": None, "part_kind": "image"}
+    history = json.dumps([{"kind": "request", "parts": [{"part_kind": "user-prompt", "content": "see"}, stored_part]}])
+    [message] = ModelMessagesTypeAdapter.validate_json(history)
+    part = message.parts[1]
+    assert isinstance(part, AttachmentPart) and part.part_kind == "image"
+    assert json.loads(ModelMessagesTypeAdapter.dump_json([message]))[0]["parts"][1] == stored_part
+    store = AttachmentStore(tmp_path)
+    assert store.read(part) == data
+    assert (await store.uploads("scope"))[sha].id == "file_old"
+    entry = PromptEntry.model_validate(
+        {"type": "prompt", "text": "see", "images": [{"media_type": "image/png", "sha256": sha}]}
+    )
+    call = ToolCall.model_validate({"tool_call_id": "c", "images": [{"media_type": "image/png", "sha256": sha}]})
+    assert entry.attachments == call.attachments == [AttachmentRef(media_type="image/png", sha256=sha)]
+    assert Prompt.model_validate({"session": "s", "text": "t", "images": ["QUFB"]}).attachments == ["QUFB"]
+    assert AttachmentStore(tmp_path).put(data).part_kind == "attachment"
 
 
 def test_a_prompts_images_arrive_as_base64() -> None:
@@ -107,7 +134,7 @@ def test_a_prompts_images_arrive_as_base64() -> None:
 
 
 @pytest.mark.parametrize(
-    "images",
+    "attachments",
     [
         ["not base64!"],
         [base64.b64encode(b"text").decode()],
@@ -115,44 +142,44 @@ def test_a_prompts_images_arrive_as_base64() -> None:
     ],
     ids=["not-base64", "not-an-image", "too-much"],
 )
-def test_a_prompts_images_are_checked(images: list[str]) -> None:
+def test_a_prompts_images_are_checked(attachments: list[str]) -> None:
     with pytest.raises(AidError) as refused:
-        decoded(images)
-    assert refused.value.code == "bad_image"
+        decoded(attachments)
+    assert refused.value.code == "bad_attachment"
 
 
 def test_a_missing_or_changed_image_is_named(tmp_path: Path) -> None:
-    store = ImageStore(tmp_path)
+    store = AttachmentStore(tmp_path)
     part = store.put(png())
-    (tmp_path / "images" / part.sha256).write_bytes(png((0, 0, 255)))
+    (tmp_path / "attachments" / part.sha256).write_bytes(png((0, 0, 255)))
     with pytest.raises(AidError) as changed:
         store.read(part)
     with pytest.raises(AidError) as missing:
-        store.read(ImagePart("image/png", "0" * 64))
-    assert (changed.value.code, missing.value.code) == ("image_missing", "image_missing")
+        store.read(AttachmentPart("image/png", "0" * 64))
+    assert (changed.value.code, missing.value.code) == ("attachment_missing", "attachment_missing")
 
 
 async def test_a_fork_takes_its_parents_images(tmp_path: Path) -> None:
-    parent = ImageStore(tmp_path / "parent")
+    parent = AttachmentStore(tmp_path / "parent")
     part = parent.put(png(), tool_call_id="c1")
-    fork = ImageStore(tmp_path / "fork")
+    fork = AttachmentStore(tmp_path / "fork")
     await fork.take(parent, [ModelRequest([UserPromptPart("see"), part])])
     assert fork.read(part) == png()
 
 
 async def test_a_request_without_the_image_bytes_fails_by_name() -> None:
-    history: list[ModelMessage] = [ModelRequest([UserPromptPart("see"), ImagePart("image/png", "0" * 64)])]
+    history: list[ModelMessage] = [ModelRequest([UserPromptPart("see"), AttachmentPart("image/png", "0" * 64)])]
     for mapping in (wire_messages, anthropic_messages, google_contents):
         with pytest.raises(AidError) as missing:
             mapping(history)
-        assert missing.value.code == "image_missing"
+        assert missing.value.code == "attachment_missing"
     assert await ModelInfo().encoded(history) == {}
 
 
 @pytest.fixture
 def history(tmp_path: Path) -> tuple[list[ModelMessage], dict[str, str]]:
     """A prompt with an image, then a tool whose answer carries one."""
-    store = ImageStore(tmp_path)
+    store = AttachmentStore(tmp_path)
     red, blue = store.put(png()), store.put(png((0, 0, 255)), tool_call_id="c1")
     messages: list[ModelMessage] = [
         ModelRequest([UserPromptPart("what colour?"), red]),
@@ -167,7 +194,7 @@ def test_chat_completions_put_images_in_user_content(history: tuple[list[ModelMe
     """A tool message takes text only: the call's image follows the request's last tool message."""
     messages, encoded = history
     red, blue = (f"data:image/png;base64,{data}" for data in encoded.values())
-    wired = wire_messages(messages, images=encoded)
+    wired = wire_messages(messages, attachments=encoded)
     assert wired[0] == {
         "role": "user",
         "content": [{"type": "text", "text": "what colour?"}, {"type": "image_url", "image_url": {"url": red}}],
@@ -240,12 +267,12 @@ class FilesServer:
         return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=ANSWER)
 
 
-async def ask_twice(model: AnthropicModel, store: ImageStore, server: FilesServer) -> None:
+async def ask_twice(model: AnthropicModel, store: AttachmentStore, server: FilesServer) -> None:
     history: list[ModelMessage] = [ModelRequest([UserPromptPart("what colour?"), store.put(png())])]
     try:
-        await model.request(history, ModelInfo(settings={"api_key": "k", "max_retries": 0}, images=store))
+        await model.request(history, ModelInfo(settings={"api_key": "k", "max_retries": 0}, attachments=store))
         server.deleted.add("file_1")
-        await model.request(history, ModelInfo(settings={"api_key": "k", "max_retries": 0}, images=store))
+        await model.request(history, ModelInfo(settings={"api_key": "k", "max_retries": 0}, attachments=store))
     finally:
         await model.aclose()
 
@@ -253,7 +280,7 @@ async def ask_twice(model: AnthropicModel, store: ImageStore, server: FilesServe
 async def test_anthropic_sends_an_image_by_file_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """One upload per image and key; a deleted file is uploaded again and the request sent again."""
     serve_wire(monkeypatch, server := FilesServer())
-    await ask_twice(AnthropicModel("anthropic/claude-test"), ImageStore(tmp_path), server)
+    await ask_twice(AnthropicModel("anthropic/claude-test"), AttachmentStore(tmp_path), server)
     assert server.sent == [
         {"type": "file", "file_id": "file_1"},
         {"type": "file", "file_id": "file_1"},
@@ -267,7 +294,7 @@ async def test_anthropic_sends_an_image_by_file_id(tmp_path: Path, monkeypatch: 
 async def test_an_image_goes_as_bytes_where_files_are_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed upload costs nothing but the bytes: the request carries them, and the next one tries again."""
     serve_wire(monkeypatch, server := FilesServer(upload_status=500))
-    await ask_twice(AnthropicModel("anthropic/claude-test"), ImageStore(tmp_path), server)
+    await ask_twice(AnthropicModel("anthropic/claude-test"), AttachmentStore(tmp_path), server)
     assert [base64.b64decode(s["data"]) for s in server.sent] == [png(), png()]
     assert len(server.uploads) == 2
 
@@ -297,10 +324,10 @@ async def test_openai_sends_an_image_by_file_id(tmp_path: Path, monkeypatch: pyt
     """The Responses API takes an image by file id where Chat Completions does not (#70): one upload, a deleted file
     uploaded again and the request sent again."""
     serve_wire(monkeypatch, server := OpenAIFiles())
-    store = ImageStore(tmp_path)
+    store = AttachmentStore(tmp_path)
     model = OpenAIResponsesModel("openai/gpt-test")
     history: list[ModelMessage] = [ModelRequest([UserPromptPart("what colour?"), store.put(png())])]
-    info = ModelInfo(settings={"api_key": "k", "max_retries": 0}, images=store)
+    info = ModelInfo(settings={"api_key": "k", "max_retries": 0}, attachments=store)
     try:
         await model.request(history, info)
         server.deleted.add("file-1")
@@ -352,12 +379,12 @@ class GeminiFiles:
         return httpx2.Response(200, headers={"content-type": "text/event-stream"}, content=body)
 
 
-async def ask_gemini(store: ImageStore, server: GeminiFiles, rounds: int = 2) -> None:
+async def ask_gemini(store: AttachmentStore, server: GeminiFiles, rounds: int = 2) -> None:
     history: list[ModelMessage] = [ModelRequest([UserPromptPart("what colour?"), store.put(png())])]
     model = GoogleModel("google/gemini-test")
     try:
         for _ in range(rounds):
-            await model.request(history, ModelInfo(settings={"api_key": "k", "max_retries": 0}, images=store))
+            await model.request(history, ModelInfo(settings={"api_key": "k", "max_retries": 0}, attachments=store))
             server.deleted.add("https://generativelanguage.googleapis.com/v1beta/files/f1")
     finally:
         await model.aclose()
@@ -366,27 +393,27 @@ async def ask_gemini(store: ImageStore, server: GeminiFiles, rounds: int = 2) ->
 async def test_gemini_sends_an_image_by_file_uri(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Uploaded once; a file Gemini no longer holds (403) is uploaded again and the request sent again."""
     serve_wire(monkeypatch, server := GeminiFiles(datetime.now(UTC) + timedelta(hours=48)))
-    await ask_gemini(ImageStore(tmp_path), server)
+    await ask_gemini(AttachmentStore(tmp_path), server)
     assert [s["fileData"]["fileUri"].rsplit("/", 1)[1] for s in server.sent] == ["f1", "f1", "f2"]
     assert (len(server.uploads), server.uploads[0].content) == (2, png())
 
 
 async def test_a_gemini_file_near_its_expiry_goes_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     serve_wire(monkeypatch, server := GeminiFiles(datetime.now(UTC) + timedelta(minutes=30)))
-    await ask_gemini(ImageStore(tmp_path), server, rounds=1)
-    await ask_gemini(ImageStore(tmp_path), server, rounds=1)
+    await ask_gemini(AttachmentStore(tmp_path), server, rounds=1)
+    await ask_gemini(AttachmentStore(tmp_path), server, rounds=1)
     assert [s["fileData"]["fileUri"].rsplit("/", 1)[1] for s in server.sent] == ["f1", "f2"]
 
 
 async def test_another_messages_server_gets_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     serve_wire(monkeypatch, server := FilesServer())
     model = AnthropicModel("zen/claude-test", Provider("https://zen.example/", "ZEN_KEY"))
-    await ask_twice(model, ImageStore(tmp_path), server)
+    await ask_twice(model, AttachmentStore(tmp_path), server)
     assert (len(server.uploads), [s["type"] for s in server.sent]) == (0, ["base64", "base64"])
 
 
 class Looking(TestModel):
-    """Keeps what each request carried: its messages and their images' bytes."""
+    """Keeps what each request carried: its messages and their attachments' bytes."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -403,14 +430,14 @@ async def emit(event: SessionEvent) -> None:
 
 async def test_a_native_prompt_sends_its_images_and_keeps_them(tmp_path: Path) -> None:
     model = Looking()
-    store = ImageStore(tmp_path)
-    async with backend(tmp_path, Agent(model), images=store) as session:
+    store = AttachmentStore(tmp_path)
+    async with backend(tmp_path, Agent(model), attachments=store) as session:
         assert (await session.prompt("what colour?", emit, [png()])).output == "red"
     ((messages, encoded),) = model.seen
     prompt = messages[-1].parts
-    assert [p.part_kind for p in prompt[:2]] == ["user-prompt", "image"]
+    assert [p.part_kind for p in prompt[:2]] == ["user-prompt", "attachment"]
     image = prompt[1]
-    assert isinstance(image, ImagePart)
+    assert isinstance(image, AttachmentPart)
     assert base64.b64decode(encoded[image.sha256]) == png()
     kept = await stored(tmp_path)
     assert image in kept[0].parts
@@ -419,13 +446,15 @@ async def test_a_native_prompt_sends_its_images_and_keeps_them(tmp_path: Path) -
 
 async def test_a_bad_image_fails_before_the_turn(tmp_path: Path) -> None:
     model = Looking()
-    async with backend(tmp_path, Agent(model), images=ImageStore(tmp_path)) as session:
+    async with backend(tmp_path, Agent(model), attachments=AttachmentStore(tmp_path)) as session:
         with pytest.raises(AidError) as refused:
             await session.prompt("what colour?", emit, [b"text"])
-    assert (refused.value.code, model.seen) == ("bad_image", [])
+    assert (refused.value.code, model.seen) == ("bad_attachment", [])
 
 
-@pytest.mark.parametrize(("takes", "code"), [(["text"], "images_unsupported"), (["text", "image"], None), (None, None)])
+@pytest.mark.parametrize(
+    ("takes", "code"), [(["text"], "attachments_unsupported"), (["text", "image"], None), (None, None)]
+)
 async def test_models_dev_input_decides_whether_a_model_sees_images(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, takes: list[str] | None, code: str | None
 ) -> None:
@@ -447,7 +476,7 @@ async def test_models_dev_input_decides_whether_a_model_sees_images(
     agent = Agent(
         "openai/local", model_settings={"api_key": "k", "api_base": "https://example.test/v1", "max_retries": 0}
     )
-    async with backend(tmp_path, agent, images=ImageStore(tmp_path)) as session:
+    async with backend(tmp_path, agent, attachments=AttachmentStore(tmp_path)) as session:
         with pytest.raises(Exception) as refused:  # the asked model's 400 stops the turn
             await session.prompt("what colour?", emit, [png()])
     if code is None:
@@ -480,7 +509,9 @@ async def test_read_hands_an_image_file_to_the_model(tmp_path: Path, keeps: bool
     async def record(event: SessionEvent) -> None:
         events.append(event)
 
-    async with backend(tmp_path, Agent(model, tools=[read]), images=ImageStore(tmp_path) if keeps else None) as session:
+    async with backend(
+        tmp_path, Agent(model, tools=[read]), attachments=AttachmentStore(tmp_path) if keeps else None
+    ) as session:
         await session.prompt("what colour is pic.png?", record)
     returned = [e for e in events if isinstance(e, ToolCall) and e.status == "completed"]
     messages, encoded = model.seen[1]
@@ -489,14 +520,14 @@ async def test_read_hands_an_image_file_to_the_model(tmp_path: Path, keeps: bool
     if keeps:
         assert answer[0].content == f"pic.png: image/png, {len(png((0, 0, 255)))} bytes"
         image = answer[1]
-        assert isinstance(image, ImagePart)
+        assert isinstance(image, AttachmentPart)
         assert (image.tool_call_id, base64.b64decode(encoded[image.sha256])) == ("c1", png((0, 0, 255)))
         assert image in (await stored(tmp_path))[-2].parts
-        assert [e.images for e in returned] == [[ImageRef(media_type="image/png", sha256=image.sha256)]]
+        assert [e.attachments for e in returned] == [[AttachmentRef(media_type="image/png", sha256=image.sha256)]]
     else:
-        assert str(answer[0].content).endswith("; this model takes no images")
+        assert str(answer[0].content).endswith("; this model takes no attachments")
         assert (len(answer), encoded) == (1, {})
-        assert [e.images for e in returned] == [[]]
+        assert [e.attachments for e in returned] == [[]]
 
 
 @pytest.mark.parametrize("engine", [AcpBackend, ClaudeSdkBackend, ClaudeTtyBackend])
@@ -504,4 +535,4 @@ async def test_other_engines_refuse_images(engine: type[Backend]) -> None:
     session = object.__new__(engine)
     with pytest.raises(AidError) as refused:
         await session.prompt("see", emit, [png()])
-    assert refused.value.code == "images_unsupported"
+    assert refused.value.code == "attachments_unsupported"

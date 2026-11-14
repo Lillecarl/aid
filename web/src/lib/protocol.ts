@@ -494,6 +494,17 @@ export interface AnswerPermission {
   text?: string | null;
 }
 /**
+ * An attachment a prompt carried or a tool returned. Its bytes are `<session dir>/attachments/<sha256>` once the session
+ * took it.
+ *
+ * This interface was referenced by `AidProtocol`'s JSON-Schema
+ * via the `definition` "AttachmentRef".
+ */
+export interface AttachmentRef {
+  media_type: string;
+  sha256: string;
+}
+/**
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "Cancel".
  */
@@ -624,8 +635,8 @@ export interface ThoughtDelta {
  * via the `definition` "ToolCall".
  */
 export interface ToolCall {
+  attachments: AttachmentRef[];
   diffs: ToolDiff[];
-  images: ImageRef[];
   input: {
     [k: string]: unknown;
   };
@@ -646,17 +657,6 @@ export interface ToolDiff {
   new: string;
   old: string | null;
   path: string;
-}
-/**
- * An image a prompt carried or a tool returned. Its bytes are `<session dir>/images/<sha256>` once the session
- * took it.
- *
- * This interface was referenced by `AidProtocol`'s JSON-Schema
- * via the `definition` "ImageRef".
- */
-export interface ImageRef {
-  media_type: string;
-  sha256: string;
 }
 /**
  * The agent asks before a tool call, and waits for a PermissionDecision. A session whose permission mode is
@@ -865,7 +865,7 @@ export interface HistoryEntry {
  * via the `definition` "PromptEntry".
  */
 export interface PromptEntry {
-  images: ImageRef[];
+  attachments: AttachmentRef[];
   text: string;
   type: "prompt";
 }
@@ -1040,8 +1040,8 @@ export interface ProviderModels {
  * via the `definition` "Prompt".
  */
 export interface Prompt {
+  attachments?: string[];
   id?: string;
-  images?: string[];
   op: "prompt";
   session: string;
   text: string;

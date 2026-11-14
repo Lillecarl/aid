@@ -18,11 +18,11 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.typing import Origin, Subprotocol
 
 import aid
-from aid.images import ImageStore
+from aid.attachments import AttachmentStore
 from aid.web import OidcConfig, create_app, serve
 from aid.web.app import ENV_ASSETS
 from tests.conftest import GRAMMARS, SPEECH_MODEL, fake_spec, needs_pymux, py_spec
-from tests.test_images import png
+from tests.test_attachments import png
 from tests.test_speech import SAID, speech
 from tests.web_harness import (
     ALLOWED,
@@ -125,11 +125,11 @@ async def test_session_images(web: Web, tmp_path: Path, daemon: Paths) -> None:
         async with httpx.AsyncClient() as client, aid.connect(daemon) as other:
             await login(client, web, ALLOWED)
             await other.create("pics", py_spec(tmp_path, "agents:echo"))
-            image = ImageStore(daemon.session_dir("pics")).put(png())
-            found = await client.get(f"{web.url}/api/sessions/pics/images/{image.sha256}")
-            absent = await client.get(f"{web.url}/api/sessions/pics/images/{'0' * 64}")
-            crooked = await client.get(f"{web.url}/api/sessions/pics/images/..%2Fspec.json")
-            elsewhere = await client.get(f"{web.url}/api/sessions/nope/images/{image.sha256}")
+            image = AttachmentStore(daemon.session_dir("pics")).put(png())
+            found = await client.get(f"{web.url}/api/sessions/pics/attachments/{image.sha256}")
+            absent = await client.get(f"{web.url}/api/sessions/pics/attachments/{'0' * 64}")
+            crooked = await client.get(f"{web.url}/api/sessions/pics/attachments/..%2Fspec.json")
+            elsewhere = await client.get(f"{web.url}/api/sessions/nope/attachments/{image.sha256}")
     assert (found.status_code, found.content, found.headers["content-type"]) == (200, png(), "image/png")
     assert "immutable" in found.headers["cache-control"]
     assert [r.status_code for r in (absent, crooked, elsewhere)] == [404, 404, 404]

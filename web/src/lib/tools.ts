@@ -11,7 +11,7 @@ export interface Tool {
   diffs: ToolDiff[];
   paths: string[];
   /** Images the call returned, by sha256. */
-  images: string[];
+  attachments: string[];
 }
 
 export const toolOf = (e: ToolCall): Tool => ({
@@ -23,7 +23,7 @@ export const toolOf = (e: ToolCall): Tool => ({
   output: e.output ?? null,
   diffs: e.diffs ?? [],
   paths: e.paths ?? [],
-  images: (e.images ?? []).map((image) => image.sha256),
+  attachments: (e.attachments ?? []).map((image) => image.sha256),
 });
 
 /** Apply an update of the call to what the log holds. */
@@ -35,7 +35,7 @@ export function merge(tool: Tool, e: ToolCall): void {
   tool.output = e.output ?? tool.output;
   if (e.diffs?.length) tool.diffs = e.diffs;
   if (e.paths?.length) tool.paths = e.paths;
-  if (e.images?.length) tool.images = e.images.map((image) => image.sha256);
+  if (e.attachments?.length) tool.attachments = e.attachments.map((image) => image.sha256);
 }
 
 // Argument names that say what a call is about, in the order Claude Code's and common MCP tools use them.

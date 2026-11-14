@@ -18,13 +18,13 @@ from aid.daemon import Daemon
 from aid.paths import ENV_RUNTIME_DIR, ENV_STATE_DIR
 from aid.protocol import (
     AidError,
+    AttachmentRef,
     Cost,
     Failure,
     GetHistory,
     GetLive,
     GetSpec,
     GetStatus,
-    ImageRef,
     Lifecycle,
     OpenWork,
     Output,
@@ -45,7 +45,7 @@ from aid.spec import AgentSpecAdapter, PermissionMode
 from tests.agents import Review
 from tests.conftest import acp_spec, py_spec
 from tests.fake_acp_agent import AGENT_NAME, AGENT_VERSION, CHUNKS, RESOLVED_MODEL
-from tests.test_images import png
+from tests.test_attachments import png
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -343,14 +343,14 @@ async def test_a_prompt_carries_images_to_a_native_session(daemon: Paths, tmp_pa
         async with aid.connect(daemon) as client:
             session = await client.create("seer", py_spec(tmp_path, "agents:seer"))
             with pytest.raises(AidError) as refused:
-                await session.run("see", images=[b"not an image"])
-            result = await session.run("see", images=[image])
+                await session.run("see", attachments=[b"not an image"])
+            result = await session.run("see", attachments=[image])
             entries = [e.item for e in (await session.history()).entries]
-    assert refused.value.code == "bad_image"
+    assert refused.value.code == "bad_attachment"
     assert result.output == f"image/png:{sha}"
     prompts = [item for item in entries if isinstance(item, PromptEntry)]
-    assert [p.images for p in prompts] == [[ImageRef(media_type="image/png", sha256=sha)]]
-    assert (daemon.state_dir / "sessions" / "seer" / "images" / sha).read_bytes() == image
+    assert [p.attachments for p in prompts] == [[AttachmentRef(media_type="image/png", sha256=sha)]]
+    assert (daemon.state_dir / "sessions" / "seer" / "attachments" / sha).read_bytes() == image
 
 
 async def test_aid_prompt_sends_image_files(
@@ -368,7 +368,7 @@ async def test_aid_prompt_sends_image_files(
             await anyio.to_thread.run_sync(main, ["prompt", "seer", "see", "--image", str(tmp_path / "gone.png")])
     # The daemon logs to the same stdout in this process.
     assert f"image/png:{hashlib.sha256(png()).hexdigest()}" in capsys.readouterr().out.splitlines()
-    assert str(missing.value) == f"aid: bad_image: cannot read {tmp_path / 'gone.png'}: No such file or directory"
+    assert str(missing.value) == f"aid: bad_attachment: cannot read {tmp_path / 'gone.png'}: No such file or directory"
 
 
 async def test_native_env_and_cwd(daemon: Paths, tmp_path: Path) -> None:

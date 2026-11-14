@@ -21,11 +21,11 @@ import zmq.asyncio
 from pydantic import TypeAdapter, ValidationError
 
 from aid import events, model_lists, plugin_host, plugins, sandbox, session_query, zap
+from aid.attachments import refs
 from aid.catalog import listing
 from aid.client import spawn_plugin_client
 from aid.control import AGENT_ID_PREFIX, authorize
 from aid.history import HISTORY_FILE, HistoryLog, Recorder
-from aid.images import refs
 from aid.inbox import INBOX_FILE, Inbox
 from aid.launcher import CommandLauncher, WorkerArgs
 from aid.messaging import AID_SENDER, BACKGROUND_SENDER, wake_prompt
@@ -846,7 +846,7 @@ class Daemon:
                 return Done(id=request.id, data=models.model_dump(mode="json"))
             case Prompt():
                 # Before the lookup: from it to `session.turn` nothing may await, or a delete slips in between.
-                images = await anyio.to_thread.run_sync(refs, request.images) if request.images else []
+                attachments = await anyio.to_thread.run_sync(refs, request.attachments) if request.attachments else []
                 session = self._session(request.session)
                 if session.turn is not None:
                     raise AidError("busy", f"{session.name!r} is in a turn")
@@ -855,7 +855,7 @@ class Daemon:
                     await self._set_hidden(session, None)
                     await self._ensure_running(session)
                     recorder = Recorder(session.history, request.id)
-                    await recorder.prompt(request.text, images)
+                    await recorder.prompt(request.text, attachments)
                     self._routes[request.id] = _Route(client, session.name, recorder)
                     await self._send_worker(session, request)
                     await self._publish_turn(session.name, request.id, "started", "prompt")

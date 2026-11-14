@@ -28,7 +28,7 @@ class _HookBackend:
     def started(self) -> Started:
         raise AssertionError("unreachable")
 
-    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
+    async def prompt(self, text: str, emit: Emit, attachments: Sequence[bytes] = ()) -> Output:
         raise AssertionError("unreachable")
 
     async def cancel(self) -> None:
@@ -45,7 +45,7 @@ class _PlainBackend:
     def started(self) -> Started:
         raise AssertionError("unreachable")
 
-    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
+    async def prompt(self, text: str, emit: Emit, attachments: Sequence[bytes] = ()) -> Output:
         raise AssertionError("unreachable")
 
     async def cancel(self) -> None:

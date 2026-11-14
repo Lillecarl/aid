@@ -50,8 +50,8 @@
     tool?: Tool;
     permission?: Permission;
     local?: boolean;
-    /** A prompt's images by sha256, served by aid web from the session's store. */
-    images?: string[];
+    /** A prompt's attachments by sha256, served by aid web from the session's store. */
+    attachments?: string[];
   };
 
   const PAGE = 100;
@@ -162,7 +162,7 @@
     const row = (kind: Kind, text: string): Row => ({ key, seq, kind, text });
     switch (item.type) {
       case "prompt":
-        return [{ ...row("user", item.text), images: item.images.map((image) => image.sha256) }];
+        return [{ ...row("user", item.text), attachments: item.attachments.map((image) => image.sha256) }];
       case "message":
         return [row("message", `From ${item.sender ?? "a person"}: ${item.text}`)];
       case "text":
@@ -399,8 +399,8 @@
     await follow();
   }
 
-  function imageUrl(sha: string): string {
-    return `/api/sessions/${encodeURIComponent(name)}/images/${sha}`;
+  function attachmentUrl(sha: string): string {
+    return `/api/sessions/${encodeURIComponent(name)}/attachments/${sha}`;
   }
 
   /** Images the next prompt carries: picked with the button or pasted into the prompt box (#66). */
@@ -739,11 +739,11 @@
         aria-expanded={!folded.has(row.key)}
         title={folded.has(row.key) ? "Unfold" : "Fold to the first line"}
         onclick={() => toggleFold(row.key)}>{folded.has(row.key) ? "▸" : "▾"}</button
-      >{#if row.kind === "assistant"}<Markdown text={row.text} />{:else}{row.text}{/if}{#if row.images?.length}<div
-          class="images"
-          data-testid="chat-images"
-          >{#each row.images as sha (sha)}<a href={imageUrl(sha)} target="_blank" rel="noopener"
-              ><img src={imageUrl(sha)} alt="Sent with the prompt" loading="lazy" /></a
+      >{#if row.kind === "assistant"}<Markdown text={row.text} />{:else}{row.text}{/if}{#if row.attachments?.length}<div
+          class="attachments"
+          data-testid="chat-attachments"
+          >{#each row.attachments as sha (sha)}<a href={attachmentUrl(sha)} target="_blank" rel="noopener"
+              ><img src={attachmentUrl(sha)} alt="Sent with the prompt" loading="lazy" /></a
             >{/each}</div
         >{/if}</div
     >
@@ -763,7 +763,7 @@
         <Markdown text={row.text} />
       </details>
   {:else if row.tool}
-    <ToolCard tool={row.tool} {imageUrl} />
+    <ToolCard tool={row.tool} {attachmentUrl} />
   {:else if row.permission}
     <PermissionCard session={name} request={row.permission.request} decision={row.permission.decision} />
   {:else}
@@ -841,7 +841,7 @@
   <textarea data-testid="chat-input" bind:value={text} onkeydown={keydown} onpaste={pasted} rows="4" placeholder={touchOnly ? "Prompt" : "Prompt (Enter sends, Shift+Enter or Ctrl+J for a new line, /help for commands)"}></textarea>
   <div class="buttons">
     <button type="submit" data-testid="chat-send" disabled={busy}>{busy ? "Working…" : "Send"}</button>
-    <label class="attach" title="Send images with the prompt: PNG, JPEG, GIF or WebP; pasting one works too"
+    <label class="attach" title="Send attachments with the prompt: PNG, JPEG, GIF or WebP; pasting one works too"
       >Image<input
         type="file"
         data-testid="chat-attach"
@@ -870,13 +870,13 @@
 </form>
 
 <style>
-  .images {
+  .attachments {
     display: flex;
     flex-wrap: wrap;
     gap: 0.5em;
     margin-top: 0.5em;
   }
-  .images img {
+  .attachments img {
     max-width: 16em;
     max-height: 12em;
     border: 1px solid var(--muted);

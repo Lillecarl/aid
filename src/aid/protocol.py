@@ -13,7 +13,7 @@ import uuid
 from enum import StrEnum
 from typing import Annotated, Final, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
 from pydantic_core import to_jsonable_python
 
 from aid.plugins import Grant, PluginSpec
@@ -77,8 +77,9 @@ class Prompt(_Request):
     op: Literal["prompt"] = "prompt"
     session: str
     text: str
-    images: list[str] = []
-    """Each image's bytes in base64 (#66): PNG, JPEG, GIF or WebP. Native sessions take them, others refuse."""
+    attachments: list[str] = Field(default=[], validation_alias=AliasChoices("attachments", "images"))
+    """Each attachment's bytes in base64 (#66, #72): PNG, JPEG, GIF or WebP. Native sessions take them, others refuse.
+    `images` is the older name, still read."""
 
 
 class Cancel(_Request):
@@ -735,7 +736,7 @@ def history_line(item: HistoryItem) -> str | None:
     usage, lifecycle) is skipped: a supervisor judges the work, not the plumbing. Callers clip."""
     match item:
         case PromptEntry():
-            return f"> {item.text}" + (f" [images: {len(item.images)}]" if item.images else "")
+            return f"> {item.text}" + (f" [attachments: {len(item.attachments)}]" if item.attachments else "")
         case MessageEntry():
             return f"[message from {item.sender or 'a person'}] {item.text}"
         case TextDelta():
@@ -766,8 +767,8 @@ class ToolDiff(_Message):
     new: str
 
 
-class ImageRef(_Message):
-    """An image a prompt carried or a tool returned. Its bytes are `<session dir>/images/<sha256>` once the session
+class AttachmentRef(_Message):
+    """An attachment a prompt carried or a tool returned. Its bytes are `<session dir>/attachments/<sha256>` once the session
     took it."""
 
     media_type: str
@@ -789,8 +790,11 @@ class ToolCall(_Message):
     diffs: list[ToolDiff] = Field(default_factory=list[ToolDiff])
     paths: list[str] = Field(default_factory=list[str])
     """Files the call touches, `path` or `path:line`."""
-    images: list[ImageRef] = Field(default_factory=list[ImageRef])
-    """Images the call returned to the model (native: `aid.images.ToolImage`)."""
+    attachments: list[AttachmentRef] = Field(
+        default_factory=list[AttachmentRef], validation_alias=AliasChoices("attachments", "images")
+    )
+    """What the call returned to the model beside its text (native: `aid.attachments.ToolAttachment`); `images` in
+    transcripts before #72."""
 
 
 class StreamChunk(_Message):
@@ -1007,7 +1011,8 @@ class Note(_Message):
 class PromptEntry(_Message):
     type: Literal["prompt"] = "prompt"
     text: str
-    images: list[ImageRef] = []
+    attachments: list[AttachmentRef] = Field(default=[], validation_alias=AliasChoices("attachments", "images"))
+    """Transcripts before #72 name it `images`."""
 
 
 class TurnError(_Message):

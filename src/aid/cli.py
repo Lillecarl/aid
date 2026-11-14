@@ -331,7 +331,9 @@ def _parser() -> argparse.ArgumentParser:
     prompt.add_argument("name")
     prompt.add_argument("text", help="prompt text, or - to read stdin")
     prompt.add_argument(
+        "--attach",
         "--image",
+        dest="attach",
         action="append",
         default=[],
         type=Path,
@@ -791,10 +793,10 @@ async def _client_command(args: argparse.Namespace) -> None:
                 titles: dict[str, str] = {}
                 written = after_tool = False
                 try:
-                    images = [await anyio.Path(path).read_bytes() for path in args.image]
+                    attachments = [await anyio.Path(path).read_bytes() for path in args.attach]
                 except OSError as error:
-                    raise AidError("bad_image", f"cannot read {error.filename}: {error.strerror}") from None
-                async for event in client.session(args.name).stream(text, images):
+                    raise AidError("bad_attachment", f"cannot read {error.filename}: {error.strerror}") from None
+                async for event in client.session(args.name).stream(text, attachments):
                     if isinstance(event, TextDelta):
                         # Each model response streams its own text: without a break they run together.
                         if written and after_tool:

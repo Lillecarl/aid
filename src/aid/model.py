@@ -18,9 +18,9 @@ import structlog
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
 from aid import anthropic_api, chat_api, gemini, responses_api, wire
-from aid.images import NO_IMAGES, ImageStore, Upload, encoded
+from aid.attachments import NO_ATTACHMENTS, AttachmentStore, Upload, encoded
 from aid.messages import (
-    ImagePart,
+    AttachmentPart,
     ModelMessage,
     ModelResponse,
     RetryPromptPart,
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     from pydantic.json_schema import JsonSchemaValue
 
     from aid.agent import Tool
-    from aid.images import Encoded
+    from aid.attachments import Encoded
 
 
 @dataclass
@@ -49,11 +49,11 @@ class ModelInfo:
     tools: Sequence[Tool] = ()
     output_type: Any = str
     settings: Mapping[str, JsonValue] = field(default_factory=dict[str, JsonValue])
-    images: ImageStore | None = None
-    """The bytes of the history's `ImagePart`s. None: a request carrying one fails `image_missing`."""
+    attachments: AttachmentStore | None = None
+    """The bytes of the history's `AttachmentPart`s. None: a request carrying one fails `attachment_missing`."""
 
     async def encoded(self, messages: Sequence[ModelMessage], skip: Container[str] = ()) -> Encoded:
-        return NO_IMAGES if self.images is None else await self.images.encoded(messages, skip)
+        return NO_ATTACHMENTS if self.attachments is None else await self.attachments.encoded(messages, skip)
 
 
 @dataclass
@@ -156,7 +156,7 @@ def model_label(model: object) -> str:
 
 
 def wire_messages(
-    messages: Sequence[ModelMessage], *, reasoning: bool = True, images: Encoded = NO_IMAGES
+    messages: Sequence[ModelMessage], *, reasoning: bool = True, attachments: Encoded = NO_ATTACHMENTS
 ) -> list[chat_api.Message]:
     """Stored parts as Chat Completions messages, keeping tool identities and, with `reasoning`, reasoning text."""
     result: list[chat_api.Message] = []
@@ -188,14 +188,14 @@ def wire_messages(
             held: list[chat_api.TextContent | chat_api.ImageContent] = []
             prompt: chat_api.UserMessage | None = None
             for part in message.parts:
-                if held and not isinstance(part, ToolReturnPart | RetryPromptPart | ImagePart):
+                if held and not isinstance(part, ToolReturnPart | RetryPromptPart | AttachmentPart):
                     result.append({"role": "user", "content": list(held)})
                     held.clear()
-                if not isinstance(part, ImagePart):
+                if not isinstance(part, AttachmentPart):
                     prompt = None
                 match part:
-                    case ImagePart():
-                        url = f"data:{part.media_type};base64,{encoded(images, part)}"
+                    case AttachmentPart():
+                        url = f"data:{part.media_type};base64,{encoded(attachments, part)}"
                         block: chat_api.ImageContent = {"type": "image_url", "image_url": {"url": url}}
                         if part.tool_call_id is not None:
                             held.append(block)
@@ -336,17 +336,17 @@ async def held_files(
     info: ModelInfo,
     scope: str,
     messages: Sequence[ModelMessage],
-    upload: Callable[[ImagePart, bytes], Awaitable[Upload]],
+    upload: Callable[[AttachmentPart, bytes], Awaitable[Upload]],
     refused: Callable[[wire.StatusError], bool] = lambda error: False,
 ) -> Mapping[str, str]:
-    """The history's images by a provider's file id (#69), uploading those it does not hold. A failed upload leaves
+    """The history's attachments by a provider's file id (#69), uploading those it does not hold. A failed upload leaves
     that image to go as base64; a later request tries again."""
-    if info.images is None:
-        return NO_IMAGES
-    parts = {p.sha256: p for m in messages for p in m.parts if isinstance(p, ImagePart)}
+    if info.attachments is None:
+        return NO_ATTACHMENTS
+    parts = {p.sha256: p for m in messages for p in m.parts if isinstance(p, AttachmentPart)}
     if not parts:
-        return NO_IMAGES
-    held = await info.images.uploads(scope)
+        return NO_ATTACHMENTS
+    held = await info.attachments.uploads(scope)
     soon = datetime.now(UTC) + UPLOAD_MARGIN
     missing = [
         part
@@ -356,7 +356,7 @@ async def held_files(
     for part in missing:
         held.pop(part.sha256, None)
         try:
-            held[part.sha256] = await upload(part, await info.images.bytes_of(part))
+            held[part.sha256] = await upload(part, await info.attachments.bytes_of(part))
         except (wire.StatusError, httpx2.TransportError, ValidationError) as error:
             if isinstance(error, wire.StatusError | httpx2.TransportError) and (
                 rejected_key(error) or (isinstance(error, wire.StatusError) and refused(error))
@@ -364,7 +364,7 @@ async def held_files(
                 raise refused_key(name, error) from error
             log.warning("image_upload_failed", model=name, image=part.sha256, error=str(error)[:300])
     if missing:
-        await info.images.save_uploads(scope, held)
+        await info.attachments.save_uploads(scope, held)
     return {sha: held[sha].id for sha in parts if sha in held}
 
 
@@ -372,10 +372,10 @@ async def drop_files(info: ModelInfo, scope: str, files: Mapping[str, str], gone
     """Drop the ids a request named that the provider no longer holds: True when there were any, so the caller
     uploads them again and resends."""
     stale = {sha for sha, file_id in files.items() if gone(file_id)}
-    if not stale or info.images is None:
+    if not stale or info.attachments is None:
         return False
-    held = await info.images.uploads(scope)
-    await info.images.save_uploads(scope, {sha: u for sha, u in held.items() if sha not in stale})
+    held = await info.attachments.uploads(scope)
+    await info.attachments.save_uploads(scope, {sha: u for sha, u in held.items() if sha not in stale})
     return True
 
 
@@ -539,8 +539,8 @@ class OpenAIChatModel:
     replays_reasoning: ClassVar[bool] = True
     """Reasoning text goes back beside the content (`reasoning_content`); False for a provider that refuses it."""
 
-    def wire(self, messages: Sequence[ModelMessage], images: Encoded = NO_IMAGES) -> list[chat_api.Message]:
-        return wire_messages(messages, reasoning=self.replays_reasoning, images=images)
+    def wire(self, messages: Sequence[ModelMessage], attachments: Encoded = NO_ATTACHMENTS) -> list[chat_api.Message]:
+        return wire_messages(messages, reasoning=self.replays_reasoning, attachments=attachments)
 
     def response_format(self, schema: JsonSchemaValue) -> chat_api.ResponseFormat:
         """How a request asks for structured output: the schema itself, where the provider takes one."""
@@ -551,9 +551,9 @@ class OpenAIChatModel:
         return None
 
     def _body(
-        self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue], images: Encoded
+        self, messages: list[ModelMessage], info: ModelInfo, settings: dict[str, JsonValue], attachments: Encoded
     ) -> bytes:
-        wired = self.wire(messages, images)
+        wired = self.wire(messages, attachments)
         if info.output_type is not str:
             schema = TypeAdapter(info.output_type).json_schema()
             settings["response_format"] = cast(JsonValue, self.response_format(schema))
@@ -722,7 +722,7 @@ def _response_items(message: ModelResponse) -> list[responses_api.Item]:
 
 
 def responses_input(
-    messages: Sequence[ModelMessage], images: Encoded = NO_IMAGES, files: Mapping[str, str] = NO_IMAGES
+    messages: Sequence[ModelMessage], attachments: Encoded = NO_ATTACHMENTS, files: Mapping[str, str] = NO_ATTACHMENTS
 ) -> list[responses_api.Item]:
     """Stored parts as Responses API input items. Reasoning replays sealed with an empty summary, so a past turn's
     item stays byte-identical (the cache prefix); unsealed thinking (another API's) and a reasoning item nothing
@@ -730,10 +730,10 @@ def responses_input(
     result: list[responses_api.Item] = []
     outputs: dict[str, responses_api.FunctionCallOutput] = {}
 
-    def image(part: ImagePart) -> responses_api.InputImage:
+    def image(part: AttachmentPart) -> responses_api.InputImage:
         if (file_id := files.get(part.sha256)) is not None:
             return {"type": "input_image", "detail": "auto", "file_id": file_id}
-        url = f"data:{part.media_type};base64,{encoded(images, part)}"
+        url = f"data:{part.media_type};base64,{encoded(attachments, part)}"
         return {"type": "input_image", "detail": "auto", "image_url": url}
 
     for message in messages:
@@ -742,10 +742,10 @@ def responses_input(
             continue
         prompt: responses_api.Message | None = None
         for part in message.parts:
-            if not isinstance(part, ImagePart):
+            if not isinstance(part, AttachmentPart):
                 prompt = None
             match part:
-                case ImagePart():
+                case AttachmentPart():
                     block = image(part)
                     if part.tool_call_id is not None and (output := outputs.get(part.tool_call_id)) is not None:
                         output["output"] = _with_content(output["output"], block)
@@ -794,7 +794,7 @@ def _response_error(name: str, code: str | None, message: str) -> Exception:
 
 class OpenAIResponsesModel:
     """OpenAI's Responses API over aid's own client (`aid.responses_api`, `aid.wire`; #70). Stateless: reasoning
-    replays sealed (`ENCRYPTED`), images go by Files API id on OpenAI's own server (#69)."""
+    replays sealed (`ENCRYPTED`), attachments go by Files API id on OpenAI's own server (#69)."""
 
     cache_reads_in_prompt: bool = True
 
@@ -839,8 +839,8 @@ class OpenAIResponsesModel:
         messages: list[ModelMessage],
         info: ModelInfo,
         settings: dict[str, JsonValue],
-        images: Encoded,
-        files: Mapping[str, str] = NO_IMAGES,
+        attachments: Encoded,
+        files: Mapping[str, str] = NO_ATTACHMENTS,
     ) -> bytes:
         if info.output_type is not str:
             text = settings.get("text")
@@ -852,7 +852,7 @@ class OpenAIResponsesModel:
         body: dict[str, JsonValue] = {
             **settings,
             "model": self._model,
-            "input": cast(JsonValue, responses_input(messages, images, files)),
+            "input": cast(JsonValue, responses_input(messages, attachments, files)),
             "stream": True,
         }
         if info.tools:
@@ -865,7 +865,7 @@ class OpenAIResponsesModel:
         return self._http
 
     async def _upload(
-        self, key: ClientKey, headers: Mapping[str, str], io_timeout: float, part: ImagePart, data: bytes
+        self, key: ClientKey, headers: Mapping[str, str], io_timeout: float, part: AttachmentPart, data: bytes
     ) -> Upload:
         response = await self._client().post(
             responses_api.files_url(key.base_url),
@@ -889,7 +889,7 @@ class OpenAIResponsesModel:
     ) -> Mapping[str, str]:
         """OpenAI's own server only: another server of the API may hold no files."""
         if self._provider is not None or key.base_url is not None:
-            return NO_IMAGES
+            return NO_ATTACHMENTS
         upload = functools.partial(self._upload, key, headers, io_timeout)
         return await held_files(self.model_name, info, upload_scope(key), messages, upload)
 
@@ -991,7 +991,7 @@ ANTHROPIC_LEGACY_MAX_TOKENS: Final = 4096
 
 
 def anthropic_messages(
-    messages: Sequence[ModelMessage], images: Encoded = NO_IMAGES, files: Mapping[str, str] = NO_IMAGES
+    messages: Sequence[ModelMessage], attachments: Encoded = NO_ATTACHMENTS, files: Mapping[str, str] = NO_ATTACHMENTS
 ) -> tuple[list[anthropic_api.TextBlock], list[anthropic_api.Message]]:
     """Stored parts as the Messages API's (system, messages). Leading system prompts become `system`; a later one
     stays in place as user text. Consecutive same-role parts share one message, so the tool results of one
@@ -1038,11 +1038,11 @@ def anthropic_messages(
                     add("user", anthropic_api.TextBlock(text=part.content))
                 case UserPromptPart():
                     add("user", anthropic_api.TextBlock(text=str(part.content)))
-                case ImagePart():
+                case AttachmentPart():
                     source = (
                         anthropic_api.FileSource(file_id=files[part.sha256])
                         if part.sha256 in files
-                        else anthropic_api.ImageSource(media_type=part.media_type, data=encoded(images, part))
+                        else anthropic_api.ImageSource(media_type=part.media_type, data=encoded(attachments, part))
                     )
                     image = anthropic_api.ImageBlock(source=source)
                     if (answer := _tool_result(turns, part.tool_call_id)) is None:
@@ -1071,7 +1071,7 @@ def anthropic_messages(
 
 
 def _tool_result(turns: list[anthropic_api.Message], call: str | None) -> anthropic_api.ToolResultBlock | None:
-    """The answer to `call` in the last user turn, where its image goes: a tool result may hold images."""
+    """The answer to `call` in the last user turn, where its image goes: a tool result may hold attachments."""
     if call is None or not turns or turns[-1].role != "user":
         return None
     return next(
@@ -1120,10 +1120,10 @@ class AnthropicModel:
         messages: list[ModelMessage],
         info: ModelInfo,
         settings: dict[str, JsonValue],
-        images: Encoded,
-        files: Mapping[str, str] = NO_IMAGES,
+        attachments: Encoded,
+        files: Mapping[str, str] = NO_ATTACHMENTS,
     ) -> anthropic_api.Request:
-        system, wired = anthropic_messages(messages, images, files)
+        system, wired = anthropic_messages(messages, attachments, files)
         settings.setdefault(
             "max_tokens", ANTHROPIC_LEGACY_MAX_TOKENS if self._model.startswith("claude-3") else ANTHROPIC_MAX_TOKENS
         )
@@ -1161,7 +1161,7 @@ class AnthropicModel:
         return await open_model_stream(self.model_name, self._client(), url, body, headers, io_timeout, key.max_retries)
 
     async def _upload(
-        self, key: ClientKey, headers: Mapping[str, str], io_timeout: float, part: ImagePart, data: bytes
+        self, key: ClientKey, headers: Mapping[str, str], io_timeout: float, part: AttachmentPart, data: bytes
     ) -> Upload:
         files = {"file": (part.sha256, data, part.media_type)}
         response = await self._client().post(
@@ -1180,7 +1180,7 @@ class AnthropicModel:
         io_timeout: float,
     ) -> Mapping[str, str]:
         if self._provider is not None:
-            return NO_IMAGES
+            return NO_ATTACHMENTS
         upload = functools.partial(self._upload, key, headers, io_timeout)
         return await held_files(self.model_name, info, upload_scope(key), messages, upload)
 
@@ -1287,7 +1287,7 @@ def _signature(part: TextPart | ToolCallPart) -> str | None:
 
 
 def google_contents(
-    messages: Sequence[ModelMessage], images: Encoded = NO_IMAGES, files: Mapping[str, str] = NO_IMAGES
+    messages: Sequence[ModelMessage], attachments: Encoded = NO_ATTACHMENTS, files: Mapping[str, str] = NO_ATTACHMENTS
 ) -> tuple[list[gemini.Part], list[gemini.Content]]:
     """Stored parts as the Gemini API's (system instruction parts, contents), merged by role as
     `anthropic_messages` does. A thought signature goes back on the part that carried it: Gemini 3 refuses a
@@ -1337,12 +1337,12 @@ def google_contents(
                     add("user", gemini.Part(text=part.content))
                 case UserPromptPart():
                     add("user", gemini.Part(text=str(part.content)))
-                case ImagePart():
+                case AttachmentPart():
                     blob, held = None, None
                     if part.sha256 in files:
                         held = gemini.FileData(mime_type=part.media_type, file_uri=files[part.sha256])
                     else:
-                        blob = gemini.Blob(mime_type=part.media_type, data=encoded(images, part))
+                        blob = gemini.Blob(mime_type=part.media_type, data=encoded(attachments, part))
                     if part.tool_call_id is not None and (block := responses.get(part.tool_call_id)) is not None:
                         nested = gemini.FunctionResponsePart(inline_data=blob, file_data=held)
                         block.parts = [*(block.parts or []), nested]
@@ -1401,8 +1401,8 @@ class GoogleModel:
         messages: list[ModelMessage],
         info: ModelInfo,
         settings: dict[str, JsonValue],
-        images: Encoded,
-        files: Mapping[str, str] = NO_IMAGES,
+        attachments: Encoded,
+        files: Mapping[str, str] = NO_ATTACHMENTS,
     ) -> bytes:
         try:
             chosen = gemini.Settings.model_validate(settings)
@@ -1416,7 +1416,7 @@ class GoogleModel:
                     "response_json_schema": TypeAdapter(info.output_type).json_schema(),
                 }
             )
-        system, contents = google_contents(messages, images, files)
+        system, contents = google_contents(messages, attachments, files)
         request = gemini.Request(
             contents=contents,
             system_instruction=gemini.Content(parts=system) if system else None,
@@ -1438,7 +1438,7 @@ class GoogleModel:
     def _headers(self, key: ClientKey) -> dict[str, str]:
         return {gemini.KEY_HEADER: key.api_key, **(self._provider.headers if self._provider else {})}
 
-    async def _upload(self, key: ClientKey, io_timeout: float, part: ImagePart, data: bytes) -> Upload:
+    async def _upload(self, key: ClientKey, io_timeout: float, part: AttachmentPart, data: bytes) -> Upload:
         """The Files API's resumable upload, both steps in one go: start, then the bytes with `finalize`."""
         http = self._client()
         start = await http.post(
@@ -1473,7 +1473,7 @@ class GoogleModel:
     ) -> Mapping[str, str]:
         """Google AI Studio's own route only: another server of the Gemini API may hold no files."""
         if self._provider is not None:
-            return NO_IMAGES
+            return NO_ATTACHMENTS
         upload = functools.partial(self._upload, key, io_timeout)
         return await held_files(self.model_name, info, upload_scope(key), messages, upload, _gemini_refused)
 

@@ -350,8 +350,8 @@ class AcpBackend:
                 if self._events is not None and (session_event := to_event(update)) is not None:
                     self._events.send_nowait(session_event)
 
-    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
-        refuse_images("ACP", images)
+    async def prompt(self, text: str, emit: Emit, attachments: Sequence[bytes] = ()) -> Output:
+        refuse_images("ACP", attachments)
         send, receive = anyio.create_memory_object_stream[SessionEvent](math.inf)
         chunks: list[str] = []
 

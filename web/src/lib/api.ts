@@ -413,7 +413,7 @@ export async function prompt(
   name: string,
   text: string,
   onEvent: (event: SessionEvent) => void,
-  images: string[] = [],
+  attachments: string[] = [],
 ): Promise<void> {
-  await call({ op: "prompt", session: name, text, images }, onEvent);
+  await call({ op: "prompt", session: name, text, attachments }, onEvent);
 }

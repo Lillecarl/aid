@@ -103,14 +103,15 @@ class RetryPromptPart(_Record):
         return str(self.content)
 
 
-class ImagePart(_Record):
-    """An image in a request, its bytes in the session's `aid.images.ImageStore` by `sha256`. It follows the
+class AttachmentPart(_Record):
+    """An image in a request, its bytes in the session's `aid.attachments.AttachmentStore` by `sha256`. It follows the
     UserPromptPart it goes with, or, with `tool_call_id`, that call's ToolReturnPart."""
 
     media_type: str
     sha256: str
     tool_call_id: str | None = None
-    part_kind: Literal["image"] = "image"
+    part_kind: Literal["attachment", "image"] = "attachment"
+    """`image` in histories before #72: such a part stays as stored, so a resent history's prefix keeps its bytes."""
 
     def __init__(self, media_type: str, sha256: str, tool_call_id: str | None = None, **kwargs: JsonValue) -> None:
         super().__init__(media_type=media_type, sha256=sha256, tool_call_id=tool_call_id, **kwargs)
@@ -119,7 +120,7 @@ class ImagePart(_Record):
 type Part = Annotated[
     SystemPromptPart
     | UserPromptPart
-    | ImagePart
+    | AttachmentPart
     | TextPart
     | ThinkingPart
     | ToolCallPart

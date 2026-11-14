@@ -10,7 +10,7 @@ import pytest
 from aid import responses_api
 from aid.agent import Tool
 from aid.messages import (
-    ImagePart,
+    AttachmentPart,
     ModelRequest,
     ModelResponse,
     RetryPromptPart,
@@ -154,7 +154,7 @@ def test_history_replays_sealed_reasoning_and_drops_what_it_cannot() -> None:
     retry = RetryPromptPart("bad arguments", tool_name="read", tool_call_id="call_2")
     again = RetryPromptPart("answer in JSON")
     history: list[ModelMessage] = [
-        ModelRequest(parts=[SystemPromptPart("be brief"), UserPromptPart("look"), ImagePart("image/png", "aa")]),
+        ModelRequest(parts=[SystemPromptPart("be brief"), UserPromptPart("look"), AttachmentPart("image/png", "aa")]),
         ModelResponse(
             parts=[
                 ThinkingPart("other api's thought", signature="anthropic-sig"),
@@ -168,7 +168,7 @@ def test_history_replays_sealed_reasoning_and_drops_what_it_cannot() -> None:
         ModelRequest(
             parts=[
                 ToolReturnPart("read", "a.png: image/png", "call_1"),
-                ImagePart("image/png", "bb", tool_call_id="call_1"),
+                AttachmentPart("image/png", "bb", tool_call_id="call_1"),
                 retry,
             ]
         ),
@@ -356,9 +356,9 @@ def test_responses_events_parse_as_the_sdk_parses_them() -> None:
 
     items = responses_input(
         [
-            ModelRequest(parts=[SystemPromptPart("s"), UserPromptPart("u"), ImagePart("image/png", "aa")]),
+            ModelRequest(parts=[SystemPromptPart("s"), UserPromptPart("u"), AttachmentPart("image/png", "aa")]),
             ModelResponse(parts=[ThinkingPart("", **{ENCRYPTED: "e"}), TextPart("t"), ToolCallPart("n", "{}", "c")]),
-            ModelRequest(parts=[ToolReturnPart("n", "r", "c"), ImagePart("image/png", "aa", tool_call_id="c")]),
+            ModelRequest(parts=[ToolReturnPart("n", "r", "c"), AttachmentPart("image/png", "aa", tool_call_id="c")]),
         ],
         {"aa": "QUFB"},
     )

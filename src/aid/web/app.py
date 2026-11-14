@@ -37,9 +37,9 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect
 
+from aid.attachments import AttachmentStore, media_type
 from aid.client import connect
-from aid.images import ImageStore, media_type
-from aid.messages import ImagePart
+from aid.messages import AttachmentPart
 from aid.paths import default_paths
 from aid.protocol import AidError
 from aid.speech import Transcription
@@ -76,7 +76,7 @@ _STATUS: Final = {
     "outside": 403,
     "not_a_directory": 400,
     "not_a_file": 400,
-    "image_missing": 404,
+    "attachment_missing": 404,
 }
 
 
@@ -149,16 +149,16 @@ SHA256: Final = re.compile(r"[0-9a-f]{64}")
 
 
 @api
-async def read_image(request: Request) -> Response:
+async def read_attachment(request: Request) -> Response:
     """An image of a session's transcript (#66), by sha256: content-addressed, so a browser may keep it. The daemon
     answers for the session first, as for its files: an unknown or hidden session is `not_found`."""
     sha = request.path_params["sha"]
     if not SHA256.fullmatch(sha):
-        raise AidError("image_missing", "not a sha256")
+        raise AidError("attachment_missing", "not a sha256")
     await _cwd(request)
     paths: Paths = request.app.state.paths
-    store = ImageStore(paths.session_dir(request.path_params["name"]))
-    data = await anyio.to_thread.run_sync(store.read, ImagePart("image/png", sha))
+    store = AttachmentStore(paths.session_dir(request.path_params["name"]))
+    data = await anyio.to_thread.run_sync(store.read, AttachmentPart("image/png", sha))
     return Response(
         data,
         media_type=media_type(data) or "application/octet-stream",
@@ -404,7 +404,7 @@ def create_app(
             Route("/api/dirs", dirs, methods=["GET"]),
             Route("/api/sessions/{name}/files", list_files, methods=["GET"]),
             Route("/api/sessions/{name}/file", read_file, methods=["GET"]),
-            Route("/api/sessions/{name}/images/{sha}", read_image, methods=["GET"]),
+            Route("/api/sessions/{name}/attachments/{sha}", read_attachment, methods=["GET"]),
             Route("/api/speech", speech, methods=["GET"]),
             Route("/api/highlight", highlight_code, methods=["POST"]),
             WebSocketRoute("/api/transcribe", transcribe),

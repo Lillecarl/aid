@@ -496,23 +496,25 @@ class Session:
         self._client = client
         self.name = name
 
-    async def stream(self, text: str, images: Sequence[bytes] = ()) -> AsyncIterator[SessionEvent]:
-        """Yield the prompt's events. The last one is an `Output`. `images`: PNG, JPEG, GIF or WebP (#66)."""
-        request = Prompt(session=self.name, text=text, images=[base64.b64encode(image).decode() for image in images])
+    async def stream(self, text: str, attachments: Sequence[bytes] = ()) -> AsyncIterator[SessionEvent]:
+        """Yield the prompt's events. The last one is an `Output`. `attachments`: PNG, JPEG, GIF or WebP (#66)."""
+        request = Prompt(
+            session=self.name, text=text, attachments=[base64.b64encode(image).decode() for image in attachments]
+        )
         async for item in self._client._events(request):  # pyright: ignore[reportPrivateUsage] -- Session is Client's own facade
             if not isinstance(item, Done):
                 yield item
 
     @overload
-    async def run(self, text: str, *, images: Sequence[bytes] = ()) -> RunResult[JsonValue]: ...
+    async def run(self, text: str, *, attachments: Sequence[bytes] = ()) -> RunResult[JsonValue]: ...
     @overload
-    async def run[T](self, text: str, output_type: type[T], *, images: Sequence[bytes] = ()) -> RunResult[T]: ...
+    async def run[T](self, text: str, output_type: type[T], *, attachments: Sequence[bytes] = ()) -> RunResult[T]: ...
     async def run[T](
-        self, text: str, output_type: type[T] | None = None, *, images: Sequence[bytes] = ()
+        self, text: str, output_type: type[T] | None = None, *, attachments: Sequence[bytes] = ()
     ) -> RunResult[T] | RunResult[JsonValue]:
         chunks: list[str] = []
         output: Output | None = None
-        async for event in self.stream(text, images):
+        async for event in self.stream(text, attachments):
             match event:
                 case TextDelta():
                     chunks.append(event.text)

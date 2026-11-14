@@ -37,7 +37,7 @@ from tests.browser_harness import (
 )
 from tests.conftest import py_spec
 from tests.test_agents import AGENT_DIR
-from tests.test_images import png
+from tests.test_attachments import png
 from tests.test_sandbox import needs_bwrap
 from tests.web_harness import ALLOWED, ASSETS, TIMEOUT, needs_dex
 
@@ -161,7 +161,7 @@ async def test_an_attached_image_reaches_the_agent_and_shows(page: Page, session
     await page.get_by_test_id("chat-attached").get_by_text("red.png").wait_for(timeout=TIMEOUT * 1000)
     await send_chat(page, "what is this?")
     await expect_chat_text(page, f"image/png:{hashlib.sha256(png()).hexdigest()}")
-    shown = page.get_by_test_id("chat-images").locator("img").first
+    shown = page.get_by_test_id("chat-attachments").locator("img").first
     await shown.wait_for(timeout=TIMEOUT * 1000)
     with anyio.fail_after(TIMEOUT):
         # decode() rejects for a broken image: one the route or the CSP refused.
@@ -177,10 +177,12 @@ async def test_an_image_a_tool_read_shows_in_its_card(page: Page, session_daemon
     await expect_chat_text(page, "red.png: image/png")
     card = page.get_by_test_id("tool-box").last
     await card.locator("summary").click()
-    shown = card.get_by_test_id("tool-images").locator("img").first
+    shown = card.get_by_test_id("tool-attachments").locator("img").first
     await shown.wait_for(timeout=TIMEOUT * 1000)
-    with anyio.fail_after(TIMEOUT):
-        assert await shown.evaluate("(img) => img.decode().then(() => img.naturalWidth)") == 8
+    # Not decode(): Firefox rejects it ("Invalid image request") while a lazy image is still loading. A broken image
+    # (refused by the route or the CSP) completes with no width.
+    handle = await shown.element_handle()
+    await page.wait_for_function("(img) => img.complete && img.naturalWidth === 8", arg=handle, timeout=TIMEOUT * 1000)
 
 
 async def test_slash_menu_lists_commands(page: Page, session_daemon: Paths, tmp_path: Path) -> None:

@@ -16,11 +16,11 @@ import pytest
 from pydantic import BaseModel
 
 from aid.agent import Agent
+from aid.attachments import ATTACHMENTS_DIR, UPLOADS, UPLOADS_DIR, AttachmentStore
 from aid.coding import read
 from aid.discovery import discover
-from aid.images import IMAGES_DIR, UPLOADS, UPLOADS_DIR, ImageStore
 from aid.messages import (
-    ImagePart,
+    AttachmentPart,
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
@@ -32,7 +32,7 @@ from aid.model import ENCRYPTED, ModelInfo, OpenAIResponsesModel
 from aid.prices import ENV_PRICES
 from aid.protocol import AidError, Output, SessionEvent, Usage
 from aid.providers import catalog_model, embedder, reranker, resolve
-from tests.test_images import png
+from tests.test_attachments import png
 from tests.test_native_backend import backend
 
 if TYPE_CHECKING:
@@ -155,7 +155,11 @@ async def test_an_image_in_the_prompt(tmp_path: Path, monkeypatch: pytest.Monkey
     agent = Agent(name, "You are a test.", model_settings=dict(route.settings or {}))
     transport = await resolve(name, providers, tmp_path.name)
     async with backend(
-        tmp_path, agent, transport=transport, price_as=catalog_model(name, providers), images=ImageStore(tmp_path)
+        tmp_path,
+        agent,
+        transport=transport,
+        price_as=catalog_model(name, providers),
+        attachments=AttachmentStore(tmp_path),
     ) as session:
         answer = await session.prompt(
             "The image is one solid colour. Is it red, green or blue? Answer with one word.",
@@ -182,7 +186,11 @@ async def test_an_image_from_a_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     agent = Agent(name, "You are a test.", tools=[read], model_settings=dict(route.settings or {}))
     transport = await resolve(name, providers, tmp_path.name)
     async with backend(
-        tmp_path, agent, transport=transport, price_as=catalog_model(name, providers), images=ImageStore(tmp_path)
+        tmp_path,
+        agent,
+        transport=transport,
+        price_as=catalog_model(name, providers),
+        attachments=AttachmentStore(tmp_path),
     ) as session:
         answer = await session.prompt(
             "Read pic.png with the read tool. The image is one solid colour. Is it red, green or blue? Answer with one"
@@ -191,7 +199,7 @@ async def test_an_image_from_a_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         )
     assert "green" in str(answer.output).lower()
     history = ModelMessagesTypeAdapter.validate_json((tmp_path / "history.json").read_bytes())
-    assert any(isinstance(p, ImagePart) and p.tool_call_id for m in history for p in m.parts)
+    assert any(isinstance(p, AttachmentPart) and p.tool_call_id for m in history for p in m.parts)
     assert_by_file_id(tmp_path, name)
 
 
@@ -214,13 +222,13 @@ async def test_a_structured_answer(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
 
 def assert_by_file_id(root: Path, model: str) -> None:
-    """Anthropic's, Google's and OpenAI's own routes send images by Files API id (#69, #70): the session's id table
+    """Anthropic's, Google's and OpenAI's own routes send attachments by Files API id (#69, #70): the session's id table
     names one."""
     prefix = {"anthropic": "file_", "google": "https://generativelanguage.googleapis.com/", "openai": "file-"}.get(
         model.split("/")[0]
     )
     if prefix is not None:
-        tables = list((root / IMAGES_DIR / UPLOADS_DIR).glob("*.json"))
+        tables = list((root / ATTACHMENTS_DIR / UPLOADS_DIR).glob("*.json"))
         assert len(tables) == 1
         assert any(u.id.startswith(prefix) for u in UPLOADS.validate_json(tables[0].read_bytes()).values())
 

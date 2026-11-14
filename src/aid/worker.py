@@ -20,6 +20,7 @@ import structlog
 import zmq
 import zmq.asyncio
 
+from aid.attachments import decoded
 from aid.backends import open_backend
 from aid.backends.base import (
     CompactionBackend,
@@ -30,7 +31,6 @@ from aid.backends.base import (
     ToolPolicyBackend,
     WatchBackend,
 )
-from aid.images import decoded
 from aid.protocol import (
     Activity,
     AidError,
@@ -333,7 +333,7 @@ class _Worker:
             await self.send(Event(id=request.id, event=event))
 
         try:
-            output = await self._backend.prompt(request.text, emit, decoded(request.images))
+            output = await self._backend.prompt(request.text, emit, decoded(request.attachments))
         except Exception as error:
             log.exception("prompt_failed", id=request.id)
             await self._report_tools()

@@ -578,8 +578,8 @@ class ClaudeTtyBackend:
     async def _find_transcript(self) -> Path | None:
         return await anyio.to_thread.run_sync(find_transcript, self._transcripts, self._session_id)
 
-    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
-        refuse_images("claude-tty", images)
+    async def prompt(self, text: str, emit: Emit, attachments: Sequence[bytes] = ()) -> Output:
+        refuse_images("claude-tty", attachments)
         if self._record is None:
             raise RuntimeError("the transcript is not being followed")
         claim = _Claim(emit)

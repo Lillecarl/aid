@@ -14,7 +14,7 @@ from pydantic import BaseModel, JsonValue, ValidationError
 import aid
 from aid.agent import Agent
 from aid.messages import (
-    ImagePart,
+    AttachmentPart,
     ModelResponse,
     RetryPromptPart,
     TextPart,
@@ -81,11 +81,11 @@ echo = Agent(FunctionModel(stream_function=_echo))
 
 
 async def _see(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
-    yield " ".join(f"{p.media_type}:{p.sha256}" for p in messages[-1].parts if isinstance(p, ImagePart)) or "none"
+    yield " ".join(f"{p.media_type}:{p.sha256}" for p in messages[-1].parts if isinstance(p, AttachmentPart)) or "none"
 
 
 seer = Agent(FunctionModel(stream_function=_see))
-"""Names the images of the request it answers."""
+"""Names the attachments of the request it answers."""
 
 
 steady = Agent(TestModel(call_tools=[], custom_output_text="steady"))

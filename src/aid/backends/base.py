@@ -38,17 +38,17 @@ class Backend(Protocol):
         """What the backend knows about its agent once open; the worker sends it in Hello."""
         ...
 
-    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
-        """`images`: PNG, JPEG, GIF or WebP files that go with `text` (#66). An engine that cannot send them
+    async def prompt(self, text: str, emit: Emit, attachments: Sequence[bytes] = ()) -> Output:
+        """`attachments`: PNG, JPEG, GIF or WebP files that go with `text` (#66). An engine that cannot send them
         refuses any (`refuse_images`)."""
         ...
 
     async def cancel(self) -> None: ...
 
 
-def refuse_images(engine: str, images: Sequence[bytes]) -> None:
-    if images:
-        raise AidError("images_unsupported", f"{engine} sessions take no images yet")
+def refuse_images(engine: str, attachments: Sequence[bytes]) -> None:
+    if attachments:
+        raise AidError("attachments_unsupported", f"{engine} sessions take no attachments yet")
 
 
 @runtime_checkable

@@ -365,6 +365,24 @@
       "title": "AnswerPermission",
       "type": "object"
     },
+    "AttachmentRef": {
+      "additionalProperties": false,
+      "description": "An attachment a prompt carried or a tool returned. Its bytes are `<session dir>/attachments/<sha256>` once the session\ntook it.",
+      "properties": {
+        "media_type": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "media_type",
+        "sha256"
+      ],
+      "title": "AttachmentRef",
+      "type": "object"
+    },
     "Cancel": {
       "additionalProperties": false,
       "properties": {
@@ -1417,24 +1435,6 @@
     },
     "HookMatch": {
       "type": "string"
-    },
-    "ImageRef": {
-      "additionalProperties": false,
-      "description": "An image a prompt carried or a tool returned. Its bytes are `<session dir>/images/<sha256>` once the session\ntook it.",
-      "properties": {
-        "media_type": {
-          "type": "string"
-        },
-        "sha256": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "media_type",
-        "sha256"
-      ],
-      "title": "ImageRef",
-      "type": "object"
     },
     "JsonValue": {},
     "Lifecycle": {
@@ -2680,15 +2680,15 @@
     "Prompt": {
       "additionalProperties": false,
       "properties": {
-        "id": {
-          "type": "string"
-        },
-        "images": {
+        "attachments": {
           "default": [],
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "id": {
+          "type": "string"
         },
         "op": {
           "const": "prompt",
@@ -2713,10 +2713,10 @@
     "PromptEntry": {
       "additionalProperties": false,
       "properties": {
-        "images": {
+        "attachments": {
           "default": [],
           "items": {
-            "$ref": "#/$defs/ImageRef"
+            "$ref": "#/$defs/AttachmentRef"
           },
           "type": "array"
         },
@@ -2732,7 +2732,7 @@
       "required": [
         "type",
         "text",
-        "images"
+        "attachments"
       ],
       "title": "PromptEntry",
       "type": "object"
@@ -3767,15 +3767,15 @@
       "additionalProperties": false,
       "description": "A tool call starting, or an update to it: fields left empty keep what an earlier event of the call said.",
       "properties": {
-        "diffs": {
+        "attachments": {
           "items": {
-            "$ref": "#/$defs/ToolDiff"
+            "$ref": "#/$defs/AttachmentRef"
           },
           "type": "array"
         },
-        "images": {
+        "diffs": {
           "items": {
-            "$ref": "#/$defs/ImageRef"
+            "$ref": "#/$defs/ToolDiff"
           },
           "type": "array"
         },
@@ -3864,7 +3864,7 @@
         "output",
         "diffs",
         "paths",
-        "images"
+        "attachments"
       ],
       "title": "ToolCall",
       "type": "object"

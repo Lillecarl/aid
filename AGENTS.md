@@ -264,27 +264,27 @@ on reusable decisions and current boundaries; put long investigations and dated 
   refuses a late acquire whose release overtook it (separate connections). Pricing asks the transport
   (`Transport.cache_reads_in_prompt`), never its class: wrappers hide classes.
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
-- `src/aid/images.py` — images in native requests (#66): `ImagePart(media_type, sha256, tool_call_id)` follows the
-  UserPromptPart (or the ToolReturnPart) it goes with; `ImageStore` = `<session dir>/images/<sha256>`, PNG/JPEG/GIF/
-  WebP by magic bytes, 5 MB cap (`bad_image`); `ModelInfo.images` → transports read base64 off the loop
-  (`encoded`); no bytes → `image_missing`. Chat Completions: data URL in user content, a tool's image after the
+- `src/aid/attachments.py` — attachments in native requests (#66, #72; images so far): `AttachmentPart(media_type, sha256, tool_call_id)` follows the
+  UserPromptPart (or the ToolReturnPart) it goes with; `AttachmentStore` = `<session dir>/attachments/<sha256>`, PNG/JPEG/GIF/
+  WebP by magic bytes, 5 MB cap (`bad_attachment`); `ModelInfo.attachments` → transports read base64 off the loop
+  (`encoded`); no bytes → `attachment_missing`. Chat Completions: data URL in user content, a tool's image after the
   last tool message; Responses: `input_image`, a tool's inside its `function_call_output`; Anthropic: image block, a tool's inside its `tool_result`; Gemini: `inlineData`, a tool's in its
   `functionResponse.parts` (beside it as a user part: junk-led answers, measured). `Backend.prompt(text, emit, images)`: native stores and
-  sends; other engines `images_unsupported`. A fork copies its parent's images (`ImageStore.take`). `Prompt.images`
-  (base64; `Session.run/stream(images=)`, `aid prompt --image`): the daemon checks them (`images.refs`,
-  `MAX_PROMPT_BYTES` together) and records `PromptEntry.images` (`ImageRef`), the worker decodes them to the backend.
-  A model models.dev lists without `image` in `modalities.input` → `images_unsupported` before any request; one it
-  does not describe is asked. Tool images: a tool returns `ToolImage(data, text)` (`read` on an image file); the loop
+  sends; other engines `attachments_unsupported`. A fork copies its parent's attachments (`AttachmentStore.take`). Before #72 the names said image: stored `part_kind: image` (kept as stored), transcripts' `images`, the `images/` dir and its upload tables (read, never written), `--image` all still read. `Prompt.attachments`
+  (base64; `Session.run/stream(attachments=)`, `aid prompt --attach`): the daemon checks them (`images.refs`,
+  `MAX_PROMPT_BYTES` together) and records `PromptEntry.attachments` (`AttachmentRef`), the worker decodes them to the backend.
+  A model models.dev lists without `image` in `modalities.input` → `attachments_unsupported` before any request; one it
+  does not describe is asked. Tool images: a tool returns `ToolAttachment(data, text)` (`read` on an image file); the loop
   stores it after the ToolReturnPart, or sends the text alone with a note where the model takes none. Live-tested
   2026-11-13 on every route but OpenCode Go (key expired) (`test_an_image_from_a_tool`). Web: Chat shows
-  `PromptEntry.images` from `GET /api/sessions/{name}/images/{sha}` (aid web reads `Paths.session_dir`, after the
+  `PromptEntry.attachments` from `GET /api/sessions/{name}/attachments/{sha}` (aid web reads `Paths.session_dir`, after the
   daemon answers for the session; immutable cache); the Image button or a paste attaches PNG/JPEG/GIF/WebP to the next
   prompt. The CSP has no `data:`, so an unsent image shows by name. A tool's images reach the transcript as
-  `ToolCall.images` (`ImageRef`) on its completed event; its card in Chat shows them from the same route.
+  `ToolCall.attachments` (`AttachmentRef`) on its completed event; its card in Chat shows them from the same route.
   Files APIs (#69, `model.held_files`/`drop_files`): Anthropic's, Google AI Studio's and OpenAI's own routes (no
   `Provider`; OpenAI: no `api_base` either)
   upload each image once per `upload_scope` (base URL + key), keep sha256 → `Upload(id, expires)` in
-  `images/uploads/<scope>.json` and send the id (Anthropic `FileSource`; Gemini `fileData`, a tool's in
+  `attachments/uploads/<scope>.json` and send the id (Anthropic `FileSource`; Gemini `fileData`, a tool's in
   `functionResponse.parts`; Gemini's expire after 48 h, so one within `UPLOAD_MARGIN` goes again; OpenAI
   `input_image.file_id`, purpose `vision`, the file name's extension names the format: none → 400). A failed upload
   goes as base64 that request; a gone file (Anthropic 404 "File `…` not found", Gemini 403 "access the File … or it

@@ -1,4 +1,4 @@
-"""Images a session sends to its model (#66): content-addressed files in the session dir, named by `ImagePart`."""
+"""Images a session sends to its model (#66): content-addressed files in the session dir, named by `AttachmentPart`."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from typing import TYPE_CHECKING, Final
 import anyio.to_thread
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from aid.messages import ImagePart
-from aid.protocol import AidError, ImageRef
+from aid.messages import AttachmentPart
+from aid.protocol import AidError, AttachmentRef
 
 if TYPE_CHECKING:
     from collections.abc import Container, Mapping, Sequence
@@ -23,7 +23,9 @@ if TYPE_CHECKING:
 
     from aid.messages import ModelMessage
 
-IMAGES_DIR: Final = "images"
+ATTACHMENTS_DIR: Final = "attachments"
+LEGACY_DIR: Final = "images"
+"""Where sessions before #72 kept them: read, never written."""
 
 
 class Upload(BaseModel):
@@ -35,11 +37,11 @@ class Upload(BaseModel):
 
 UPLOADS: Final = TypeAdapter(dict[str, Upload])
 UPLOADS_DIR: Final = "uploads"
-"""`images/uploads/<scope>.json`: sha256 → a provider's file id, per provider and key (`scope`)."""
+"""`attachments/uploads/<scope>.json`: sha256 → a provider's file id, per provider and key (`scope`)."""
 MAX_BYTES: Final = 5 * 1024 * 1024
 """Anthropic's limit per image, the lowest of the three APIs."""
 MAX_PROMPT_BYTES: Final = 20 * 1024 * 1024
-"""One prompt's images together: what one protocol message may carry. Each request resends every image of the
+"""One prompt's attachments together: what one protocol message may carry. Each request resends every image of the
 history, so this does not keep a request under a provider's size limit."""
 
 SIGNATURES: Final = (
@@ -62,48 +64,55 @@ def media_type(data: bytes) -> str | None:
 
 
 def checked(data: bytes) -> str:
-    """The image's media type, or `bad_image` for what no model takes."""
+    """The image's media type, or `bad_attachment` for what no model takes."""
     if len(data) > MAX_BYTES:
-        raise AidError("bad_image", f"the image is {len(data)} bytes, over the limit of {MAX_BYTES}")
+        raise AidError("bad_attachment", f"the image is {len(data)} bytes, over the limit of {MAX_BYTES}")
     if (kind := media_type(data)) is None:
-        raise AidError("bad_image", "the image is not PNG, JPEG, GIF or WebP")
+        raise AidError("bad_attachment", "the image is not PNG, JPEG, GIF or WebP")
     return kind
 
 
 @dataclass(frozen=True)
-class ToolImage:
+class ToolAttachment:
     """A tool's answer that is an image: the native loop stores `data` and sends it after `text`, or sends `text` alone
-    where the model takes no images."""
+    where the model takes no attachments."""
 
     data: bytes
     text: str
 
 
-def decoded(images: Sequence[str]) -> list[bytes]:
-    """A prompt's base64 images as bytes, each checked, `bad_image` when one is not."""
-    if (total := sum(len(image) // 4 * 3 for image in images)) > MAX_PROMPT_BYTES:
-        raise AidError("bad_image", f"the images are {total} bytes, over the limit of {MAX_PROMPT_BYTES}")
+def decoded(attachments: Sequence[str]) -> list[bytes]:
+    """A prompt's base64 attachments as bytes, each checked, `bad_attachment` when one is not."""
+    if (total := sum(len(image) // 4 * 3 for image in attachments)) > MAX_PROMPT_BYTES:
+        raise AidError("bad_attachment", f"the attachments are {total} bytes, over the limit of {MAX_PROMPT_BYTES}")
     try:
-        data = [base64.b64decode(image, validate=True) for image in images]
+        data = [base64.b64decode(image, validate=True) for image in attachments]
     except binascii.Error as error:
-        raise AidError("bad_image", f"an image is not base64: {error}") from None
+        raise AidError("bad_attachment", f"an image is not base64: {error}") from None
     for one in data:
         checked(one)
     return data
 
 
-def refs(images: Sequence[str]) -> list[ImageRef]:
-    """What the transcript records of a prompt's images."""
-    return [ImageRef(media_type=checked(d), sha256=hashlib.sha256(d).hexdigest()) for d in decoded(images)]
+def refs(attachments: Sequence[str]) -> list[AttachmentRef]:
+    """What the transcript records of a prompt's attachments."""
+    return [AttachmentRef(media_type=checked(d), sha256=hashlib.sha256(d).hexdigest()) for d in decoded(attachments)]
 
 
-class ImageStore:
-    """`root/images/<sha256>`, written once. A part names bytes the store checks on read."""
+class AttachmentStore:
+    """`root/attachments/<sha256>`, written once. A part names bytes the store checks on read."""
 
     def __init__(self, root: Path) -> None:
-        self._dir = root / IMAGES_DIR
+        self._dir = root / ATTACHMENTS_DIR
+        self._legacy = root / LEGACY_DIR
 
-    def put(self, data: bytes, tool_call_id: str | None = None) -> ImagePart:
+    def _path(self, sha256: str) -> Path:
+        path = self._dir / sha256
+        if not path.exists() and (legacy := self._legacy / sha256).exists():
+            return legacy
+        return path
+
+    def put(self, data: bytes, tool_call_id: str | None = None) -> AttachmentPart:
         kind = checked(data)
         digest = hashlib.sha256(data).hexdigest()
         path = self._dir / digest
@@ -112,34 +121,37 @@ class ImageStore:
             partial = path.with_name(f".{digest}.{os.getpid()}")
             partial.write_bytes(data)
             partial.replace(path)
-        return ImagePart(kind, digest, tool_call_id)
+        return AttachmentPart(kind, digest, tool_call_id)
 
-    def read(self, part: ImagePart) -> bytes:
+    def read(self, part: AttachmentPart) -> bytes:
         try:
-            data = (self._dir / part.sha256).read_bytes()
+            data = self._path(part.sha256).read_bytes()
         except FileNotFoundError:
-            raise AidError("image_missing", f"image {part.sha256} is not in {self._dir}") from None
+            raise AidError("attachment_missing", f"image {part.sha256} is not in {self._dir}") from None
         if hashlib.sha256(data).hexdigest() != part.sha256:
-            raise AidError("image_missing", f"image {part.sha256} in {self._dir} does not match its name")
+            raise AidError("attachment_missing", f"image {part.sha256} in {self._dir} does not match its name")
         return data
 
-    def _encoded(self, parts: Sequence[ImagePart]) -> Encoded:
+    def _encoded(self, parts: Sequence[AttachmentPart]) -> Encoded:
         return {part.sha256: base64.b64encode(self.read(part)).decode() for part in parts}
 
     async def encoded(self, messages: Sequence[ModelMessage], skip: Container[str] = ()) -> Encoded:
         """Every image of `messages` as base64 by sha256, read in a worker thread; `skip` names those sent by id."""
-        parts = [p for m in messages for p in m.parts if isinstance(p, ImagePart) and p.sha256 not in skip]
+        parts = [p for m in messages for p in m.parts if isinstance(p, AttachmentPart) and p.sha256 not in skip]
         return await anyio.to_thread.run_sync(self._encoded, parts) if parts else {}
 
-    async def bytes_of(self, part: ImagePart) -> bytes:
+    async def bytes_of(self, part: AttachmentPart) -> bytes:
         return await anyio.to_thread.run_sync(self.read, part)
 
     def _uploads_file(self, scope: str) -> Path:
         return self._dir / UPLOADS_DIR / f"{scope}.json"
 
     def _uploads(self, scope: str) -> dict[str, Upload]:
+        path = self._uploads_file(scope)
+        if not path.exists():
+            path = self._legacy / UPLOADS_DIR / path.name
         try:
-            return UPLOADS.validate_json(self._uploads_file(scope).read_bytes())
+            return UPLOADS.validate_json(path.read_bytes())
         except FileNotFoundError, ValidationError:
             return {}
 
@@ -151,35 +163,35 @@ class ImageStore:
         partial.replace(path)
 
     async def uploads(self, scope: str) -> dict[str, Upload]:
-        """The file ids `scope` holds for this store's images: an unreadable table is an empty one."""
+        """The file ids `scope` holds for this store's attachments: an unreadable table is an empty one."""
         return await anyio.to_thread.run_sync(self._uploads, scope)
 
     async def save_uploads(self, scope: str, ids: Mapping[str, Upload]) -> None:
         await anyio.to_thread.run_sync(self._write_uploads, scope, ids)
 
-    def _take(self, other: ImageStore, parts: Sequence[ImagePart]) -> None:
+    def _take(self, other: AttachmentStore, parts: Sequence[AttachmentPart]) -> None:
         for part in parts:
-            if not (self._dir / part.sha256).exists():
+            if not self._path(part.sha256).exists():
                 self.put(other.read(part), part.tool_call_id)
 
-    async def take(self, other: ImageStore, messages: Sequence[ModelMessage]) -> None:
-        """Copy the images of `messages` from `other`: a seeded history (a fork) names its parent's."""
-        parts = [p for m in messages for p in m.parts if isinstance(p, ImagePart)]
+    async def take(self, other: AttachmentStore, messages: Sequence[ModelMessage]) -> None:
+        """Copy the attachments of `messages` from `other`: a seeded history (a fork) names its parent's."""
+        parts = [p for m in messages for p in m.parts if isinstance(p, AttachmentPart)]
         if parts:
             await anyio.to_thread.run_sync(self._take, other, parts)
 
-    async def add(self, data: bytes, tool_call_id: str | None = None) -> ImagePart:
+    async def add(self, data: bytes, tool_call_id: str | None = None) -> AttachmentPart:
         return await anyio.to_thread.run_sync(self.put, data, tool_call_id)
 
 
 type Encoded = Mapping[str, str]
 """Images' base64 by sha256: what a transport's request mapping reads."""
 
-NO_IMAGES: Final[Encoded] = MappingProxyType({})
+NO_ATTACHMENTS: Final[Encoded] = MappingProxyType({})
 
 
-def encoded(images: Encoded, part: ImagePart) -> str:
+def encoded(attachments: Encoded, part: AttachmentPart) -> str:
     try:
-        return images[part.sha256]
+        return attachments[part.sha256]
     except KeyError:
-        raise AidError("image_missing", f"image {part.sha256} has no bytes for this request") from None
+        raise AidError("attachment_missing", f"image {part.sha256} has no bytes for this request") from None

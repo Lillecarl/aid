@@ -188,8 +188,8 @@ class ClaudeSdkBackend:
             update["permission"] = default
         self._spec = self._spec.model_copy(update=update)
 
-    async def prompt(self, text: str, emit: Emit, images: Sequence[bytes] = ()) -> Output:
-        refuse_images("claude-sdk", images)
+    async def prompt(self, text: str, emit: Emit, attachments: Sequence[bytes] = ()) -> Output:
+        refuse_images("claude-sdk", attachments)
         payload = json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n"
         argv = sdk_argv(self._spec, resume=self._started.agent_session, mcp_config=self._mcp_config)
         env = agent_environment(self._spec.env, inherit=self._spec.inherit_env)
