@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import json
 
-from plugins.prreview import SKILLS
+import pytest
+from pydantic import ValidationError
+
+from plugins.prreview import SKILLS, PrReviewConfig
 from plugins.prreview.review import (
     SKILL_HINTS,
+    Limits,
     LineComment,
     Pr,
     angle_prompt,
+    build_summary,
     comment_problems,
     diff_lines,
     rebuilds,
@@ -97,9 +102,48 @@ def test_every_hinted_skill_exists_and_parses() -> None:
     )
 
 
+PR = Pr(number=1, head="h", base="master", title="t", body="b", author="a", url="u")
+
+
 def test_a_long_diff_is_cut_and_says_so() -> None:
-    pr = Pr(number=1, head="h", base="master", title="t", body="b", author="a", url="u")
-    prompt = angle_prompt(pr, "x" * 2000, [], None, 1000)
+    prompt = angle_prompt(PR, "x" * 2000, None, None, Limits(diff=1000, builds=1000))
     assert 'truncated="at 1000 characters' in prompt
     assert "x" * 1001 not in prompt
     assert "CI lists nothing to rebuild." in prompt
+
+
+def test_the_build_report_reaches_reviewers_without_its_graph_link() -> None:
+    comment = f"Changed: 3. [Graph](https://g.test/#{'d' * 500}) and [the log](https://l.test/1).\n" + "y" * 2000
+    prompt = angle_prompt(PR, "", comment, None, Limits(diff=1000, builds=1000))
+    assert "Changed: 3. Graph and [the log](https://l.test/1)." in prompt
+    assert "d" * 200 not in prompt
+    assert '<builds system="x86_64-linux" truncated="at 1000 characters">' in prompt
+
+
+def test_the_build_summary_counts_the_report() -> None:
+    report: dict[str, object] = {
+        "results": [{}, {}, {}],
+        "built": 1,
+        "failed": 2,
+        "unchanged_input_failed": 1,
+        "wall_seconds": 61.4,
+    }
+    assert build_summary(json.dumps(report)) == (
+        "1 of 3 changed derivations built, 2 failed (1 on an unchanged input), 0 out of budget, in 61 s"
+    )
+
+
+def test_a_stored_config_from_before_pynix_review_still_loads() -> None:
+    old = {
+        "name": "r",
+        "model": "m/x",
+        "max_builds": 10,
+        "build_timeout": 3600.0,
+        "nixpkgs_config": "{ }",
+        "commands": {"gh": ["gh"], "git": ["git"], "nix": ["nix"]},
+    }
+    loaded = PrReviewConfig.model_validate(old)
+    assert (loaded.max_derivations, loaded.wall, loaded.kill_after) == (1000, 3600, 5400)
+    assert loaded.commands.pynix_review == ["pynix-review"]
+    with pytest.raises(ValidationError, match="kill_after must be at least wall"):
+        PrReviewConfig.model_validate({"name": "r", "model": "m/x", "wall": 100, "kill_after": 50})

@@ -386,7 +386,7 @@ async def _review_pr(messages: list[ModelMessage], info: AgentInfo) -> AsyncIter
             args = json.dumps({"name": hinted.group(1)})
             yield {0: DeltaToolCall(name="skill", json_args=args, tool_call_id="skill0")}
             return
-        builds = " ".join(re.findall(r"^- (\S+: \w+)", prompt, re.MULTILINE))
+        builds = " ".join(f"{k}: {n}" for k, n in re.findall(r"^\| (built|failed) \| (\d+) \|", prompt, re.MULTILINE))
         head = str(loaded[0].content if isinstance(loaded[0], ToolReturnPart) else loaded[0].model_response())
         yield f"No issues. {builds} | loaded: {head.splitlines()[0]}" if loaded else f"No issues. {builds}"
         return

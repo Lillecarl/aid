@@ -3,9 +3,10 @@ reviews into one (docs/pr-review.md). Nothing reaches GitHub: `submit_review` re
 database.
 
 The operator starts a run with `aid prreview start CONFIG.json`. One PR at a time: the plugin checks its head out
-into a worktree of a bare repository of its own, builds what CI's `comparison` artifact says it rebuilds, runs one
-read-only session per angle in the worktree, then the judge's session, and deletes the worktree, the outputs and the
-sessions. Bundled, `autostart`.
+into a worktree of a bare repository of its own, has `pynix-review pr` build the derivations the change makes
+differ from its merge base, runs one read-only session per angle in the worktree, then the judge's session, and
+deletes the worktree. The outputs stay for the build daemon to collect. A person approves or rejects each recorded
+review afterwards (`aid prreview approve|reject`). Bundled, `autostart`.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal
 
 import anyio
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError, model_validator
 
 import aid
 from aid.drive import Pacing, newest_seq, since, turn
@@ -44,12 +45,13 @@ from .duplicates import (
 from .picking import SOURCES, Source, pick_order
 from .review import (
     NO_REVIEW,
-    Build,
+    Limits,
     LineComment,
     Pr,
     Review,
     Sides,
     angle_prompt,
+    build_summary,
     clipped,
     comment_problems,
     diff_lines,
@@ -81,7 +83,8 @@ ENV_SKILLS_ONLY: Final = "AID_SKILLS_ONLY"
 SKILLS_PROVIDER: Final = "skills"
 DUPLICATES: Final = "duplicates"
 SEARCH_MAX: Final = 1000
-QUERY: Final = ("--state", "open", "--label", "10.rebuild-linux: 1-10", "--checks", "success", "--draft=false")
+QUERY: Final = ("--state", "open", "--checks", "success", "--draft=false")
+RETIRED: Final = frozenset({"max_builds", "build_timeout", "nixpkgs_config"})
 COMMON: Final = (
     "You review one nixpkgs pull request from a single angle; other reviewers cover the others. You only read: ls, "
     "read, outline and search, in a checkout of the pull request's head. Each prompt carries the pull request, the "
@@ -155,7 +158,7 @@ class PrReviewConfig(BaseModel):
     clone: str | None = None
     """The plugin's bare repository; None: `prreview/nixpkgs.git` in the plugin directory."""
     query: list[str] = Field(default_factory=lambda: list(QUERY))
-    """`gh search prs` filters: PRs whose rebuilds come from cache.nixos.org but their own."""
+    """`gh search prs` filters: open, green and not a draft; `max_derivations` bounds what a PR builds."""
     search_limit: Annotated[int, Field(ge=1, le=SEARCH_MAX)] = 100
     """Hits each source reads: 100 is one request; GitHub's search answers at most `SEARCH_MAX`."""
     sources: list[Source] = Field(default_factory=lambda: list(SOURCES), min_length=1)
@@ -169,15 +172,18 @@ class PrReviewConfig(BaseModel):
     duplicate that wins makes it end `duplicate`, unbuilt and unreviewed."""
     merged_days: Annotated[int, Field(ge=0)] = 30
     max_candidates: Annotated[int, Field(ge=1, le=20)] = 5
-    max_builds: Annotated[int, Field(ge=0)] = 10
-    """A PR whose CI lists more rebuilds on x86_64-linux is skipped."""
-    build_timeout: Annotated[float, Field(gt=0)] = 3600.0
-    nixpkgs_config: str = "{ allowUnfree = true; }"
-    """The worktree's `config`, as a Nix expression; the daemon user's own is never read. CI lists unfree packages
-    among the rebuilds, and an empty config refuses to evaluate them (measured: jetbrains-toolbox, 2026-11-07). The
-    outputs stay on this machine and are deleted after the PR."""
+    max_derivations: Annotated[int, Field(ge=1)] = 1000
+    """A PR that changes more derivations on x86_64-linux is skipped unbuilt (`pynix-review pr --max-derivations`)."""
+    wall: Annotated[int, Field(ge=1)] = 3600
+    """Seconds after which pynix-review starts no new build."""
+    kill_after: Annotated[int, Field(ge=1)] = 5400
+    """Seconds after which pynix-review stops the builds still running: at least `wall`."""
+    reference: str | None = None
+    """A tree Hydra has built, for build times the merge base lacks; None: pynix-review's default channel."""
     diff_limit: Annotated[int, Field(ge=1000)] = 60_000
     """Characters of the diff in each prompt; the files are in the checkout."""
+    builds_limit: Annotated[int, Field(ge=1000)] = 20_000
+    """Characters of pynix-review's report (`built.md`) in each prompt; the database keeps it whole."""
     angles: dict[Annotated[str, Field(pattern=r"^[a-z0-9-]{1,16}$")], str] = Field(
         default_factory=lambda: dict(ANGLES), min_length=1
     )
@@ -192,6 +198,24 @@ class PrReviewConfig(BaseModel):
     outage_backoff: Annotated[float, Field(ge=0)] = 30.0
     outage_max: Annotated[float, Field(ge=0)] = 600.0
     commands: Commands = Field(default_factory=Commands)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _retired(cls, data: object) -> object:
+        """Stored run configs are validated again at start: these built through `nix build` before pynix-review."""
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if k not in RETIRED}  # pyright: ignore[reportUnknownVariableType]
+        return data
+
+    @model_validator(mode="after")
+    def _deadlines(self) -> PrReviewConfig:
+        if self.kill_after < self.wall:
+            raise ValueError("kill_after must be at least wall")
+        return self
+
+    @property
+    def limits(self) -> Limits:
+        return Limits(diff=self.diff_limit, builds=self.builds_limit)
 
     @property
     def gauge(self) -> int | None:
@@ -561,7 +585,6 @@ class PrReviews(aid.Plugin):
         repo = Path(config.clone) if config.clone else self._dir / "nixpkgs.git"
         worktree = self._dir / "worktrees" / config.name
         roles = [*config.angles, JUDGE, DUPLICATES]
-        outputs: list[str] = []
         holder = holder_name(config, pr.number)
         await store.started(config.name, pr)
         log.info("pr_review", run=config.name, pr=pr.number, head=pr.head)
@@ -573,38 +596,34 @@ class PrReviews(aid.Plugin):
             await step("reading CI's rebuild list")
             with tempfile.TemporaryDirectory(prefix="prreview-") as into:
                 changed = await commands.rebuild_list(cmds, pr.head, Path(into))
-            attrs = [] if changed is None else rebuilds(changed)
-            skipped = None
             if changed is None:
-                skipped = "CI's comparison artifact is missing"
-            elif len(attrs) > config.max_builds:
-                skipped = f"CI lists {len(attrs)} rebuilds, more than {config.max_builds}"
-            if skipped is not None:
-                await self._end(config, pr, PrState.SKIPPED, skipped)
+                await self._end(config, pr, PrState.SKIPPED, "CI's comparison artifact is missing")
                 return
+            attrs = rebuilds(changed)
             diff = await commands.diff(cmds, pr.number)
             await step("checking for duplicates")
             if config.duplicates and await self._beaten(config, pr, worktree, diff, attrs):
                 return
-            builds: list[Build] = []
-            for n, attr in enumerate(attrs, 1):
-                await step(f"building {attr} ({n} of {len(attrs)})")
-                built = await commands.build(
-                    cmds, worktree, attr, config.build_timeout, config.nixpkgs_config, say=build_log
-                )
-                outputs.extend(built.out_paths)
-                builds.append(built)
-                await self._say([root, work], f"{attr}: {built.outcome} in {built.seconds:.0f} s\n")
-            await store.built(config.name, pr, diff, builds, None)
-            if builds:
-                await self._note(
-                    holder, "Built:\n" + "".join(f"\n- `{b.attr}`: {b.outcome} in {b.seconds:.0f} s" for b in builds)
-                )
+            report = None
+            if attrs:
+                await step(f"building with pynix-review: {len(attrs)} attributes CI rebuilds")
+                reviewed = await self._build(config, pr, build_log)
+                if reviewed.skipped is not None:
+                    await self._end(config, pr, PrState.SKIPPED, reviewed.skipped)
+                    return
+                report = reviewed.report
+            await store.built(config.name, pr, diff, report, None)
+            if report is not None:
+                summary = build_summary(report.report)
+                await self._say([root, work], f"#{pr.number}: {summary}\n")
+                graph = "" if report.view is None else f" ([graph]({report.view}))"
+                await self._note(holder, f"Built: {summary}{graph}")
             await step(f"reviewing from {len(config.angles)} angles")
             skills = skill_hints(pr.title, diff)
-            await self._angles(config, pr, worktree, angle_prompt(pr, diff, builds, None, config.diff_limit, skills))
+            builds = None if report is None else report.comment
+            await self._angles(config, pr, worktree, angle_prompt(pr, diff, builds, None, config.limits, skills))
             answers = await store.angles(config.name, pr.number, pr.head)
-            prompt = judge_prompt(pr, diff, builds, None, config.diff_limit, answers, skills)
+            prompt = judge_prompt(pr, diff, builds, None, config.limits, answers, skills)
             await step("judging")
             await self._judge(config, pr, worktree, prompt, diff_lines(diff))
             await self._end(config, pr, PrState.REVIEWED, await store.event(config.name, pr.number, pr.head))
@@ -625,8 +644,25 @@ class PrReviews(aid.Plugin):
                     except AidError as failure:
                         if failure.code != "not_found":
                             log.warning("session_left", session=name, error=failure.message)
-                await commands.delete(cmds, outputs)
                 await commands.clean(cmds, repo, worktree)
+
+    async def _build(self, config: PrReviewConfig, pr: Pr, say: commands.Say) -> commands.Reviewed:
+        """pynix-review's build of `pr`, from a directory of its own: a PR left to an earlier run's files would read
+        its report. A head that moved since `pr` refuses."""
+        with tempfile.TemporaryDirectory(prefix="prreview-") as out:
+            reviewed = await commands.pynix_review(
+                config.commands,
+                pr.number,
+                Path(out),
+                wall=config.wall,
+                kill_after=config.kill_after,
+                max_derivations=config.max_derivations,
+                reference=config.reference,
+                say=say,
+            )
+        if reviewed.head != pr.head:
+            raise AidError("head_moved", f"the PR's head is {reviewed.head}, not {pr.head}")
+        return reviewed
 
     async def _end(self, config: PrReviewConfig, pr: Pr, state: PrState, why: str | None) -> None:
         await self.store.ended(config.name, pr.number, pr.head, state, None if state == PrState.REVIEWED else why)

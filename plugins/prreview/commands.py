@@ -1,27 +1,30 @@
-"""What a PR review runs: `gh` for the PR and CI's artifact, `git` for the checkout, `nix` for the builds. The plugin
-runs these, never a model.
+"""What a PR review runs: `gh` for the PR and CI's artifact, `git` for the checkout, `pynix-review` for the builds.
+The plugin runs these, never a model.
 """
 
 from __future__ import annotations
 
 import codecs
 import contextlib
+import os
 import shutil
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 import anyio
 import anyio.to_thread
 import structlog
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, model_validator
 
 from aid.protocol import AidError
 
 from .duplicates import Candidate
-from .review import Build, Pr
+from .review import Pr
+from .store import BuildReport
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Sequence
+    from collections.abc import Awaitable, Callable, Mapping, Sequence
     from pathlib import Path
 
 log = structlog.get_logger(__name__)
@@ -32,7 +35,11 @@ CI_WORKFLOW: Final = "PR"
 ARTIFACT: Final = "comparison"
 CHANGED_PATHS: Final = "changed-paths.json"
 HEAD_REF: Final = "refs/prreview/head"
-LOG_LINES: Final = 60
+TOKEN_ENV: Final = "GITHUB_TOKEN"
+BUILT_DIR: Final = "built"
+REPORT_FILE: Final = "built.json"
+COMMENT_FILE: Final = "built.md"
+"""pynix-review's names under `--out`: not imported, as pynix-review is a program here, not a library."""
 SAY_EVERY: Final = 0.5
 """Seconds between live-output sends while a command writes."""
 type Say = Callable[[str], Awaitable[None]]
@@ -47,7 +54,15 @@ class Commands(BaseModel):
 
     gh: list[str] = Field(default_factory=lambda: ["gh"])
     git: list[str] = Field(default_factory=lambda: ["git"])
-    nix: list[str] = Field(default_factory=lambda: ["nix"])
+    pynix_review: list[str] = Field(default_factory=lambda: ["pynix-review"])
+
+    @model_validator(mode="before")
+    @classmethod
+    def _retired(cls, data: object) -> object:
+        """Stored run configs are validated again at start: `nix` built before pynix-review did."""
+        if isinstance(data, dict):
+            return {k: v for k, v in data.items() if k != "nix"}  # pyright: ignore[reportUnknownVariableType]
+        return data
 
 
 class _Hit(BaseModel):
@@ -92,24 +107,44 @@ class _Runs(BaseModel):
     workflow_runs: list[_WorkflowRun] = Field(default_factory=list[_WorkflowRun])
 
 
-class _PathInfo(BaseModel):
-    path: str | None = None
-    closureSize: int = 0
+class _ReviewedPr(BaseModel):
+    head: str
+    merge_base: str
+
+
+class _Files(BaseModel):
+    view: str | None = None
+
+
+class _PynixReview(BaseModel):
+    """`pynix-review pr`'s stdout; `built` only when it built."""
+
+    pr: _ReviewedPr
+    skipped: str | None = None
+    built: _Files | None = None
+
+
+@dataclass(frozen=True)
+class Reviewed:
+    """What `pynix-review pr` made of a PR: a report when it built, else why not."""
+
+    head: str
+    report: BuildReport | None
+    skipped: str | None
 
 
 _HITS: Final = TypeAdapter(list[_Hit])
-type _PathInfos = dict[str, _PathInfo | None] | list[_PathInfo]
-_PATH_INFO: Final[TypeAdapter[_PathInfos]] = TypeAdapter(_PathInfos)
-"""`nix path-info --json`: an object keyed by path since Nix 2.19, a list before."""
 
 
 async def _quiet(text: str) -> None:
     pass
 
 
-async def streamed(argv: Sequence[str], say: Say = _quiet, cwd: Path | None = None) -> tuple[int, bytes, bytes]:
+async def streamed(
+    argv: Sequence[str], say: Say = _quiet, cwd: Path | None = None, env: Mapping[str, str] | None = None
+) -> tuple[int, bytes, bytes]:
     """Run `argv`, passing its stderr to `say` as it comes, at most every `SAY_EVERY` seconds; then its exit code,
-    stdout and stderr. A cancel kills it (anyio's `Process.aclose`)."""
+    stdout and stderr. `env` replaces the environment whole. A cancel kills it (anyio's `Process.aclose`)."""
     out, err = bytearray(), bytearray()
     decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     pending: list[str] = []
@@ -123,7 +158,7 @@ async def streamed(argv: Sequence[str], say: Say = _quiet, cwd: Path | None = No
             said = time.monotonic()
             await say(text)
 
-    async with await anyio.open_process(list(argv), cwd=cwd) as process:
+    async with await anyio.open_process(list(argv), cwd=cwd, env=env) as process:
         assert process.stdout is not None and process.stderr is not None
 
         async def pump_out() -> None:
@@ -143,8 +178,10 @@ async def streamed(argv: Sequence[str], say: Say = _quiet, cwd: Path | None = No
     return code, bytes(out), bytes(err)
 
 
-async def _run(argv: Sequence[str], what: str, cwd: Path | None = None, say: Say = _quiet) -> str:
-    code, stdout, stderr = await streamed(argv, say, cwd)
+async def _run(
+    argv: Sequence[str], what: str, cwd: Path | None = None, say: Say = _quiet, env: Mapping[str, str] | None = None
+) -> str:
+    code, stdout, stderr = await streamed(argv, say, cwd, env)
     if code != 0:
         tail = stderr.decode(errors="replace").strip()[-2000:]
         raise AidError("command_failed", f"{what} exited {code}: {tail}")
@@ -291,65 +328,52 @@ async def clean(commands: Commands, repo: Path, worktree: Path) -> None:
             log.warning("clean_failed", step=what, error=failure.message)
 
 
-async def build(
-    commands: Commands, worktree: Path, attr: str, allowed: float, nixpkgs_config: str, say: Say = _quiet
-) -> Build:
-    """One attribute of the worktree, outside any nixpkgs config of the daemon's user; past `allowed` seconds it is
-    stopped and recorded as a timeout."""
+async def github_token(commands: Commands) -> str:
+    """The daemon's `GITHUB_TOKEN`, else `gh`'s own: pynix-review needs one, as GitHub serves CI's artifacts only
+    with a token."""
+    return os.environ.get(TOKEN_ENV) or (await _run([*commands.gh, "auth", "token"], "gh auth token")).strip()
+
+
+async def pynix_review(
+    commands: Commands,
+    number: int,
+    out: Path,
+    *,
+    wall: int,
+    kill_after: int,
+    max_derivations: int,
+    reference: str | None,
+    say: Say = _quiet,
+) -> Reviewed:
+    """`pynix-review pr`: CI's rebuilds diffed against the merge base, and built through the local daemon, which
+    starts nothing past `wall` seconds and stops what still runs at `kill_after`. Outputs stay in the store: the
+    daemon collects them."""
     argv = [
-        *commands.nix,
-        "build",
-        "--file",
-        str(worktree),
-        "--arg",
-        "config",
-        nixpkgs_config,
-        "--arg",
-        "overlays",
-        "[ ]",
-        attr,
-        "--no-link",
-        "--print-out-paths",
-        "--print-build-logs",
+        *commands.pynix_review,
+        "pr",
+        str(number),
+        "--repo",
+        REPO,
+        "--out",
+        str(out),
+        "--wall",
+        str(wall),
+        "--kill-after",
+        str(kill_after),
+        "--max-derivations",
+        str(max_derivations),
     ]
-    started = time.monotonic()
-    result = None
-    with anyio.move_on_after(allowed):
-        result = await streamed(argv, say)
-    seconds = time.monotonic() - started
-    if result is None:
-        return Build(attr=attr, outcome="timeout", seconds=seconds, log_tail="")
-    code, stdout, stderr = result
-    tail = "\n".join(stderr.decode(errors="replace").splitlines()[-LOG_LINES:])
-    if code != 0:
-        return Build(attr=attr, outcome="failed", seconds=seconds, log_tail=tail)
-    paths = tuple(line for line in stdout.decode().split() if line.startswith("/"))
-    return Build(
-        attr=attr,
-        outcome="built",
-        seconds=seconds,
-        log_tail=tail,
-        out_paths=paths,
-        closure_size=await closure_size(commands, paths),
-    )
-
-
-async def closure_size(commands: Commands, paths: Sequence[str]) -> int | None:
-    if not paths:
-        return None
-    try:
-        out = await _run([*commands.nix, "path-info", "--closure-size", "--json", *paths], "nix path-info")
-    except AidError:
-        return None
-    info = _PATH_INFO.validate_json(out)
-    rows = info.values() if isinstance(info, dict) else info
-    return max((row.closureSize for row in rows if row is not None), default=None)
-
-
-async def delete(commands: Commands, paths: Sequence[str]) -> None:
-    """Only the PR's own outputs, all in one call (they may refer to each other); what is still alive stays."""
-    if paths:
-        try:
-            await _run([*commands.nix, "store", "delete", *paths], "nix store delete")
-        except AidError as failure:
-            log.warning("delete_failed", paths=len(paths), error=failure.message)
+    if reference is not None:
+        argv += ["--reference", reference]
+    env = {**os.environ, TOKEN_ENV: await github_token(commands)}
+    answer = _PynixReview.model_validate_json(await _run(argv, "pynix-review pr", say=say, env=env))
+    report = None
+    if answer.built is not None:
+        built = anyio.Path(out) / BUILT_DIR
+        report = BuildReport(
+            merge_base=answer.pr.merge_base,
+            report=await (built / REPORT_FILE).read_text(),
+            comment=await (built / COMMENT_FILE).read_text(),
+            view=answer.built.view,
+        )
+    return Reviewed(head=answer.pr.head, report=report, skipped=answer.skipped)

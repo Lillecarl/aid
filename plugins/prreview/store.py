@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
     from aid.protocol import Usage
 
-    from .review import Build, Pr, Review
+    from .review import Pr, Review
 
 PRREVIEW_FILE: Final = "prreview.db"
 SCHEMA_VERSION: Final = 3
@@ -114,7 +114,21 @@ CREATE TABLE IF NOT EXISTS reviews (
     PRIMARY KEY (run, number, head),
     FOREIGN KEY (run, number, head) REFERENCES prs (run, number, head)
 ) WITHOUT ROWID;
+CREATE TABLE IF NOT EXISTS build_reports (
+    run TEXT NOT NULL,
+    number INTEGER NOT NULL,
+    head TEXT NOT NULL,
+    merge_base TEXT NOT NULL,
+    report TEXT NOT NULL,
+    comment TEXT NOT NULL,
+    view TEXT,
+    at REAL NOT NULL,
+    PRIMARY KEY (run, number, head),
+    FOREIGN KEY (run, number, head) REFERENCES prs (run, number, head)
+) WITHOUT ROWID;
 """
+"""`builds` holds per-attribute rows from before pynix-review built; `build_reports` holds pynix-review's
+report whole."""
 
 
 class RunState(StrEnum):
@@ -144,6 +158,17 @@ class Decision(StrEnum):
 
     APPROVED = "approved"
     REJECTED = "rejected"
+
+
+@dataclass(frozen=True)
+class BuildReport:
+    merge_base: str
+    report: str
+    """pynix-review's `built.json`, as text: its schema is pynix-review's own (`built.schema.json`)."""
+    comment: str
+    """`built.md`: the GitHub comment pynix-review writes from the report."""
+    view: str | None = None
+    """The build graph's link."""
 
 
 @dataclass(frozen=True)
@@ -197,27 +222,16 @@ def _started(db: apsw.Connection, run: str, pr: Pr) -> None:
             " duplicate_of = NULL",
             (run, pr.number, pr.head, pr.base, pr.title, pr.body, pr.author, pr.url, PrState.STARTED, time.time()),
         )
-        db.execute("DELETE FROM builds WHERE run = ? AND number = ? AND head = ?", (run, pr.number, pr.head))
+        db.execute("DELETE FROM build_reports WHERE run = ? AND number = ? AND head = ?", (run, pr.number, pr.head))
 
 
-def _built(db: apsw.Connection, run: str, pr: Pr, diff: str, builds: list[Build], skipped: str | None) -> None:
+def _built(db: apsw.Connection, run: str, pr: Pr, diff: str, report: BuildReport | None, skipped: str | None) -> None:
     with db:
-        for b in builds:
+        if report is not None:
             db.execute(
-                "INSERT OR REPLACE INTO builds"
-                " (run, number, head, attr, outcome, seconds, log_tail, out_paths, closure_size)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    run,
-                    pr.number,
-                    pr.head,
-                    b.attr,
-                    b.outcome,
-                    b.seconds,
-                    b.log_tail,
-                    json.dumps(b.out_paths),
-                    b.closure_size,
-                ),
+                "INSERT OR REPLACE INTO build_reports (run, number, head, merge_base, report, comment, view, at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (run, pr.number, pr.head, report.merge_base, report.report, report.comment, report.view, time.time()),
             )
         db.execute(
             "UPDATE prs SET state = ?, diff = ?, skipped = ? WHERE run = ? AND number = ? AND head = ?",
@@ -303,8 +317,8 @@ class PrStore:
     async def started(self, run: str, pr: Pr) -> None:
         await self._db.run(_started, run, pr)
 
-    async def built(self, run: str, pr: Pr, diff: str, builds: list[Build], skipped: str | None) -> None:
-        await self._db.run(_built, run, pr, diff, builds, skipped)
+    async def built(self, run: str, pr: Pr, diff: str, report: BuildReport | None, skipped: str | None) -> None:
+        await self._db.run(_built, run, pr, diff, report, skipped)
 
     async def ended(self, run: str, number: int, head: str, state: PrState, note: str | None = None) -> None:
         await self._db.run(_ended, run, number, head, state, note)

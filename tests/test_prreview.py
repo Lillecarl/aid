@@ -136,7 +136,7 @@ def config(tmp_path: Path, origin: Path, found: Path, **fields: JsonValue) -> di
         "remote": f"file://{origin}",
         "max_prs": 1,
         "backoff": 0,
-        "commands": {"gh": [*fake, "gh", str(found)], "nix": [*fake, "nix", str(found)]},
+        "commands": {"gh": [*fake, "gh", str(found)], "pynix_review": [*fake, "pynix-review", str(found)]},
         **fields,
     }
 
@@ -173,6 +173,11 @@ async def stays_running(client: aid.Client) -> bool:
     return status[0]["running"] is True
 
 
+def pynix_reviews(found: Path) -> list[dict[str, JsonValue]]:
+    log = found / "pynix-review.log"
+    return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+
 async def until(client: aid.Client, sql: str) -> None:
     """Polled: the plugin publishes no event."""
     found = await rows(client, sql)
@@ -185,6 +190,7 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
     paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     origin, head = await remote(tmp_path)
     found = fixtures(tmp_path, head, ["hello", "broken"])
     # Left by a daemon killed mid-PR: `git worktree add` refuses a path that exists.
@@ -199,7 +205,7 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
             await client.call_plugin("prreview", "start", config=config(tmp_path, origin, found))
             await until(client, "SELECT 1 FROM runs WHERE state != 'running'")
             prs = await rows(client, "SELECT number, head, state, error, step FROM prs")
-            builds = await rows(client, "SELECT attr, outcome, closure_size FROM builds ORDER BY attr")
+            reports = await rows(client, "SELECT head, merge_base, report, comment, view FROM build_reports")
             angles = await rows(client, "SELECT angle, answer, usage IS NOT NULL FROM angle_reviews ORDER BY angle")
             reviews = await rows(client, "SELECT event, body, comments, session FROM reviews")
             checks = await rows(client, "SELECT candidates, answer, beaten_by FROM duplicate_checks")
@@ -208,12 +214,36 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
             root_notes = await notes(client, "nixrev")
             holder_notes = await notes(client, "nixrev.7")
             live = LiveChunk.model_validate(await client.call(GetLive(session="nixrev.7")))
+            status = await client.call_plugin("prreview", "status", name="nixrev")
+            decided = await client.call_plugin("prreview", "approve", run="nixrev", number=7, by="carl", note="ok")
+            decisions = await rows(client, "SELECT decision, decided_by, note FROM reviews")
+            approved_note = (await notes(client, "nixrev.7"))[-1]
     assert prs == [[7, head, "reviewed", None, "judging"]]
-    assert builds == [["broken", "failed", None], ["hello", "built", 2**20]]
+    # pynix-review got the run's deadlines and ceiling, and the token `gh` holds; its report is kept whole.
+    [called] = pynix_reviews(found)
+    argv = called["argv"]
+    assert isinstance(argv, list)
+    assert argv[:2] == ["pr", "7"]
+    assert [argv[argv.index(flag) + 1] for flag in ("--wall", "--kill-after", "--max-derivations")] == [
+        "3600",
+        "5400",
+        "1000",
+    ]
+    assert called["token"] == "fake-token"
+    [[reported_head, merge_base, report, comment, view]] = reports
+    assert (reported_head, merge_base) == (head, "base0")
+    assert isinstance(report, str) and json.loads(report)["failed"] == 1
+    assert isinstance(comment, str) and comment.startswith("### pynix-review build")
+    assert isinstance(view, str) and view.startswith("https://example.test/")
     assert [a[0] for a in angles] == ["alternatives", "conventions", "correctness", "security"]
     # Each angle loaded the skill its prompt named, from the plugin's own directory: the checkout holds none.
     loaded = f"loaded: Skill nixpkgs-packaging, from {PLUGINS / 'prreview' / 'review-skills' / 'nixpkgs-packaging'}."
-    assert all(answer == f"No issues. broken: failed hello: built | {loaded}" and used for _, answer, used in angles)
+    assert all(answer == f"No issues. built: 1 failed: 1 | {loaded}" and used for _, answer, used in angles)
+    # A person decides on the review afterwards; nothing is posted either way.
+    assert isinstance(status, list) and isinstance(status[0], dict) and status[0]["pending"] == 1
+    assert decided == {"run": "nixrev", "number": 7, "head": head, "decision": "approved"}
+    assert decisions == [["approved", "carl", "ok"]]
+    assert approved_note == ("prreview", "Review approved by carl: ok")
     # The comment off the diff was refused inside the judge's turn; the one on it was recorded.
     assert reviews == [
         [
@@ -226,7 +256,7 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
     # No PR touches its files, so no model compared any.
     assert checks == [["[]", None, None]]
     assert isinstance(root, NativeSpec) and root.tools == []
-    # Each PR's sessions stay, stopped, under its holder; the worktree and the outputs go.
+    # Each PR's sessions stay, stopped, under its holder; the worktree goes.
     roles = ["alternatives", "conventions", "correctness", "judge", "security"]
     assert sorted(infos) == ["nixrev", "nixrev.7", *(f"nixrev.7.{role}" for role in roles)]
     assert infos["nixrev.7"].parent == "nixrev"
@@ -235,33 +265,41 @@ async def test_a_pr_is_built_reviewed_by_each_angle_and_judged_into_one_recorded
     assert (infos["nixrev"].hidden, infos["nixrev.7"].hidden) == (None, "PR reviewed: COMMENT")
     # While the plugin worked, the holder showed working and streamed each step and build as live output.
     assert live.text.startswith("Reviewing #7 hello: 1 -> 2\n")
-    for line in ("▶ #7: fetching the head", "▶ #7: building hello (", "hello: built in", "▶ #7: judging"):
+    for line in (
+        "▶ #7: fetching the head",
+        "▶ #7: building with pynix-review: 2 attributes CI rebuilds",
+        "evaluating",
+        "#7: 1 of 2 changed derivations built, 1 failed",
+        "▶ #7: judging",
+    ):
         assert line in live.text
     # The root tells the run, PR by PR; the holder tells the PR. Both by the plugin, no model turn.
     link = "[#7 hello: 1 -> 2](https://github.com/NixOS/nixpkgs/pull/7)"
     assert root_notes == [("prreview", f"{link}: reviewed: COMMENT")]
     assert [text.split("\n")[0] for _, text in holder_notes] == [
         f"Reviewing {link} by someone at {head[:12]}.",
-        "Built:",
+        "Built: 1 of 2 changed derivations built, 1 failed (0 on an unchanged input), 0 out of budget, in 4 s"
+        " ([graph](https://example.test/#" + "x" * 300 + "))",
         "Review: COMMENT",
         "Reviewed: COMMENT",
     ]
     assert not (paths.state_dir / "plugins" / "prreview" / "worktrees" / "nixrev").exists()
-    calls = [json.loads(line) for line in (found / "nix.log").read_text().splitlines()]
-    assert [c for c in calls if c[:2] == ["store", "delete"]] == [["store", "delete", "/nix/store/fake-hello"]]
-    built = next(c for c in calls if c[0] == "build")
-    assert built[built.index("config") + 1] == "{ allowUnfree = true; }"
 
 
-async def test_a_pr_ci_says_rebuilds_too_much_is_skipped_unbuilt(
-    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("moved", [False, True])
+async def test_a_pr_pynix_review_will_not_build_is_skipped_unreviewed(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, moved: bool
 ) -> None:
+    """Over the ceiling, or at a head that moved since the pick."""
     monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
     origin, head = await remote(tmp_path)
     found = fixtures(tmp_path, head, ["a", "b"])
+    if moved:
+        (found / "head").write_text("f" * 40)
+    limit = 2 if moved else 1
     with anyio.fail_after(TIMEOUT):
         async with serving(paths, launcher) as client:
-            await client.call_plugin("prreview", "start", config=config(tmp_path, origin, found, max_builds=1))
+            await client.call_plugin("prreview", "start", config=config(tmp_path, origin, found, max_derivations=limit))
             await until(client, "SELECT 1 FROM prs WHERE state != 'started'")
             # Long enough to be past the PR, in the search or the poll's sleep: a pause stops the run there too.
             await anyio.sleep(3)
@@ -273,9 +311,10 @@ async def test_a_pr_ci_says_rebuilds_too_much_is_skipped_unbuilt(
                     running = await stays_running(client)
             prs = await rows(client, "SELECT state, skipped FROM prs")
             reviewed = await rows(client, "SELECT count(*) FROM angle_reviews")
-    assert prs == [["skipped", "CI lists 2 rebuilds, more than 1"]]
+    why = f"the PR's head is {'f' * 40}, not {head}" if moved else "2 changed derivations, more than 1"
+    assert prs == [["skipped", why]]
     assert reviewed == [[0]]
-    assert not (found / "nix.log").exists()
+    assert len(pynix_reviews(found)) == 1
 
 
 DECISION_COLUMNS = "    decision TEXT,\n    decided_by TEXT,\n    decided_at REAL,\n    note TEXT,\n"
@@ -372,7 +411,7 @@ async def test_a_pr_an_equal_later_duplicate_beats_ends_unbuilt(
         ("prreview", "[#7 hello: 1 -> 2](https://github.com/NixOS/nixpkgs/pull/7): duplicate of #8 hello: 1 -> 2 (8)"),
         ("prreview", "No pull request left to review; searching again every 15 min."),
     ]
-    assert not (found / "nix.log").exists()
+    assert pynix_reviews(found) == []
 
 
 def test_a_pick_puts_every_unreviewed_pr_before_the_reviewed_ones() -> None:
