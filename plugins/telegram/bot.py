@@ -17,7 +17,7 @@ import httpx
 import structlog
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
-from aid.client import daemon_call
+from aid.client import LoopExit, daemon_call
 from aid.protocol import (
     AidError,
     Output,
@@ -555,7 +555,7 @@ async def serve(client: Client, bot: Bot, chats: Set[int], mutes: Mutes, buttons
             messages, taps, offset = await bot.updates(offset)
         except BotError as error:
             if (delay := poll_delay(error)) is None:
-                raise SystemExit(
+                raise LoopExit(
                     f"aid telegram: Telegram refused the updates ({error.status}: {error.description})"
                 ) from error
             log.warning("telegram_poll_failed", error=error.description, retry_in=delay)

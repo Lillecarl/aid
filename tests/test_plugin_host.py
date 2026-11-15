@@ -13,7 +13,7 @@ import zmq.asyncio
 import aid
 from aid import daemon as daemon_module
 from aid import plugin_host
-from aid.client import local_plugin_endpoints, register_plugin
+from aid.client import daemon_call, local_plugin_endpoints, register_plugin
 from aid.daemon import Daemon
 from aid.discovery import Catalog
 from aid.plugins import INPROC_PLUGIN_EVENTS, INPROC_PLUGINS, Grant, PluginSpec
@@ -356,6 +356,54 @@ async def test_supervise_gives_up_after_repeated_failures(monkeypatch: pytest.Mo
     finally:
         ctx.term()
     assert runs == 3
+
+
+async def test_a_silent_daemon_restarts_the_plugin_and_leaves_its_loop_running(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hosted plugin's `daemon_call` timing out in a child task, as `_renew_serving` does. A `SystemExit` there
+    left the event loop and ended the daemon (2026-11-15); the plugin restarts instead, and its neighbours run on."""
+    monkeypatch.setattr(plugin_host, "RESTART_DELAY", 0.01)
+    monkeypatch.setattr(plugin_host, "MAX_FAILURES", 2)
+    monkeypatch.setattr("aid.client.DAEMON_CALL_TIMEOUT", 0.05)
+    runs = 0
+
+    @asynccontextmanager
+    async def fake_spawn(_ctx: zmq.asyncio.Context, _name: str, *, private: bool = False) -> AsyncGenerator[object]:
+        yield object()
+
+    monkeypatch.setattr(plugin_host, "spawn_plugin_client", fake_spawn)
+
+    class Unanswered(aid.Plugin):
+        """Waits on a daemon that never answers, from a child task."""
+
+        async def run(self, client: aid.Client) -> None:
+            nonlocal runs
+            runs += 1
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(daemon_call, anyio.sleep_forever())
+
+    ticks = 0
+
+    async def neighbour() -> None:
+        nonlocal ticks
+        while True:
+            ticks += 1
+            await anyio.sleep(0.01)
+
+    ctx = zmq.asyncio.Context()
+    try:
+        with anyio.fail_after(TIMEOUT):
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(neighbour)
+                await plugin_host.supervise(ctx, "unanswered", Unanswered())
+                seen = ticks
+                await anyio.sleep(0.05)
+                assert ticks > seen
+                tg.cancel_scope.cancel()
+    finally:
+        ctx.term()
+    assert runs == 2
 
 
 async def test_supervise_ends_on_cancellation(monkeypatch: pytest.MonkeyPatch) -> None:

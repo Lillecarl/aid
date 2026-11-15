@@ -196,14 +196,23 @@ DAEMON_CALL_TIMEOUT: Final = 30.0
 fresh baseline, rather than hang on a reply a restarted daemon never sends."""
 
 
+class LoopExit(Exception):
+    """A client loop that cannot go on. `plugin_host.supervise` restarts a hosted plugin on it; `aid plugin run`
+    exits with its message.
+
+    Never `SystemExit` for this: asyncio re-raises a task's `SystemExit` out of the event loop, so in a hosted
+    plugin it ends the daemon, and the runner's cancel of every task then skips the shielded worker watchers
+    (measured 2026-11-15: the daemon hung in `_stop_all`, answering nothing)."""
+
+
 async def daemon_call[T](call: Awaitable[T], *, name: str = "aid") -> T:
-    """Await a daemon call, exiting loudly when the daemon answers nothing: a restarted daemon never replies
-    to requests sent before its restart, so hanging would outlive the outage silently."""
+    """Await a daemon call, ending the loop loudly when the daemon answers nothing: a restarted daemon never
+    replies to requests sent before its restart, so hanging would outlive the outage silently."""
     try:
         with anyio.fail_after(DAEMON_CALL_TIMEOUT):
             return await call
     except TimeoutError:
-        raise SystemExit(f"{name}: the daemon answered nothing for 30s") from None
+        raise LoopExit(f"{name}: the daemon answered nothing for 30s") from None
 
 
 SERVE_RENEW: Final = 30.0

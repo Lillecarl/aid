@@ -12,7 +12,7 @@ import httpx
 import pytest
 
 import aid
-from aid.client import daemon_call, register_plugin
+from aid.client import LoopExit, daemon_call, register_plugin
 from aid.discovery import discover
 from aid.mutes import Mutes
 from aid.plugins import Grant
@@ -235,13 +235,15 @@ def test_poll_delay_exits_on_dead_requests() -> None:
     assert poll_delay(BotError(500, "Server Error")) == 5.0
 
 
-async def test_daemon_call_exits_when_the_daemon_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_daemon_call_ends_the_loop_when_the_daemon_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`LoopExit`, never `SystemExit`: asyncio re-raises a task's `SystemExit` out of the loop, so a hosted
+    plugin's would end the daemon."""
     monkeypatch.setattr("aid.client.DAEMON_CALL_TIMEOUT", 0.1)
 
     async def hang() -> None:
         await anyio.sleep_forever()
 
-    with pytest.raises(SystemExit, match="answered nothing"):
+    with pytest.raises(LoopExit, match="answered nothing"):
         await daemon_call(hang())
 
 

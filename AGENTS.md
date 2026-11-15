@@ -453,7 +453,9 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - `src/aid/env.py` — agent environments, minus the markers of the Claude session that started us.
 - `src/aid/client.py` — public API: `aid.connect()`, `Client`, `Session.run/stream`.
 - `src/aid/client.py:daemon_call` — what hosted loops await daemon calls through: silence past
-  `DAEMON_CALL_TIMEOUT` exits loudly, so the supervisor restarts into a fresh baseline.
+  `DAEMON_CALL_TIMEOUT` raises `LoopExit`, so the supervisor restarts into a fresh baseline (`aid plugin run`
+  exits with it). Never `SystemExit` in code a hosted plugin runs: asyncio re-raises it out of the event loop and
+  the daemon ends.
 - `src/aid/drive.py` — for plugins that drive sessions turn by turn (campaign, PR review): `idle`, `ended` (a turn
   that ended on its own), `turn`, `Pacing`. An outage (`OUTAGE` codes) costs no attempt and backs off doubling to
   `outage_max`.

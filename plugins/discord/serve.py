@@ -16,7 +16,7 @@ import httpx
 import structlog
 from pydantic import BaseModel, ConfigDict
 
-from aid.client import daemon_call
+from aid.client import LoopExit, daemon_call
 from aid.protocol import AidError, Output, SessionInfosAdapter, TurnError, tool_text
 from aid.settle import IDLE_WINDOW, TICK_INTERVAL, VERDICT_TIMEOUT, describe_end, settled_turns
 
@@ -412,7 +412,7 @@ async def run_loops(client: Client, config: DiscordConfig, mutes: Mutes, channel
         try:
             url = await rest.gateway_url()
         except DiscordError as error:
-            raise SystemExit(f"aid discord: the token proved bad ({error.status}: {error.message})") from error
+            raise LoopExit(f"aid discord: the token proved bad ({error.status}: {error.message})") from error
 
         async def on_dispatch(event: str, data: JsonValue) -> None:
             await dispatch(client, rest, mutes, channel_map, config.guild_id, config.category, event, data)

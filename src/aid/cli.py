@@ -18,7 +18,7 @@ import structlog
 from pydantic import TypeAdapter, ValidationError
 
 from aid import daemon, guard, plugin_host, speech
-from aid.client import connect, register_plugin
+from aid.client import LoopExit, connect, register_plugin
 from aid.discovery import discover
 from aid.launcher import PRELOAD, CommandLauncher, ForkserverLauncher, WorkerArgs, process_main
 from aid.log import configure_logging
@@ -1130,6 +1130,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             anyio.run(_run_plugin, args.name)
         except AidError as error:
             raise SystemExit(f"aid plugin run: {error}") from None
+        except LoopExit as error:
+            raise SystemExit(str(error)) from None
         return
     if args.command == "guard":
         configure_logging()
@@ -1137,6 +1139,8 @@ def main(argv: Sequence[str] | None = None) -> None:
             anyio.run(guard.main, args.plugin)
         except AidError as error:
             raise SystemExit(f"aid guard: {error}") from None
+        except LoopExit as error:
+            raise SystemExit(str(error)) from None
         return
     if args.command in ("daemon", "web", "worker"):
         configure_logging()
