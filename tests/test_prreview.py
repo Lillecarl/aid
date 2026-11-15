@@ -317,6 +317,24 @@ async def test_a_pr_pynix_review_will_not_build_is_skipped_unreviewed(
     assert len(pynix_reviews(found)) == 1
 
 
+async def test_a_pr_without_ci_s_artifact_is_skipped_before_any_fetch(
+    paths: Paths, launcher: ForkserverLauncher, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Old PRs' artifacts expire: the check comes first. The remote does not exist, so a fetch would fail the PR."""
+    monkeypatch.setenv(ENV_STATE_DIR, str(paths.state_dir))
+    found = fixtures(tmp_path, "a" * 40, [])
+    (found / "changed-paths.json").unlink()
+    with anyio.fail_after(TIMEOUT):
+        async with serving(paths, launcher) as client:
+            cfg = config(tmp_path, tmp_path / "no-such-remote", found)
+            await client.call_plugin("prreview", "start", config=cfg)
+            await until(client, "SELECT 1 FROM prs WHERE state != 'started'")
+            await client.call_plugin("prreview", "pause", name="nixrev")
+            prs = await rows(client, "SELECT state, skipped, error FROM prs")
+    assert prs == [["skipped", "CI's comparison artifact is missing", None]]
+    assert pynix_reviews(found) == []
+
+
 DECISION_COLUMNS = "    decision TEXT,\n    decided_by TEXT,\n    decided_at REAL,\n    note TEXT,\n"
 
 

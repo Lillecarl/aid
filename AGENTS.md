@@ -219,7 +219,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   across runs: `commands.py`
   fetches `refs/pull/N/head` `--depth 1` into the plugin's bare repo (head moved → skipped), detached worktree
   `worktrees/<run>`; `gh` finds the head's `PR` workflow run and its `comparison` artifact, `review.rebuilds` reads
-  `rebuildsByPlatform.x86_64-linux` (missing → skipped; the list also feeds `search_terms`). Duplicates
+  `rebuildsByPlatform.x86_64-linux` (missing → skipped; the list also feeds `search_terms`), read before the
+  fetch: an old PR's artifact has expired. Duplicates
   (`duplicates.py`, pure; before any build): `search_terms` (title's `pkg:` + rebuilds, `TERMS`), open and merged in
   `merged_days` PRs by title, kept if they touch one of its files (`max_candidates`); with any, a `.duplicates`
   session (read tools) answers a JSON block, refused → asked again; `beaten_by`: merged duplicate wins, else the

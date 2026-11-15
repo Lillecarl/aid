@@ -30,6 +30,9 @@ def gh(fixtures: Path, args: list[str]) -> int:
             print("fake-token")
         case ["api", *_]:
             print(json.dumps({"workflow_runs": [{"id": 11, "name": "PR", "conclusion": "success"}]}))
+        case ["run", "download", *_] if not (fixtures / "changed-paths.json").exists():
+            print("no valid artifacts found to download", file=sys.stderr)
+            return 1
         case ["run", "download", *rest]:
             into = Path(rest[rest.index("--dir") + 1])
             into.mkdir(parents=True, exist_ok=True)

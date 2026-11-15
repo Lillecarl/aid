@@ -590,9 +590,7 @@ class PrReviews(aid.Plugin):
         log.info("pr_review", run=config.name, pr=pr.number, head=pr.head)
         await self._note(holder, f"Reviewing [#{pr.number} {pr.title}]({pr.url}) by {pr.author} at {pr.head[:12]}.")
         try:
-            await commands.clone(cmds, repo)
-            await step("fetching the head and checking it out")
-            await commands.checkout(cmds, repo, config.remote, pr, worktree, say=build_log)
+            # Before the fetch: an old PR's artifact has expired, and a nixpkgs fetch costs ~40 s (measured 2026-11-15).
             await step("reading CI's rebuild list")
             with tempfile.TemporaryDirectory(prefix="prreview-") as into:
                 changed = await commands.rebuild_list(cmds, pr.head, Path(into))
@@ -600,6 +598,9 @@ class PrReviews(aid.Plugin):
                 await self._end(config, pr, PrState.SKIPPED, "CI's comparison artifact is missing")
                 return
             attrs = rebuilds(changed)
+            await commands.clone(cmds, repo)
+            await step("fetching the head and checking it out")
+            await commands.checkout(cmds, repo, config.remote, pr, worktree, say=build_log)
             diff = await commands.diff(cmds, pr.number)
             await step("checking for duplicates")
             if config.duplicates and await self._beaten(config, pr, worktree, diff, attrs):
