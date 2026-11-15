@@ -1692,7 +1692,12 @@ class Daemon:
         if not session.exited.is_set():
             log.warning("worker_kill", session=session.name, after=STOP_TIMEOUT)
             handle.kill()
-            await session.exited.wait()
+            # Bounded: asyncio's runner, ending the loop on a BaseException, cancels every task natively, shield or
+            # not, and a watcher cancelled so never sets `exited` (measured 2026-11-15: the daemon hung here).
+            with anyio.move_on_after(STOP_TIMEOUT):
+                await session.exited.wait()
+            if not session.exited.is_set():
+                log.error("worker_unwatched", session=session.name, pid=handle.pid)
 
     async def _worker_loop(self) -> None:
         while True:
