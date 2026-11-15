@@ -1,10 +1,5 @@
 from __future__ import annotations
 
-from aid.agent import Agent as Agent
-from aid.agent import ModelRetry as ModelRetry
-from aid.agent import RunContext as RunContext
-from aid.agent import Tool as Tool
-from aid.agent import Toolset as Toolset
 from aid.agents import AgentDefinition as AgentDefinition
 from aid.agents import Instruction as Instruction
 from aid.agents import InstructionsContext as InstructionsContext
@@ -37,3 +32,8 @@ from aid.spec import NativeSpec as NativeSpec
 from aid.spec import PermissionMode as PermissionMode
 from aid.supervision import supervisor_tools as supervisor_tools
 from aid.tools import mcptool as mcptool
+from aid_agent.agent import Agent as Agent
+from aid_agent.agent import ModelRetry as ModelRetry
+from aid_agent.agent import RunContext as RunContext
+from aid_agent.agent import Tool as Tool
+from aid_agent.agent import Toolset as Toolset

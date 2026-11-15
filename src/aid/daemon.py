@@ -21,7 +21,6 @@ import zmq.asyncio
 from pydantic import TypeAdapter, ValidationError
 
 from aid import events, model_lists, plugin_host, plugins, sandbox, session_query, zap
-from aid.attachments import refs
 from aid.catalog import listing
 from aid.client import spawn_plugin_client
 from aid.control import AGENT_ID_PREFIX, authorize
@@ -133,6 +132,7 @@ from aid.spec import (
     tool_group,
 )
 from aid.summary import summarize
+from aid_agent.attachments import refs
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Mapping, Sequence

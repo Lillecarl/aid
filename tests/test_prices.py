@@ -8,9 +8,9 @@ import httpx2
 import pytest
 
 from aid.backends.native import add_cost
-from aid.model import AnthropicModel, OpenAIChatModel, RequestUsage
 from aid.protocol import Cost, HistoryEntry, Usage
 from aid.summary import summarize
+from aid_agent.model import AnthropicModel, OpenAIChatModel, RequestUsage
 from aid_models import models_dev
 from aid_models.prices import ENV_PRICES, Price, lookup, price_for
 

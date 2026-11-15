@@ -17,13 +17,13 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 import aid
-from aid.model import AnthropicModel, OpenAIChatModel
 from aid.protocol import ModelEntry
+from aid_agent.model import AnthropicModel, OpenAIChatModel
 from aid_models import models_dev
 from aid_models.transport import Provider
 
 if TYPE_CHECKING:
-    from aid.model import Transport
+    from aid_agent.model import Transport
 
 FETCH_TIMEOUT: Final = 10.0
 ANTHROPIC_PACKAGE: Final = "@ai-sdk/anthropic"

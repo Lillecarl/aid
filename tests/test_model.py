@@ -8,10 +8,11 @@ import httpx2
 import pytest
 
 import aid.backends.native as native_backend
-from aid import anthropic_api
-from aid.agent import Agent, Tool
 from aid.discovery import Catalog
-from aid.messages import (
+from aid.protocol import AidError, SessionEvent, Usage
+from aid.spec import NativeSpec
+from aid_agent.agent import Agent, Tool
+from aid_agent.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
@@ -24,7 +25,7 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.model import (
+from aid_agent.model import (
     ANTHROPIC_MAX_TOKENS,
     AnthropicModel,
     GoogleModel,
@@ -37,9 +38,7 @@ from aid.model import (
     model_for,
     wire_messages,
 )
-from aid.protocol import AidError, SessionEvent, Usage
-from aid.spec import NativeSpec
-from aid_models import chat_api, wire
+from aid_models import anthropic_api, chat_api, wire
 from aid_models.prices import ENV_PRICES
 from aid_models.transport import Provider, StreamBroken
 from tests.test_native_backend import backend

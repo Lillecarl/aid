@@ -367,7 +367,7 @@
     },
     "AttachmentRef": {
       "additionalProperties": false,
-      "description": "An attachment a prompt carried or a tool returned. Its bytes are `<session dir>/attachments/<sha256>` once the session\ntook it.",
+      "description": "An attachment a prompt carried or a tool returned, its bytes in an `AttachmentStore` by `sha256`.",
       "properties": {
         "media_type": {
           "type": "string"

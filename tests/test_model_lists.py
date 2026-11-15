@@ -18,8 +18,8 @@ from aid_models.models_dev import ENV_SOURCE
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from aid.model import Transport
     from aid.paths import Paths
+    from aid_agent.model import Transport
 
 
 CATALOG: dict[str, Any] = {

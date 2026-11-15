@@ -7,14 +7,14 @@ from typing import TYPE_CHECKING, Any, cast
 
 import anyio
 
-from aid.agent import Agent
 from aid.backends.native import (
     METADATA,
     THOUGHT_LIMIT,
     prune_history,
     turn_metadata,
 )
-from aid.messages import (
+from aid_agent.agent import Agent
+from aid_agent.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,

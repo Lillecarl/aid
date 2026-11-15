@@ -9,7 +9,6 @@ import apsw
 import pytest
 
 import aid
-from aid.agent import Agent, ModelRetry
 from aid.backends.native import NativeBackend
 from aid.backends.permissions import PermissionWaits
 from aid.coding import (
@@ -25,7 +24,6 @@ from aid.coding import (
     search,
     spill,
 )
-from aid.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from aid.protocol import (
     AidError,
     MessageEntry,
@@ -38,6 +36,8 @@ from aid.protocol import (
 )
 from aid.removals import PLANS_FILE, Removal
 from aid.spec import Hook, PermissionMode
+from aid_agent.agent import Agent, ModelRetry
+from aid_agent.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, UserPromptPart
 from tests.conftest import py_spec
 from tests.models import TestModel
 

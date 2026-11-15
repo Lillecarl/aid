@@ -104,7 +104,7 @@ class RetryPromptPart(_Record):
 
 
 class AttachmentPart(_Record):
-    """An image in a request, its bytes in the session's `aid.attachments.AttachmentStore` by `sha256`. It follows the
+    """An image in a request, its bytes in the session's `aid_agent.attachments.AttachmentStore` by `sha256`. It follows the
     UserPromptPart it goes with, or, with `tool_call_id`, that call's ToolReturnPart."""
 
     media_type: str

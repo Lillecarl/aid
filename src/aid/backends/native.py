@@ -1,4 +1,4 @@
-"""Aid's own agent loop, over the OpenAI and Anthropic SDKs (`aid.model`)."""
+"""Aid's own agent loop, over the OpenAI and Anthropic SDKs (`aid_agent.model`)."""
 
 from __future__ import annotations
 
@@ -21,30 +21,12 @@ from pydantic import ValidationError
 from pydantic_core import to_jsonable_python
 
 from aid import sandbox
-from aid.agent import Agent, ModelRetry, Tool, Toolset
-from aid.attachments import AttachmentStore, Kind, ToolAttachment, checked, kind_of
 from aid.backends.permissions import PermissionWaits
 from aid.catalog import session_catalog
 from aid.client import connect
 from aid.coding import CODING, OUTPUTS_DIR, Coding, Verdict, asking_names, coding_tools
 from aid.instructions import compose, environment
-from aid.messages import (
-    AttachmentPart,
-    ModelMessage,
-    ModelMessagesTypeAdapter,
-    ModelRequest,
-    ModelResponse,
-    Part,
-    RetryPromptPart,
-    SystemPromptPart,
-    TextPart,
-    ThinkingPart,
-    ToolCallPart,
-    ToolReturnPart,
-    UserPromptPart,
-)
 from aid.messaging import ARRIVED, arrived
-from aid.model import Model, ModelInfo, RequestUsage, Transport, accumulate, model_for
 from aid.protocol import (
     AidError,
     AttachmentRef,
@@ -64,6 +46,24 @@ from aid.removals import PLANS_FILE
 from aid.slots import Slotted, limited_hosts
 from aid.supervision import supervisor_tools
 from aid.tools import tool_paths
+from aid_agent.agent import Agent, ModelRetry, Tool, Toolset
+from aid_agent.attachments import AttachmentStore, Kind, ToolAttachment, checked, kind_of
+from aid_agent.messages import (
+    AttachmentPart,
+    ModelMessage,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    Part,
+    RetryPromptPart,
+    SystemPromptPart,
+    TextPart,
+    ThinkingPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
+from aid_agent.model import Model, ModelInfo, RequestUsage, Transport, accumulate, model_for
 from aid_models.models_dev import catalog as models_catalog
 from aid_models.models_dev import inputs, window
 from aid_models.prices import CURRENCY, Price, lookup
@@ -76,9 +76,9 @@ if TYPE_CHECKING:
 
     from aid.backends.base import Emit, Notifier
     from aid.discovery import Catalog
-    from aid.messages import Part
     from aid.protocol import MessageEntry
     from aid.spec import NativeSpec, PermissionMode
+    from aid_agent.messages import Part
 
 log = structlog.get_logger(__name__)
 
@@ -192,7 +192,7 @@ def unshown(answer: str, more: str) -> str:
     """What joining `more` adds to an `answer` already streamed. A rewritten cut word cannot be taken back, so the
     stream gets what follows the part both share."""
     joined = join_continued(answer, more)
-    return joined[len(os.path.commonprefix([answer, joined])) :]
+    return joined[len(os.path.commonprefix([answer, joined])) :]  # noqa: RUF071 characters, not path components
 
 
 def _overlap(answer: str, more: str) -> int:

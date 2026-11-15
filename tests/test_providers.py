@@ -9,22 +9,22 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 import aid
-from aid.agent import Agent
 from aid.backends.native import session_agent
 from aid.discovery import discover
-from aid.messages import ModelMessage, ModelRequest, UserPromptPart
-from aid.model import AnthropicModel, ModelInfo, OpenAIChatModel
 from aid.model_lists import providers
 from aid.protocol import AidError, ProviderInfo
 from aid.providers import catalog_model, catalog_provider, claimed, resolve
 from aid.spec import NativeSpec
+from aid_agent.agent import Agent
+from aid_agent.messages import ModelMessage, ModelRequest, UserPromptPart
+from aid_agent.model import AnthropicModel, ModelInfo, OpenAIChatModel
 from aid_models.models_dev import ENV_SOURCE
 from aid_models.transport import Provider
 
 if TYPE_CHECKING:
     from pathlib import Path
 
-    from aid.model import Transport
+    from aid_agent.model import Transport
 
 
 CATALOG: dict[str, Any] = {
@@ -34,7 +34,7 @@ CATALOG: dict[str, Any] = {
 }
 
 PROVIDER = '''import aid
-from aid.model import OpenAIChatModel, Provider
+from aid_agent.model import OpenAIChatModel, Provider
 
 
 class Zen(aid.ModelProvider):

@@ -2,7 +2,7 @@
 permission requests whose tool's mode involves the supervisor (`supervisor`, `ask_supervisor`).
 
     import aid
-    from aid.agent import Agent
+    from aid_agent.agent import Agent
 
     boss = Agent("...", toolsets=[aid.supervisor_tools])
 
@@ -17,9 +17,9 @@ import functools
 import json
 from typing import TYPE_CHECKING, Final
 
-from aid.agent import ModelRetry, Toolset
 from aid.client import connect
 from aid.protocol import AidError, GoalState, HistoryPage, QueryResult, SearchResults, history_line
+from aid_agent.agent import ModelRetry, Toolset
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable

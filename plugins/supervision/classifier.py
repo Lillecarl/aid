@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Final, Literal
 from pydantic import BaseModel
 
 import aid
-from aid.agent import Agent
+from aid_agent.agent import Agent
 
 if TYPE_CHECKING:
     from aid.protocol import PermissionRequest

@@ -494,8 +494,7 @@ export interface AnswerPermission {
   text?: string | null;
 }
 /**
- * An attachment a prompt carried or a tool returned. Its bytes are `<session dir>/attachments/<sha256>` once the session
- * took it.
+ * An attachment a prompt carried or a tool returned, its bytes in an `AttachmentStore` by `sha256`.
  *
  * This interface was referenced by `AidProtocol`'s JSON-Schema
  * via the `definition` "AttachmentRef".

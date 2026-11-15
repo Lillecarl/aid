@@ -2,7 +2,7 @@
 `InstructionsProvider` and `ModelProvider` in plugin packages (`aid.discovery`).
 
     import aid
-    from aid.agent import Agent
+    from aid_agent.agent import Agent
 
     class DeepSeek(aid.AgentDefinition):
         \"\"\"Concise answers from DeepSeek.\"\"\"
@@ -31,9 +31,9 @@ if TYPE_CHECKING:
 
     from pydantic import JsonValue
 
-    from aid.agent import Agent
-    from aid.model import Transport
     from aid.protocol import ModelEntry
+    from aid_agent.agent import Agent
+    from aid_agent.model import Transport
     from aid_models.embedding import Embedder
     from aid_models.rerank import Reranker
 

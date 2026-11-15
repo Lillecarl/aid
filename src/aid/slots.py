@@ -25,8 +25,8 @@ from aid.protocol import AcquireModelSlot, AidError, ReleaseModelSlot, SlotUse
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Mapping
 
-    from aid.messages import ModelMessage, ModelResponse
-    from aid.model import Model, ModelInfo, StreamDelta
+    from aid_agent.messages import ModelMessage, ModelResponse
+    from aid_agent.model import Model, ModelInfo, StreamDelta
 
 
 RELEASED_KEPT: Final = 1024

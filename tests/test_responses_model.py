@@ -7,9 +7,10 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
-from aid import responses_api
-from aid.agent import Tool
-from aid.messages import (
+from aid.protocol import AidError
+from aid.providers import resolve
+from aid_agent.agent import Tool
+from aid_agent.messages import (
     AttachmentPart,
     ModelRequest,
     ModelResponse,
@@ -21,7 +22,7 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.model import (
+from aid_agent.model import (
     ENCRYPTED,
     ModelInfo,
     OpenAIChatModel,
@@ -32,8 +33,7 @@ from aid.model import (
     model_for,
     responses_input,
 )
-from aid.protocol import AidError
-from aid.providers import resolve
+from aid_models import responses_api
 from aid_models.transport import ModelUnavailable
 from tests.test_model import serve_wire, sse
 
@@ -41,7 +41,7 @@ if TYPE_CHECKING:
     import httpx2
     from pydantic import JsonValue
 
-    from aid.messages import ModelMessage
+    from aid_agent.messages import ModelMessage
 
 KEY = {"api_key": "k", "max_retries": 0}
 

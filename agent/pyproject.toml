@@ -1,0 +1,20 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aid-agent"
+version = "0.1.0"
+description = "aid's agent loop as a library: models over Chat Completions, Responses, Anthropic and Gemini, tools, history."
+requires-python = ">=3.14"
+dependencies = ["aid-models", "anyio>=4.10", "httpx2", "pydantic>=2.11", "structlog>=24.4"]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aid_agent"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+anyio_mode = "auto"

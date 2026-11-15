@@ -9,7 +9,6 @@ import anyio
 import pytest
 from pydantic import BaseModel, Field
 
-from aid.agent import Agent, ModelRetry, Tool
 from aid.backends.native import (
     CONTINUE,
     DEFAULT_DESIRED_MAX,
@@ -25,7 +24,12 @@ from aid.backends.native import (
 from aid.backends.permissions import PermissionWaits
 from aid.coding import CODING, Coding, coding_tools
 from aid.discovery import Catalog
-from aid.messages import (
+from aid.messaging import ARRIVED
+from aid.protocol import AidError, MessageEntry, Output, SessionEvent, Started, TextDelta, ToolCall, Usage
+from aid.spec import PermissionMode
+from aid.tools import McpTool
+from aid_agent.agent import Agent, ModelRetry, Tool
+from aid_agent.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
@@ -37,11 +41,7 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.messaging import ARRIVED
-from aid.model import ModelInfo, RequestUsage, StreamDelta
-from aid.protocol import AidError, MessageEntry, Output, SessionEvent, Started, TextDelta, ToolCall, Usage
-from aid.spec import PermissionMode
-from aid.tools import McpTool
+from aid_agent.model import ModelInfo, RequestUsage, StreamDelta
 from tests.agents import coder, echo
 from tests.models import AgentInfo, DeltaToolCall, DeltaToolCalls, FunctionModel, TestModel
 from tests.test_coding import plan
@@ -50,8 +50,8 @@ if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable
     from pathlib import Path
 
-    from aid.attachments import AttachmentStore
-    from aid.model import Transport
+    from aid_agent.attachments import AttachmentStore
+    from aid_agent.model import Transport
 
 
 @asynccontextmanager

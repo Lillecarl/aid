@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationEr
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-    from aid.model import Model
+    from aid_agent.model import Model
     from aid_models.chat_api import FunctionTool
 
 

@@ -10,12 +10,12 @@ import httpx
 import httpx2
 import pytest
 
-from aid.anthropic_api import messages_url
 from aid.discovery import discover
-from aid.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, ThinkingPart, UserPromptPart
-from aid.model import AnthropicModel, ModelInfo, OpenAIChatModel
 from aid.protocol import AidError
+from aid_agent.messages import ModelMessage, ModelRequest, ModelResponse, TextPart, ThinkingPart, UserPromptPart
+from aid_agent.model import AnthropicModel, ModelInfo, OpenAIChatModel
 from aid_models import chat_api, wire
+from aid_models.anthropic_api import messages_url
 from aid_models.models_dev import ENV_SOURCE
 from plugins import opencode, openrouter
 from tests.test_model import event

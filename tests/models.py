@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import TypeAdapter
 
-from aid.messages import (
+from aid.messaging import ARRIVED
+from aid_agent.messages import (
     ModelMessage,
     ModelResponse,
     RetryPromptPart,
@@ -19,8 +20,7 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.messaging import ARRIVED
-from aid.model import ModelInfo, RequestUsage, StreamDelta, accumulate
+from aid_agent.model import ModelInfo, RequestUsage, StreamDelta, accumulate
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Callable, Mapping

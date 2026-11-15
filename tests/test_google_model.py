@@ -9,9 +9,11 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx2
 import pytest
 
-from aid.agent import Agent
 from aid.backends.native import add_cost
-from aid.messages import (
+from aid.protocol import AidError, SessionEvent, Usage
+from aid.providers import resolve
+from aid_agent.agent import Agent
+from aid_agent.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
@@ -24,9 +26,7 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.model import GoogleModel, ModelInfo, RequestUsage, google_contents, model_for
-from aid.protocol import AidError, SessionEvent, Usage
-from aid.providers import resolve
+from aid_agent.model import GoogleModel, ModelInfo, RequestUsage, google_contents, model_for
 from aid_models import gemini, transport, wire
 from aid_models.prices import Price
 from aid_models.transport import ModelUnavailable

@@ -13,8 +13,15 @@ from typing import TYPE_CHECKING, Final
 import httpx2
 import pytest
 
-from aid.agent import Agent
-from aid.attachments import (
+from aid.backends.acp import AcpBackend
+from aid.backends.claude_sdk import ClaudeSdkBackend
+from aid.backends.claude_tty import ClaudeTtyBackend
+from aid.backends.permissions import PermissionWaits
+from aid.coding import CODING, Coding, read
+from aid.protocol import AidError, AttachmentRef, Prompt, PromptEntry, ToolCall
+from aid.spec import PermissionMode
+from aid_agent.agent import Agent
+from aid_agent.attachments import (
     MAX_BYTES,
     MAX_PDF_BYTES,
     MAX_PROMPT_BYTES,
@@ -24,12 +31,7 @@ from aid.attachments import (
     file_name,
     refs,
 )
-from aid.backends.acp import AcpBackend
-from aid.backends.claude_sdk import ClaudeSdkBackend
-from aid.backends.claude_tty import ClaudeTtyBackend
-from aid.backends.permissions import PermissionWaits
-from aid.coding import CODING, Coding, read
-from aid.messages import (
+from aid_agent.messages import (
     AttachmentPart,
     ModelMessagesTypeAdapter,
     ModelRequest,
@@ -39,7 +41,7 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.model import (
+from aid_agent.model import (
     AnthropicModel,
     GoogleModel,
     ModelInfo,
@@ -50,8 +52,6 @@ from aid.model import (
     responses_input,
     wire_messages,
 )
-from aid.protocol import AidError, AttachmentRef, Prompt, PromptEntry, ToolCall
-from aid.spec import PermissionMode
 from aid_models.prices import ENV_PRICES
 from aid_models.transport import Provider
 from tests.models import TestModel
@@ -66,8 +66,8 @@ if TYPE_CHECKING:
     from pydantic import JsonValue
 
     from aid.backends.base import Backend
-    from aid.messages import ModelMessage
     from aid.protocol import SessionEvent
+    from aid_agent.messages import ModelMessage
 
 
 def png(rgb: tuple[int, int, int] = (255, 0, 0), size: int = 8) -> bytes:

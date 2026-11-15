@@ -11,10 +11,10 @@ from pydantic import ValidationError
 import aid
 from aid import events
 from aid.client import register_plugin
-from aid.model import AnthropicModel, GoogleModel, OpenAIChatModel
 from aid.plugins import Grant
 from aid.protocol import AidError, CallPlugin, GetHistory, SendMessage, SessionInfosAdapter
 from aid.spec import AcpSpec, NativeSpec, PermissionMode, Private
+from aid_agent.model import AnthropicModel, GoogleModel, OpenAIChatModel
 from aid_models.transport import check_host
 from tests.conftest import py_spec
 from tests.models import HOST

@@ -11,8 +11,8 @@ import httpx
 from pydantic import BaseModel, Field
 
 import aid
-from aid.model import OpenAIChatModel, RequestUsage
 from aid.protocol import ModelEntry
+from aid_agent.model import OpenAIChatModel, RequestUsage
 from aid_models.transport import Provider
 
 if TYPE_CHECKING:

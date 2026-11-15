@@ -77,6 +77,7 @@ let
     aid = [ "test" ];
     pyrun = [ "test" ];
     aid-models = [ "test" ];
+    aid-agent = [ "test" ];
   };
   ui = pkgs.callPackage ./web { pymuxElement = p.pymux-element; };
   # The shell's UI skips the check: a protocol change makes protocol.ts stale until `npm run types`, and that
@@ -205,6 +206,7 @@ let
           ./.
           ./pyrun
           ./models
+          ./agent
           pyedit
           shellous
           xonsh
@@ -217,6 +219,7 @@ let
             "aid"
             "pyrun"
             "aid-models"
+            "aid-agent"
             "pyedit"
             "shellous"
             "openai"
@@ -258,6 +261,7 @@ let
           pygments = final.pygments;
         };
         aid-models = final.callPackage ./models { inherit (p) mkProject; };
+        aid-agent = final.callPackage ./agent { inherit (p) mkProject; };
         pyrun = final.callPackage ./pyrun {
           inherit (p) mkProject;
           utilLinux = pkgs.util-linux;
@@ -295,7 +299,7 @@ in
     name = "aid-schema";
     runtimeInputs = [ devEnv ];
     text = ''
-      export PYTHONPATH=${lib.escapeShellArg (toString ./src)}:${lib.escapeShellArg (toString ./models/src)}:${lib.escapeShellArg (toString ./pyrun/src)}
+      export PYTHONPATH=${lib.escapeShellArg (toString ./src)}:${lib.escapeShellArg (toString ./models/src)}:${lib.escapeShellArg (toString ./agent/src)}:${lib.escapeShellArg (toString ./pyrun/src)}
       python -m aid.schema
     '';
   };
@@ -335,6 +339,7 @@ in
   inherit (set.aid) tests;
   pyrun-tests = set.pyrun.tests;
   aid-models = set.aid-models;
+  aid-agent = set.aid-agent;
 
   ruff = pkgs.writeShellApplication {
     name = "ruff";
@@ -356,7 +361,7 @@ in
     text = # bash
       ''
         # pyrefly resolves imports through PYTHONPATH: point it at the working copy, as the dev shell does.
-        export PYTHONPATH=${lib.escapeShellArg (toString ./src)}:${lib.escapeShellArg (toString ./models/src)}:${lib.escapeShellArg (toString ./pyrun/src)}''${PYTHONPATH:+:$PYTHONPATH}
+        export PYTHONPATH=${lib.escapeShellArg (toString ./src)}:${lib.escapeShellArg (toString ./models/src)}:${lib.escapeShellArg (toString ./agent/src)}:${lib.escapeShellArg (toString ./pyrun/src)}''${PYTHONPATH:+:$PYTHONPATH}
         pyrefly "$@"
       '';
   };
@@ -395,7 +400,7 @@ in
     # The working copy, ahead of the aid the venv carries. The UI is the built one; `npm run dev` in web/
     # serves the working copy instead.
     shellHook = ''
-      export PYTHONPATH=${lib.escapeShellArg (toString ./src)}:${lib.escapeShellArg (toString ./models/src)}:${lib.escapeShellArg (toString ./pyrun/src)}''${PYTHONPATH:+:$PYTHONPATH}
+      export PYTHONPATH=${lib.escapeShellArg (toString ./src)}:${lib.escapeShellArg (toString ./models/src)}:${lib.escapeShellArg (toString ./agent/src)}:${lib.escapeShellArg (toString ./pyrun/src)}''${PYTHONPATH:+:$PYTHONPATH}
       export AID_WEB_ASSETS=${shellUi}
       export AID_TEST_SPEECH_MODEL=${speechModel}
       export AID_TREE_SITTER_GRAMMARS=${grammars}

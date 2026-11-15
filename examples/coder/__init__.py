@@ -12,7 +12,7 @@ web UI or `aid answer`.
 from __future__ import annotations
 
 import aid
-from aid.agent import Agent
+from aid_agent.agent import Agent
 
 INSTRUCTIONS = """\
 You work on the code in your working directory.

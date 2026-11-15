@@ -79,7 +79,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
 ## Layout
 
 - `src/aid/spec.py` — `AcpSpec` / `NativeSpec` / `ClaudeTtySpec` / `ClaudeSdkSpec`: what a session runs.
-- `src/aid/protocol.py` — pydantic messages on the zmq sockets; `AidError`, `ModelCost`, `ModelEntry` (re-exported
+- `src/aid/protocol.py` — pydantic messages on the zmq sockets; `AidError`, `ModelCost`, `ModelEntry`, the run events (re-exported
   from `aid_models`: same classes).
 - `src/aid/daemon.py` — ROUTER for clients (`control.sock`), ROUTER for workers (`workers.sock`), session state.
 - `src/aid/launcher.py` — `Launcher` protocol; `ForkserverLauncher`.
@@ -275,7 +275,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   refuses a late acquire whose release overtook it (separate connections). Pricing asks the transport
   (`Transport.cache_reads_in_prompt`), never its class: wrappers hide classes.
 - `src/aid/backends/` — `acp.py`, `native.py`, `claude_tty.py`, `claude_sdk.py`; each implements `base.Backend`.
-- `src/aid/attachments.py` — what native requests carry beside text (#66 images, #72 PDFs): `AttachmentPart(media_type,
+- `agent/src/aid_agent/attachments.py` — what native requests carry beside text (#66 images, #72 PDFs): `AttachmentPart(media_type,
   sha256, tool_call_id)` follows the UserPromptPart (or the ToolReturnPart) it goes with; `AttachmentStore` =
   `<session dir>/attachments/<sha256>`, format by magic bytes (PNG/JPEG/GIF/WebP, PDF `%PDF-`), caps 5 MB an image,
   `MAX_PDF_BYTES` 20 MB a PDF, `MAX_PROMPT_BYTES` a prompt (`bad_attachment`); `kind_of` → models.dev's kind (`image`,
@@ -312,10 +312,10 @@ on reusable decisions and current boundaries; put long investigations and dated 
 - `models/src/aid_models/wire.py` — aid's own model clients' HTTP (#65): `open_stream` (POST, 2xx or `StatusError` with the body),
   `events` (SSE data), `client` (tests patch it, called `timeout=` by keyword). No model SDK at runtime; each is a
   test dependency for differential tests (`…parse_as_…` in test_model.py and test_google_model.py). Protocol
-  modules: `aid_models.gemini`, `aid.anthropic_api`, `aid_models.chat_api` (Chat Completions + embeddings: request TypedDicts,
-  response models keep unknown fields as `model_extra`), `aid.responses_api` (#70). `aid_models.transport.open_model_stream`: open + `max_retries` + naming,
+  modules: `aid_models.gemini`, `aid_models.anthropic_api`, `aid_models.chat_api` (Chat Completions + embeddings: request TypedDicts,
+  response models keep unknown fields as `model_extra`), `aid_models.responses_api` (#70). `aid_models.transport.open_model_stream`: open + `max_retries` + naming,
   shared by every client.
-- `src/aid/model.py` — the native backend's transports: `AnthropicModel` (Messages API over aid's own client, `aid.anthropic_api`: typed core, other
+- `agent/src/aid_agent/model.py` — the native backend's transports: `AnthropicModel` (Messages API over aid's own client, `aid_models.anthropic_api`: typed core, other
   settings pass through as body fields; native blocks, an `error` event overloaded/api/rate → `ModelUnavailable`,
   `extra_headers` carry betas, automatic caching on; structured output's schema through `anthropic_api.output_schema`,
   the SDK's `transform_schema`: an open object is a 400, #71), `OpenAIChatModel` (Chat Completions, `aid_models.chat_api`; an `error` event after a 200, as OpenRouter sends,
@@ -582,9 +582,13 @@ on reusable decisions and current boundaries; put long investigations and dated 
   sandbox: `nix build --file . pyrun-tests`.
 - `models/` — `aid-models` (`aid_models`): the model clients as a library: `transport` (provider prefixes, keys,
   `model_answer`/`open_model_stream`, `check_host`), `wire`, `chat_api`, `gemini`, `embedding`, `rerank`, `prices`,
-  `models_dev`, `errors.AidError`. Never imports aid; aid and pyedit (its index) depend on it. Chat transports stay
-  in `aid.model`. `models/default.nix` for aid's set, `models/package.nix` for a nixpkgs package set. Its tests
-  live in `tests/` (test_embedding, test_rerank, test_prices).
+  `models_dev`, `errors.AidError`, and the wire types `anthropic_api`, `responses_api`. Never imports aid; aid and
+  pyedit (its index) depend on it. `models/default.nix` for aid's set, `models/package.nix` for a nixpkgs package set.
+  Its tests live in `tests/` (test_embedding, test_rerank, test_prices).
+- `agent/` — `aid-agent` (`aid_agent`, #75): the agent loop as a library, on aid-models: `agent` (Agent, Tool,
+  Toolset), `model` (transports), `messages`, `attachments`, `events` (TextDelta, ThoughtDelta, ToolCall, Usage,
+  Output, …; `aid.protocol` re-exports the same classes). Never imports aid (`tests/test_aid_models.py`); pymux-ai
+  depends on it. `nix/python-overlay.nix` names aid-models and aid-agent for a nixpkgs Python set (`package.nix`).
 - `default.nix` — a pyproject.nix set from pyterm's builders (`mkPythonSet`, `mkProject`, its `overlay`);
   `aid/default.nix` — the aid project in it; `nix/` — NixOS and home-manager modules.
 

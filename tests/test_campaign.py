@@ -38,8 +38,8 @@ PLUGINS = Path(__file__).parent.parent / "plugins"
 SCRIPTED = """\
 import agents
 import aid
-from aid.messages import TextPart
-from aid.model import StreamDelta
+from aid_agent.messages import TextPart
+from aid_agent.model import StreamDelta
 
 MODELS = {
     "auditor": agents.auditor,

@@ -20,7 +20,6 @@ import structlog
 import zmq
 import zmq.asyncio
 
-from aid.attachments import decoded
 from aid.backends import open_backend
 from aid.backends.base import (
     CompactionBackend,
@@ -58,6 +57,7 @@ from aid.protocol import (
 )
 from aid.spec import AgentSpecAdapter, NativeSpec
 from aid.zap import Keypair, connect_curve
+from aid_agent.attachments import decoded
 
 if TYPE_CHECKING:
     from anyio.abc import TaskGroup

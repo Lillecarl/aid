@@ -12,8 +12,10 @@ import anyio
 from pydantic import BaseModel, JsonValue, ValidationError
 
 import aid
-from aid.agent import Agent
-from aid.messages import (
+from aid.messaging import ARRIVED
+from aid.protocol import AidError, Goal, decode_request
+from aid_agent.agent import Agent
+from aid_agent.messages import (
     AttachmentPart,
     ModelResponse,
     RetryPromptPart,
@@ -22,8 +24,6 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.messaging import ARRIVED
-from aid.protocol import AidError, Goal, decode_request
 from plugins.supervision.classifier import ClassifierVerdict
 from tests.models import (
     AgentInfo,
@@ -38,7 +38,7 @@ from tests.models import (
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from aid.messages import ModelMessage
+    from aid_agent.messages import ModelMessage
 
 
 def _is_note(content: object) -> bool:

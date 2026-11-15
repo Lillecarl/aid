@@ -18,9 +18,9 @@ from websockets.exceptions import ConnectionClosed, InvalidStatus
 from websockets.typing import Origin, Subprotocol
 
 import aid
-from aid.attachments import AttachmentStore
 from aid.web import OidcConfig, create_app, serve
 from aid.web.app import ENV_ASSETS
+from aid_agent.attachments import AttachmentStore
 from tests.conftest import GRAMMARS, SPEECH_MODEL, fake_spec, needs_pymux, py_spec
 from tests.test_attachments import png
 from tests.test_speech import SAID, speech

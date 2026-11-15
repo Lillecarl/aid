@@ -12,7 +12,7 @@ Put `examples` on AID_PLUGINS_PATH, or copy this directory into `~/.config/aid/p
 from __future__ import annotations
 
 import aid
-from aid.agent import Agent
+from aid_agent.agent import Agent
 
 
 class DeepSeek(aid.AgentDefinition):

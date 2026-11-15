@@ -11,13 +11,22 @@ from __future__ import annotations
 import json
 import uuid
 from enum import StrEnum
-from typing import Annotated, Final, Literal, cast
+from typing import Annotated, Final, Literal
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, JsonValue, TypeAdapter
-from pydantic_core import to_jsonable_python
 
 from aid.plugins import Grant, PluginSpec
 from aid.spec import AgentKind, AgentSpec, PermissionMode, Sandbox, TagKey, TagValue
+from aid_agent.events import AttachmentRef as AttachmentRef
+from aid_agent.events import Cost as Cost
+from aid_agent.events import Output as Output
+from aid_agent.events import TextDelta as TextDelta
+from aid_agent.events import ThoughtDelta as ThoughtDelta
+from aid_agent.events import ToolCall as ToolCall
+from aid_agent.events import ToolDiff as ToolDiff
+from aid_agent.events import Usage as Usage
+from aid_agent.events import clip as clip
+from aid_agent.events import to_json as to_json
 
 # Re-exported: aid's protocol carries them, and every `except AidError` in aid catches the library's.
 from aid_models.errors import AidError as AidError
@@ -656,37 +665,12 @@ class AgentCatalog(_Message):
     problems: list[str]
 
 
-class TextDelta(_Message):
-    type: Literal["text"] = "text"
-    text: str
-
-
-class ThoughtDelta(_Message):
-    type: Literal["thought"] = "thought"
-    text: str
-
-
 class RemoteControl(_Message):
     """Claude Code's Remote Control bridge for the turn: join it in a browser or over the connect URL."""
 
     type: Literal["remote_control"] = "remote_control"
     session_url: str
     connect_url: str
-
-
-TOOL_TEXT_LIMIT: Final = 20_000
-"""Characters of a tool's output, or of a side of a diff, that an event carries; history keeps every event."""
-
-
-def clip(text: str) -> str:
-    if len(text) <= TOOL_TEXT_LIMIT:
-        return text
-    return f"{text[:TOOL_TEXT_LIMIT]}\n… {len(text) - TOOL_TEXT_LIMIT} more characters"
-
-
-def to_json(value: object) -> JsonValue:
-    """A tool's arguments as JSON; what JSON cannot hold becomes its `str`."""
-    return cast(JsonValue, to_jsonable_python(value, fallback=str))
 
 
 def tool_text(value: object) -> str | None:
@@ -725,43 +709,6 @@ def history_line(item: HistoryItem) -> str | None:
             return None
 
 
-class ToolDiff(_Message):
-    path: str
-    old: str | None = None
-    """None for a new file."""
-    new: str
-
-
-class AttachmentRef(_Message):
-    """An attachment a prompt carried or a tool returned. Its bytes are `<session dir>/attachments/<sha256>` once the session
-    took it."""
-
-    media_type: str
-    sha256: str
-
-
-class ToolCall(_Message):
-    """A tool call starting, or an update to it: fields left empty keep what an earlier event of the call said."""
-
-    type: Literal["tool_call"] = "tool_call"
-    tool_call_id: str
-    tool: str | None = None
-    """The tool's name, as permission rules name it; None where the agent names none (ACP)."""
-    title: str | None = None
-    kind: str | None = None
-    status: str | None = None
-    input: JsonValue = None
-    output: str | None = None
-    diffs: list[ToolDiff] = Field(default_factory=list[ToolDiff])
-    paths: list[str] = Field(default_factory=list[str])
-    """Files the call touches, `path` or `path:line`."""
-    attachments: list[AttachmentRef] = Field(
-        default_factory=list[AttachmentRef], validation_alias=AliasChoices("attachments", "images")
-    )
-    """What the call returned to the model beside its text (native: `aid.attachments.ToolAttachment`); `images` in
-    transcripts before #72."""
-
-
 class StreamChunk(_Message):
     """A text or thinking delta of a running turn, published on its session's stream topic for every watcher, not
     only the client that prompted: a page with the chat open shows it until history records the joined block.
@@ -788,61 +735,6 @@ class ToolEvent(_Message):
 
     turn: str
     call: ToolCall
-
-
-class Cost(_Message):
-    amount: float
-    currency: str
-
-
-class Usage(_Message):
-    """Tokens a turn used, as its agent reports them; sent just before the turn's Output. None where the agent
-    says nothing.
-
-    What "the turn" covers differs by agent (measured 2026-09):
-    - claude-agent-acp 0.75.1: every model call of the turn, subagents included.
-    - opencode 1.x: the turn's last model response only.
-    - Native: the run, every request. `input_tokens` follows the provider: Chat Completions counts cache reads
-      in it, Anthropic's Messages API does not.
-    - claude-tty: the main conversation's messages, each counted once; subagents write transcripts of their own,
-      which aid does not read.
-
-    `context_used`/`context_size` come from the agent's own report for ACP and claude-tty. The native backend sets them
-    itself: `context_size` is the session's context gauge (`max_context`, half the model window by default) and
-    `context_used` is aid's rough estimate of the send view, since the engine reports no window of its own.
-    """
-
-    type: Literal["usage"] = "usage"
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    cache_read_tokens: int | None = None
-    cache_write_tokens: int | None = None
-    thought_tokens: int | None = None
-    """Included in output_tokens where the agent bills them together (Claude)."""
-    requests: int | None = None
-    """Model calls in the turn."""
-    models: list[str] = Field(default_factory=list[str])
-    context_used: int | None = None
-    """Tokens in the context window at the turn's end."""
-    context_size: int | None = None
-    agent: str | None = None
-    """Set for a subagent's tokens (interactive Claude): its type, or `subagent` where Claude names none. They
-    are the subagent's own, recorded when it stops, and not in the turn's Usage. A fork's turn, recorded in its
-    parent after the fork's answer, is `fork <name>`."""
-    session_cost: Cost | None = None
-    """The agent's own running total for its session, not this turn's share: ACP's `usage_update` cost is
-    cumulative. It restarts with the agent's session."""
-    cost: Cost | None = None
-    """This turn's own cost, where aid prices the tokens itself (native, from models.dev: `aid_models.prices`).
-    Turns add up; None is unknown, not free."""
-
-
-class Output(_Message):
-    """Final event of a prompt. `output` is text for ACP and the agent's typed output for native."""
-
-    type: Literal["output"] = "output"
-    output: JsonValue
-    stop_reason: str
 
 
 class TurnEvent(_Message):

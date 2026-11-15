@@ -15,11 +15,13 @@ from typing import TYPE_CHECKING, Final, Literal
 import pytest
 from pydantic import BaseModel
 
-from aid.agent import Agent
-from aid.attachments import ATTACHMENTS_DIR, UPLOADS, UPLOADS_DIR, AttachmentStore
 from aid.coding import read
 from aid.discovery import discover
-from aid.messages import (
+from aid.protocol import AidError, Output, SessionEvent, Usage
+from aid.providers import catalog_model, embedder, reranker, resolve
+from aid_agent.agent import Agent
+from aid_agent.attachments import ATTACHMENTS_DIR, UPLOADS, UPLOADS_DIR, AttachmentStore
+from aid_agent.messages import (
     AttachmentPart,
     ModelMessagesTypeAdapter,
     ModelRequest,
@@ -28,9 +30,7 @@ from aid.messages import (
     ToolCallPart,
     UserPromptPart,
 )
-from aid.model import ENCRYPTED, ModelInfo, OpenAIResponsesModel
-from aid.protocol import AidError, Output, SessionEvent, Usage
-from aid.providers import catalog_model, embedder, reranker, resolve
+from aid_agent.model import ENCRYPTED, ModelInfo, OpenAIResponsesModel
 from aid_models.prices import ENV_PRICES
 from tests.test_attachments import pdf, png
 from tests.test_native_backend import backend

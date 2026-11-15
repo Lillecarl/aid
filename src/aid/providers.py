@@ -18,8 +18,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
-from aid.model import AnthropicModel, GoogleModel, OpenAIChatModel, OpenAIResponsesModel, responses_route
 from aid.protocol import AidError
+from aid_agent.model import AnthropicModel, GoogleModel, OpenAIChatModel, OpenAIResponsesModel, responses_route
 from aid_models import models_dev
 from aid_models.embedding import Embedder, GoogleEmbedder, OpenAIEmbedder
 from aid_models.transport import OPENAI_COMPATIBLE, Provider, split_name
@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from pydantic import JsonValue
 
     from aid.agents import ModelProvider
-    from aid.model import Transport
+    from aid_agent.model import Transport
     from aid_models.rerank import Reranker
 
 OPENAI_COMPATIBLE_PACKAGE: Final = "@ai-sdk/openai-compatible"

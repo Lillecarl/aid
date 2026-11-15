@@ -37,13 +37,13 @@ from starlette.routing import Mount, Route, WebSocketRoute
 from starlette.staticfiles import StaticFiles
 from starlette.websockets import WebSocketDisconnect
 
-from aid.attachments import AttachmentStore, media_type
 from aid.client import connect
-from aid.messages import AttachmentPart
 from aid.paths import default_paths
 from aid.protocol import AidError
 from aid.speech import Transcription
 from aid.web import auth, files, highlight, theme, zws
+from aid_agent.attachments import AttachmentStore, media_type
+from aid_agent.messages import AttachmentPart
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable

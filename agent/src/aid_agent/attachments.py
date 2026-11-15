@@ -15,14 +15,15 @@ from typing import TYPE_CHECKING, Final, Literal
 import anyio.to_thread
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
-from aid.messages import AttachmentPart
-from aid.protocol import AidError, AttachmentRef
+from aid_agent.events import AttachmentRef
+from aid_agent.messages import AttachmentPart
+from aid_models.errors import AidError
 
 if TYPE_CHECKING:
     from collections.abc import Container, Mapping, Sequence
     from pathlib import Path
 
-    from aid.messages import ModelMessage
+    from aid_agent.messages import ModelMessage
 
 ATTACHMENTS_DIR: Final = "attachments"
 LEGACY_DIR: Final = "images"

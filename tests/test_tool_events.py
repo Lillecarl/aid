@@ -10,12 +10,13 @@ from acp.schema import (
 )
 
 from aid.backends import acp, native
-from aid.messages import (
+from aid.protocol import ToolCall, ToolDiff
+from aid_agent.events import TOOL_TEXT_LIMIT
+from aid_agent.messages import (
     RetryPromptPart,
     ToolCallPart,
     ToolReturnPart,
 )
-from aid.protocol import TOOL_TEXT_LIMIT, ToolCall, ToolDiff
 
 
 def test_acp_tool_call_carries_input_and_paths() -> None:

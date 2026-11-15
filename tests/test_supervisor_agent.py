@@ -8,8 +8,8 @@ import anyio
 import pytest
 
 import aid
-from aid.agent import ModelRetry, Tool
 from aid.discovery import discover
+from aid_agent.agent import ModelRetry, Tool
 from plugins.supervision.agent import MODEL
 from plugins.supervision.reference import ENV_TLDR_PAGES, man_page, tldr_page
 

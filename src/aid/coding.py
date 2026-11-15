@@ -1,7 +1,7 @@
 """Tools for native agents that work on code: read files, edit them through pyedit, run processes through pyrun.
 
     import aid
-    from aid.agent import Agent
+    from aid_agent.agent import Agent
 
     class Coder(aid.AgentDefinition):
         \"\"\"Changes code in its session's directory.\"\"\"
@@ -44,8 +44,6 @@ from pyedit.session import EditSession  # pyright: ignore[reportMissingTypeStubs
 from shellous import ResultError, Runner, sh
 
 import pyrun
-from aid.agent import ModelRetry, RunContext, Tool, Toolset
-from aid.attachments import ToolAttachment, checked, media_type
 from aid.confine import inside
 from aid.protocol import (
     AidError,
@@ -63,6 +61,8 @@ from aid.removals import plan as plan_removal
 from aid.removals import preview as removal_preview
 from aid.sandbox import bwrap_argv
 from aid.spec import PermissionMode, match_hook
+from aid_agent.agent import ModelRetry, RunContext, Tool, Toolset
+from aid_agent.attachments import ToolAttachment, checked, media_type
 from pyrun.host import run_script
 from pyrun.scope import Scope
 from pyrun.script import FILENAME as SCRIPT_FILENAME

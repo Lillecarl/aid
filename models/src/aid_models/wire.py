@@ -1,7 +1,7 @@
 """Plain HTTP for aid's own model clients (#65): a streaming POST, its server-sent events, and its refusals.
 
 No model SDK: each protocol module (`aid_models.gemini`, …) types the fields aid sends and reads, and the transports in
-`aid.model` name the failures (`unavailable`, `rejected_key`).
+`aid_agent.model` name the failures (`unavailable`, `rejected_key`).
 """
 
 from __future__ import annotations

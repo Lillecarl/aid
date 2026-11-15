@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Final
 
 import aid
-from aid.agent import Agent
+from aid_agent.agent import Agent
 
 from .reference import man_page, tldr_page
 

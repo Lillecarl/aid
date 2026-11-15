@@ -5,14 +5,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import aid
-from aid.agent import Agent
-from aid.messages import UserPromptPart
+from aid_agent.agent import Agent
+from aid_agent.messages import UserPromptPart
 from tests.models import AgentInfo, FunctionModel
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from aid.messages import ModelMessage
+    from aid_agent.messages import ModelMessage
 
 
 async def _shout(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:

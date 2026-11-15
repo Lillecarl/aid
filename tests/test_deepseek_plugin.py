@@ -11,9 +11,9 @@ import pytest
 from pydantic import BaseModel
 
 from aid.discovery import discover
-from aid.messages import ModelMessage, ModelRequest, SystemPromptPart, UserPromptPart
-from aid.model import ModelInfo, RequestUsage
 from aid.providers import resolve
+from aid_agent.messages import ModelMessage, ModelRequest, SystemPromptPart, UserPromptPart
+from aid_agent.model import ModelInfo, RequestUsage
 from aid_models import wire
 from tests.test_model import event
 

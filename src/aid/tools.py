@@ -18,10 +18,11 @@ import inspect
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, overload
 
+from aid_agent.events import PATH_KEYS as PATH_KEYS
+from aid_agent.events import tool_paths as tool_paths
+
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-    from pydantic import JsonValue
 
 _MARKER: Final = "__aid_mcptool__"
 
@@ -57,15 +58,3 @@ def mcptool[F: Callable[..., Any]](
 def tool_of(obj: object) -> McpTool | None:
     tool = getattr(obj, _MARKER, None)
     return tool if isinstance(tool, McpTool) else None
-
-
-#: Argument names that carry a file a call touches, across Claude Code's tools, common MCP servers and
-#: aid.coding: the web UI's gist() in web/src/lib/tools.ts reads the same names.
-PATH_KEYS: Final = ("file_path", "path", "notebook_path")
-
-
-def tool_paths(input: JsonValue) -> list[str]:
-    """Files a call touches, from its arguments."""
-    if not isinstance(input, dict):
-        return []
-    return [p for key in PATH_KEYS if isinstance(p := input.get(key), str)]

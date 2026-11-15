@@ -16,9 +16,8 @@ import httpx2
 import structlog
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
-from aid import anthropic_api, responses_api
-from aid.attachments import NO_ATTACHMENTS, AttachmentStore, Upload, encoded, file_name, kind_of
-from aid.messages import (
+from aid_agent.attachments import NO_ATTACHMENTS, AttachmentStore, Upload, encoded, file_name, kind_of
+from aid_agent.messages import (
     AttachmentPart,
     ModelMessage,
     ModelResponse,
@@ -30,8 +29,8 @@ from aid.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
-from aid.protocol import AidError
-from aid_models import chat_api, gemini, wire
+from aid_models import anthropic_api, chat_api, gemini, responses_api, wire
+from aid_models.errors import AidError
 from aid_models.transport import (
     CLIENT_SETTINGS,
     GOOGLE_KEY_ENV,
@@ -56,8 +55,8 @@ if TYPE_CHECKING:
 
     from pydantic.json_schema import JsonSchemaValue
 
-    from aid.agent import Tool
-    from aid.attachments import Encoded
+    from aid_agent.agent import Tool
+    from aid_agent.attachments import Encoded
 
 
 @dataclass
@@ -618,7 +617,7 @@ def _response_error(name: str, code: str | None, message: str) -> Exception:
 
 
 class OpenAIResponsesModel:
-    """OpenAI's Responses API over aid's own client (`aid.responses_api`, `aid_models.wire`; #70). Stateless: reasoning
+    """OpenAI's Responses API over aid's own client (`aid_models.responses_api`, `aid_models.wire`; #70). Stateless: reasoning
     replays sealed (`ENCRYPTED`), attachments go by Files API id on OpenAI's own server (#69)."""
 
     cache_reads_in_prompt: bool = True
@@ -925,7 +924,7 @@ def anthropic_tool(definition: chat_api.FunctionTool) -> anthropic_api.ToolDefin
 
 
 class AnthropicModel:
-    """The Messages API over aid's own client (`aid.anthropic_api`, `aid_models.wire`; #65): signed thinking replayed,
+    """The Messages API over aid's own client (`aid_models.anthropic_api`, `aid_models.wire`; #65): signed thinking replayed,
     beta headers (`extra_headers`) and caching passed through. `cache_control` defaults to automatic caching of the
     longest prefix."""
 

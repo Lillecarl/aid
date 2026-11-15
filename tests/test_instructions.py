@@ -13,17 +13,17 @@ import anyio
 import pytest
 
 import aid
-from aid.agent import Agent
 from aid.agents import Instruction, InstructionsContext, InstructionsProvider
 from aid.backends.native import NativeBackend, open_native
 from aid.backends.permissions import PermissionWaits
 from aid.coding import CODING, Coding, compact
 from aid.discovery import Catalog, discover
 from aid.instructions import compose
-from aid.messages import ModelRequest, ModelResponse, SystemPromptPart, TextPart, UserPromptPart
 from aid.plugins import ENV_PLUGINS_PATH
 from aid.protocol import AgentCatalog, Started
 from aid.spec import NativeSpec, PermissionMode
+from aid_agent.agent import Agent
+from aid_agent.messages import ModelRequest, ModelResponse, SystemPromptPart, TextPart, UserPromptPart
 from tests.conftest import TESTS
 from tests.models import TestModel
 

@@ -13,8 +13,8 @@ import httpx
 from pydantic import BaseModel, Field, JsonValue
 
 import aid
-from aid.model import OpenAIChatModel
 from aid.protocol import AidError, ModelCost, ModelEntry
+from aid_agent.model import OpenAIChatModel
 from aid_models.embedding import OpenAIEmbedder
 from aid_models.rerank import RerankClient
 from aid_models.transport import Provider
