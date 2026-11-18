@@ -66,6 +66,8 @@ class ModelInfo:
     settings: Mapping[str, JsonValue] = field(default_factory=dict[str, JsonValue])
     attachments: AttachmentStore | None = None
     """The bytes of the history's `AttachmentPart`s. None: a request carrying one fails `attachment_missing`."""
+    inline: bool = False
+    """Every attachment goes as base64 in the request, never uploaded to a provider's Files API."""
 
     async def encoded(self, messages: Sequence[ModelMessage], skip: Container[str] = ()) -> Encoded:
         return NO_ATTACHMENTS if self.attachments is None else await self.attachments.encoded(messages, skip)
@@ -232,7 +234,7 @@ async def held_files(
 ) -> Mapping[str, str]:
     """The history's attachments by a provider's file id (#69), uploading those it does not hold. A failed upload leaves
     that image to go as base64; a later request tries again."""
-    if info.attachments is None:
+    if info.attachments is None or info.inline:
         return NO_ATTACHMENTS
     parts = {p.sha256: p for m in messages for p in m.parts if isinstance(p, AttachmentPart)}
     if not parts:

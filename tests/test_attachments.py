@@ -397,6 +397,20 @@ async def test_anthropic_sends_an_image_by_file_id(tmp_path: Path, monkeypatch: 
     assert png() in server.uploads[0].content
 
 
+async def test_an_inline_request_uploads_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    serve_wire(monkeypatch, server := FilesServer())
+    store = AttachmentStore(tmp_path)
+    model = AnthropicModel("anthropic/claude-test")
+    history: list[ModelMessage] = [ModelRequest([UserPromptPart("what colour?"), store.put(png())])]
+    try:
+        info = ModelInfo(settings={"api_key": "k", "max_retries": 0}, attachments=store, inline=True)
+        await model.request(history, info)
+    finally:
+        await model.aclose()
+    assert server.uploads == []
+    assert [(s["type"], base64.b64decode(s["data"])) for s in server.sent] == [("base64", png())]
+
+
 async def test_an_image_goes_as_bytes_where_files_are_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed upload costs nothing but the bytes: the request carries them, and the next one tries again."""
     serve_wire(monkeypatch, server := FilesServer(upload_status=500))
