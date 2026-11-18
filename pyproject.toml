@@ -17,7 +17,7 @@ dependencies = [
   "hypercorn>=0.17",
   "itsdangerous>=2.2",
   "libpymux",
-  "mcp>=1.20",
+  "mcp>=2.3",
   "numpy>=2.0",
   # aid.wire: the HTTP of aid's own model clients (#65; no model SDK); aid_agent.model catches its errors.
   "httpx2",

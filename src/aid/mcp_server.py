@@ -16,14 +16,14 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 import anyio
 import zmq
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.server.stdio import stdio_server
 from mcp.shared.message import SessionMessage
-from mcp.types import JSONRPCMessage, JSONRPCNotification
+from mcp.types import JSONRPCNotification
 
 from aid.client import connect
 from aid.discovery import discover
@@ -33,7 +33,6 @@ from aid.plugins import plugins_path
 from aid.protocol import AidError
 
 if TYPE_CHECKING:
-    from anyio.streams.memory import MemoryObjectSendStream
     from pydantic import JsonValue
 
     from aid.protocol import MessageEntry
@@ -44,6 +43,12 @@ POLL: Final = 25.0
 # Past this the daemon has gone, not merely found no message: reconnect.
 POLL_GRACE: Final = 10.0
 RETRY: Final = 2.0
+
+
+class Push(Protocol):
+    """The stdio writer's send side: mcp 2 types it as a private protocol."""
+
+    async def send(self, item: SessionMessage, /) -> None: ...
 
 
 def instructions(session: str) -> str:
@@ -60,12 +65,12 @@ def channel_params(message: MessageEntry) -> dict[str, JsonValue]:
     return {"content": message.text, "meta": {"from": message.sender} if message.sender else {}}
 
 
-def build(channel_session: str | None) -> FastMCP:
+def build(channel_session: str | None) -> MCPServer:
     catalog = discover(plugins_path())
     for problem in catalog.problems:
         # stdout carries the protocol.
         print(f"aid.mcp_server: {problem}", file=sys.stderr)
-    server = FastMCP(
+    server = MCPServer(
         SERVER_NAME,
         instructions=f"{instructions(channel_session)}\n\n{USERTEE}" if channel_session else USERTEE,
         log_level="WARNING",
@@ -75,7 +80,7 @@ def build(channel_session: str | None) -> FastMCP:
     return server
 
 
-async def forward_messages(session: str, push: MemoryObjectSendStream[SessionMessage]) -> None:
+async def forward_messages(session: str, push: Push) -> None:
     """The session's messages, from the daemon's mailbox to the channel, for as long as the server runs."""
     while True:
         try:
@@ -87,7 +92,7 @@ async def forward_messages(session: str, push: MemoryObjectSendStream[SessionMes
                         notification = JSONRPCNotification(
                             jsonrpc="2.0", method=CHANNEL, params=channel_params(message)
                         )
-                        await push.send(SessionMessage(message=JSONRPCMessage(notification)))
+                        await push.send(SessionMessage(message=notification))
         except (AidError, TimeoutError, zmq.ZMQError) as error:
             print(f"aid.mcp_server: messages for {session}: {error}; retrying", file=sys.stderr)
             await anyio.sleep(RETRY)
@@ -96,7 +101,7 @@ async def forward_messages(session: str, push: MemoryObjectSendStream[SessionMes
 async def serve() -> None:
     channel_session = os.environ.get(ENV_SESSION) if os.environ.get(ENV_CHANNEL) == "1" else None
     server = build(channel_session)
-    lowlevel = server._mcp_server  # pyright: ignore[reportPrivateUsage] -- FastMCP cannot declare an experimental capability
+    lowlevel = server._lowlevel_server  # pyright: ignore[reportPrivateUsage] -- MCPServer cannot declare an experimental capability
     options = lowlevel.create_initialization_options(
         experimental_capabilities={"claude/channel": {}} if channel_session else None
     )
