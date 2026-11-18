@@ -77,7 +77,7 @@ ROUTES: Final = [
     Route("deepseek/deepseek-flash", "DEEPSEEK_API_KEY", plugin="deepseek", reads_pdf=False),
     Route("opencode-zen/deepseek-v4.1-flash", "OPENCODE_API_KEY", plugin="opencode", reads_pdf=False),
     Route("opencode-zen/claude-haiku-5-5", "OPENCODE_API_KEY", plugin="opencode"),
-    Route("opencode-go/deepseek-v4.1-flash", "OPENCODE_GO_API_KEY", plugin="opencode"),
+    Route("opencode-go/deepseek-v4.1-flash", "OPENCODE_GO_API_KEY", plugin="opencode", reads_pdf=False),
     Route(
         "openrouter/deepseek/deepseek-v4-flash",
         "OPENROUTER_API_KEY",

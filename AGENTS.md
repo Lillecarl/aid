@@ -367,8 +367,8 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `x-opencode-session` (uuid5 of the aid session, `ModelProvider.session`), as Go asks of other agents; Go answers
   400 MissingSessionID without it. A list's `unsupported` marks are fetched with it: a plugin change shows after
   the day's cache. Measured 2026-10-24: Zen answers over both routes (Anthropic Messages with `x-api-key`, Chat
-  Completions), priced through models.dev's `opencode`. Live tests (#64, 2026-11-13): OpenRouter passes; Go answers
-  401 `api_key_expired` (key to renew). A plugin
+  Completions), priced through models.dev's `opencode`. Live tests (#64): OpenRouter passes (2026-11-13), Go passes
+  (2026-11-18; deepseek-v4.1-flash reads images, no PDFs). A plugin
   named like a bundled one in an earlier tier shadows it: the example agent is `examples/deepseek_agent`.
 - `NativeSpec.model` (`provider/model`) runs the agent on another model (`session_agent`); the agent's
   `model_settings` follow only within one provider, `NativeSpec.model_settings` go over them. `aid new-py --model`,
