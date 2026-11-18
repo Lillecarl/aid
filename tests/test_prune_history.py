@@ -7,13 +7,9 @@ from typing import TYPE_CHECKING, Any, cast
 
 import anyio
 
-from aid.backends.native import (
-    METADATA,
-    THOUGHT_LIMIT,
-    prune_history,
-    turn_metadata,
-)
+from aid.backends.native import METADATA, turn_metadata
 from aid_agent.agent import Agent
+from aid_agent.loop import THOUGHT_LIMIT, prune_history
 from aid_agent.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,

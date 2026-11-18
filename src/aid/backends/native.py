@@ -11,63 +11,49 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Final
 
 import anyio
 import anyio.to_thread
 import structlog
-from anyio.lowlevel import checkpoint
-from pydantic import ValidationError
 from pydantic_core import to_jsonable_python
 
 from aid import sandbox
 from aid.backends.permissions import PermissionWaits
 from aid.catalog import session_catalog
 from aid.client import connect
-from aid.coding import CODING, OUTPUTS_DIR, Coding, Verdict, asking_names, coding_tools
+from aid.coding import CODING, OUTPUTS_DIR, Coding, asking_names, coding_tools
 from aid.instructions import compose, environment
 from aid.messaging import ARRIVED, arrived
 from aid.protocol import (
     AidError,
-    AttachmentRef,
-    Cost,
     Output,
     SessionTool,
     Started,
-    TextDelta,
-    ThoughtDelta,
-    ToolCall,
-    Usage,
-    clip,
-    to_json,
 )
 from aid.providers import catalog_model, resolve
 from aid.removals import PLANS_FILE
 from aid.slots import Slotted, limited_hosts
 from aid.supervision import supervisor_tools
-from aid.tools import tool_paths
-from aid_agent.agent import Agent, ModelRetry, Tool, Toolset
-from aid_agent.attachments import AttachmentStore, Kind, ToolAttachment, checked, kind_of
+from aid_agent.agent import Agent, Tool, Toolset
+from aid_agent.attachments import AttachmentStore, Kind, checked, kind_of
+from aid_agent.loop import Turn, context_tokens, run, signed_thinking, takes
 from aid_agent.messages import (
     AttachmentPart,
     ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
-    ModelResponse,
-    Part,
-    RetryPromptPart,
     SystemPromptPart,
     TextPart,
-    ThinkingPart,
     ToolCallPart,
     ToolReturnPart,
     UserPromptPart,
 )
-from aid_agent.model import Model, ModelInfo, RequestUsage, Transport, accumulate, model_for
+from aid_agent.model import Model, ModelInfo, Transport, model_for
 from aid_models.models_dev import catalog as models_catalog
 from aid_models.models_dev import inputs, window
-from aid_models.prices import CURRENCY, Price, lookup
-from aid_models.transport import Hosted, StreamBroken, check_host, split_name
+from aid_models.prices import Price, lookup
+from aid_models.transport import Hosted, check_host, split_name
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
@@ -78,15 +64,12 @@ if TYPE_CHECKING:
     from aid.discovery import Catalog
     from aid.protocol import MessageEntry
     from aid.spec import NativeSpec, PermissionMode
-    from aid_agent.messages import Part
 
 log = structlog.get_logger(__name__)
 
 HISTORY_FILE = "history.json"
 RUNS_DIR = "runs"
 """pyrun's store for what the session's `python` tool runs."""
-THOUGHT_LIMIT: Final = 500
-"""Characters of a thinking part kept for replay: thought serves the turn, not the replay."""
 FORKS_DIR: Final = "forks"
 """Snapshots `snapshot` writes for forks, under the session's state directory."""
 FORK_SNAPSHOTS: Final = 16
@@ -96,119 +79,10 @@ DEFAULT_DESIRED_MAX: Final = 100_000
 """Tokens the context gauge assumes when the session names no `max_context` and models.dev knows no window for the
 model; a known window gives half of it. Unknown models err toward compacting early, which fails safe."""
 AUTO_COMPACT: Final = "keep what the next turns need to go on with the work, and every open request."
-CONTINUE: Final = (
-    "Your reply above stopped at the output token limit, mid-sentence. Continue it from exactly where it stopped, "
-    "as if it had never been interrupted. Do not restart or summarize it."
-)
-"""The request after an answer cut at the output limit. DeepSeek's prefix completion, which would continue it in
-place, refuses any history holding a tool call (measured 2026-10-23), and every session has tools. Not asked to
-repeat its last words: Claude Haiku 5.5 refused that or restarted the answer in 2 of 3 tries, and continued this
-plainly in 3 of 3 (2026-10-24). `join_continued` still overlaps a repeat a model gives on its own."""
-OVERLAP: Final = 500
-"""The longest overlap `join_continued` looks for."""
-LEADERS: Final = " \t\n.\u2026"
-"""What a continuation's repeat may open with before the repeated words."""
-HOLD: Final = 200
-"""Characters of a continuation held from the stream until its repeat of the answer is known and left out."""
-SEAM_PUNCTUATION: Final = ",.;:!?\u2014"
-"""Punctuation a space follows in prose, where `join_continued` restores one."""
-STREAM_RETRIES: Final = 3
-"""Broken streams in a row a turn sends again before it fails."""
-STREAM_BACKOFF: Final = 5.0
-"""Seconds before the first resend; each one after waits that much longer."""
 
 
 METADATA: Final = "[Session metadata]"
 """The header of the metadata part each turn's opening request carries."""
-
-
-def prune_history(
-    history: list[ModelMessage], boundary: int, *, preserve_signed_thinking: bool = False
-) -> list[ModelMessage]:
-    """Trim past thinking in the send view, without changing stored history.
-
-    The turn's own thinking and signed Anthropic blocks stay whole. A fixed boundary keeps sends monotonic.
-    """
-    pruned: list[ModelMessage] = []
-    for index, message in enumerate(history):
-        past = index < boundary
-        parts: list[Part] = []
-        changed = False
-        for part in message.parts:
-            if past and isinstance(part, ThinkingPart):
-                if preserve_signed_thinking and part.signature:
-                    parts.append(part)
-                    continue
-                thought = part.content[:THOUGHT_LIMIT] + "…" if len(part.content) > THOUGHT_LIMIT else part.content
-                parts.append(part.model_copy(update={"content": thought, "signature": None}))
-                changed = True
-            else:
-                parts.append(part)
-        pruned.append(message.model_copy(update={"parts": parts}) if changed else message)
-    return pruned
-
-
-def estimate_tokens(messages: list[ModelMessage]) -> int:
-    """The gauge's rough unit: the serialized size over four."""
-    return len(ModelMessagesTypeAdapter.dump_json(messages)) // 4
-
-
-def context_tokens(history: list[ModelMessage], boundary: int, *, preserve_signed_thinking: bool = False) -> int:
-    """How many tokens a request over `history` would carry, in the gauge's own unit.
-
-    Rough but monotonic, and the same estimate a turn's `context_pct` uses, so the number a turn reports as
-    `context_used` matches what it opened with.
-    """
-    return estimate_tokens(prune_history(history, boundary, preserve_signed_thinking=preserve_signed_thinking))
-
-
-def join_continued(answer: str, more: str) -> str:
-    """An answer and its continuation, joined at their longest overlap when the continuation repeats the answer's
-    last words, as models do unasked.
-    Measured on deepseek-flash, a repeat can open with "...", change case, or trade a no-break space for a plain one:
-    the match ignores all three. A repeat starts at a word, so the overlap must too: a single repeated word counts,
-    and a chance match inside a word does not. A repeat can also rewrite the word the cut split ("carbon-d", then
-    "carbon dioxide"), so that word may give way to the repeat's. After the repeat, a paragraph break before a
-    lowercase word is a space. Without a repeat, a continuation drops the space at the cut; every such seam
-    measured fell between words, so one goes back between a word or punctuation and a word."""
-    start = len(more) - len(more.lstrip(LEADERS))
-    rest = more[start:]
-    cut_word = max(answer.rfind(" "), answer.rfind("\n")) + 1
-    for kept in (answer, answer[:cut_word] if 0 < cut_word < len(answer) else None):
-        if kept is not None and (size := _overlap(kept, rest)):
-            after = rest[size:]
-            if after[:1].isspace() and "\n" in after[: len(after) - len(after.lstrip())]:
-                stripped = after.lstrip()
-                after = f" {stripped}" if stripped[:1].islower() else after
-            return kept + after
-    if any(char in ".\u2026" for char in more[:start]):
-        more = rest
-    if answer and more and more[0].isalnum() and (answer[-1].isalnum() or answer[-1] in SEAM_PUNCTUATION):
-        return f"{answer} {more}"
-    return answer + more
-
-
-def unshown(answer: str, more: str) -> str:
-    """What joining `more` adds to an `answer` already streamed. A rewritten cut word cannot be taken back, so the
-    stream gets what follows the part both share."""
-    joined = join_continued(answer, more)
-    return joined[len(os.path.commonprefix([answer, joined])) :]  # noqa: RUF071 characters, not path components
-
-
-def _overlap(answer: str, more: str) -> int:
-    """The longest start of `more` that ends `answer`, loosely compared, and starts at a word there or with
-    punctuation (Claude Haiku 5.5 repeated the comma a cut ended on); 0 if none."""
-    tail, head = _loose(answer[-OVERLAP:]), _loose(more[:OVERLAP])
-    for size in range(min(len(tail), len(head)), 0, -1):
-        boundary = size == len(tail) or tail[-size - 1] == " " or not head[0].isalnum()
-        if boundary and tail.endswith(head[:size]):
-            return size
-    return 0
-
-
-def _loose(text: str) -> str:
-    """Case and whitespace folded, character for character, so lengths match the original."""
-    return "".join(" " if char.isspace() else lower if len(lower := char.lower()) == 1 else char for char in text)
 
 
 def open_turn(history: list[ModelMessage]) -> int:
@@ -232,53 +106,6 @@ def turn_metadata(used: int, desired_max: int, cwd: str | None = None) -> UserPr
         # The instructions name the directory once, at the start; a session can move since (`ChangeDirectory`).
         meta["cwd"] = cwd
     return UserPromptPart(content=f"{METADATA}\n{json.dumps(meta)}")
-
-
-def interrupted_messages(messages: list[ModelMessage]) -> list[ModelMessage]:
-    """Close unanswered calls without replaying them. A failed or cancelled tool can already have effects.
-    A response the provider never started is dropped: there is nothing in it to keep."""
-    normalized: list[ModelMessage] = []
-    for message in messages:
-        if isinstance(message, ModelResponse) and not message.parts:
-            continue
-        calls = [part for part in message.parts if isinstance(part, ToolCallPart)]
-        ids = [call.tool_call_id for call in calls]
-        if calls and (any(not identity for identity in ids) or len(ids) != len(set(ids))):
-            message = message.model_copy(
-                update={
-                    "parts": [
-                        *(part for part in message.parts if not isinstance(part, ToolCallPart)),
-                        TextPart("The provider returned invalid tool-call identities. These calls did not execute."),
-                    ],
-                    "invalid_tool_calls": [call.model_dump(mode="json") for call in calls],
-                }
-            )
-        normalized.append(message)
-    messages = normalized
-    pending: dict[str, ToolCallPart] = {}
-    for message in messages:
-        for part in message.parts:
-            if isinstance(part, ToolCallPart):
-                pending[part.tool_call_id] = part
-            elif isinstance(part, ToolReturnPart | RetryPromptPart) and part.tool_name is not None:
-                pending.pop(part.tool_call_id, None)
-    if not pending:
-        return messages
-    return [
-        *messages,
-        ModelRequest(
-            parts=[
-                ToolReturnPart(
-                    tool_name=call.tool_name,
-                    tool_call_id=call.tool_call_id,
-                    content="The turn was interrupted before this tool returned. Its effects are unknown; "
-                    "inspect the current state before retrying it.",
-                    outcome="interrupted",
-                )
-                for call in pending.values()
-            ]
-        ),
-    ]
 
 
 def load_target(target: str) -> Agent:
@@ -321,47 +148,6 @@ def aid_toolset(catalog: Catalog) -> Toolset:
         for t in catalog.tools.values()
     ]
     return Toolset(tools)
-
-
-def to_event(
-    part: ToolCallPart | ToolReturnPart | RetryPromptPart,
-    kind: str | None = None,
-    attachments: Sequence[AttachmentPart] = (),
-) -> ToolCall:
-    if isinstance(part, ToolCallPart):
-        try:
-            args = part.args_as_dict()
-        except ValueError:
-            return ToolCall(
-                tool_call_id=part.tool_call_id,
-                tool=part.tool_name,
-                title=part.tool_name,
-                kind=kind,
-                status="in_progress",
-                input=part.args_as_json_str(),
-            )
-        return ToolCall(
-            tool_call_id=part.tool_call_id,
-            tool=part.tool_name,
-            title=part.tool_name,
-            kind=kind,
-            status="in_progress",
-            input=to_json(args),
-            paths=tool_paths(args),
-        )
-    if isinstance(part, ToolReturnPart):
-        return ToolCall(
-            tool_call_id=part.tool_call_id,
-            status="completed",
-            output=clip(part.model_response_str()),
-            attachments=[AttachmentRef(media_type=image.media_type, sha256=image.sha256) for image in attachments],
-        )
-    return ToolCall(tool_call_id=part.tool_call_id, status="failed", output=clip(part.model_response()))
-
-
-class UsageLimitExceeded(AidError):
-    def __init__(self, limit: int) -> None:
-        super().__init__("request_limit", f"turn reached its {limit} model-request budget")
 
 
 def model_name(agent: Agent) -> str | None:
@@ -452,8 +238,7 @@ class NativeBackend:
         self._looked_up = self._owned is None
         self._price: Price | None = None
         self._inputs: list[str] | None = None
-        self._turn: list[ModelMessage] | None = None
-        self._in_flight: tuple[list[ToolCallPart], int] | None = None
+        self._turn: Turn | None = None
         coding.compact = self.compact
         coding.snapshot = self.snapshot
 
@@ -506,32 +291,21 @@ class NativeBackend:
         if self._max_context is None and (size := window(catalog, name)):
             self._desired_max = size // 2
 
-    async def _request_price(self) -> Price | None:
-        await self._look_up()
-        return self._price
-
     async def _takes(self, kind: Kind) -> bool:
-        """False only where models.dev lists the model's input without `kind`: an undescribed model is asked. A
-        transport that reads PDFs wherever its models read images (`pdfs_as_images`) takes them on an image model."""
         await self._look_up()
-        if self._inputs is None or kind in self._inputs:
-            return True
-        return kind == "pdf" and "image" in self._inputs and getattr(self._model, "pdfs_as_images", False)
+        return takes(self._model, self._inputs, kind)
 
-    async def _tool_return(self, call: ToolCallPart, result: object) -> list[Part]:
-        if not isinstance(result, ToolAttachment):
-            return [ToolReturnPart(call.tool_name, to_jsonable_python(result), call.tool_call_id)]
-        kind = kind_of(checked(result.data))
-        if self._attachments is None or not await self._takes(kind):
-            note = f"{result.text}; this model takes no {'PDFs' if kind == 'pdf' else 'images'}"
-            return [ToolReturnPart(call.tool_name, note, call.tool_call_id)]
-        attachment = await self._attachments.add(result.data, call.tool_call_id)
-        return [ToolReturnPart(call.tool_name, result.text, call.tool_call_id), attachment]
+    async def _permit(self, tool: Tool, call: ToolCallPart, arguments: dict[str, JsonValue]) -> str | None:
+        verdict = await self._coding.permit(
+            call.tool_call_id,
+            tool_name=call.tool_name,
+            title=f"{call.tool_name} {json.dumps(arguments, default=str)[:TITLE_LIMIT]}",
+            input=arguments,
+        )
+        return None if verdict.allowed else verdict.refusal(f"{tool.name} stays unrun")
 
-    def _preserve_signed_thinking(self) -> bool:
-        """Anthropic rejects a signed block whose signature the wire dropped, so keep them whole. Gemini's signed
-        thoughts replay the same way."""
-        return self._model.model_name.startswith(("anthropic/", "google/"))
+    async def _received(self) -> str | None:
+        return arrived(taken) if (taken := await self._take_messages()) else None
 
     def answer_permission(
         self,
@@ -573,207 +347,45 @@ class NativeBackend:
             self._open_tail = 0
         await self._auto_compact(text)
         await self._look_up()
-        messages: list[ModelMessage] = []
-        if not self._history and self._agent.instructions:
-            messages.append(ModelRequest(parts=[SystemPromptPart(self._agent.instructions)]))
+        instructions = "" if self._history else self._agent.instructions
+        opening = [ModelRequest(parts=[SystemPromptPart(instructions)])] if instructions else []
         used = context_tokens(
-            [*self._history, *messages, ModelRequest(parts=[UserPromptPart(text)])],
+            [*self._history, *opening, ModelRequest(parts=[UserPromptPart(text)])],
             max(0, len(self._history) - self._open_tail),
-            preserve_signed_thinking=self._preserve_signed_thinking(),
+            preserve_signed_thinking=signed_thinking(self._model),
         )
-        messages.append(
-            ModelRequest(
-                parts=[
-                    UserPromptPart(text),
-                    *attachments,
-                    turn_metadata(used, self._desired_max, str(self._coding.cwd)),
-                ]
-            )
-        )
-        usage = Usage(requests=0, models=[])
-        completed = False
-        stop_reason = "end_turn"
-        output: Any = None
-        retries = 0
-        so_far: str | None = None
-        continued = 0
-        broken = 0
-        scope = anyio.CancelScope()
-        self._scope = scope
-        self._turn = messages
-        first = True
+        prompt = [UserPromptPart(text), *attachments, turn_metadata(used, self._desired_max, str(self._coding.cwd))]
+        turn = self._turn = Turn()
+        scope = self._scope = anyio.CancelScope()
         try:
             with scope:
-                while True:
-                    await checkpoint()
-                    # Between steps, as Claude Code hands a person's messages to a turn in progress: only before a
-                    # request the turn sends anyway, so a message taken is always seen.
-                    if not first and (taken := await self._take_messages()):
-                        messages.append(ModelRequest(parts=[UserPromptPart(arrived(taken))]))
-                    first = False
-                    if self._max_requests is not None and (usage.requests or 0) >= self._max_requests:
-                        raise UsageLimitExceeded(self._max_requests)
-                    usage = usage.model_copy(update={"requests": (usage.requests or 0) + 1})
-                    response = ModelResponse(parts=[], model_name=self._model.model_name)
-                    messages.append(response)
-                    indexes: dict[int, int] = {}
-                    request_usage = RequestUsage()
-                    usage_observed = False
-                    price = await self._request_price()
-                    truncated = False
-                    info = ModelInfo(
-                        list(self._tools.values()),
-                        self._agent.output_type,
-                        self._agent.model_settings,
-                        self._attachments,
-                    )
-                    wire = prune_history(
-                        [*self._history, *messages[:-1]],
-                        max(0, len(self._history) - self._open_tail),
-                        preserve_signed_thinking=self._preserve_signed_thinking(),
-                    )
-                    held = None if so_far is None else ""
-                    try:
-                        stream = self._model.stream(wire, info)
-                        try:
-                            async for delta in stream:
-                                accumulate(response, indexes, delta)
-                                if delta.model_name:
-                                    response.model_name = delta.model_name
-                                truncated = truncated or delta.truncated
-                                if delta.usage is not None:
-                                    usage_observed = True
-                                    for name in RequestUsage.__dataclass_fields__:
-                                        counts = [getattr(request_usage, name), getattr(delta.usage, name)]
-                                        known = [count for count in counts if count is not None]
-                                        setattr(request_usage, name, max(known) if known else None)
-                                if isinstance(delta.part, TextPart) and delta.part.content:
-                                    if held is None:
-                                        await emit(TextDelta(text=delta.part.content))
-                                    elif len(held := held + delta.part.content) >= HOLD:
-                                        await emit(TextDelta(text=unshown(so_far or "", held)))
-                                        held = None
-                                elif isinstance(delta.part, ThinkingPart) and delta.part.content:
-                                    await emit(ThoughtDelta(text=delta.part.content))
-                                await checkpoint()
-                            if held:
-                                await emit(TextDelta(text=unshown(so_far or "", held)))
-                        finally:
-                            with anyio.CancelScope(shield=True):
-                                await stream.aclose()
-                        broken = 0
-                    except StreamBroken as error:
-                        if broken >= STREAM_RETRIES:
-                            # A code of its own: a driver waits this out without counting it against the work.
-                            raise AidError("model_unavailable", str(error)) from error
-                        broken += 1
-                        # What streamed of it stays in the transcript; the engine history drops it.
-                        messages.pop()
-                        log.warning("stream_broken", error=str(error), retry=broken)
-                        await anyio.sleep(STREAM_BACKOFF * broken)
-                        continue
-                    finally:
-                        if usage_observed:
-                            usage = usage.model_copy(
-                                update={
-                                    "input_tokens": (usage.input_tokens or 0) + request_usage.input_tokens,
-                                    "output_tokens": (usage.output_tokens or 0) + request_usage.output_tokens,
-                                    "cache_read_tokens": (usage.cache_read_tokens or 0)
-                                    + request_usage.cache_read_tokens,
-                                    "cache_write_tokens": (usage.cache_write_tokens or 0)
-                                    + request_usage.cache_write_tokens,
-                                    "thought_tokens": usage.thought_tokens
-                                    if request_usage.reasoning_tokens is None
-                                    else (usage.thought_tokens or 0) + request_usage.reasoning_tokens,
-                                }
-                            )
-                        if usage_observed and price is not None:
-                            usage = usage.model_copy(
-                                update={"cost": add_cost(usage.cost, price, request_usage, self._model)}
-                            )
-                        resolved_model = response.model_name or self._model.model_name
-                        if resolved_model not in usage.models:
-                            usage = usage.model_copy(update={"models": [*usage.models, resolved_model]})
-                    calls = [part for part in response.parts if isinstance(part, ToolCallPart)]
-                    if not calls:
-                        text = "".join(part.content for part in response.parts if isinstance(part, TextPart))
-                        answer = text if so_far is None else join_continued(so_far, text)
-                        # A request that adds nothing to the answer (all thinking, or only the repeat) would be cut
-                        # or stop the same way again.
-                        grew = len(answer) > len(so_far or "")
-                        limit = self._agent.max_continuations
-                        if truncated and grew and (limit is None or continued < limit):
-                            so_far, continued = answer, continued + 1
-                            messages.append(ModelRequest(parts=[UserPromptPart(CONTINUE)]))
-                            continue
-                        try:
-                            output = (
-                                answer
-                                if self._agent.output_type is str
-                                else self._agent.output_adapter().validate_json(answer)
-                            )
-                        except ValidationError as error:
-                            if retries >= self._agent.output_retries:
-                                raise
-                            retries += 1
-                            so_far, continued = None, 0
-                            messages.append(ModelRequest(parts=[RetryPromptPart(str(error))]))
-                            continue
-                        completed = True
-                        if truncated or not grew:
-                            stop_reason = "max_tokens"
-                        break
-                    so_far, continued = None, 0
-                    ids = [call.tool_call_id for call in calls]
-                    if any(not call_id for call_id in ids) or len(ids) != len(set(ids)):
-                        raise AidError("invalid_tool_call", "response has missing or duplicate tool-call identities")
-                    for index, call in enumerate(calls):
-                        self._in_flight = (calls, index)
-                        try:
-                            tool = self._tools.get(call.tool_name)
-                            await emit(to_event(call, tool.kind if tool is not None else None))
-                            await checkpoint()
-                            if tool is None:
-                                raise ModelRetry(f"unknown tool {call.tool_name!r}")
-                            try:
-                                arguments = call.args_as_dict()
-                            except ValueError as error:
-                                if truncated:
-                                    raise ModelRetry(f"{error}: the response hit its output token limit") from error
-                                raise ModelRetry(str(error)) from error
-                            verdict = (
-                                Verdict(True)
-                                if tool.asks
-                                else await self._coding.permit(
-                                    call.tool_call_id,
-                                    tool_name=call.tool_name,
-                                    title=f"{call.tool_name} {json.dumps(arguments, default=str)[:TITLE_LIMIT]}",
-                                    input=arguments,
-                                )
-                            )
-                            if verdict.allowed:
-                                result = await tool.call(arguments, call.tool_call_id)
-                            else:
-                                result = verdict.refusal(f"{call.tool_name} stays unrun")
-                        except ModelRetry as error:
-                            part = RetryPromptPart(str(error), tool_name=call.tool_name, tool_call_id=call.tool_call_id)
-                            returned: list[Part] = [part]
-                        else:
-                            returned = await self._tool_return(call, result)
-                            part = returned[0]
-                            assert isinstance(part, ToolReturnPart)
-                        messages.append(ModelRequest(parts=returned))
-                        await emit(to_event(part, attachments=[p for p in returned if isinstance(p, AttachmentPart)]))
-            return Output(output=to_jsonable_python(output), stop_reason=stop_reason if completed else "cancelled")
+                await run(
+                    self._model,
+                    lambda: self._history,
+                    prompt,
+                    turn=turn,
+                    instructions=instructions,
+                    tools=list(self._tools.values()),
+                    emit=emit,
+                    permit=self._permit,
+                    receive=self._received,
+                    settings=self._agent.model_settings,
+                    output_type=self._agent.output_type,
+                    output_retries=self._agent.output_retries,
+                    max_continuations=self._agent.max_continuations,
+                    max_requests=self._max_requests,
+                    attachments=self._attachments,
+                    price=self._price,
+                    inputs=self._inputs,
+                    open_tail=self._open_tail,
+                )
+            return Output(output=to_jsonable_python(turn.output), stop_reason=turn.stop_reason or "cancelled")
         finally:
             self._scope = None
             self._turn = None
-            self._in_flight = None
             with anyio.CancelScope(shield=True):
-                if not completed:
-                    messages = interrupted_messages(messages)
                 async with self._history_lock:
-                    self._history = [*self._history, *messages]
+                    self._history = [*self._history, *turn.messages]
                     self._open_tail = 0
                     try:
                         await _write_atomic(self._history_file, ModelMessagesTypeAdapter.dump_json(self._history))
@@ -781,12 +393,12 @@ class NativeBackend:
                         log.exception("history_write_failed", path=str(self._history_file))
                     # The turn's end state: what a request over the stored history would carry, against the
                     # gauge. The next turn sends exactly this (its boundary is the whole history) plus its prompt.
-                    usage = usage.model_copy(
+                    usage = turn.usage.model_copy(
                         update={
                             "context_used": context_tokens(
                                 self._history,
                                 len(self._history),
-                                preserve_signed_thinking=self._preserve_signed_thinking(),
+                                preserve_signed_thinking=signed_thinking(self._model),
                             ),
                             "context_size": self._desired_max,
                         }
@@ -807,16 +419,16 @@ class NativeBackend:
         """Write the conversation as it stands inside the running tool call, for a fork to start from: the
         stored history, this turn so far, `reply` as this call's return, and the sibling calls after it closed
         as not run. Stored history alone lacks the turn: it is written when the turn ends."""
-        if self._turn is None or self._in_flight is None:
+        if self._turn is None or self._turn.in_flight is None:
             raise AidError("no_tool_call", "a snapshot is taken only inside a tool call")
-        calls, index = self._in_flight
+        calls, index = self._turn.in_flight
         call = calls[index]
         returns = [
             ToolReturnPart(call.tool_name, reply, call.tool_call_id),
             *(ToolReturnPart(later.tool_name, NOT_FORKED, later.tool_call_id) for later in calls[index + 1 :]),
         ]
         async with self._history_lock:
-            messages = [*self._history, *self._turn, ModelRequest(parts=returns)]
+            messages = [*self._history, *self._turn.messages, ModelRequest(parts=returns)]
         forks = self._history_file.parent / FORKS_DIR
         await forks.mkdir(exist_ok=True)
         path = forks / f"{uuid.uuid4().hex[:12]}.json"
@@ -842,7 +454,7 @@ class NativeBackend:
         if self._fresh_turns:
             return
         opening = [*self._history, ModelRequest(parts=[UserPromptPart(prompt)])]
-        used = context_tokens(opening, len(self._history), preserve_signed_thinking=self._preserve_signed_thinking())
+        used = context_tokens(opening, len(self._history), preserve_signed_thinking=signed_thinking(self._model))
         if used < self._desired_max:
             return
         try:
@@ -906,14 +518,6 @@ async def _write_atomic(path: anyio.Path, data: bytes) -> None:
     tmp = path.with_name(path.name + ".tmp")
     await tmp.write_bytes(data)
     await tmp.rename(path)
-
-
-def add_cost(total: Cost | None, price: Price, usage: RequestUsage, model: Model) -> Cost:
-    cached = usage.cache_read_tokens if getattr(model, "cache_reads_in_prompt", False) else 0
-    amount = price.cost(
-        max(0, usage.input_tokens - cached), usage.cache_read_tokens, usage.cache_write_tokens, usage.output_tokens
-    )
-    return Cost(amount=(total.amount if total is not None else 0.0) + amount, currency=CURRENCY)
 
 
 async def _receive_messages(session: str) -> list[MessageEntry]:

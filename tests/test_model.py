@@ -8,6 +8,7 @@ import httpx2
 import pytest
 
 import aid.backends.native as native_backend
+import aid_agent.loop as agent_loop
 from aid.discovery import Catalog
 from aid.protocol import AidError, SessionEvent, Usage
 from aid.spec import NativeSpec
@@ -151,7 +152,7 @@ async def test_the_gauge_is_half_the_model_window(
     assert usage.context_size == gauge
 
 
-@pytest.mark.parametrize("breaks", [1, native_backend.STREAM_RETRIES + 1])
+@pytest.mark.parametrize("breaks", [1, agent_loop.STREAM_RETRIES + 1])
 async def test_a_broken_stream_goes_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, breaks: int) -> None:
     class Breaking(httpx2.AsyncByteStream):
         async def __aiter__(self):
@@ -172,7 +173,7 @@ async def test_a_broken_stream_goes_again(tmp_path: Path, monkeypatch: pytest.Mo
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
     monkeypatch.setattr(wire, "client", make_client)
-    monkeypatch.setattr(native_backend, "STREAM_BACKOFF", 0)
+    monkeypatch.setattr(agent_loop, "STREAM_BACKOFF", 0)
     events: list[SessionEvent] = []
 
     async def emit(item: SessionEvent) -> None:
@@ -180,20 +181,20 @@ async def test_a_broken_stream_goes_again(tmp_path: Path, monkeypatch: pytest.Mo
 
     agent = Agent("openai/local", model_settings={"api_key": "test-broken", "api_base": "https://example.test/v1"})
     async with backend(tmp_path, agent) as session:
-        if breaks > native_backend.STREAM_RETRIES:
+        if breaks > agent_loop.STREAM_RETRIES:
             with pytest.raises(AidError) as raised:
                 await session.prompt("hello", emit)
             assert raised.value.code == "model_unavailable"
             assert isinstance(raised.value.__cause__, StreamBroken)
         else:
             assert (await session.prompt("hello", emit)).output == "done"
-    assert sent == min(breaks + 1, native_backend.STREAM_RETRIES + 1)
+    assert sent == min(breaks + 1, agent_loop.STREAM_RETRIES + 1)
     usage = next(item for item in events if isinstance(item, Usage))
     assert usage.requests == sent
     history = ModelMessagesTypeAdapter.validate_json((tmp_path / "history.json").read_bytes())
     # Only the last response stays: the answer, or what the last broken one streamed (a failed turn keeps it).
     [response] = [m for m in history if isinstance(m, ModelResponse)]
-    kind = TextPart if breaks <= native_backend.STREAM_RETRIES else ThinkingPart
+    kind = TextPart if breaks <= agent_loop.STREAM_RETRIES else ThinkingPart
     assert [type(part) for part in response.parts] == [kind]
 
 
@@ -215,7 +216,7 @@ async def test_a_refused_request_goes_again(
         return httpx2.AsyncClient(transport=httpx2.MockTransport(handle), **kwargs)
 
     monkeypatch.setattr(wire, "client", make_client)
-    monkeypatch.setattr(native_backend, "STREAM_BACKOFF", 0)
+    monkeypatch.setattr(agent_loop, "STREAM_BACKOFF", 0)
 
     async def emit(item: SessionEvent) -> None:
         pass

@@ -30,7 +30,7 @@ buildPythonPackage {
     pydantic
     structlog
   ];
-  pythonImportsCheck = [ "aid_agent.model" ];
+  pythonImportsCheck = [ "aid_agent.loop" ];
   meta = {
     description = "aid's agent loop as a library";
     homepage = "https://github.com/Lillecarl/aid";

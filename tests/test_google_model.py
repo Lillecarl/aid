@@ -9,10 +9,10 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx2
 import pytest
 
-from aid.backends.native import add_cost
 from aid.protocol import AidError, SessionEvent, Usage
 from aid.providers import resolve
 from aid_agent.agent import Agent
+from aid_agent.loop import add_cost
 from aid_agent.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,

@@ -10,15 +10,11 @@ import pytest
 from pydantic import BaseModel, Field
 
 from aid.backends.native import (
-    CONTINUE,
     DEFAULT_DESIRED_MAX,
     METADATA,
     NOT_FORKED,
-    THOUGHT_LIMIT,
     NativeBackend,
-    UsageLimitExceeded,
     aid_toolset,
-    join_continued,
     open_turn,
 )
 from aid.backends.permissions import PermissionWaits
@@ -29,6 +25,7 @@ from aid.protocol import AidError, MessageEntry, Output, SessionEvent, Started, 
 from aid.spec import PermissionMode
 from aid.tools import McpTool
 from aid_agent.agent import Agent, ModelRetry, Tool
+from aid_agent.loop import CONTINUE, THOUGHT_LIMIT, UsageLimitExceeded, join_continued
 from aid_agent.messages import (
     ModelMessage,
     ModelMessagesTypeAdapter,

@@ -290,7 +290,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   (`attachments.refs`) and records `PromptEntry.attachments` (`AttachmentRef`), the worker decodes them to the backend.
   Before #72 the names said image: stored `part_kind: image` (kept as stored: the resent prefix keeps its bytes),
   transcripts' `images`, the `images/` dir and its upload tables (read, never written), `--image` all still read.
-  Gate (`NativeBackend._takes(kind)`): a model models.dev lists without the kind in `modalities.input` →
+  Gate (`aid_agent.loop.takes(model, inputs, kind)`): a model models.dev lists without the kind in `modalities.input` →
   `attachments_unsupported` before any request; one it does not describe is asked; `Transport.pdfs_as_images`
   (Responses: OpenAI reads PDFs on every image model, models.dev lists none for gpt-5-nano) takes PDFs on image models.
   OpenRouter parses a PDF to text even for a text-only model ($0.002 a page on DeepSeek, measured): left refused.
@@ -301,7 +301,7 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `Paths.session_dir` after the daemon answers for the session; content type from the bytes; immutable cache);
   `Attachments.svelte` draws images, links a PDF; Attach or a paste adds files to the next prompt; the CSP has no
   `data:`, so an unsent one shows by name. Limit: the context gauge counts an attachment as its part's few bytes.
-  Files APIs (#69, `model.held_files`/`drop_files`): Anthropic's, Google AI Studio's and OpenAI's own routes (no
+  Files APIs (#69, `model.held_files`/`drop_files`; `ModelInfo.inline` / `run(inline=)`: none, base64 always): Anthropic's, Google AI Studio's and OpenAI's own routes (no
   `Provider`; OpenAI: no `api_base` either) upload each attachment once per `upload_scope` (base URL + key), keep sha256
   → `Upload(id, expires)` in `attachments/uploads/<scope>.json` and send the id (Anthropic `FileSource`; Gemini
   `fileData`; Gemini's expire after 48 h, so one within `UPLOAD_MARGIN` goes again; OpenAI `file_id`, purpose `vision`
@@ -585,9 +585,13 @@ on reusable decisions and current boundaries; put long investigations and dated 
   `models_dev`, `errors.AidError`, and the wire types `anthropic_api`, `responses_api`. Never imports aid; aid and
   pyedit (its index) depend on it. `models/default.nix` for aid's set, `models/package.nix` for a nixpkgs package set.
   Its tests live in `tests/` (test_embedding, test_rerank, test_prices).
-- `agent/` — `aid-agent` (`aid_agent`, #75): the agent loop as a library, on aid-models: `agent` (Agent, Tool,
-  Toolset), `model` (transports), `messages`, `attachments`, `events` (TextDelta, ThoughtDelta, ToolCall, Usage,
-  Output, …; `aid.protocol` re-exports the same classes). Never imports aid (`tests/test_aid_models.py`); pymux-ai
+- `agent/` — `aid-agent` (`aid_agent`, #75): the agent loop as a library, on aid-models: `loop` (`run`: one turn
+  of requests, tool calls, continuations, output and stream retries; the caller owns history, the `Turn`, the cancel
+  scope, persistence and compaction; hooks `emit`, `permit` (non-`asks` tools: None runs, text refuses), `receive`;
+  `prune_history`, `join_continued`, `interrupted_messages`, `add_cost`, `takes`), `agent` (Agent, Tool, Toolset),
+  `model` (transports), `messages`, `attachments`, `events` (TextDelta, ThoughtDelta, ToolCall, Usage, Output, …;
+  `aid.protocol` re-exports the same classes). `NativeBackend` wraps `run` with aid's state: `CODING`,
+  `Coding.permit`, turn metadata, the gauge, auto-compaction, history.json. Never imports aid (`tests/test_aid_models.py`); pymux-ai
   depends on it. `nix/python-overlay.nix` names aid-models and aid-agent for a nixpkgs Python set (`package.nix`).
 - `default.nix` — a pyproject.nix set from pyterm's builders (`mkPythonSet`, `mkProject`, its `overlay`);
   `aid/default.nix` — the aid project in it; `nix/` — NixOS and home-manager modules.
@@ -644,7 +648,7 @@ UI: `cd web && npm run check && npm run dev` (proxies the API to `aid web` on `A
   tool calls are closed as interrupted, not replayed: their effects may already have happened. A model request is
   replayed: a transport's `StreamBroken` (a dropped connection mid-response, `model.BROKEN`) or `ModelUnavailable`
   (refused before answering: no connection, 5xx, 408/409/429, `model.unavailable`) sends it again, `STREAM_RETRIES`
-  in a row with backoff, its partial response gone from the engine history, kept in the transcript; then the turn
+  in a row with backoff (`aid_agent.loop`), its partial response gone from the engine history, kept in the transcript; then the turn
   fails `model_unavailable`. The worker passes an `AidError`'s code through; any other exception is `agent_error`.
 - multiprocessing re-imports the parent's `__main__` in each worker: every entry script needs a
   `if __name__ == "__main__":` guard.

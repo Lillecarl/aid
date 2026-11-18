@@ -9,8 +9,9 @@ from acp.schema import (
     ToolCallStart,
 )
 
-from aid.backends import acp, native
+from aid.backends import acp
 from aid.protocol import ToolCall, ToolDiff
+from aid_agent import loop
 from aid_agent.events import TOOL_TEXT_LIMIT
 from aid_agent.messages import (
     RetryPromptPart,
@@ -73,18 +74,18 @@ def test_native_tool_events() -> None:
     call = ToolCallPart(tool_name="add", args='{"a": 1}', tool_call_id="c1")
     done = ToolReturnPart(tool_name="add", content={"sum": 3}, tool_call_id="c1")
     retry = RetryPromptPart(tool_name="add", content="a must be even", tool_call_id="c2")
-    assert native.to_event(call) == ToolCall(
+    assert loop.to_event(call) == ToolCall(
         tool_call_id="c1", tool="add", title="add", status="in_progress", input={"a": 1}
     )
-    assert native.to_event(done) == ToolCall(tool_call_id="c1", status="completed", output='{"sum":3}')
-    failed = native.to_event(retry)
+    assert loop.to_event(done) == ToolCall(tool_call_id="c1", status="completed", output='{"sum":3}')
+    failed = loop.to_event(retry)
     assert isinstance(failed, ToolCall)
     assert (failed.status, "a must be even" in (failed.output or "")) == ("failed", True)
 
 
 def test_native_tool_call_carries_paths() -> None:
     call = ToolCallPart(tool_name="read", args='{"path": "a.py", "offset": 1}', tool_call_id="c1")
-    assert native.to_event(call) == ToolCall(
+    assert loop.to_event(call) == ToolCall(
         tool_call_id="c1",
         tool="read",
         title="read",
