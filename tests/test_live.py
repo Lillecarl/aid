@@ -15,11 +15,11 @@ from typing import TYPE_CHECKING, Final, Literal
 import pytest
 from pydantic import BaseModel
 
-from aid.coding import read
+from aid.coding import coding_tools
 from aid.discovery import discover
 from aid.protocol import AidError, Output, SessionEvent, Usage
 from aid.providers import catalog_model, embedder, reranker, resolve
-from aid_agent.agent import Agent
+from aid_agent.agent import Agent, Tool
 from aid_agent.attachments import ATTACHMENTS_DIR, UPLOADS, UPLOADS_DIR, AttachmentStore
 from aid_agent.messages import (
     AttachmentPart,
@@ -41,6 +41,8 @@ if TYPE_CHECKING:
     from pydantic import JsonValue
 
 PLUGINS: Final = Path(__file__).parent.parent / "plugins"
+READ: Final = next(t for t in coding_tools.tools if isinstance(t, Tool) and t.name == "read")
+"""The toolset's own `read`: its errors go back to the model, as in a session (deepseek-v4.1-flash read `.`)."""
 TURN_BOUND: Final = 0.01
 """Dollars one turn may cost; a turn over it means a wrong model or a runaway loop."""
 
@@ -185,7 +187,7 @@ async def test_an_image_from_a_tool(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     providers = discover([PLUGINS], only=[route.plugin]).model_providers if route.plugin else {}
     name = route.vision or route.model
     (tmp_path / "pic.png").write_bytes(png((0, 255, 0), size=256))
-    agent = Agent(name, "You are a test.", tools=[read], model_settings=dict(route.settings or {}))
+    agent = Agent(name, "You are a test.", tools=[READ], model_settings=dict(route.settings or {}))
     transport = await resolve(name, providers, tmp_path.name)
     async with backend(
         tmp_path,
@@ -215,7 +217,7 @@ async def test_a_pdf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, route: Rou
     providers = discover([PLUGINS], only=[route.plugin]).model_providers if route.plugin else {}
     name = route.vision or route.model
     (tmp_path / "doc.pdf").write_bytes(pdf())
-    tools = [read] if source == "tool" else []
+    tools = [READ] if source == "tool" else []
     agent = Agent(name, "You are a test.", tools=tools, model_settings=dict(route.settings or {}))
     transport = await resolve(name, providers, tmp_path.name)
     ask = "What is the secret word in the document? Answer with the word only."
